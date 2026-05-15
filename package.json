@@ -9,11 +9,13 @@
     "format": "biome format --write"
   },
   "dependencies": {
+    "drizzle-orm": "^0.45.2",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "drizzle-kit": "^0.31.10"
   },
   "peerDependencies": {
     "typescript": "^5"

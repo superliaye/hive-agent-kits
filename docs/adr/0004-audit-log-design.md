@@ -127,12 +127,13 @@ Rejected:
 
 Rationale: the primary purpose (debuggability) is destroyed by silent loss. A 30% drop rate from drop-on-failure looks like nothing's wrong until you try to debug something and the record isn't there. SQLite + WAL writes almost never fail under normal conditions; when they do (disk full, file locked, schema mismatch in payload), surfacing the problem loudly is the right behavior. If block-on-failure becomes a latency problem later, the migration to buffered async writes is local to the Audit module — emitters don't change.
 
-**Transaction semantics depend on the event class:**
+**Audit and main DB are separate SQLite files**, so a true cross-file transaction is not available. Hive intentionally chooses **best-effort separate-transaction semantics** with **audit-first ordering**:
 
-- **(i) Same-transaction** for state-changing events: `memory.write`, `agent.created`/`updated`/`destroyed`, `harness.written`, `capability.bound`. The audit row and the side-effect row are in one DB transaction. Either both succeed or both fail. Invariant: audit row exists iff the side effect happened.
-- **(ii) Separate-transaction (immediately after)** for observation events: `permission.decided`, `mcp.server.crashed`, `run.tool_use.executed`, `run.completed`. These observe state that lives outside the main DB (a subprocess crashed; a permission decision happened; a model completion streamed). The side effect already occurred; the audit row records that it did.
+1. The emitting module emits its event. The Audit subscriber writes the audit row inside its own transaction (in `audit.db`). If that write fails, the emit fails (block-on-failure), and the operation that triggered the emit fails *before* it commits any side effect.
+2. Only after the audit write succeeds does the emitter proceed with its actual side effect (e.g., the Memory module commits to `hive.db`).
+3. If the side effect then fails after the audit row was written, the audit log contains an "attempt" record that no main-DB row corresponds to. **This is acceptable** — the agent (or developer) reading the audit log can reason about what was attempted and what landed, and reconcile by comparing audit rows against main-DB state. Audit is observational; it is not the system of record for main-DB state.
 
-Crashes between (ii)'s side effect and its audit write are tolerated — the operation already happened in the world. (i) is for "either it happened in Hive's DB *and* the audit knows, or neither."
+This trades the originally-aspirational same-transaction guarantee for an architecture that actually works under "separate files" and still surfaces all failure modes. Crashes between an audit row and a side-effect commit produce visible discrepancies, not silent gaps. Every attempted operation is traceable; the audit log over-records rather than under-records.
 
 ## Retention: configurable, default forever
 
@@ -193,8 +194,12 @@ Audit is **not a feature delivered in a single slice.** It's a thin subscriber (
 
 Concretely:
 
-- Slice 1 (kernel) introduces SQLite + Drizzle + a typed event emitter primitive + Run module emitting events + Audit subscriber persisting them. At this point audit covers Run events end-to-end.
-- Each subsequent module slice adds its event stream and a corresponding subscription in `src/audit/subscriptions.ts`.
+- Audit lands **before any other module exists**, as a self-contained deep module fully tested in isolation against synthetic event streams. Prerequisites: `TypedEmitter<T>` primitive in `src/lib/`, SQLite + Drizzle scaffolding, `~/.hive/` paths helper, `bun test`. No Run, no Permission, no Memory needed to validate audit end-to-end.
+- The audit module's public seam is two verbs: `attach(events, normalizer)` to wire a typed event stream + per-event-type normalizers, and `query(filter)` to read persisted events. Behind the seam: redaction backstop, normalization dispatch, ID/timestamp generation, parent tracking, SQLite write (with block-on-failure transaction semantics), tamper-evidence column hooks (null in v1).
+- Tests inject synthetic `TypedEmitter`s and assert on `query()` results plus row contents. Each behavior (persistence, redaction, transaction semantics, query filters, schema additivity) is exercised in isolation. No mocks of other modules — they don't exist yet and aren't needed.
+- Each subsequent module slice adds its event stream and one line in `src/audit/subscriptions.ts` (`audit.attach(<moduleEvents>, <moduleNormalizer>)`). At every stage, audit's interface is stable; only the wire-up file changes.
+
+Why land audit first? Because the inputs to audit are simulated, building it standalone forces its interface to be honest — if "great audit" requires Run to be partly built first, the seam is wrong. Building it against synthetic inputs proves the interface stands on its own.
 
 The discipline of "every module emits, audit subscribes" is a **convention, not a mechanically enforced contract.** Hive is a single-author personal system; rigid forcing functions slow exploration without catching enough real misses to justify them. We rely on a light set:
 
