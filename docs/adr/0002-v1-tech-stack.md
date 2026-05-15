@@ -153,6 +153,56 @@ hive/
 └── data/                         # gitignored (DB, agent partitions)
 ```
 
+## User data location: unified `~/.hive/` across platforms
+
+Hive stores all user-facing runtime data under a single directory: `~/.hive/` on every OS. Aligns with **OpenClaw** (`~/.openclaw/`) and **Hermes** (`~/.hermes/`); see CONTEXT.md → "Reference projects".
+
+```
+~/.hive/
+├── .token                          # daemon auth token (chmod 0600 on Unix)
+├── config.yaml                     # daemon config (audit retention, defaults)
+├── hive.db                         # main SQLite: Agents, Threads, Runs, Memory, Registry
+├── audit.db                        # audit SQLite (separate file per ADR-0004)
+├── audit-archive/                  # rotated audit JSONL (when autoRotate enabled)
+├── capabilities/
+│   ├── skills/<name>/SKILL.md
+│   ├── snippets/<name>/SNIPPET.md
+│   └── harnesses/<agent-id>/HARNESS.md
+├── agents/<agent-id>/
+│   ├── auth-profiles.json          # OpenClaw-shaped secrets per agent (ADR-0003 G1)
+│   └── memory.md                   # per-Agent memory (format deferred)
+├── mcp/servers.json                # MCP server config
+└── logs/daemon.log                 # Pino structured logs (separate from audit)
+```
+
+Rejected: OS-native paths via Electron's `app.getPath('userData')` (`%LOCALAPPDATA%\Hive\` / `~/Library/Application Support/Hive/` / `~/.local/share/Hive/`). Idiomatic per-OS but breaks the unified-path mental model and creates per-OS branching in every doc, every CLI message, and every sync tool. The cost of `~/.hive/` looking unusual on Windows is much lower than the cost of three different paths.
+
+A single source-of-truth helper exposes every path:
+
+```ts
+// src/lib/paths.ts
+import { homedir } from "os"
+import { join } from "path"
+export const HIVE_DIR  = join(homedir(), ".hive")
+export const HIVE_DB   = join(HIVE_DIR, "hive.db")
+export const AUDIT_DB  = join(HIVE_DIR, "audit.db")
+// ... etc.
+```
+
+Every other module imports from here. No path strings hardcoded elsewhere.
+
+**Portability partition** (relevant to ADR-0001 blocker #1, future sync ADR):
+
+| Folder | Travels with user | Notes |
+|---|---|---|
+| `capabilities/{skills,snippets,harnesses}/` | Personal-origin yes; Workplace stays | Per-Capability origin tag |
+| `agents/<id>/memory.md` | Yes (Personal-origin) | Per-Agent partition |
+| `agents/<id>/auth-profiles.json` | Per-secret `copyToAgents` flag (OpenClaw shape) | OAuth refresh tokens don't travel by default |
+| `mcp/servers.json` | Per-server origin | Personal servers travel; Workplace stay |
+| `hive.db` | No | Operational state — deployment-local |
+| `audit.db` | No | Per-deployment audit log |
+| `logs/`, `.token` | No | Local-only |
+
 ## Daemon-from-Electron lifecycle
 
 Goal: **the user double-clicks the Hive icon and the chat window appears. No terminal, no separate install, no manual daemon start.**

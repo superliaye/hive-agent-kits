@@ -187,6 +187,24 @@ The subscribe pattern only works if every module exposes a typed event stream. C
 
 Each module owns its event types and their Zod schemas. The Audit subscriber validates incoming events against these schemas before normalizing to the common `AuditEvent` row and persisting.
 
+## Build sequencing & discipline
+
+Audit is **not a feature delivered in a single slice.** It's a thin subscriber (~200 LOC) that grows by attaching to new module event streams as those modules ship. Real cost of "great audit" lives in the emitter modules, not in audit itself.
+
+Concretely:
+
+- Slice 1 (kernel) introduces SQLite + Drizzle + a typed event emitter primitive + Run module emitting events + Audit subscriber persisting them. At this point audit covers Run events end-to-end.
+- Each subsequent module slice adds its event stream and a corresponding subscription in `src/audit/subscriptions.ts`.
+
+The discipline of "every module emits, audit subscribes" is a **convention, not a mechanically enforced contract.** Hive is a single-author personal system; rigid forcing functions slow exploration without catching enough real misses to justify them. We rely on a light set:
+
+1. **AGENTS.md awareness.** The model-agnostic instructions file (mirrored to `CLAUDE.md`) primes every coding session with audit awareness — what audit is, that it uses a subscribe pattern, that secrets stay out of payloads. Future contributors (human or AI) read it before writing code. Highest-leverage layer because it shapes how code is written in the first place.
+2. **Code review.** When a new module or a new public verb lands, the reviewer checks for emission. For a single-author repo, the author *is* the reviewer; the discipline is "ask myself before merging."
+3. **Daemon-startup observability.** The Audit subscriber logs which modules it's attached to at boot — `[audit] subscribed to N module event streams: run, permission, secrets, mcp, …`. Gaps are visible in the log without being errors.
+4. **Optional test helpers.** For modules where audit coverage is critical (permission decisions, secrets access), tests can assert emission directly. Not required across all modules.
+
+We considered and rejected stricter mechanical enforcement — a `defineModule()` helper that fails to compile without an event stream, a CI lint rule. The friction wasn't worth it for a personal system where exploration speed dominates.
+
 ## What this defers (v1.1+)
 
 - **Tamper-evidence.** Hash-chained rows (`prev_hash`), periodic signing (`signature`). Fields are already reserved in the schema; v1.1 fills them in with a chain-validation tool. No data migration.
