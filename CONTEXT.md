@@ -82,7 +82,9 @@ Prevents silent under-delivery when a Capability cannot be honored. MCP server a
 The iterative cycle inside a **Run**: model emits a tool call → Hive executes the bound **Tool** or **MCP** call → result returns to the model → model continues. Universal across providers; the **ModelGateway** normalizes the wire shape.
 
 **Audit Log**:
-Append-only record of every **Capability** invocation within a **Run** (tool call, MCP call, Skill load, Memory read/write). Suitable for replay, inspection, and Trust/Permissions evaluation.
+Append-only record of meaningful events across the system — Capability invocations within Runs (tool calls, MCP calls, Skill loads, Memory writes), Permission decisions, Secrets access (the reference and source, never the value), MCP server lifecycle, Agent lifecycle (created/updated/destroyed by Agent Manager), backend invocations (CLI spawn args), user actions (messages sent, approvals, model overrides). Primary purpose: **inspection and debuggability** — answering "what happened, why, and when?" Schema reserves fields for v1.1 tamper-evidence (hash chain, signature) without requiring data migration. Replay-as-executable-history is an explicit non-goal for v1.
+
+**Built on a subscribe model, not a push API.** Other modules do **not** call `audit.record(...)`. Each module owns its typed event stream (Run emits `RunEvent`, Permission emits `PermissionDecision`, Secrets emits `SecretAccess`, MCP emits server-lifecycle events, Memory emits `MemoryWrite`, the Capability Registry emits registration events, the Agent Manager emits lifecycle events). The Audit Log is a subscriber: it consumes these streams, normalizes each into a common `AuditEvent` row, and persists. Nothing reaches *into* Audit; Audit reaches *out*. This is the same pattern that lets the UI, future observability exporters, and any future training-data dumper plug in without touching emitters.
 
 **Librarian Memory Model**:
 Leading candidate (not locked). Per-**Agent** memory in a deterministic format + a per-Agent INDEX. Cross-agent reads are on-demand and INDEX-guided (via the **Agent Catalog**). No auto-promotion.
