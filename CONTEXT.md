@@ -54,8 +54,40 @@ Tagged as company-bound. Implements adapters for the company's systems (e.g., AD
 **Capability Registry**:
 The flat, named set of all loaded **Capabilities** (both origins) at a deployment. Agent Harnesses resolve names against it when a Run starts.
 
+**Capability Manifest**:
+The on-disk description of a **Capability** — schema, content (for Skills), MCP endpoint (for MCP Servers), origin tag, **Provider Hints**, and **Capability Compatibility** constraints. A Capability is the runtime entity resolved against the **Capability Registry**; its Manifest is the document that defines it.
+
+**Provider Hint**:
+Typed escape-hatch metadata on a **Capability Manifest** carrying per-provider concessions (e.g., Anthropic `cache_control` placement, OpenAI strict-mode requirement, Gemini schema subset). Read by the **ModelGateway** at Run start to produce a provider-shaped artifact.
+
+**Capability Compatibility**:
+Manifest-declared requirements (e.g., *requires tool_use*, *requires reasoning visibility*, *requires ≥200k context*) that a **Run** validates against its chosen model before starting. Prevents silent under-delivery when a Capability cannot be honored.
+
+**Tool-use Loop**:
+The iterative cycle inside a **Run**: model emits a tool call → Hive executes the bound **Tool** or **MCP** call → result returns to the model → model continues. Universal across providers; the **ModelGateway** normalizes the wire shape.
+
+**Audit Log**:
+Append-only record of every **Capability** invocation within a **Run** (tool call, MCP call, Skill load, Memory read/write). Suitable for replay, inspection, and Trust/Permissions evaluation.
+
 **Librarian Memory Model**:
 Leading candidate (not locked). Per-**Agent** memory in a deterministic format + a per-Agent INDEX. Cross-agent reads are on-demand and INDEX-guided (via the **Agent Catalog**). No auto-promotion.
+
+## Runtime
+
+**Daemon**:
+The long-running Hive process that hosts the **Agent Catalog**, **Runs**, **Memory**, **Capability Registry**, and **Audit Log**. Exposes HTTP + WebSocket on `localhost`. Per ADR-0002, Bun + Hono. The same Daemon binary serves the desktop **Shell**, headless servers, and CLI clients.
+
+**Shell**:
+The desktop presentation layer (Electron, per ADR-0002) that wraps the UI in a real window and spawns the **Daemon** as a child process. Owns tray icon, native notifications, deep links, single-instance lock, and auto-update. Distinct from the Daemon — removing the Shell does not stop the Daemon.
+
+**Headless Mode**:
+The **Daemon** running without a **Shell**. The only mode for servers, dev tunnels, CI, and CLI use. Same binary, same data, no window.
+
+**ModelGateway**:
+The single Hive-owned interface every LLM call passes through. Normalizes streaming events, tool-use representation, and provider knobs (thinking, caching, multimodal). Insulates Hive from whichever **Provider Adapter** library backs it. Per ADR-0002, currently delegates to `@earendil-works/pi-ai`; swappable.
+
+**Provider Adapter**:
+The per-provider translation unit that maps Hive's canonical message + tool format to one provider's wire shape (Anthropic Messages, OpenAI Responses, Gemini, Bedrock, Ollama, …). Composed by the **ModelGateway**. Owns auth, model catalog, thinking-effort mapping, prompt-cache placement, and stream-event normalization for that provider.
 
 ## Relationships
 
@@ -68,6 +100,10 @@ Leading candidate (not locked). Per-**Agent** memory in a deterministic format +
 - The **Root Agent** is the user's interface; the **Agent Manager** is the system's interface for agent lifecycle
 - The **Capability Registry** is loaded at deployment startup; per-agent data (**Memory**, INDEX, **Threads**) is loaded per-Run against the (Agent, Thread) pair
 - The **Agent Catalog** indexes agents; each agent's data lives in its own partition keyed by Agent identity
+- A **Capability Manifest** defines a **Capability**; **Provider Hints** and **Capability Compatibility** live on the Manifest
+- Every LLM call inside a **Run** flows: Run → **ModelGateway** → **Provider Adapter** → provider SDK
+- The **Daemon** hosts Runs and the Registry; the **Shell** is one of several clients (alongside browser tabs and CLI) that connect to the Daemon over HTTP/WS
+- **Headless Mode** = Daemon without Shell; all other modes are Daemon-plus-client
 
 ## Flagged ambiguities
 
