@@ -1,8 +1,9 @@
 node_modules/
 dist/
 data/
+*.log
 *.db
-org/*/.workspace/
 .DS_Store
 .worktrees/
+org/*/.workspace/
 role-skills/ui-ux-pro-max/
