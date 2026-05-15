@@ -86,6 +86,9 @@ Append-only record of meaningful events across the system — Capability invocat
 
 **Built on a subscribe model, not a push API.** Other modules do **not** call `audit.record(...)`. Each module owns its typed event stream (Run emits `RunEvent`, Permission emits `PermissionDecision`, Secrets emits `SecretAccess`, MCP emits server-lifecycle events, Memory emits `MemoryWrite`, the Capability Registry emits registration events, the Agent Manager emits lifecycle events). The Audit Log is a subscriber: it consumes these streams, normalizes each into a common `AuditEvent` row, and persists. Nothing reaches *into* Audit; Audit reaches *out*. This is the same pattern that lets the UI, future observability exporters, and any future training-data dumper plug in without touching emitters.
 
+**Configuration**:
+Deployment-wide application settings — audit retention, UI theme, daemon port, log level, etc. — stored at `~/.hive/config.yaml` and managed by the **Config module**. Reactive: modules subscribe to specific keys via `config.watch(key, listener)` and react to changes without restart. Settings UI mutations and external edits to `config.yaml` flow through the same change pipeline. **Per-Agent settings** (model preference, capability bindings, prompt) live on the **Agent Harness**, not in Configuration. **Secrets** (API keys, OAuth tokens) live in the Secrets primitive, not in Configuration. Boundary rule: Config is for things every component of the deployment may read; Agent-specific things stay with the Agent; sensitive values stay in Secrets.
+
 **Librarian Memory Model**:
 Leading candidate (not locked). Per-**Agent** memory in a deterministic format + a per-Agent INDEX. Cross-agent reads are on-demand and INDEX-guided (via the **Agent Catalog**). No auto-promotion.
 
