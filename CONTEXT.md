@@ -9,7 +9,7 @@ An identity with an **Agent Harness** + a **Memory** partition keyed by that ide
 _Avoid_: "AI assistant", "bot" (too generic).
 
 **Agent Harness**:
-An agent's capability bundle — the agent's **own** complete system prompt (frozen text, written by the **Agent Manager** at spawn, drawing on **Prompt Snippets**) + identity + bound **Skills** + bound **Tools** + bound **MCP Servers**. A file/document. The prompt itself is monolithic and is not reassembled at Run start; only the bound Capabilities are resolved against the **Capability Registry** at Run start. Updating the prompt requires an explicit Agent Manager Run.
+An agent's capability bundle. A file/document, frozen at agent-creation time by the **Agent Manager**. Always contains: identity, a chosen **Agent Backend**, and backend-specific `config` (validated against a Zod schema the backend ships). For `native`-backend Agents, `config` carries the agent's **own** complete system prompt (drawing on **Prompt Snippets**) + bound **Skills** + bound **Tools** + bound **MCP Servers** + model preference (with fallback) + thinking effort + temperature. For CLI-driven backends (`claude-code`, `codex`, …), `config` is much smaller — model id, reasoning/thinking budget, permission mode, working directory, env — because the CLI brings its own tools and prompt machinery. The GUI renders an edit form by fetching the backend's schema, so adding a new backend is additive: ship its schema with its adapter. Updating the Harness requires an explicit Agent Manager Run. Users may override the model per-Run from the UI; that override is transient and never persists to the Harness.
 _Avoid_: "Harness" alone (we always prefix with "Agent"), "Persona" (implies only prompt).
 
 **Memory**:
@@ -22,7 +22,7 @@ The logical focus area an **Agent** specializes in. Abstract — not a hardcoded
 A persistent conversation between a user (or another agent) and an **Agent**. Holds message history. One Agent can have multiple Threads, in parallel or sequentially. Modeled after OpenAI's Thread.
 
 **Run**:
-One execution of an **Agent** on a **Thread**. Spans from invocation to completion — may include multiple model turns and tool calls. Multiple Runs of the same Agent (on the same or different Threads) may execute concurrently. Modeled after OpenAI's Run.
+One execution of an **Agent** on a **Thread**. Spans from invocation to completion — may include multiple model turns and tool calls. Multiple Runs of the same Agent (on the same or different Threads) may execute concurrently. The internal mechanics of a Run depend on the Agent's **Agent Backend**: a `native`-backend Run executes Hive's model-plus-tool-use loop in-process; a CLI-backend Run spawns an external agent CLI (`claude-code`, `codex`, …) and streams its output. From the outside (UI, CLI, audit), every Run is a stream of `RunEvent`s — the backend is invisible at the seam. Modeled after OpenAI's Run.
 
 **Agent Catalog**:
 The directory of agents at a deployment. One entry per **Agent**: name, **Agent Harness**, **Domain** (label), current state. Used for routing, discovery, and lifecycle management. A consumer reads it to answer "what agents exist and which one should I send this to?"
@@ -99,7 +99,14 @@ The desktop presentation layer (Electron, per ADR-0002) that wraps the UI in a r
 The **Daemon** running without a **Shell**. The only mode for servers, dev tunnels, CI, and CLI use. Same binary, same data, no window.
 
 **ModelGateway**:
-The single Hive-owned interface every LLM call passes through. Normalizes streaming events, tool-use representation, and provider knobs (thinking, caching, multimodal). Insulates Hive from whichever **Provider Adapter** library backs it. Per ADR-0002, currently delegates to `@earendil-works/pi-ai`; swappable.
+The single Hive-owned interface every LLM completion call passes through. Normalizes streaming events, tool-use representation, and provider knobs (thinking, caching, multimodal). Insulates Hive from whichever **Provider Adapter** library backs it. Per ADR-0002, currently delegates to `@earendil-works/pi-ai`; swappable. **Only the `native` Agent Backend uses the ModelGateway.** CLI-driven backends (`claude-code`, `codex`) never touch it — their model auth, tool dispatch, and conversation state are internal to the CLI subprocess.
+
+**Agent Backend**:
+The runtime that executes an Agent's **Run**. Declared on the **Agent Harness**. Two kinds in v1:
+- **`native`** — Hive's own Run executor (ModelGateway + bound Capabilities + Memory + Permission System).
+- **CLI-driven** (`claude-code`, `codex`, future external agent CLIs) — Hive spawns the external agent CLI, hands it the task (Thread history + Memory + the user's latest message), streams its stdout as `RunEvent`s, captures its result, and writes back to Memory + Thread.
+
+The seam is the Run module's interface: `startRun(thread, agent) → AsyncIterable<RunEvent>`. Native and CLI-driven backends are interchangeable behind it — UI, CLI, audit, and Thread persistence see the same event shape. The **Root Agent** and **Agent Manager** are always `native`; **Worker Agents** may be either.
 
 **Provider Adapter**:
 The per-provider translation unit that maps Hive's canonical message + tool format to one provider's wire shape (Anthropic Messages, OpenAI Responses, Gemini, Bedrock, Ollama, …). Composed by the **ModelGateway**. Owns auth, model catalog, thinking-effort mapping, prompt-cache placement, and stream-event normalization for that provider.
@@ -117,7 +124,8 @@ The per-provider translation unit that maps Hive's canonical message + tool form
 - The **Capability Registry** is loaded at deployment startup; per-agent data (**Memory**, INDEX, **Threads**) is loaded per-Run against the (Agent, Thread) pair
 - The **Agent Catalog** indexes agents; each agent's data lives in its own partition keyed by Agent identity
 - A **Capability Manifest** defines a **Capability**; **Provider Hints** and **Capability Compatibility** live on the Manifest
-- Every LLM call inside a **Run** flows: Run → **ModelGateway** → **Provider Adapter** → provider SDK
+- Every LLM completion call inside a `native`-backend **Run** flows: Run → **ModelGateway** → **Provider Adapter** → provider SDK; CLI-driven backends bypass this entirely (the CLI subprocess manages its own LLM calls)
+- An **Agent Backend** is selected per-Agent on the **Agent Harness**; the Run module's interface is the seam where `native` and CLI-driven backends are interchangeable
 - The **Daemon** hosts Runs and the Registry; the **Shell** is one of several clients (alongside browser tabs and CLI) that connect to the Daemon over HTTP/WS
 - **Headless Mode** = Daemon without Shell; all other modes are Daemon-plus-client
 

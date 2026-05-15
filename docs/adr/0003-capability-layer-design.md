@@ -120,24 +120,52 @@ Deferred: a full TUI (Ink-style interactive terminal client). Web UI is the prim
 
 Auth: token from `~/.hive/.token` (chmod 0600). CLI prompts to start the daemon if not running.
 
+## Harness config is backend-specific and schema-driven
+
+The Agent Harness has a `backend` discriminator and a `config` object whose shape depends on the chosen backend:
+
+```
+backend: "native"
+config:  { model, modelFallback?, thinkingEffort?, temperature?, maxTokens?, … }
+         + bound Skills / Tools / MCP Servers + system prompt
+
+backend: "claude-code"
+config:  { model, thinkingBudget?, permissionMode?, workingDir?, allowedTools? }
+         (claude-code brings its own tools/skills; no Hive Capability bindings)
+
+backend: "codex"
+config:  { model, reasoningEffort?, sandboxMode?, workingDir? }
+```
+
+Each backend ships a Zod schema for its `config`. The schema is the source of truth — the GUI fetches it from the daemon (a kernel verb like `getBackendConfigSchema(backend)`) and renders a dynamic form. Daemon validates writes. Adding a new backend is purely additive: ship the schema with the adapter.
+
+**Model catalog** comes from the backend:
+- `native`: pi-ai's `listModels()` (70+ providers exposed).
+- `claude-code` / `codex`: queried from the CLI (`--list-models`) or read from a known static config; cached by the daemon, refreshable on demand.
+
+**Per-Run model override.** A user may pick a different model in the UI for one specific Run ("just for this turn, use Sonnet not Opus"). Override is transient — never written back to the Harness. Resolution order at Run start: per-Run override → `config.model` → `config.modelFallback` → global deployment default. No per-Thread sticky model in v1.
+
+This is the resolution to ADR-0002's "Per-Agent vs per-Run model selection policy" deferred decision.
+
 ## Authority partition: Root dispatches, Manager manages, Workers work
 
 The kernel ships exactly two non-Worker Agents. Authority is partitioned at the Harness-binding level — no per-call runtime gate:
 
-| Role | Dispatch (`spawn_sub_agent`) | Agent lifecycle (`create_agent`, …) |
-|---|---|---|
-| Root Agent | ✅ Bound | ❌ Not bound |
-| Agent Manager | ❌ Not bound | ✅ Bound |
-| Worker Agents (all others) | ❌ Not bound | ❌ Not bound |
+| Role | Dispatch (`spawn_sub_agent`) | Agent lifecycle (`create_agent`, …) | Backend |
+|---|---|---|---|
+| Root Agent | ✅ Bound | ❌ Not bound | always `native` |
+| Agent Manager | ❌ Not bound | ✅ Bound | always `native` |
+| Worker Agents (all others) | ❌ Not bound | ❌ Not bound | `native` or any CLI backend |
 
 Any user may address any Agent directly. Convention is to talk to the Root Agent, which orchestrates multi-Agent workflows when needed. The Agent Manager is reachable directly when authoring or updating agents.
 
 Knock-on rules:
 
 - **Agent Manager is singleton.** Exactly one per deployment; cannot self-spawn another Agent Manager.
-- **Agent Manager has full Registry visibility.** Its Harness binds every Capability so it can compose any combination into a new Agent's Harness.
+- **Agent Manager has full Registry visibility.** Its Harness binds every Capability so it can compose any combination into a new Agent's Harness — including authoring CLI-backed Worker Harnesses.
 - **Workers are leaves.** They do work — they don't fork.
 - **Multi-Agent review flows are Root-orchestrated.** If a workflow wants "Agent Manager drafts a new Agent, then a Review Agent QAs it before commit," the Root Agent runs that pipeline. The Agent Manager does not dispatch the reviewer itself. (This pipeline is v1.1; v1 ships Agent Manager → direct write.)
+- **Backend is orthogonal to role.** Worker Agents may use `native`, `claude-code`, `codex`, or any future CLI backend. Root and Agent Manager are always `native` because they need direct access to Hive internals (Registry, Harness writing, dispatch).
 
 ## Agent Manager workflow (resolved)
 

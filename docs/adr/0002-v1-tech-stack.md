@@ -43,12 +43,14 @@ ADR-0001's *vocabulary commitments* (Agent, Agent Harness, Memory, Capability, T
 │ │ Routes: /agents /threads /runs /caps /ws   │   │
 │ └────────────────────────────────────────────┘   │
 │ ┌────────────────────────────────────────────┐   │
-│ │ Run Executor                               │   │
-│ │   ├─ Tool-use loop                         │   │
+│ │ Run module (Agent Backend seam)            │   │
+│ │   ├─ native       (ModelGateway + tools)   │   │
+│ │   ├─ claude-code  (spawn `claude`)         │   │
+│ │   ├─ codex        (spawn `codex`)          │   │
 │ │   └─ Stream multiplexer (→ WS)             │   │
 │ └────────────────────────────────────────────┘   │
 │ ┌────────────────────────────────────────────┐   │
-│ │ ModelGateway (Hive-owned interface)        │   │
+│ │ ModelGateway (used by native backend only) │   │
 │ │   └─ @earendil-works/pi-ai                 │   │
 │ │       └─ first-party SDKs                  │   │
 │ └────────────────────────────────────────────┘   │
@@ -151,6 +153,34 @@ hive/
 └── data/                         # gitignored (DB, agent partitions)
 ```
 
+## Daemon-from-Electron lifecycle
+
+Goal: **the user double-clicks the Hive icon and the chat window appears. No terminal, no separate install, no manual daemon start.**
+
+Mechanism:
+
+- The daemon binary is bundled inside the Electron app package via electron-builder's `extraResources`. It ships *with* the app — not a separate install.
+- On Electron startup, the main process **probes `localhost:3117` first**. If a daemon answers (e.g., a power user has been running `hive daemon start` headlessly), Electron attaches to it. If the port is free, Electron spawns the bundled daemon as a **hidden child process** (`windowsHide: true` on Windows; macOS/Linux open no terminal by default).
+- A `spawnedByShell` flag is set when Electron starts the daemon itself. On Electron quit:
+  - If `spawnedByShell === true`, Electron sends SIGTERM to the daemon, waits up to N seconds, escalates to SIGKILL if needed.
+  - If `spawnedByShell === false`, Electron leaves the daemon running. The user started it; the user owns its lifecycle.
+- Close window → minimize to tray; daemon keeps running (regardless of who spawned it).
+- Quit from tray → triggers the cleanup above.
+
+This is the *probe-then-spawn* model. It cleanly handles the three real compositions:
+
+| Composition | Behavior |
+|---|---|
+| Pure desktop user (most users) | Open app → daemon spawned hidden → tray icon → quit kills daemon |
+| Headless user attaching GUI ad-hoc | Daemon already running → open app → Electron attaches → quit leaves daemon running |
+| Headless server (no GUI ever) | Daemon runs alone via `hive daemon start`; Electron never invoked |
+
+Implementation cost: ~30 LOC plus the `extraResources` packaging entry. Rejected alternatives:
+
+- **Always spawn fresh** — would conflict with an existing headless daemon on the port. Bad for users who run Hive on a home server and occasionally open the desktop UI.
+- **Lazy-spawn on first Run** — adds cold-start latency to every "first message after opening the app" and complicates the tray-icon-status story (the icon would be "off" until you've talked to it).
+- **Embed daemon in Electron's Node main process** (single process, no spawn) — forces the daemon to run in Node, abandoning Bun's built-in TS / SQLite / test runner. The two-process cost is one `spawn()` call and a localhost socket; trivial.
+
 ## What this defers
 
 - Cloud / hosted sync. Local-first only; sync is user-driven.
@@ -163,8 +193,8 @@ hive/
 - **Memory format details** (events vs prose, tiering, INDEX shape, promotion rules). Storage layer absorbs either. Hermes Agent's memory subsystem (`plugins/memory/`, agent-curated, FTS5 session search, Honcho dialectic user modeling) is the leading public reference design to evaluate against — see CONTEXT.md "Reference projects".
 - **Capability manifest schema** — particularly the shape of `providerHints` for per-provider Tool concessions (Gemini schema subset, OpenAI strict mode, Anthropic cache_control placement).
 - **Secrets / auth profiles** — Hive must build its own Secrets primitive. pi-ai is stateless on disk for credentials: it reads provider env vars (`OPENAI_API_KEY` etc.) at call time, accepts `apiKey` overrides per call, and exposes OAuth primitives (`getOAuthApiKey(providerId, credentials)`) where the *caller* persists the `{refresh, access, expires}` triple. pi-ai's own CLI saves to `auth.json` in CWD, but that's a CLI convention, not a library surface. (Earlier draft of this ADR described an "auth-profiles" surface in pi-ai — that was inaccurate; no such system exists. See ADR-0003 G1.)
-- **Per-Agent vs per-Run model selection policy.** Harness declares preferred + fallback; the resolution algorithm at Run start is unspecified.
-- **Daemon process management from Electron.** Spawn on app start vs lazy spawn vs attach-to-existing (if daemon already running headlessly). Affects "headless mode + open the app" composition.
+- ~~**Per-Agent vs per-Run model selection policy.**~~ Resolved: three-layer resolution at Run start — (1) per-Run override (transient, picked in UI), (2) Harness `config.model` + `config.modelFallback` (per-Agent default, edited via Agent Manager), (3) global deployment default. No per-Thread sticky model in v1. Backend-specific config (model name, effort, thinking budget, permission flags) lives in `harness.config` and is validated against a per-backend Zod schema. See ADR-0003 "Harness config is backend-specific and schema-driven".
+- ~~**Daemon process management from Electron.**~~ Resolved (see "Daemon-from-Electron lifecycle" below).
 
 ## Verification
 
