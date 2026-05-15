@@ -9,7 +9,7 @@ An identity with an **Agent Harness** + a **Memory** partition keyed by that ide
 _Avoid_: "AI assistant", "bot" (too generic).
 
 **Agent Harness**:
-An agent's capability bundle — system prompt + identity + selected **Skills** + bound **Tools** + bound **MCP Servers**. A file/document. Resolution against the **Capability Registry** happens at Run start.
+An agent's capability bundle — the agent's **own** complete system prompt (frozen text, written by the **Agent Manager** at spawn, drawing on **Prompt Snippets**) + identity + bound **Skills** + bound **Tools** + bound **MCP Servers**. A file/document. The prompt itself is monolithic and is not reassembled at Run start; only the bound Capabilities are resolved against the **Capability Registry** at Run start. Updating the prompt requires an explicit Agent Manager Run.
 _Avoid_: "Harness" alone (we always prefix with "Agent"), "Persona" (implies only prompt).
 
 **Memory**:
@@ -36,14 +36,18 @@ A specialized **Agent** that creates, configures, clones, and destroys other age
 **Skill**:
 An on-demand technique file an agent opts into. Loaded only when matched; not always-on context. A **Capability** with Personal-origin (typically).
 
+**Prompt Snippet**:
+A reusable block of prompt text — voice rules, coding practices, review standards, domain conventions, etc. A **Capability** with an origin tag. **Not** loaded into any running agent's context. Consumed only by the **Agent Manager** at agent-creation (or prompt-refresh) time as reference material when authoring another agent's Harness prompt. The Agent Manager may adopt verbatim, paraphrase, combine, or omit. Snippets are advisory inputs to prompt authoring; they are never live includes.
+_Avoid_: "Persona", "Role", "Soul", "Instructions" — those describe content categories, not the kind. The kind is "Prompt Snippet"; categories (voice, practice, convention, …) live on the manifest if useful.
+
 **Tool**:
-A function an agent can call. A **Capability**. May be defined natively (Personal-origin) or provided by an **MCP Server** (Workplace-origin).
+A function an agent can call. A **Capability**. Either **built-in** (TypeScript handler in the Hive daemon source tree — Personal-origin, ships with Hive itself, has direct in-process access to Hive internals like Memory and Run spawning) or **MCP-sourced** (surfaced from a configured **MCP Server**; origin inherits from the server: a personal MCP server carries Personal-origin Tools, a company MCP server carries Workplace-origin Tools). **User extension of Tools happens by adding MCP servers, not by dropping TypeScript files into a data directory** — the process boundary is what gives user-installed Tools a trust model.
 
 **MCP Server**:
-An external process providing tools and resources via the Model Context Protocol. A **Capability**; typically Workplace-origin.
+An external process providing tools and resources via the Model Context Protocol. A **Capability**. Origin is per-server: a personal MCP server (a `gh` wrapper you wrote, a local Ollama bridge) is Personal-origin and travels with you; a company MCP server (ADO, internal allowlists) is Workplace-origin and stays. Because **Tools** are restricted to built-in (in the daemon source tree) or MCP-sourced, **MCP is the only path for user-installed Tools** — it carries both Personal and Workplace extensions. Process lifecycle is reference-counted by Harness bindings: the server starts when the first Agent that binds it appears in the **Agent Catalog**, and stops when the last such Agent unbinds or is destroyed.
 
 **Capability**:
-A named, reusable unit of agent ability — a **Skill**, **Tool**, **MCP Server**, or **Agent Harness** template. Has an **origin** tag.
+A named, reusable unit of agent ability — a **Skill**, **Prompt Snippet**, **Tool**, **MCP Server**, or **Agent Harness** template. Has an **origin** tag.
 
 **Personal-origin Capability**:
 Tagged as portable. Travels with the user across companies. Carries no company-specific knowledge.
@@ -61,7 +65,11 @@ The on-disk description of a **Capability** — schema, content (for Skills), MC
 Typed escape-hatch metadata on a **Capability Manifest** carrying per-provider concessions (e.g., Anthropic `cache_control` placement, OpenAI strict-mode requirement, Gemini schema subset). Read by the **ModelGateway** at Run start to produce a provider-shaped artifact.
 
 **Capability Compatibility**:
-Manifest-declared requirements (e.g., *requires tool_use*, *requires reasoning visibility*, *requires ≥200k context*) that a **Run** validates against its chosen model before starting. Prevents silent under-delivery when a Capability cannot be honored.
+Manifest-declared requirements that a **Run** validates before starting. Two axes:
+- **Model-side**: *requires tool_use*, *requires reasoning visibility*, *requires ≥200k context*. Validated against the chosen model.
+- **System-side**: *requires `gog` binary at $PATH*, *requires Docker daemon running*, *requires `$AZURE_TOKEN` env var*. Validated against the deployment environment.
+
+Prevents silent under-delivery when a Capability cannot be honored. MCP server activation also gates on system-side compatibility — a server that requires `gog` does not start (and surfaces a clear error) if `gog` is missing.
 
 **Tool-use Loop**:
 The iterative cycle inside a **Run**: model emits a tool call → Hive executes the bound **Tool** or **MCP** call → result returns to the model → model continues. Universal across providers; the **ModelGateway** normalizes the wire shape.
@@ -96,6 +104,7 @@ The per-provider translation unit that maps Hive's canonical message + tool form
 - An **Agent** owns zero or more **Threads**
 - A **Run** binds an Agent to a Thread for one execution
 - A **Skill** is typically Personal-origin; an Agent Harness opts into specific skills
+- A **Prompt Snippet** is consumed by the **Agent Manager** at spawn/refresh time; it is never bound to a target Agent and never enters a target Agent's runtime context
 - A **Tool** may be Personal-origin (portable) or Workplace-origin (per-company, often via MCP)
 - The **Root Agent** is the user's interface; the **Agent Manager** is the system's interface for agent lifecycle
 - The **Capability Registry** is loaded at deployment startup; per-agent data (**Memory**, INDEX, **Threads**) is loaded per-Run against the (Agent, Thread) pair
@@ -108,6 +117,7 @@ The per-provider translation unit that maps Hive's canonical message + tool form
 ## Flagged ambiguities
 
 - **"Persistent vs. ephemeral agent"** was originally proposed as a fundamental distinction. Resolved: it's not. Both share `Agent Harness + Memory`. The difference is whether the agent is kept after the task — a deployment choice, not an identity.
+- **"Agent Harness template vs instance"** (ADR-0001 blocker #6). Resolved: there is no live template. The Harness *is* the instance — a frozen artifact written by the Agent Manager. The "template-like" reuse is supplied by **Prompt Snippets** (a separate Capability kind) that the Agent Manager consults at spawn. Snippet edits do not propagate; refreshing an agent's prompt requires an explicit Agent Manager Run.
 - **"Domain"** is locked to the _logical focus area_ sense. It is abstract — not a structural partition. Resources an agent can reach (repos, files, MCPs) are determined by the **Agent Harness**, not by Domain.
 - **"Hermes-style tiered memory" vs. "Librarian model"** — open. Likely composable (librarian as per-Agent partition, tiered shape within each agent's memory). Deferred to a dedicated memory session.
 - **Our "Agent" vs. industry "agent"** — industry usually means the _running_ thing (LLM + loop). Ours is the _persistent_ pair (Agent Harness + Memory). The running thing is **Run**. Closest industry analogue: OpenAI's Assistant.
