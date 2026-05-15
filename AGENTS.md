@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Repo conventions for AI coding agents (Codex, Claude Code, Cursor, Aider, Windsurf, …) and humans. Model-agnostic — the canonical source. `CLAUDE.md` is a copy for Claude Code compatibility; if you edit one, sync both.
+Repo conventions for AI coding agents working in this repo.
 
 ## Read first (in this order)
 
