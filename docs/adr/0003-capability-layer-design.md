@@ -2,7 +2,7 @@
 
 ## What this ADR records
 
-The shape and lifecycle of every **Capability** kind in Hive v1: what they are, how they're stored on disk, who consumes them, when they run, and how the CLI participates. Closes ADR-0001 blocker #6 (Agent Harness "template" vs "instance" disambiguation). Leaves open ADR-0001 blockers #2 (secrets), #3 (name-collision), and the permission-system shape — those get their own ADRs.
+The shape and lifecycle of every **Capability** kind in Hive v1: what they are, how they're stored on disk, who consumes them, when they run, and how the CLI participates. Closes ADR-0001 blocker #6 (Agent Harness "template" vs "instance" disambiguation). Leaves open ADR-0001 blocker #2 (secrets) and the permission-system shape — those get their own ADRs. Blocker #3 (name-collision) is downgraded out of the active backlog: with `run_shell` as the default CLI path, MCP servers in v1 are sparse and naturally divergent, so collisions are unlikely until v1.1.
 
 ## The five Capability kinds
 
@@ -10,7 +10,7 @@ Hive recognizes exactly five Capability kinds. Each carries an **origin** tag (P
 
 | Kind | Content | Consumed by | When |
 |---|---|---|---|
-| **Skill** | Markdown technique file | The running Agent, mid-Run, when matched | Per-Run, on demand |
+| **Skill** | Markdown technique file | The running Agent, mid-Run, when the model invokes `load_skill(name)` | Per-Run, progressive disclosure (descriptions always visible, body loaded on demand) |
 | **Prompt Snippet** | Markdown prompt block (voice, practice, convention) | The **Agent Manager** | At agent spawn / explicit prompt refresh |
 | **Tool** | Built-in TS handler **or** MCP-sourced function | The running Agent | Per Tool call |
 | **MCP Server** | External process speaking Model Context Protocol | Hive daemon (as MCP client) | While ref-counted by Harness bindings |
@@ -40,6 +40,8 @@ Conflating them under one Capability kind would produce mush in both manifests a
 
 Snippets are advisory inputs to prompt authoring — the Agent Manager may adopt verbatim, paraphrase, combine, or omit. The result is one monolithic frozen prompt in the target Agent's Harness; Snippet content never enters that Agent's runtime context.
 
+**Snippet manifest is minimal: `{ name, description, origin }` + body.** No closed category enum, no hardcoded tag taxonomy. The `description` is free-form prose written for the Agent Manager (an LLM), which is perfectly capable of recognizing snippet purpose from natural language without a `category: "voice"` field. Adding a closed enum was considered and rejected: it would require maintenance, would constrain authoring, and would add no signal the description doesn't already carry.
+
 ## On-disk shape: folder-per-capability for markdown-bearing kinds
 
 Skills, Prompt Snippets, and Agent Harnesses each live in a folder containing a canonical manifest file plus optional sibling assets:
@@ -66,19 +68,26 @@ Rejected: single-file `<name>.md`, or hybrid promote-when-needed. The first 10 S
 
 Tools come from exactly two places:
 
-- **Built-in.** TypeScript handler in the Hive daemon source tree (`src/capabilities/tools/<name>/tool.ts`), exported via a typed `defineTool({...})` helper with Zod schema, `providerHints`, and `compatibility` fields. Has in-process access to Hive internals (Memory, Run spawning, the gateway). Kernel primitives live here: `memory_read`, `memory_write`, `ask_user`, `spawn_sub_agent`, `save_artifact`, `run_shell`, etc.
+- **Built-in.** TypeScript handler in the Hive daemon source tree (`src/capabilities/tools/<name>/tool.ts`), exported via a typed `defineTool({...})` helper with Zod schema, `providerHints`, and `compatibility` fields. Has in-process access to Hive internals (Memory, Run spawning, the gateway). Kernel Tools include both *universal* primitives that any Agent may bind (`memory_read`, `memory_write`, `ask_user`, `save_artifact`, `run_shell`, …) and *restricted* primitives bound only to specific roles: `spawn_sub_agent` / dispatch Tools are bound exclusively to the **Root Agent**; `create_agent` / `update_agent_harness` / `destroy_agent` / agent-lifecycle Tools are bound exclusively to the **Agent Manager**. Restriction is enforced by which Harness binds them, not by per-call checks at runtime.
 - **MCP-sourced.** Surfaced from a configured MCP Server. Origin inherits from the server.
 
 User extension of Tools happens *exclusively* via MCP. Hive does not dynamically `import()` user TypeScript from a data directory; the process boundary that MCP provides is what gives user-installed Tools their trust model. A user who wants a new Tool writes (or installs) a tiny MCP server.
 
-## Kernel `run_shell` Tool + MCP wrappers for CLIs that earn structure
+## Agents invoke external CLIs through `run_shell` — period
 
-Agents invoke external CLIs through two coexisting paths:
+There is one path for CLI invocation in v1:
 
-- **`run_shell`** — a built-in Tool that runs an arbitrary shell command. Gated by the Permission System with a per-Agent allowlist. Used for one-off, exploratory, or low-frequency invocations where structured output isn't needed.
-- **MCP wrappers** — a Personal- or Workplace-origin MCP server wraps a CLI and exposes typed Tools. Used when the CLI is called often, output is structured, or the model picks the right Tool more reliably with a typed surface.
+- **`run_shell`** — a built-in Tool that runs an arbitrary shell command. Gated by the Permission System with a per-Agent per-command allowlist. The agent's call looks like `run_shell({command: "gog", args: ["search", "xyz"]})`. The daemon executes the command and returns `{stdout, stderr, exitCode}`.
 
-Rule of thumb: wrap a CLI in MCP when it's daily-use *and* output is structured *and* schema visibility improves selection accuracy. Otherwise, leave it on `run_shell`. There is no auto-detection of CLIs on `$PATH` — availability is declared via Capability Compatibility (`requires: [{binary: "gog"}]`) and validated at Run start (built-in) or server start (MCP).
+**No MCP wrapping for single CLIs.** Wrapping `gog` (or any one CLI) in an MCP server is overkill — 30+ LOC of server code, subprocess lifecycle, JSON-RPC roundtrips, all to gain "typed Tool surface" for one verb. `run_shell` plus a sensible permission allowlist gives the same practical capability at zero authoring cost.
+
+**No manifest-only shell Tools either.** A user-droppable YAML that declares "register a Tool named `gog_search` that runs `gog search`" was considered and rejected. It is strictly less capable than MCP and only marginally cheaper than `run_shell` once a permission allowlist exists; not worth the second mechanism in v1.
+
+When a CLI invocation genuinely earns a typed Tool surface (high-frequency, structured output, state needed across calls, model selection accuracy materially improves), the path is **kernel-Tool promotion**: add a built-in TS Tool in the daemon source tree. That decision is made deliberately, in code, with review — not by users dropping manifests.
+
+Availability is declared via Capability Compatibility (`requires: [{binary: "gog"}]`) on the Agent Harness, validated at Run start.
+
+MCP servers remain in the architecture, but their role is narrowed: **server-class integrations** (ADO, GitHub Enterprise, Slack, internal company services, Ollama bridges, etc.) — surfaces that bring meaningful state, structured resources, or many related Tools at once. Not "I want to call one CLI."
 
 ## MCP server lifecycle: ref-counted by Harness bindings
 
@@ -86,7 +95,7 @@ An MCP server's process:
 
 - **Starts** when the first Agent in the Catalog whose Harness binds it appears.
 - **Stops** when the last such Agent unbinds or is destroyed.
-- **Crashes** are caught by a watchdog with exponential-backoff reconnect (lifted from CLAW); the audit log records every restart.
+- **Crashes** are caught by a watchdog with exponential-backoff reconnect; the audit log records every restart. (See OpenClaw's MCP integration for a working precedent of this pattern.)
 
 This avoids cold-start latency for actively-bound servers (they're warm whenever an Agent that needs them exists) and avoids running servers no Agent has asked for. Reference counting is on Harness *bindings*, not on active Runs — Threads are persistent and Runs come and go on the same Agent.
 
@@ -107,9 +116,41 @@ The `hive` binary plays three roles, all as a client to the daemon over `localho
 - **Capability + Agent admin** — `hive agents …`, `hive caps …`, `hive memory …`, `hive sync …`. The scriptable mirror of the Web UI.
 - **One-shot user surface** — `hive send "…"` streams a Run result to stdout. Bridges any terminal context (git hook, Makefile, another agent) into Hive.
 
-Deferred: a full TUI (Ink-style interactive terminal client). Web UI is the primary v1 user surface; if a TUI is needed later, CLAW's TUI shape can be lifted then.
+Deferred: a full TUI (Ink-style interactive terminal client). Web UI is the primary v1 user surface; if a TUI is needed later, OpenClaw and Hermes both ship working TUIs to reference.
 
-Auth: token from `~/.hive/.token` (chmod 0600), lifted from CLAW. CLI prompts to start the daemon if not running.
+Auth: token from `~/.hive/.token` (chmod 0600). CLI prompts to start the daemon if not running.
+
+## Authority partition: Root dispatches, Manager manages, Workers work
+
+The kernel ships exactly two non-Worker Agents. Authority is partitioned at the Harness-binding level — no per-call runtime gate:
+
+| Role | Dispatch (`spawn_sub_agent`) | Agent lifecycle (`create_agent`, …) |
+|---|---|---|
+| Root Agent | ✅ Bound | ❌ Not bound |
+| Agent Manager | ❌ Not bound | ✅ Bound |
+| Worker Agents (all others) | ❌ Not bound | ❌ Not bound |
+
+Any user may address any Agent directly. Convention is to talk to the Root Agent, which orchestrates multi-Agent workflows when needed. The Agent Manager is reachable directly when authoring or updating agents.
+
+Knock-on rules:
+
+- **Agent Manager is singleton.** Exactly one per deployment; cannot self-spawn another Agent Manager.
+- **Agent Manager has full Registry visibility.** Its Harness binds every Capability so it can compose any combination into a new Agent's Harness.
+- **Workers are leaves.** They do work — they don't fork.
+- **Multi-Agent review flows are Root-orchestrated.** If a workflow wants "Agent Manager drafts a new Agent, then a Review Agent QAs it before commit," the Root Agent runs that pipeline. The Agent Manager does not dispatch the reviewer itself. (This pipeline is v1.1; v1 ships Agent Manager → direct write.)
+
+## Agent Manager workflow (resolved)
+
+The Agent Manager's loop is intentionally underspecified — the details belong to its system prompt (designed when we write the Agent Manager Harness). What this ADR pins:
+
+- **Invocation.** Direct user message, or dispatched-to by the Root Agent. Both supported. No requirement that AM be reached through Root.
+- **Input.** Natural language ("Make a coding agent for odsp-web"). Optional structured references (specific Snippets / Skills / MCPs to consider) may be passed but aren't required.
+- **Output.** Writes the target Agent's Harness file directly. The "review by sub-agent" pattern is deferred to v1.1 and requires the Root Agent to orchestrate (since AM can't dispatch).
+- **Update is the same flow.** There is no separate "refresh" Tool. Authoring a new Harness and editing an existing one go through the same Agent Manager Run; the difference is whether a target Agent ID is supplied.
+- **Discovery.** Agent Manager's Harness binds every Capability (full Registry access), so Snippets/Skills/Tools/MCPs are visible without a special discovery Tool.
+- **Inner-loop specifics** (clarification questions vs. autonomous draft, diff-vs-rewrite, preservation of hand-edits) are deferred to the Agent Manager's prompt design — they're prompt engineering, not architecture.
+
+What's still open at this layer is the *approval boundary* — ADR-0001's deferred "Agent Manager authority: autonomous vs user-approved." The strong v1 default should be **user approval before any Harness write commits to disk**: AM proposes the file, the UI shows the diff, the user approves. Closing this open thread fully is a permission-system concern (see G2 — Permission System shape).
 
 ## Capability Compatibility extends to system prerequisites
 
@@ -125,84 +166,52 @@ Validated at Run start for built-in Tools and at server start for MCP servers. M
 
 The following decisions are *not* settled and should be the next grill targets. Each entry is self-contained enough to resume cold on a different machine.
 
-### G1 — MCP Tool namespacing under collisions (ADR-0001 blocker #3)
+### G1 — Secrets / MCP auth (ADR-0001 blocker #2)
 
-When `gog-mcp` exposes `search` and another MCP server also exposes `search`, what does the Agent's tool call resolve to? Same question across Personal vs Workplace origin: does a Workplace `web_fetch` shadow a Personal one, or vice versa?
+MCP servers, built-in Tools, and the ModelGateway (via pi-ai) all need credentials — provider API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …), OAuth credential triples (`{refresh, access, expires}` for Claude Pro / ChatGPT Plus / Copilot), and tool-specific tokens (`GH_TOKEN`, Azure SPN, etc.). Where do they live? How are they injected?
 
-Options to consider:
-- **Fully qualified.** `<server>.<tool>` always; flat names never legal in Harness bindings. Most explicit, most verbose.
-- **Flat with collision error.** The Registry refuses to load if two servers expose the same tool name unless an alias is set.
-- **Flat with origin precedence.** Workplace overrides Personal (or vice versa); audit log records the shadow.
-- **Hybrid.** Flat by default; qualified form available for tie-breaking.
+**Constraint from upstream.** pi-ai is stateless on disk for credentials (verified against the published source): it reads env vars at call time, accepts explicit `apiKey` overrides, and exposes `getOAuthApiKey(providerId, credentials) → { newCredentials, apiKey }` where the caller persists. There is no "auth-profiles" surface in pi-ai to adopt (an earlier ADR-0002 draft was incorrect on this). **Hive must build its own Secrets primitive regardless** — pi-ai is a consumer, not a provider.
 
-Touches: ADR-0001 blocker #3, ADR-0002 manifest design, the Capability Registry browser UI.
+**Concrete reference design — OpenClaw.** OpenClaw has solved most of this problem already. Key shapes worth borrowing (read from `E:\dev\GitRepos\openclaw\src\agents\auth-profiles\types.ts` and `docs/auth-credential-semantics.md`):
 
-### G2 — Secrets / MCP auth (ADR-0001 blocker #2)
+- Three credential types: `ApiKeyCredential`, `TokenCredential` (static bearer, not refreshed), `OAuthCredential` (with refresh handling).
+- `SecretRef = { source: "env" | "file" | "exec", provider, id }` — values stored inline OR via reference. The `exec` source makes the backend pluggable for keychain, 1Password, Vault, gh-auth, etc.
+- Per-agent profile store at `<workspace>/agents/<agent-id>/agent/auth-profiles.json`. Read-through inheritance: agent → `main` agent fallback. No copying of secret material.
+- Two-file split: secrets store (`{version, profiles}`) vs. state store (`{version, order, lastGood, usageStats}`). State changes constantly; secrets rarely. Separated to avoid touching the credentials file.
+- `copyToAgents` boolean per credential (api_key/token default portable; oauth default non-portable).
+- Stable probe reason codes for diagnostics: `ok | excluded_by_auth_order | missing_credential | invalid_expires | expired | unresolved_ref | no_model`.
+- External CLI credential discovery with scoped modes (`none` / `existing` / `scoped`) and `allowKeychainPrompt: false` for read-only paths.
 
-MCP servers and built-in Tools both need credentials (`GH_TOKEN`, `OPENAI_API_KEY`, Azure SPN, etc.). Where do they live? How are they injected? ADR-0002 already flagged the choice: adopt `pi-ai`'s `auth-profiles` surface or wrap it under a Hive-native Secrets primitive.
+**Constraint from upstream pi-ai.** pi-ai is stateless on disk for credentials (verified against the published source): it reads env vars at call time, accepts explicit `apiKey` overrides, and exposes `getOAuthApiKey(providerId, credentials) → { newCredentials, apiKey }` where the caller persists. No "auth-profiles" surface to adopt (an earlier ADR-0002 draft was incorrect). Hive's Secrets primitive sits *above* pi-ai and feeds it.
 
-Questions to resolve:
-- Storage backend — OS keychain (Keychain / DPAPI / libsecret), encrypted file, or both?
-- Naming — by capability (`gog.token`), by profile (`work` / `personal`), or by raw env var name?
-- Origin tagging — does a secret carry Personal/Workplace origin the way Capabilities do? (Probably yes.)
-- Per-Agent vs global — can two Agents see different secrets for the same name?
-- Redaction — audit log + UI must never leak secrets; the redaction policy needs to be a first-class concept, not a grep.
+Questions remaining for Hive (narrowed):
+- **Storage backend.** Adopt OpenClaw's plain-JSON-with-filesystem-perms baseline, or escalate to OS keychain (Keychain / DPAPI / libsecret) as the default `exec` source? Likely answer: plain JSON for v1 with `exec` source pluggable; ship a `hive secret get <id>` subcommand the `exec` source can call to bridge to OS keychain when users want.
+- **Origin tagging.** Add explicit `origin: "personal" | "workplace"` alongside the OpenClaw `copyToAgents` boolean (more semantic than a single portability flag, aligns with Capability origin).
+- **Multi-account.** Adopt OpenClaw's profile + usage-stats data shape, but defer the rotation/cooldown engine to v1.1 (premature for single-user single-account v1).
+- **OAuth refresh persistence.** When pi-ai returns `newCredentials`, the Secrets primitive writes back to the per-Agent profile store. Atomicity / file-locking shape TBD — OpenClaw has working code in `src/agents/auth-profiles/oauth-file-lock-passthrough.test-support.ts` to reference.
+- **Redaction policy.** First-class, not a grep. Where does the redaction layer live — at the audit log boundary, at the HTTP boundary, at the gateway? OpenClaw redacts at multiple points; pick one for Hive.
 
-Touches: ADR-0001 blocker #2, ADR-0002 deferred decision on `auth-profiles`, every MCP server's env, the audit log.
+Touches: ADR-0001 blocker #2, ADR-0002 (Secrets deferred decision — corrected this session), every MCP server's env, the ModelGateway, the audit log, the portability mission.
 
-### G3 — Skill matching mechanism at Run time
+**Hermes is also a reference but smaller in scope here.** Hermes has its own credential pool (`agent/credential_pool.py`, `agent/credential_sources.py`) — worth a glance for an alternative shape, but OpenClaw's design covers more of what Hive needs.
 
-CONTEXT.md says Skills are "loaded only when matched; not always-on context." Matched **how**?
+### G2 — Permission System shape
 
-Options:
-- **Model-picks-by-description.** Skill descriptions are visible to the model as a tool-list; model invokes a `load_skill(name)` Tool. Claude-Code-style.
-- **Hand-bound list on the Harness.** The Harness names exactly which Skills are available; description-style matching is internal to those.
-- **Both.** Harness narrows the universe; model picks within.
-- **Heuristic match.** The Run executor runs a small classifier over the user message and pre-loads top-K Skill descriptions; model can then invoke their full body.
+`run_shell` is unshippable without this. The work-claw internal-Microsoft inventory (a *feature wishlist*, not an architectural source) lists a 5-level autonomy dial, 14 action categories, classifier, custom rules, approval modal, and trust pattern learning. Treat those as starting hypotheses to evaluate against scenarios — not as a design to copy. Concrete questions for Hive:
 
-Touches: Skill manifest description format, the Run executor's prompt assembly, the model's tool-list construction, context-budget allocator (work-claw inventory line ~85).
-
-### G4 — Snippet metadata categories
-
-Should Snippet manifests require a category enum (`voice`, `practice`, `convention`, `process`, `domain-rule`, …) or just carry free-form tags? Affects how the Agent Manager discovers them ("show me all `voice` Snippets when authoring a new coding agent") and how the Registry browser groups them.
-
-Sub-questions:
-- Are categories closed (fixed enum, evolves slowly) or open (free-form, user-defined)?
-- Can a Snippet be in multiple categories?
-- Does category interact with origin? (E.g., `domain-rule` Snippets are almost always Workplace-origin.)
-
-Touches: Snippet manifest schema, Agent Manager discovery query, Registry browser UI.
-
-### G5 — Agent Manager workflow
-
-This is the largest open thread. The Agent Manager is on the critical path for every agent creation and every prompt refresh. Open questions:
-
-- **Invocation.** Is the Agent Manager always a sub-Agent the Root Agent dispatches to ("Make a coding agent for odsp-web" → Root → Manager), or can the user address it directly?
-- **Input.** Natural language description from the user only? Plus optional explicit references ("use these Snippets")? Plus a starting Harness to fork?
-- **Inner loop.** Does the Agent Manager (a) ask the user clarifying questions before authoring, (b) draft the Harness then ask for review, or (c) author autonomously and let the user iterate via "refresh" Runs?
-- **Output.** Writes the Harness file directly, or proposes a diff for user approval first?
-- **Refresh.** What does "Agent Manager, please refresh agent X" actually look like? Re-author from scratch with current Snippets? Delta against the existing prompt? Preserve user hand-edits?
-- **Self-spawn.** Can the Agent Manager create another Agent Manager (e.g., a domain-specialized variant for prompt engineering inside a particular vertical)?
-- **Discovery.** How does the Agent Manager know what Snippets exist? Reads the Registry directly? Through a `list_capabilities` Tool? Pre-loaded into its system prompt?
-
-Touches: every Capability kind, the Permission System (Agent Manager has elevated authority — explicit boundary needed, ADR-0001's deferred decision on "Agent Manager authority boundary").
-
-### G6 — Permission System shape
-
-`run_shell` is unshippable without this. CLAW had a 5-level autonomy dial + 14 action categories + classifier + custom rules + approval modal + trust pattern learning. The inventory marks most of this Core. Questions:
-
-- Lift the 5-level dial wholesale (Strict / Supervised / Balanced / Autonomous / YOLO), or simplify for v1?
-- Action categories — keep CLAW's 14, prune to a smaller set, or generalize? Need at minimum: `file_read`, `file_write`, `shell` (for `run_shell`), `network`, `memory_write`, `agent_spawn`, `mcp_tool`, `destructive`.
-- Scope of a rule — per-Agent, per-Thread, per-Run, global? CLAW had per-channel; we already decided against per-Thread scoping in Q2 (Agent Harness binds, not Thread).
-- Approval modal — one-time / always-allow / session-trust / deny — lift wholesale?
-- Trust pattern learning (auto-suggest after N approvals) — v1 or v1.1?
-- Pre-tool guardrails (`rm -rf`, `drop database`, etc.) — hard-coded denylist independent of autonomy dial?
+- **Autonomy axis** — one global dial, per-Agent dial, or per-action-category? A coarse 5-level dial is simple but blunt; per-category gradations are more honest. v1 likely needs only two axes: per-Agent autonomy level + hard-coded denylist for destructive shell commands.
+- **Action categories** — minimum viable set for v1: `shell` (for `run_shell` with per-command allowlist), `memory_write`, `agent_spawn`, `mcp_tool`, `destructive`. Add `file_read`/`file_write`/`network` only when actual Tools land that need them — categories without consumers are noise.
+- **Scope of a rule** — per-Agent (lives on Harness) and global (deployment default). Q2 of this session ruled out per-Thread scope (Harness binds, not Thread). Per-Run is unnecessary.
+- **Approval modal** — one-time / always-allow / session-trust / deny. Standard shape. Live in the Web UI; CLI gets a TTY prompt fallback.
+- **Trust pattern learning** — defer to v1.1. Premature without usage data.
+- **Pre-tool guardrails** — hard-coded denylist (`rm -rf /`, `DROP DATABASE`, `shutdown`, `format`, etc.) independent of autonomy dial. These are never allowed; the autonomy dial doesn't override them.
+- **Reference reads.** Look at OpenClaw's permission/security layer (`src/security/`) and Hermes' `agent/file_safety.py` for working precedent on how other projects shaped this.
 
 Touches: kernel `run_shell` Tool (depends on this), Agent Manager (it elevates permissions), MCP Tool invocation, audit log enrichment.
 
 ---
 
-These six are independent enough to grill in parallel sessions; G5 (Agent Manager) is the highest-leverage because every other decision flows through it.
+These two are independent. G2 (Permission System) is more urgent because `run_shell` and the Agent Manager's approval boundary both block on it.
 
 ## Verification
 

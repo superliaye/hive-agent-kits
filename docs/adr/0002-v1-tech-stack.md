@@ -160,9 +160,9 @@ hive/
 
 ## Deferred decisions (open)
 
-- **Memory format details** (events vs prose, tiering, INDEX shape, promotion rules). Storage layer absorbs either.
+- **Memory format details** (events vs prose, tiering, INDEX shape, promotion rules). Storage layer absorbs either. Hermes Agent's memory subsystem (`plugins/memory/`, agent-curated, FTS5 session search, Honcho dialectic user modeling) is the leading public reference design to evaluate against — see CONTEXT.md "Reference projects".
 - **Capability manifest schema** — particularly the shape of `providerHints` for per-provider Tool concessions (Gemini schema subset, OpenAI strict mode, Anthropic cache_control placement).
-- **Secrets / auth profiles** — pi-ai's `auth-profiles` exist; whether Hive adopts that surface or wraps it under a Hive-native Secrets primitive is open.
+- **Secrets / auth profiles** — Hive must build its own Secrets primitive. pi-ai is stateless on disk for credentials: it reads provider env vars (`OPENAI_API_KEY` etc.) at call time, accepts `apiKey` overrides per call, and exposes OAuth primitives (`getOAuthApiKey(providerId, credentials)`) where the *caller* persists the `{refresh, access, expires}` triple. pi-ai's own CLI saves to `auth.json` in CWD, but that's a CLI convention, not a library surface. (Earlier draft of this ADR described an "auth-profiles" surface in pi-ai — that was inaccurate; no such system exists. See ADR-0003 G1.)
 - **Per-Agent vs per-Run model selection policy.** Harness declares preferred + fallback; the resolution algorithm at Run start is unspecified.
 - **Daemon process management from Electron.** Spawn on app start vs lazy spawn vs attach-to-existing (if daemon already running headlessly). Affects "headless mode + open the app" composition.
 

@@ -28,23 +28,30 @@ One execution of an **Agent** on a **Thread**. Spans from invocation to completi
 The directory of agents at a deployment. One entry per **Agent**: name, **Agent Harness**, **Domain** (label), current state. Used for routing, discovery, and lifecycle management. A consumer reads it to answer "what agents exist and which one should I send this to?"
 
 **Root Agent**:
-The user's entry-point **Agent**. Has system overview, handles simple requests directly, dispatches harder work to other agents.
+The user's entry-point **Agent**. Handles simple requests directly and **is the only Agent allowed to dispatch tasks to other Agents** (the `spawn_sub_agent` / dispatch Tools are bound exclusively to its Harness). Any user can address any Agent directly, but Root is the conventional entry point and the orchestrator for multi-Agent workflows.
 
 **Agent Manager**:
-A specialized **Agent** that creates, configures, clones, and destroys other agents. Separated from the **Root Agent** for focus reasons — agent design is heavy context.
+A specialized **Agent** that creates, configures, and destroys other Agents. **The only Agent allowed to manage Agents** — agent-lifecycle Tools (`create_agent`, `update_agent_harness`, `destroy_agent`, etc.) are bound exclusively to its Harness. Cannot dispatch tasks to other Agents (that's Root's privilege); cannot self-spawn (exactly one Agent Manager per deployment). Has full Registry visibility — its Harness binds every Capability so it can author or update any Agent's Harness. Separated from the **Root Agent** for focus reasons — agent design is heavy context.
+
+**Worker Agent**:
+Any **Agent** that is not the **Root Agent** or the **Agent Manager**. Workers do work: read/write Memory, call Tools, invoke MCP Servers, load Skills. They **cannot dispatch** (no `spawn_sub_agent`) and **cannot manage** other Agents (no agent-lifecycle Tools). This is the default Agent class; the kernel ships only two non-Worker Agents (Root and Manager).
 
 **Skill**:
-An on-demand technique file an agent opts into. Loaded only when matched; not always-on context. A **Capability** with Personal-origin (typically).
+An on-demand technique file an Agent has access to. A **Capability** with Personal-origin (typically). Two stages:
+- **Spawn-time binding.** The **Agent Manager** picks which Skills an Agent has when authoring the Harness. The chosen names are frozen into the Harness alongside Tools and MCP Servers. Set is fixed until an explicit Agent Manager refresh.
+- **Run-time progressive disclosure.** At Run start, *all bound* Skill descriptions are surfaced to the model (one line each, cheap). The model decides when to invoke `load_skill(name)` based on the current request; only then is the full body fetched into context. The model is the matcher — same pattern as Tools.
+
+Manifest fields: `name`, `description` (one-line trigger the model reads to decide invocation), `origin`. Body is the technique itself.
 
 **Prompt Snippet**:
-A reusable block of prompt text — voice rules, coding practices, review standards, domain conventions, etc. A **Capability** with an origin tag. **Not** loaded into any running agent's context. Consumed only by the **Agent Manager** at agent-creation (or prompt-refresh) time as reference material when authoring another agent's Harness prompt. The Agent Manager may adopt verbatim, paraphrase, combine, or omit. Snippets are advisory inputs to prompt authoring; they are never live includes.
-_Avoid_: "Persona", "Role", "Soul", "Instructions" — those describe content categories, not the kind. The kind is "Prompt Snippet"; categories (voice, practice, convention, …) live on the manifest if useful.
+A reusable block of prompt text — voice rules, coding practices, review standards, domain conventions, etc. A **Capability** with an origin tag. **Not** loaded into any running agent's context. Consumed only by the **Agent Manager** at agent-creation (or prompt-refresh) time as reference material when authoring another agent's Harness prompt. The Agent Manager may adopt verbatim, paraphrase, combine, or omit. Snippets are advisory inputs to prompt authoring; they are never live includes. Manifest fields: `name`, `description` (free-form prose — the Agent Manager reads this to decide fit), `origin`. No closed category enum: the Agent Manager is an LLM and recognizes the snippet's purpose from the description.
+_Avoid_: "Persona", "Role", "Soul", "Instructions" — those are content categories, not the kind. The kind is "Prompt Snippet".
 
 **Tool**:
-A function an agent can call. A **Capability**. Either **built-in** (TypeScript handler in the Hive daemon source tree — Personal-origin, ships with Hive itself, has direct in-process access to Hive internals like Memory and Run spawning) or **MCP-sourced** (surfaced from a configured **MCP Server**; origin inherits from the server: a personal MCP server carries Personal-origin Tools, a company MCP server carries Workplace-origin Tools). **User extension of Tools happens by adding MCP servers, not by dropping TypeScript files into a data directory** — the process boundary is what gives user-installed Tools a trust model.
+A function an agent can call. A **Capability**. Either **built-in** (TypeScript handler in the Hive daemon source tree — Personal-origin, ships with Hive itself, has direct in-process access to Hive internals like Memory and Run spawning) or **MCP-sourced** (surfaced from a configured **MCP Server**; origin inherits from the server). Hive does not load arbitrary user TypeScript at runtime; new Tool *kinds* arrive via MCP servers or by adding a built-in Tool to the daemon source. For invoking external CLIs (`gog`, `gh`, `docker`, `az`), the built-in `run_shell` Tool plus a per-Agent command allowlist is the standard path — wrapping single CLIs in dedicated Tools or MCP servers is not the recommended pattern.
 
 **MCP Server**:
-An external process providing tools and resources via the Model Context Protocol. A **Capability**. Origin is per-server: a personal MCP server (a `gh` wrapper you wrote, a local Ollama bridge) is Personal-origin and travels with you; a company MCP server (ADO, internal allowlists) is Workplace-origin and stays. Because **Tools** are restricted to built-in (in the daemon source tree) or MCP-sourced, **MCP is the only path for user-installed Tools** — it carries both Personal and Workplace extensions. Process lifecycle is reference-counted by Harness bindings: the server starts when the first Agent that binds it appears in the **Agent Catalog**, and stops when the last such Agent unbinds or is destroyed.
+An external process providing tools and resources via the Model Context Protocol. A **Capability**. Origin is per-server: a personal MCP server (a local Ollama bridge, a personal note-taking server) is Personal-origin and travels with you; a company MCP server (ADO, internal allowlists, internal data services) is Workplace-origin and stays. **MCP's role is server-class integrations** — surfaces that bring meaningful state, structured resources, or many related Tools at once. **MCP is not the path for wrapping single CLIs** — for that, agents use the built-in `run_shell` Tool against a per-Agent command allowlist. Process lifecycle is reference-counted by Harness bindings: the server starts when the first Agent that binds it appears in the **Agent Catalog**, and stops when the last such Agent unbinds or is destroyed.
 
 **Capability**:
 A named, reusable unit of agent ability — a **Skill**, **Prompt Snippet**, **Tool**, **MCP Server**, or **Agent Harness** template. Has an **origin** tag.
@@ -106,13 +113,27 @@ The per-provider translation unit that maps Hive's canonical message + tool form
 - A **Skill** is typically Personal-origin; an Agent Harness opts into specific skills
 - A **Prompt Snippet** is consumed by the **Agent Manager** at spawn/refresh time; it is never bound to a target Agent and never enters a target Agent's runtime context
 - A **Tool** may be Personal-origin (portable) or Workplace-origin (per-company, often via MCP)
-- The **Root Agent** is the user's interface; the **Agent Manager** is the system's interface for agent lifecycle
+- The **Root Agent** is the user's conventional entry point and the only Agent that may dispatch tasks to other Agents; the **Agent Manager** is the only Agent that may create/update/destroy Agents; all other Agents are **Worker Agents** (do work, cannot dispatch, cannot manage)
 - The **Capability Registry** is loaded at deployment startup; per-agent data (**Memory**, INDEX, **Threads**) is loaded per-Run against the (Agent, Thread) pair
 - The **Agent Catalog** indexes agents; each agent's data lives in its own partition keyed by Agent identity
 - A **Capability Manifest** defines a **Capability**; **Provider Hints** and **Capability Compatibility** live on the Manifest
 - Every LLM call inside a **Run** flows: Run → **ModelGateway** → **Provider Adapter** → provider SDK
 - The **Daemon** hosts Runs and the Registry; the **Shell** is one of several clients (alongside browser tabs and CLI) that connect to the Daemon over HTTP/WS
 - **Headless Mode** = Daemon without Shell; all other modes are Daemon-plus-client
+
+## Reference projects
+
+External agent systems that inform Hive's design. We borrow specific patterns from them; we are not cloning either.
+
+**OpenClaw** — [github.com/openclaw/openclaw](https://github.com/openclaw/openclaw). Public, TypeScript personal-AI assistant. Multi-platform (Telegram, Discord, Slack, WhatsApp, Signal, voice). Built on the `@earendil-works/pi-*` package family (pi-ai, pi-agent-core, pi-coding-agent, pi-tui, pi-web-ui). Local clone for direct inspection: `E:\dev\GitRepos\openclaw`. Workspace lives at `~/.openclaw/workspace/agents/<agent-id>/`.
+- Reference for: **capability layer** (skills, plugins, MCP integration); **secrets / auth** (`SecretRef` with `env`/`file`/`exec` sources; ApiKey/Token/OAuth credential taxonomy; per-Agent auth profiles with `main` fallback via read-through inheritance; `copyToAgents` portability flag; round-robin usage stats + cooldown tracking); channel/transport architecture; `doctor`/diagnostics with stable probe reason codes; MCP watchdog patterns.
+- Where Hive diverges: **per-Agent Memory partition** (OpenClaw shares one workspace across channels); **explicit Personal/Workplace origin tagging** on Capabilities and secrets (vs. OpenClaw's single `copyToAgents` boolean); **frozen Agent Harness** authored by the Agent Manager (vs. OpenClaw's live agent config).
+
+**Hermes Agent** — [github.com/NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent). Public, Python self-improving agent from Nous Research. Multi-platform (CLI + Telegram/Discord/Slack/WhatsApp/Signal/Email gateway). Seven terminal backends (local, Docker, SSH, Singularity, Modal, Daytona, Vercel Sandbox); serverless hibernation. Ships an explicit OpenClaw migration command (`hermes claw migrate`) — the two ecosystems are sibling projects, not competitors. Local clone for direct inspection: `E:\dev\GitRepos\hermes-agent`. Workspace lives at `~/.hermes/`.
+- Reference for: **memory model candidate** (tiered persistence, autonomous skill creation from experience, FTS5 session search with LLM summarization, Honcho dialectic user modeling); provider-adapter pattern (per-provider files under `agent/`); context compression and budget allocation (`context_compressor.py`, `context_engine.py`); scheduled automations via built-in cron; multi-backend execution surfaces.
+- Where Hive diverges: **per-Agent Memory keyed by Agent identity** (Hermes builds one cross-session user model); **Agent Manager explicitly authors and refreshes Agent Harnesses** (Hermes' self-improvement is autonomous and continuous; Hive gates it through explicit Agent Manager Runs); first-class Personal/Workplace origin tagging for portability across employers.
+
+**work-claw** — *Microsoft-internal* feature inventory, **not a public reference project and not an architectural source.** [`docs/inventory-workclaw.md`](docs/inventory-workclaw.md) catalogues ~150 features from that internal system and triages them as starting hypotheses for what Hive might build (per ADR-0001). Use it as a *feature checklist* against scenarios, never as a design pattern. Cite OpenClaw or Hermes for architectural references, not work-claw.
 
 ## Flagged ambiguities
 

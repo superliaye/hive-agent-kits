@@ -1,5 +1,7 @@
 # Work-Claw (CLAW) Feature Inventory & Triage for Hive
 
+> **Status:** Feature wishlist, not an architectural reference. Work-claw is a *Microsoft-internal* project; this document is a checklist of features to consider building into Hive against the scenarios in `scenarios-corp.md` and `scenarios-personal.md`. **Do not treat work-claw as a design source.** For architectural references and patterns, see `CONTEXT.md` → "Reference projects" (OpenClaw and Hermes Agent).
+
 Source documents reviewed: `D:\GitRepos\work-claw\README.md`, `PLAN.md`, `CHANGELOG.md` (v0.17.0 → v0.30.0), `INSTALL.md`, `HELP.md`.
 
 ## Triage Criteria
