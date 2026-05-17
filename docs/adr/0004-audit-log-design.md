@@ -10,7 +10,7 @@ System-internal diagnostics (parse errors, watcher failures, startup chatter, pe
 
 ## Audit vs trace
 
-**Audit answers "what did the user or agent do?"** It is the record of decisions and side effects with a user-visible consequence: a binding toggled in the UI, a Tool call inside a Run, a Memory write, a Permission decision, a Secret access, a Harness rewrite by the Agent Manager. Persisted in SQLite. Retained forever by default. Queryable with `hive audit query …`.
+**Audit answers "what did the user or agent do?"** It is the record of decisions and side effects with a user-visible consequence: a binding toggled in the UI, a Tool call inside a Run, a Memory write, a Permission decision, a Secret access, a Harness rewrite by the Agent Manager. Persisted in SQLite. Retained forever by default. Queryable via the daemon's `GET /api/audit` route (the future `hive audit query` CLI will be a thin wrapper around it) or directly via `sqlite3 -readonly ~/.hive/audit.db`.
 
 **Trace answers "why didn't this work?"** It is the diagnostic stream the system writes about its own operation: malformed-manifest skip, filesystem watcher error, daemon startup phase, hot-reload rescan, gateway latency, CLI subprocess capture. Persisted as JSONL via Pino at `<runtime>/logs/daemon.log`. Rotation by tooling, retention modest, freely deletable.
 
@@ -196,7 +196,20 @@ Rejected:
 - **Per-source retention policies** — too much config; new decision per source, new place for bugs. Single global window is enough.
 - **Size-based rotation** — works fine in principle but requires choosing a threshold; time is more intuitive.
 
-CLI surface for manual control (works in all retention modes):
+Query surfaces (v1 ships the HTTP route + `sqlite3` access; the `hive` CLI is deferred to v1.1):
+
+```bash
+# HTTP (any client, auth-gated, JSON):
+curl -H "Authorization: Bearer $(cat ~/.hive/.token)" \
+  'http://127.0.0.1:3117/api/audit?source=permission&since=<microseconds>&limit=100'
+
+# Ad-hoc local SQL (read-only, safe alongside the daemon's WAL writer):
+sqlite3 -readonly ~/.hive/audit.db \
+  "SELECT datetime(ts/1000000,'unixepoch') t, source, event_type, agent_id
+   FROM audit_events WHERE run_id = '<id>' ORDER BY ts;"
+```
+
+Future `hive` CLI surface (deferred — none of these exist yet; they will wrap the HTTP route + add ad-hoc helpers):
 
 ```
 hive audit query --run <id>            # show events for a Run
@@ -265,7 +278,7 @@ This ADR is correct if, after implementation, the following hold:
 2. **No module imports `Audit`**. Audit subscribes to every other module's event stream; the dependency graph runs one direction only.
 3. **A test that intentionally emits an event containing `sk-test123abc456…` ends up with `[REDACTED:openai-key]` in the persisted row**, not the raw value.
 4. **Disabling the audit subscriber (test scenario) causes every operation in the system to fail** with a clear error — there is no silent-degrade path.
-5. **`hive audit query --run <id>` reconstructs the full timeline** of a Run including permission decisions, tool calls, results, errors, and memory writes — without joining any other table.
+5. **`GET /api/audit?run_id=<id>` reconstructs the full timeline** of a Run including permission decisions, tool calls, results, errors, and memory writes — without joining any other table. (The future `hive audit query --run <id>` CLI will be a thin wrapper around the same route.)
 6. **Deleting `~/.hive/audit.db` does not corrupt Hive state** — the next operation creates a fresh empty audit file and continues.
 
 If any of these is false, the design is wrong — fix here before further commitments.

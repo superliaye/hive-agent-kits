@@ -89,8 +89,8 @@ Two processes, two languages: Electron's main process is Node (because Electron 
 | UI build | Vite | Instant HMR |
 | UI framework | React | Largest agent training corpus |
 | Desktop shell | Electron | Uniform Chromium across OS; mature tray / notifications / deep links / single-instance |
-| Shell packaging | electron-builder | Standard packager — `.dmg`, `.msi`, `.AppImage` |
-| Shell auto-update | electron-updater | Pairs with electron-builder; signed releases via GitHub Releases |
+| Shell packaging | `@electron/packager` | Produces a runnable, unsigned app directory (`Hive.exe` + resources). No installer in v1 — see "Why not electron-builder" below |
+| Shell auto-update | (deferred to v1.1) | Pairs with electron-builder + signing cert; not yet wired |
 | Shell hardening | electron-hardener (1Password) | Lock down Node integration in renderer; published pattern |
 | Shell hot-reload (dev) | electronmon | Restart main on save; renderer uses Vite HMR |
 
@@ -209,7 +209,7 @@ Goal: **the user double-clicks the Hive icon and the chat window appears. No ter
 
 Mechanism:
 
-- The daemon binary is bundled inside the Electron app package via electron-builder's `extraResources`. It ships *with* the app — not a separate install.
+- The daemon binary is bundled inside the Electron app package via the packager's `extraResources` mechanism. It ships *with* the app — not a separate install.
 - On Electron startup, the main process **probes `localhost:3117` first**. If a daemon answers (e.g., a power user has been running `hive daemon start` headlessly), Electron attaches to it. If the port is free, Electron spawns the bundled daemon as a **hidden child process** (`windowsHide: true` on Windows; macOS/Linux open no terminal by default).
 - A `spawnedByShell` flag is set when Electron starts the daemon itself. On Electron quit:
   - If `spawnedByShell === true`, Electron sends SIGTERM to the daemon, waits up to N seconds, escalates to SIGKILL if needed.
@@ -231,12 +231,23 @@ Implementation cost: ~30 LOC plus the `extraResources` packaging entry. Rejected
 - **Lazy-spawn on first Run** — adds cold-start latency to every "first message after opening the app" and complicates the tray-icon-status story (the icon would be "off" until you've talked to it).
 - **Embed daemon in Electron's Node main process** (single process, no spawn) — forces the daemon to run in Node, abandoning Bun's built-in TS / SQLite / test runner. The two-process cost is one `spawn()` call and a localhost socket; trivial.
 
+## Why not electron-builder
+
+The original pick was `electron-builder` — the industry default that produces signed `.msi` / `.dmg` / `.AppImage` installers and pairs with `electron-updater`. We switched to `@electron/packager` for v1 because:
+
+- electron-builder unconditionally downloads `winCodeSign` on Windows builds. That archive contains macOS `.dylib` symlinks the bundled `7za.exe` cannot extract without Windows Developer Mode or admin permissions.
+- The failure is total — *any* Windows target (`nsis`, `dir`, `portable`) hits the same cache-extraction step.
+- electron-packager bundles the app with Electron's binary into a runnable folder without any code-signing dance, which satisfies the "double-click to run" requirement without infrastructure prerequisites.
+
+Trade-off: no installer in v1. Users get `shell/release/Hive-win32-x64/Hive.exe`, ~378 MB folder they copy and run. Acceptable for personal-scale single-author distribution. Switch back to electron-builder when a code-signing cert and a build host with the right perms exist (Developer Mode toggle on Windows, or admin-elevated CI). The packager pick is encapsulated in `scripts/ship.ts:13-22` so the swap is localized.
+
 ## What this defers
 
 - Cloud / hosted sync. Local-first only; sync is user-driven.
 - Mobile native shells. Web UI over tunnel covers v1 mobile.
 - Replacement of pi-ai with own adapters. Triggered only by concrete ModelGateway friction.
 - Migration off Electron (to Tauri or native). Reconsider only if Electron's bundle size or memory footprint becomes a blocking concern for the portability mission.
+- Signed installers (`.msi`, `.dmg`, `.AppImage`) + auto-update. Needs signing cert + electron-builder; see "Why not electron-builder" above.
 
 ## Deferred decisions (open)
 
