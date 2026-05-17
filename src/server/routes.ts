@@ -1,6 +1,7 @@
 // Hono route definitions. Pure routing — module dependencies are passed in.
 
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { ZodError } from "zod";
 import type { Capability } from "../capabilities/types.ts";
@@ -69,6 +70,17 @@ function toAgentDetail(a: Agent): AgentDetailWire {
 
 export function buildRoutes(deps: RoutesDeps): Hono {
   const app = new Hono();
+  // Daemon listens on 127.0.0.1; permissive CORS lets the Electron renderer
+  // (file://) and the Vite dev server (http://localhost:5173) reach it.
+  app.use(
+    "/api/*",
+    cors({
+      origin: (origin) => origin ?? "*",
+      allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+      allowHeaders: ["authorization", "content-type"],
+      credentials: true,
+    }),
+  );
   app.use("/api/*", bearerAuth(deps.token));
 
   app.get("/api/ready", (c) => c.json({ status: "ok" }));

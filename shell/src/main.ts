@@ -6,8 +6,10 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { app, BrowserWindow } from "electron";
 
-const DAEMON_URL = "http://127.0.0.1:3117";
-const TOKEN_PATH = join(homedir(), ".hive", ".token");
+const PORT = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : 3117;
+const DAEMON_URL = `http://127.0.0.1:${PORT}`;
+const RUNTIME_ROOT = process.env.HIVE_RUNTIME_ROOT ?? join(homedir(), ".hive");
+const TOKEN_PATH = join(RUNTIME_ROOT, ".token");
 // __dirname = shell/dist after compile; repo root is two levels up.
 const REPO_ROOT = resolve(__dirname, "..", "..");
 const UI_DEV_URL = process.env.HIVE_UI_DEV_URL ?? "http://127.0.0.1:5173";
@@ -35,20 +37,18 @@ async function waitForReady(timeoutMs = 10_000): Promise<void> {
 }
 
 async function ensureDaemon(): Promise<void> {
-  if (await isDaemonReady()) {
-    return;
-  }
-  // Spawn bun in the repo root. In a packaged build this would be a bundled
-  // daemon binary; for the slice we run from source.
+  if (await isDaemonReady()) return;
+  // Spawn bun directly (no shell wrapper). Without shell:true on Windows,
+  // SIGKILL reaches bun.exe directly so teardown completes promptly.
   const cmd = process.platform === "win32" ? "bun.exe" : "bun";
   daemon = spawn(cmd, ["run", "src/server/start.ts"], {
     cwd: REPO_ROOT,
-    stdio: "inherit",
+    stdio: ["ignore", "inherit", "inherit"],
     windowsHide: true,
   });
   spawnedByShell = true;
-  daemon.on("exit", (code) => {
-    console.log(`[shell] daemon exited (code=${code})`);
+  daemon.on("error", (err) => {
+    console.error("[shell] daemon spawn error:", err);
   });
   await waitForReady();
 }
@@ -69,28 +69,32 @@ async function createWindow(): Promise<void> {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // Pass daemon coordinates through additional arguments so the preload
-      // script can hand them to the renderer.
       additionalArguments: [`--hive-base=${DAEMON_URL}`, `--hive-token=${token}`],
     },
   });
-
+  win.webContents.on("did-fail-load", (_e, code, desc, url) => {
+    console.error(`[shell] did-fail-load: ${code} ${desc} ${url}`);
+  });
   if (process.env.HIVE_UI_MODE === "dev" || process.env.NODE_ENV === "development") {
     await win.loadURL(UI_DEV_URL);
   } else if (existsSync(UI_DIST_INDEX)) {
     await win.loadFile(UI_DIST_INDEX);
   } else {
-    // Fall back to dev URL if no production bundle has been built.
     await win.loadURL(UI_DEV_URL);
   }
 }
 
 app.whenReady().then(async () => {
-  await ensureDaemon();
-  await createWindow();
+  try {
+    await ensureDaemon();
+    await createWindow();
+  } catch (err) {
+    console.error("[shell] startup failed:", err);
+    app.exit(1);
+  }
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow().catch(console.error);
+      createWindow().catch((err) => console.error("[shell] activate failed:", err));
     }
   });
 });
@@ -101,6 +105,8 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   if (daemon && spawnedByShell && !daemon.killed) {
-    daemon.kill("SIGTERM");
+    // Windows: SIGTERM doesn't reliably reach a Bun subprocess spawned via
+    // shell:true. Use SIGKILL (process tree) to ensure we don't hang quit.
+    daemon.kill(process.platform === "win32" ? "SIGKILL" : "SIGTERM");
   }
 });

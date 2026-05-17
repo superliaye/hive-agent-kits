@@ -5,14 +5,15 @@ import { createServer } from "./index.ts";
 
 async function main(): Promise<void> {
   const server = await createServer({ mode: "file" });
-  // Bun's serve binds when this module is the entry point.
+  // HIVE_PORT env var overrides config — used by e2e tests for isolation.
+  const port = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : server.port;
   Bun.serve({
-    port: server.port,
+    port,
     hostname: "127.0.0.1",
     fetch: server.app.fetch,
   });
   console.log(
-    `[daemon] listening on http://127.0.0.1:${server.port} | ` +
+    `[daemon] listening on http://127.0.0.1:${port} | ` +
       `registry=${server.registry.list().length} capabilities, ` +
       `catalog=${server.catalog.list().length} agents`,
   );

@@ -5,9 +5,11 @@
   "main": "dist/main.js",
   "scripts": {
     "start": "tsc && electron .",
-    "build": "tsc"
+    "build": "tsc",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.0",
     "@types/node": "^22.0.0",
     "electron": "^33.0.0",
     "typescript": "^5.6.3"
