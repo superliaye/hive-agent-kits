@@ -50,13 +50,6 @@ export function CapabilitiesPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
   const filtered = useMemo(() => applyFilter(kindCaps, filter), [kindCaps, filter]);
   const grouped = useMemo(() => groupCapabilities(filtered, groupBy), [filtered, groupBy]);
 
-  function toggleIn(set: ReadonlySet<string>, value: string): Set<string> {
-    const next = new Set(set);
-    if (next.has(value)) next.delete(value);
-    else next.add(value);
-    return next;
-  }
-
   function clearFilters(): void {
     setFilter(EMPTY_FILTER);
   }
