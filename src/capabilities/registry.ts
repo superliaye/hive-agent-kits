@@ -2,12 +2,13 @@
 //
 // Two-tier (bundled + runtime) with runtime > bundled resolution. Same-name
 // collision at the bundled layer (personal vs workplace) is a load-time error.
-// Hot-reload via node:fs.watch on both roots; rescans on debounced changes.
+// Scan + watch + diff machinery lives in TieredManifestStore; this file owns
+// the resolution rule, the typed event surface, and the public seam.
 
-import { watch, type FSWatcher } from "node:fs";
 import type { CapabilityKind } from "../lib/capability-types.ts";
 import { log } from "../lib/log.ts";
 import { bundledRoot, runtimeRoot } from "../lib/paths.ts";
+import { createTieredManifestStore } from "../lib/tiered-store.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import { type LoaderResult, scanAll } from "./loader.ts";
 import type { Capability, Registry, RegistryEvents, ResolutionAddress } from "./types.ts";
@@ -39,12 +40,13 @@ export type CreateRegistryOptions = {
   logErrors?: boolean;
 };
 
-const RESCAN_DEBOUNCE_MS = 250;
-
 function key(kind: CapabilityKind, name: string): string {
   return `${kind}:${name}`;
 }
 
+// Resolution rule: runtime shadows bundled; collisions at the bundled layer
+// (personal vs workplace for the same name) are reported back so the caller
+// can decide first-scan-fatal vs hot-reload-tolerant.
 function resolve(loaded: Capability[]): {
   resolved: Map<string, Capability>;
   collisions: Capability[][];
@@ -112,136 +114,68 @@ export function createRegistry(opts: CreateRegistryOptions = {}): Registry {
   const events = new TypedEmitter<RegistryEvents>();
   const scanner = opts.scanner ?? scanAll;
   const logErrors = opts.logErrors ?? true;
-  const enableWatch = opts.watch ?? true;
 
-  let current = new Map<string, Capability>();
-  const watchers: FSWatcher[] = [];
-  let started = false;
-  let pendingRescan: ReturnType<typeof setTimeout> | undefined;
-
-  async function performScan(emitAsDiff: boolean): Promise<void> {
-    const { capabilities, errors } = scanner();
-    if (logErrors) {
-      for (const e of errors) {
-        log().warn({ module: "capabilities", path: e.path, err: e.message }, "skipped malformed manifest");
+  const store = createTieredManifestStore<Capability>({
+    watchRoots: [bundledRoot(), runtimeRoot()],
+    watch: opts.watch,
+    scan: () => {
+      const { capabilities, errors } = scanner();
+      const { resolved, collisions } = resolve(capabilities);
+      if (collisions.length > 0) {
+        // Throws on first scan (fatal); routed to onRescanError on rescan.
+        throw new RegistryCollisionError(collisions);
       }
-    }
-    const { resolved, collisions } = resolve(capabilities);
-    if (collisions.length > 0) {
-      const err = new RegistryCollisionError(collisions);
-      // First scan: throw so the daemon refuses to start (ADR-0007 V#4).
-      // Subsequent scans (hot-reload): log; the prior resolved map remains.
-      if (!emitAsDiff) throw err;
-      if (logErrors) log().warn({ module: "capabilities" }, err.message);
-      return;
-    }
-
-    if (!emitAsDiff) {
-      for (const cap of resolved.values()) {
+      return { items: Array.from(resolved.values()), errors };
+    },
+    key: (c) => key(c.kind, c.name),
+    same: sameResolution,
+    onLoaderError: logErrors
+      ? (e) => log().warn({ module: "capabilities", path: e.path, err: e.message }, "skipped malformed manifest")
+      : undefined,
+    onRescanError: logErrors
+      ? (err) => log().warn({ module: "capabilities", err: err.message }, "hot-reload error")
+      : undefined,
+    onDiff: async ({ added, removed, changed }) => {
+      for (const c of added) {
         await events.emit("capability.registered", {
-          name: cap.name,
-          kind: cap.kind,
-          origin: cap.origin,
-          layer: cap.layer,
-          source: cap.source,
-          shadows: cap.shadows,
+          name: c.name,
+          kind: c.kind,
+          origin: c.origin,
+          layer: c.layer,
+          source: c.source,
+          shadows: c.shadows,
         });
       }
-      current = resolved;
-      return;
-    }
-
-    for (const [k, cap] of resolved) {
-      const prior = current.get(k);
-      if (!prior) {
-        await events.emit("capability.registered", {
-          name: cap.name,
-          kind: cap.kind,
-          origin: cap.origin,
-          layer: cap.layer,
-          source: cap.source,
-          shadows: cap.shadows,
-        });
-      } else if (!sameResolution(prior, cap)) {
-        await events.emit("capability.changed", {
-          name: cap.name,
-          kind: cap.kind,
-          origin: cap.origin,
-          layer: cap.layer,
-        });
-      }
-    }
-    for (const [k, prior] of current) {
-      if (!resolved.has(k)) {
+      for (const c of removed) {
         await events.emit("capability.unregistered", {
-          name: prior.name,
-          kind: prior.kind,
-          origin: prior.origin,
-          layer: prior.layer,
+          name: c.name,
+          kind: c.kind,
+          origin: c.origin,
+          layer: c.layer,
         });
       }
-    }
-    current = resolved;
-  }
-
-  function scheduleRescan(): void {
-    if (pendingRescan) clearTimeout(pendingRescan);
-    pendingRescan = setTimeout(() => {
-      pendingRescan = undefined;
-      performScan(true).catch((err) => {
-        if (logErrors) log().warn({ module: "capabilities", err: String(err) }, "hot-reload error");
-      });
-    }, RESCAN_DEBOUNCE_MS);
-  }
-
-  function attachWatchers(): void {
-    const roots = [bundledRoot(), runtimeRoot()];
-    for (const root of roots) {
-      try {
-        // recursive works on macOS and Windows; on Linux it falls back per-dir
-        // in newer Node. Wrap in try/catch — missing dirs are normal in dev.
-        const w = watch(root, { recursive: true }, () => scheduleRescan());
-        w.on("error", () => {
-          // Swallow watcher errors; the dir may not exist yet.
+      for (const c of changed) {
+        await events.emit("capability.changed", {
+          name: c.name,
+          kind: c.kind,
+          origin: c.origin,
+          layer: c.layer,
         });
-        watchers.push(w);
-      } catch {
-        // Root may not exist (e.g., runtimeRoot before first launch). Skip.
       }
-    }
-  }
+    },
+  });
 
   return {
     list(filter) {
-      const all = Array.from(current.values());
+      const all = store.current();
       return filter?.kind ? all.filter((c) => c.kind === filter.kind) : all;
     },
     get(kind, name) {
-      return current.get(key(kind, name));
+      return store.get(key(kind, name));
     },
-    async start() {
-      if (started) return;
-      started = true;
-      await performScan(false);
-      if (enableWatch) attachWatchers();
-    },
-    async rescan() {
-      await performScan(true);
-    },
+    start: () => store.start(),
+    rescan: () => store.rescan(),
     events,
-    dispose() {
-      if (pendingRescan) {
-        clearTimeout(pendingRescan);
-        pendingRescan = undefined;
-      }
-      for (const w of watchers) {
-        try {
-          w.close();
-        } catch {
-          // best-effort
-        }
-      }
-      watchers.length = 0;
-    },
+    dispose: () => store.dispose(),
   };
 }

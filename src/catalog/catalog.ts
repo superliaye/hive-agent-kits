@@ -1,15 +1,18 @@
 // Agent Catalog factory per ADR-0007.
 //
-// Holds resolved Agents (runtime fork > bundled). updateBindings always
-// writes to the runtime tier — bundled HARNESS.md is never touched.
-// Emits typed events the audit subscriber attaches to.
+// Holds resolved Agents (runtime fork > bundled, with bundled fallback when
+// a fork file fails to parse). updateBindings always writes to the runtime
+// tier — bundled HARNESS.md is never touched. Scan + diff machinery lives
+// in TieredManifestStore; this file owns the typed events, the write-back
+// verbs, and the fork-write semantics.
 
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { HarnessManifest } from "../capabilities/schemas.ts";
 import { log } from "../lib/log.ts";
-import { runtime } from "../lib/paths.ts";
+import { bundledRoot, runtime, runtimeRoot } from "../lib/paths.ts";
+import { createTieredManifestStore } from "../lib/tiered-store.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import { type LoaderResult, scanAll } from "./loader.ts";
 import type { Agent, BindingKind, BindingPatch, Catalog, CatalogEvents } from "./types.ts";
@@ -23,6 +26,7 @@ const KIND_TO_FIELD: Record<BindingKind, keyof Agent["bindings"]> = {
 
 export type CreateCatalogOptions = {
   scanner?: () => LoaderResult;
+  watch?: boolean;
   logErrors?: boolean;
 };
 
@@ -50,43 +54,47 @@ function writeHarness(path: string, agent: Agent): void {
   writeFileSync(path, content, "utf8");
 }
 
+function sameAgent(a: Agent, b: Agent): boolean {
+  return (
+    a.path === b.path &&
+    a.layer === b.layer &&
+    a.hasFork === b.hasFork &&
+    a.forkError === b.forkError
+  );
+}
+
 export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
   const events = new TypedEmitter<CatalogEvents>();
   const scanner = opts.scanner ?? scanAll;
   const logErrors = opts.logErrors ?? true;
 
-  let current = new Map<string, Agent>();
-  let started = false;
-
-  async function performScan(emitAsDiff: boolean): Promise<void> {
-    const { agents, errors } = scanner();
-    if (logErrors) {
-      for (const e of errors) {
-        log().warn({ module: "catalog", path: e.path, err: e.message }, "skipped malformed manifest");
-      }
-    }
-    const next = new Map<string, Agent>(agents.map((a) => [a.agentId, a]));
-
-    if (!emitAsDiff) {
-      for (const a of next.values()) {
+  const store = createTieredManifestStore<Agent>({
+    watchRoots: [bundledRoot(), runtimeRoot()],
+    watch: opts.watch,
+    scan: () => {
+      const { agents, errors } = scanner();
+      return { items: agents, errors };
+    },
+    key: (a) => a.agentId,
+    same: sameAgent,
+    onLoaderError: logErrors
+      ? (e) => log().warn({ module: "catalog", path: e.path, err: e.message }, "skipped malformed manifest")
+      : undefined,
+    onRescanError: logErrors
+      ? (err) => log().warn({ module: "catalog", err: err.message }, "hot-reload error")
+      : undefined,
+    onDiff: async ({ added, removed }) => {
+      // Scan-time edits to an existing agent don't fire a typed event today;
+      // user-driven mutations emit harness.updated explicitly. The trace log
+      // is enough for scan-time "changed" diagnostics.
+      for (const a of added) {
         await events.emit("agent.created", { agentId: a.agentId, path: a.path });
       }
-      current = next;
-      return;
-    }
-
-    for (const [id, a] of next) {
-      if (!current.has(id)) {
-        await events.emit("agent.created", { agentId: id, path: a.path });
+      for (const a of removed) {
+        await events.emit("agent.destroyed", { agentId: a.agentId });
       }
-    }
-    for (const [id] of current) {
-      if (!next.has(id)) {
-        await events.emit("agent.destroyed", { agentId: id });
-      }
-    }
-    current = next;
-  }
+    },
+  });
 
   function applyPatch(agent: Agent, patch: BindingPatch): Agent {
     const field = KIND_TO_FIELD[patch.kind];
@@ -106,24 +114,20 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
   }
 
   async function refreshOne(agentId: string): Promise<Agent> {
-    await performScan(true);
-    const a = current.get(agentId);
+    await store.rescan();
+    const a = store.get(agentId);
     if (!a) throw new AgentNotFoundError(agentId);
     return a;
   }
 
   return {
-    list() {
-      return Array.from(current.values());
-    },
-    get(agentId) {
-      return current.get(agentId);
-    },
+    list: () => store.current(),
+    get: (agentId) => store.get(agentId),
     async updateBindings(agentId, patches, source = "ui") {
       if (patches.length === 0) {
         throw new Error("updateBindings requires at least one patch");
       }
-      const agent = current.get(agentId);
+      const agent = store.get(agentId);
       if (!agent) throw new AgentNotFoundError(agentId);
 
       const runtimePath = join(runtime.agent(agentId), "HARNESS.md");
@@ -136,6 +140,7 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
         layer: "runtime",
         hasFork: true,
         path: runtimePath,
+        forkError: undefined,
       };
       // Single write — all-or-nothing for the batch.
       writeHarness(runtimePath, forked);
@@ -143,15 +148,11 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
       // Re-read from disk so the cached Agent matches what's persisted —
       // catches any subtle YAML round-trip drift.
       const refreshed = await refreshOne(agentId);
-      await events.emit("harness.updated", {
-        agentId,
-        source,
-        diff: patches,
-      });
+      await events.emit("harness.updated", { agentId, source, diff: patches });
       return refreshed;
     },
     async resetToBundled(agentId) {
-      const agent = current.get(agentId);
+      const agent = store.get(agentId);
       if (!agent) throw new AgentNotFoundError(agentId);
       const runtimePath = join(runtime.agent(agentId), "HARNESS.md");
       if (existsSync(runtimePath)) {
@@ -165,18 +166,9 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
       });
       return refreshed;
     },
-    async start() {
-      if (started) return;
-      started = true;
-      await performScan(false);
-    },
-    async rescan() {
-      await performScan(true);
-    },
+    start: () => store.start(),
+    rescan: () => store.rescan(),
     events,
-    dispose() {
-      // No external resources today (no watcher). Reserved for symmetry
-      // with Registry — a future hot-reload watcher would close here.
-    },
+    dispose: () => store.dispose(),
   };
 }
