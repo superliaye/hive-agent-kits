@@ -56,6 +56,13 @@ export const CapabilityKindQuery = CapabilityKind;
 
 // Public capability shape exposed over HTTP. Mirrors the in-memory Capability
 // minus the manifest body and per-kind details (kept light for list views).
+//
+// Two distinct "source" concepts here, named to disambiguate:
+//   - `source` — CapabilitySource enum (`filesystem` | `builtin` | `mcp-discovered`)
+//     describing *how the Registry discovered* the capability.
+//   - `upstream` — when the capability is vendored from a git/npm upstream,
+//     the manifest's `source: { url, ref }` block. Used by the UI to group
+//     "all hyperframes-* skills" together.
 export type CapabilityWire = {
   name: string;
   kind: z.infer<typeof CapabilityKind>;
@@ -66,6 +73,7 @@ export type CapabilityWire = {
   workplaceId?: string;
   shadows?: Array<{ layer: string; origin: string; workplaceId?: string }>;
   tags?: string[];
+  upstream?: { url: string; ref: string };
 };
 
 export type AgentSummaryWire = {

@@ -29,6 +29,8 @@ export type RoutesDeps = {
 
 function toCapabilityWire(c: Capability): CapabilityWire {
   const tags = c.kind === "skill" || c.kind === "snippet" ? c.manifest.tags : undefined;
+  const manifestSource =
+    c.kind === "skill" || c.kind === "snippet" ? c.manifest.source : undefined;
   return {
     name: c.name,
     kind: c.kind,
@@ -43,6 +45,7 @@ function toCapabilityWire(c: Capability): CapabilityWire {
       workplaceId: s.workplaceId,
     })),
     tags,
+    upstream: manifestSource ? { url: manifestSource.url, ref: manifestSource.ref } : undefined,
   };
 }
 

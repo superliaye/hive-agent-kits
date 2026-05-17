@@ -38,6 +38,7 @@ export type CapabilityWire = {
   workplaceId?: string;
   shadows?: Array<{ layer: string; origin: string; workplaceId?: string }>;
   tags?: string[];
+  upstream?: { url: string; ref: string };
 };
 
 export type BindingPatch = {

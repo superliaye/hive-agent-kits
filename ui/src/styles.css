@@ -82,3 +82,21 @@ pre.config { background: #ffffff; border: 1px solid #e0e0e6; border-radius: 4px;
   white-space: pre-wrap;
   color: #4a2020;
 }
+
+.filter-bar {
+  background: #ffffff;
+  border: 1px solid #e0e0e6;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 12px 0 16px;
+}
+.filter-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.filter-search { flex: 1; padding: 6px 10px; border: 1px solid #d0d0d6; border-radius: 4px; font: inherit; }
+.group-by { font-size: 12px; color: #4a4a55; }
+.group-by select { padding: 4px 8px; border: 1px solid #d0d0d6; border-radius: 4px; font: inherit; }
+.filter-count { font-size: 12px; color: #6a6a75; }
+.facet-row { display: flex; align-items: baseline; gap: 8px; margin: 6px 0 0; font-size: 12px; }
+.facet-label { color: #6a6a75; width: 80px; flex-shrink: 0; text-transform: uppercase; letter-spacing: 0.5px; font-size: 10px; }
+.facet-chips { flex: 1; }
+
+.badge-source { background: #e8e0f0; color: #4a2a6a; }
