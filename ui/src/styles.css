@@ -61,3 +61,24 @@ body {
 
 .empty { color: #6a6a75; font-style: italic; padding: 8px; }
 pre.config { background: #ffffff; border: 1px solid #e0e0e6; border-radius: 4px; padding: 12px; overflow: auto; font-size: 12px; }
+
+.banner-error {
+  background: #fbe9e7;
+  border: 1px solid #c75450;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin: 12px 0 16px;
+  color: #6a2020;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.banner-error pre.banner-detail {
+  background: #ffffff;
+  border: 1px solid #e0c4c4;
+  border-radius: 3px;
+  padding: 8px;
+  margin: 8px 0 0;
+  font-size: 11px;
+  white-space: pre-wrap;
+  color: #4a2020;
+}

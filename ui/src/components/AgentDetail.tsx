@@ -30,6 +30,14 @@ export function AgentDetail({
         {agent.domain} · {agent.backend} · {agent.layer}
         {agent.hasFork ? " · fork" : ""}
       </div>
+      {agent.forkError && (
+        <div className="banner-error" data-testid="fork-error-banner">
+          <strong>Runtime fork failed to load.</strong> Showing the bundled
+          fallback; your edits to this Agent's runtime HARNESS.md are being
+          ignored until the parse error is fixed:
+          <pre className="banner-detail">{agent.forkError}</pre>
+        </div>
+      )}
       <div className="subtabs">
         <button
           className={`subtab ${tab === "prompt" ? "active" : ""}`}

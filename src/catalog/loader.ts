@@ -86,6 +86,7 @@ export function scanAll(): LoaderResult {
     const runtimeHas = existsSync(runtimePath);
     const bundledHas = existsSync(bundledPath);
     const hasFork = runtimeHas;
+    let forkError: string | undefined;
 
     if (runtimeHas) {
       const r = loadAgent(id, runtimePath, "runtime", hasFork);
@@ -94,12 +95,15 @@ export function scanAll(): LoaderResult {
         continue;
       }
       errors.push(r);
-      // Runtime fork is malformed — fall through to bundled rather than drop.
+      // Surface to the UI: the runtime fork failed to parse and we'll fall
+      // back to bundled. Without this the user has no signal their edits
+      // are being ignored.
+      forkError = r.message;
     }
     if (bundledHas) {
       const r = loadAgent(id, bundledPath, "bundled", hasFork);
       if ("agentId" in r) {
-        agents.push(r);
+        agents.push(forkError ? { ...r, forkError } : r);
         continue;
       }
       errors.push(r);

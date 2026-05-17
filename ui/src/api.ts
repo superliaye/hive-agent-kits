@@ -25,6 +25,7 @@ export type AgentDetail = AgentSummary & {
   };
   config: Record<string, unknown>;
   promptBody: string;
+  forkError?: string;
 };
 
 export type CapabilityWire = {

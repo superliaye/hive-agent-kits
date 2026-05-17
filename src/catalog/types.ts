@@ -24,6 +24,10 @@ export type BindingPatch = {
 // Resolved Agent record. Bundled = comes straight from the repo. Runtime =
 // a fork lives in app-storage and overrides bundled. `hasFork` is true
 // when a runtime HARNESS.md exists for this agent.
+//
+// `forkError` is populated when a runtime fork exists but failed to parse:
+// the resolver falls back to the bundled file and surfaces the failure so
+// the Settings UI can show a banner rather than silently ignoring edits.
 export type Agent = {
   agentId: string;
   backend: AgentBackend;
@@ -33,6 +37,7 @@ export type Agent = {
   promptBody: string;
   layer: CapabilityLayer;
   hasFork: boolean;
+  forkError?: string;
   // Absolute path to the manifest currently resolved (runtime fork or bundled).
   path: string;
 };

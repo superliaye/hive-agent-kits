@@ -51,6 +51,9 @@ export type AgentDetailWire = AgentSummaryWire & {
   };
   config: Record<string, unknown>;
   promptBody: string;
+  // Populated when a runtime fork file exists but failed to parse; the
+  // resolved agent falls back to bundled. UI shows a banner.
+  forkError?: string;
 };
 
 // Envelope for events delivered over /api/events (SSE).

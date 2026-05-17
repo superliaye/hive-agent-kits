@@ -159,6 +159,24 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     expect(root?.bindings.skills).toEqual(["beta"]);
   });
 
+  test("malformed runtime fork falls back to bundled and surfaces forkError", async () => {
+    writeBundledHarness("root", "alpha");
+    // Hand-write a runtime fork with invalid frontmatter.
+    const runtimeDir = join(runtimeRoot, "agents", "root");
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(join(runtimeDir, "HARNESS.md"), "no frontmatter here, just text");
+
+    const catalog = createCatalog({ logErrors: false });
+    await catalog.start();
+
+    const root = catalog.get("root");
+    expect(root).toBeDefined();
+    expect(root?.layer).toBe("bundled");
+    expect(root?.hasFork).toBe(true);
+    expect(root?.forkError).toBeDefined();
+    expect(root?.bindings.skills).toContain("alpha");
+  });
+
   test("unknown agentId throws AgentNotFoundError", async () => {
     const catalog = createCatalog({ logErrors: false });
     await catalog.start();

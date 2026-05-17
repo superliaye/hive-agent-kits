@@ -65,6 +65,7 @@ function toAgentDetail(a: Agent): AgentDetailWire {
     bindings: a.bindings,
     config: a.config,
     promptBody: a.promptBody,
+    forkError: a.forkError,
   };
 }
 
