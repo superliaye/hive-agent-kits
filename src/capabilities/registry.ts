@@ -6,6 +6,7 @@
 
 import { watch, type FSWatcher } from "node:fs";
 import type { CapabilityKind } from "../lib/capability-types.ts";
+import { log } from "../lib/log.ts";
 import { bundledRoot, runtimeRoot } from "../lib/paths.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import { type LoaderResult, scanAll } from "./loader.ts";
@@ -33,8 +34,8 @@ export type CreateRegistryOptions = {
   scanner?: () => LoaderResult;
   // Disable filesystem hot-reload watcher. Default true.
   watch?: boolean;
-  // Forwarded to console.warn on malformed manifests. Default true; tests
-  // can silence noise.
+  // Forwarded to trace log on malformed manifests. Default true; tests can
+  // silence noise.
   logErrors?: boolean;
 };
 
@@ -122,7 +123,7 @@ export function createRegistry(opts: CreateRegistryOptions = {}): Registry {
     const { capabilities, errors } = scanner();
     if (logErrors) {
       for (const e of errors) {
-        console.warn(`[capabilities] skipped ${e.path}: ${e.message}`);
+        log().warn({ module: "capabilities", path: e.path, err: e.message }, "skipped malformed manifest");
       }
     }
     const { resolved, collisions } = resolve(capabilities);
@@ -131,7 +132,7 @@ export function createRegistry(opts: CreateRegistryOptions = {}): Registry {
       // First scan: throw so the daemon refuses to start (ADR-0007 V#4).
       // Subsequent scans (hot-reload): log; the prior resolved map remains.
       if (!emitAsDiff) throw err;
-      if (logErrors) console.warn(`[capabilities] ${err.message}`);
+      if (logErrors) log().warn({ module: "capabilities" }, err.message);
       return;
     }
 
@@ -188,7 +189,7 @@ export function createRegistry(opts: CreateRegistryOptions = {}): Registry {
     pendingRescan = setTimeout(() => {
       pendingRescan = undefined;
       performScan(true).catch((err) => {
-        if (logErrors) console.warn(`[capabilities] hot-reload error: ${err}`);
+        if (logErrors) log().warn({ module: "capabilities", err: String(err) }, "hot-reload error");
       });
     }, RESCAN_DEBOUNCE_MS);
   }

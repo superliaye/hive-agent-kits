@@ -5,6 +5,7 @@
 // schema. The production schema is `AppConfig` from ./schema.ts.
 
 import type { ZodType } from "zod";
+import { log } from "../lib/log.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { ConfigPersistence } from "./persistence.ts";
 import type { Config, ConfigChange, ConfigEvents } from "./types.ts";
@@ -84,10 +85,9 @@ export function createConfigStore<S extends Record<string, unknown>>(
         void events.emit("change", change);
       }
     } catch (err) {
-      // Bad external edit — keep current in-memory state. Pino will log
-      // once we wire it up; for now, surface via console.
-      // eslint-disable-next-line no-console
-      console.error("[config] external edit rejected:", err);
+      // Bad external edit — keep current in-memory state. Trace channel
+      // captures the rejection; the user sees their edit didn't take.
+      log().error({ module: "config", err: String(err) }, "external edit rejected");
     }
   }
 

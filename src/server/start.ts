@@ -1,6 +1,7 @@
 // Daemon executable entrypoint. `bun run src/server/start.ts` (or via the
 // "start" npm script) boots the daemon in file mode against ~/.hive/.
 
+import { log } from "../lib/log.ts";
 import { createServer } from "./index.ts";
 
 async function main(): Promise<void> {
@@ -13,6 +14,16 @@ async function main(): Promise<void> {
     hostname: "127.0.0.1",
     fetch: server.app.fetch,
   });
+  log().info(
+    {
+      module: "daemon",
+      port: server.port,
+      capabilities: server.registry.list().length,
+      agents: server.catalog.list().length,
+    },
+    "daemon listening",
+  );
+  // Also surface to stdout for a human watching the terminal in dev.
   console.log(
     `[daemon] listening on http://127.0.0.1:${server.port} | ` +
       `registry=${server.registry.list().length} capabilities, ` +
@@ -29,6 +40,7 @@ function parsePort(raw: string): number {
 }
 
 main().catch((err) => {
+  log().fatal({ module: "daemon", err: String(err) }, "daemon failed to start");
   console.error("[daemon] failed to start:", err);
   process.exit(1);
 });

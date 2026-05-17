@@ -6,12 +6,10 @@
 // the full graph of who feeds the audit log.
 
 import type { Registry } from "../capabilities/index.ts";
-import type { RegistryEvents } from "../capabilities/types.ts";
 import type { Catalog } from "../catalog/index.ts";
 import type { CatalogEvents } from "../catalog/types.ts";
 import type { Config, ConfigEvents } from "../config/types.ts";
 import type { ModelGateway } from "../model-gateway/index.ts";
-import type { GatewayModuleEvents } from "../model-gateway/types.ts";
 import type { Audit } from "./audit.ts";
 import type { Normalizer } from "./types.ts";
 
@@ -43,28 +41,13 @@ function configNormalizer<S extends Record<string, unknown>>(): Normalizer<Confi
   };
 }
 
-const gatewayNormalizer: Normalizer<GatewayModuleEvents> = {
-  "adapter.registered": (event) => ({
-    event_type: "gateway.adapter.registered",
-    payload: { providers: [...event.providers] },
-  }),
-  "adapter.unregistered": (event) => ({
-    event_type: "gateway.adapter.unregistered",
-    payload: { providers: [...event.providers] },
-  }),
-};
+// Gateway adapter registration is startup-only / diagnostic; trace, not audit.
+// When a future flow lets a *user* register a gateway adapter at runtime, we
+// can subscribe a filtered normalizer here.
 
-const catalogNormalizer: Normalizer<CatalogEvents> = {
-  "agent.created": (event) => ({
-    event_type: "agent.created",
-    agent_id: event.agentId,
-    payload: { path: event.path },
-  }),
-  "agent.destroyed": (event) => ({
-    event_type: "agent.destroyed",
-    agent_id: event.agentId,
-    payload: {},
-  }),
+// Catalog: only user/agent-driven side effects are audited. agent.created at
+// scan time is system inventory — that goes to trace via the log singleton.
+const catalogNormalizer: Partial<Normalizer<CatalogEvents>> = {
   "harness.updated": (event) => ({
     event_type: "harness.updated",
     agent_id: event.agentId,
@@ -72,37 +55,10 @@ const catalogNormalizer: Normalizer<CatalogEvents> = {
   }),
 };
 
-const registryNormalizer: Normalizer<RegistryEvents> = {
-  "capability.registered": (event) => ({
-    event_type: "capability.registered",
-    payload: {
-      name: event.name,
-      kind: event.kind,
-      origin: event.origin,
-      layer: event.layer,
-      source: event.source,
-      shadows: event.shadows,
-    },
-  }),
-  "capability.unregistered": (event) => ({
-    event_type: "capability.unregistered",
-    payload: {
-      name: event.name,
-      kind: event.kind,
-      origin: event.origin,
-      layer: event.layer,
-    },
-  }),
-  "capability.changed": (event) => ({
-    event_type: "capability.changed",
-    payload: {
-      name: event.name,
-      kind: event.kind,
-      origin: event.origin,
-      layer: event.layer,
-    },
-  }),
-};
+// Registry: all events today are scan-driven or hot-reload-driven (system,
+// not user). Trace captures them via the log singleton. When user-initiated
+// capability adds land (Settings UI drop-zone), add a normalizer here with
+// a filter on the source/origin.
 
 // Attaches every present source's event stream to the audit log.
 // Returns a disposer that detaches all listeners.
@@ -116,13 +72,11 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
     disposers.push(audit.attach("config", sources.config.events, configNormalizer<S>()));
   }
 
-  if (sources.gateway) {
-    disposers.push(audit.attach("gateway", sources.gateway.events, gatewayNormalizer));
-  }
-
-  if (sources.registry) {
-    disposers.push(audit.attach("registry", sources.registry.events, registryNormalizer));
-  }
+  // gateway and registry intentionally not attached: their events are
+  // system-driven (startup / hot-reload), so they belong in the trace log,
+  // not the audit log. See "Audit vs trace" in ADR-0004.
+  void sources.gateway;
+  void sources.registry;
 
   if (sources.catalog) {
     disposers.push(audit.attach("catalog", sources.catalog.events, catalogNormalizer));

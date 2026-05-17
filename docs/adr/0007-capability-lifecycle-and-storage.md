@@ -66,7 +66,7 @@ Rules:
 - **Runtime shadows bundled.** A runtime capability with the same name as a bundled one wins for resolution. The shadowed entry remains visible in the Settings UI with a "shadowed by runtime" marker.
 - **Personal and Workplace at the bundled layer do not shadow each other.** They are parallel namespaces, not a hierarchy. Cross-origin collisions at the bundled layer are load-time errors.
 - **Origin tag is preserved through resolution.** A runtime entry shadowing a workplace-origin bundled entry surfaces as runtime-origin (implicitly Personal in spirit — the user's local override).
-- Every resolution that shadows is audited: `capability.registered { name, kind, layer, origin, shadows: [...] }`.
+- Every resolution that shadows is logged (trace channel) with `{name, kind, layer, origin, shadows}`. Not audited — see ADR-0004 "Audit vs trace": startup scan and hot-reload are system-driven, not user-driven, so they go to the trace log, not the audit table.
 
 The same shadow pattern applies to Agent Harnesses: a runtime `<AppData>/Hive/agents/root/HARNESS.md` shadows the bundled `bundled/agents/root/HARNESS.md`. Memory and Threads always live in the runtime tier.
 
@@ -230,17 +230,22 @@ The user installs the underlying MCP server binary themselves (per its README �
 
 This is what enables Hive to support hundreds of MCP servers with negligible footprint — the bundled `MCP.yaml` files are tiny, and the heavy lifting (the server binaries themselves) lives in the user's normal package-manager ecosystem.
 
-## Audit emissions
+## Event emissions
 
-The Capability Registry and the Agent Catalog emit typed event streams. The Audit Log subscribes (per ADR-0004 — no module calls `audit.record(...)` directly):
+The Capability Registry and the Agent Catalog emit typed event streams. The Audit Log subscribes per ADR-0004's user/agent-action filter; the Trace Log captures everything else.
 
-| Module | Events |
-|---|---|
-| Capability Registry | `capability.registered`, `capability.unregistered`, `capability.changed` (with `name`, `kind`, `layer`, `origin`, `shadows?`) |
-| Agent Catalog | `agent.created`, `agent.destroyed`, `harness.updated` (with `agentId`, `diff`) |
-| Settings UI mutations | Same `harness.updated` event; payload includes which bindings changed and source = `ui` |
+| Module | Event | Audit? | Trace? |
+|---|---|---|---|
+| Capability Registry | `capability.registered` (startup scan) | no | yes |
+| Capability Registry | `capability.unregistered` (hot-reload remove) | no | yes |
+| Capability Registry | `capability.changed` (hot-reload edit) | no | yes |
+| Agent Catalog | `agent.created` (startup scan inventory) | no | yes |
+| Agent Catalog | `agent.created` (Agent Manager Run creates a Worker) | **yes** | yes |
+| Agent Catalog | `agent.destroyed` (Agent Manager Run destroys a Worker) | **yes** | yes |
+| Agent Catalog | `harness.updated` (UI binding edit) | **yes** | yes |
+| Agent Catalog | `harness.updated` (Agent Manager rewrite or reset) | **yes** | yes |
 
-This gives free traceability of every capability registration, every Harness binding change, every shadow resolution — for free, without consumers touching the Audit module.
+Audit captures *user-driven* and *agent-driven* state changes. Scan-time inventory and filesystem-watcher events go to the Trace Log only (Pino JSONL at `<runtime>/logs/daemon.log`). This keeps `audit.db` quiet at boot and the audit table queryable for "what did the user/AM do?" without scan-noise drowning the signal. See ADR-0004 "Audit vs trace" for the full split.
 
 ## Out-of-box experience
 
@@ -280,12 +285,12 @@ This ADR is correct if, after implementation:
 
 1. A new bundled Skill added by editing `bundled/personal/skills/foo/SKILL.md` in the repo and committing appears in the Registry on next daemon start (or live, if running in dev mode against the source tree).
 2. A new runtime Skill added by dropping a folder into `<AppData>/Hive/capabilities/skills/foo/` appears in the Registry within seconds, without any CLI command.
-3. If both a `bundled/personal/skills/foo` and a `<AppData>/Hive/capabilities/skills/foo` exist, the runtime entry wins and the audit log records the shadow.
+3. If both a `bundled/personal/skills/foo` and a `<AppData>/Hive/capabilities/skills/foo` exist, the runtime entry wins and the **trace log** records the shadow (scan-time event; not audit-table).
 4. If both `bundled/personal/skills/foo` and `bundled/workplace/<id>/skills/foo` exist, the daemon refuses to start (or quarantines both with a clear error).
 5. Toggling a Capability binding on/off in the Settings UI takes effect on the next Run in the affected Agent's existing Thread.
 6. Deleting `<AppData>/Hive/agents/root/HARNESS.md` causes Root to resolve from `bundled/agents/root/HARNESS.md` on next Run, with Memory and Threads preserved.
 7. An MCP server declared in `bundled/personal/mcp/ado/MCP.yaml` whose `compatibility.system.binaries: [npx]` is unmet does not start, and the error message points the user to the capability's README.
 8. There is no `hive caps install` (or `hive skill install`, etc.) command in the CLI.
-9. The Audit Log contains `capability.registered` rows for every Capability discovered at startup, including layer and origin, and `harness.updated` rows for every binding change made through the Settings UI.
+9. The Trace Log (`<runtime>/logs/daemon.log`) contains `capability.registered` records for every Capability discovered at startup, including layer and origin. The Audit Log (`<runtime>/audit.db`) contains `harness.updated` rows for every binding change made through the Settings UI — and nothing else from the Registry/Catalog scan path (per ADR-0004 "Audit vs trace").
 
 If any of these is false, the design is wrong — fix here before further commitments.

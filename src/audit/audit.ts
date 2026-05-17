@@ -17,10 +17,13 @@ import type {
 } from "./types.ts";
 
 export type Audit = {
+  // Normalizer can be partial — only the event keys present are subscribed.
+  // This lets callers attach to a TypedEmitter and audit only a subset
+  // (e.g., user-action events) without auditing the rest.
   attach<TEventMap extends Record<string, unknown>>(
     source: ModuleSource,
     events: TypedEmitter<TEventMap>,
-    normalizer: Normalizer<TEventMap>,
+    normalizer: Partial<Normalizer<TEventMap>>,
   ): () => void;
   query(filter: AuditQueryFilter): Promise<AuditEvent[]>;
   subscriptions(): readonly ModuleSource[];
@@ -39,7 +42,7 @@ export function createAudit(opts: CreateAuditOptions): Audit {
   function attach<TEventMap extends Record<string, unknown>>(
     source: ModuleSource,
     events: TypedEmitter<TEventMap>,
-    normalizer: Normalizer<TEventMap>,
+    normalizer: Partial<Normalizer<TEventMap>>,
   ): () => void {
     // Silent dedupe — calling attach() twice for the same source is almost
     // always a bug, but we want subscriptions() to return one entry per source.

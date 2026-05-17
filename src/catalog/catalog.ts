@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { HarnessManifest } from "../capabilities/schemas.ts";
+import { log } from "../lib/log.ts";
 import { runtime } from "../lib/paths.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import { type LoaderResult, scanAll } from "./loader.ts";
@@ -61,7 +62,7 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
     const { agents, errors } = scanner();
     if (logErrors) {
       for (const e of errors) {
-        console.warn(`[catalog] skipped ${e.path}: ${e.message}`);
+        log().warn({ module: "catalog", path: e.path, err: e.message }, "skipped malformed manifest");
       }
     }
     const next = new Map<string, Agent>(agents.map((a) => [a.agentId, a]));

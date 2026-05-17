@@ -20,13 +20,17 @@ A portable personal AI system. Capabilities carry an origin tag: Personal travel
 
 ## Always keep in mind
 
-### Audit awareness
+### Audit vs trace awareness
 
-Hive's Audit Log records operations across modules — tool calls, permission decisions, secrets access, MCP lifecycle, memory writes, agent lifecycle, backend invocations. **Audit uses a subscribe pattern: modules emit typed events as side effects; the Audit module subscribes and persists. Audit is never directly called — there is no `audit.record(...)` API.**
+Two distinct stores, two distinct purposes — don't conflate them.
 
-When you write code that does something auditable (mutates state, makes a decision, invokes a capability), think about whether the relevant event is being emitted from the module's internal write path. If a module doesn't yet expose an event stream for the kind of thing you're doing, add one.
+**Audit** = what users and agents did. Tool calls, permission decisions, secret accesses, harness edits, Run completions. SQLite-backed, retained, queryable. Uses a subscribe pattern: modules emit typed events as side effects; the Audit module subscribes and persists. Audit is never directly called — there is no `audit.record(...)` API. When you write code that does something user-visible (mutates state, makes a decision, invokes a capability), think about whether the relevant event is being emitted from the module's internal write path. Never put sensitive values in event payloads — refs, not values.
 
-Never put sensitive values in event payloads. Refs, not values. Keys, not values. See [ADR-0004](docs/adr/0004-audit-log-design.md) for the full design — event types, transaction semantics, redaction backstop, retention.
+**Trace** = system diagnostics. Parse errors, watcher events, daemon startup chatter, performance counters. JSONL via Pino at `~/.hive/logs/daemon.log`. *No* subscribe pattern — modules import the `log()` singleton from `src/lib/log.ts` and write at the call site with full context: `log().warn({ module, path, err }, "skipped malformed manifest")`. `console.log`/`console.warn`/`console.error` in non-test source code is wrong; use the trace logger.
+
+The line: was a user or agent the proximate cause of this event? If yes → audit. If no (the system observed something during normal operation) → trace.
+
+See [ADR-0004](docs/adr/0004-audit-log-design.md) for the full design — "Audit vs trace" section, event types, transaction semantics, redaction backstop, retention.
 
 ### Style
 

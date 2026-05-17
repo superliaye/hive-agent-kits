@@ -4,7 +4,47 @@
 
 How **Audit** works in Hive v1: its purpose, how events get into it, what events get in, where they're stored, how secrets stay out, what happens when it fails, and how it ages out. Sharpens the **Audit Log** term in CONTEXT.md and constrains every module's event-emission surface.
 
-Primary purpose: **debuggability and inspection** — answering "what happened, why, and when?" Tamper-evidence is a v1.1 concern (hooks reserved in the schema, no migration needed to add later). Replay-as-executable-history is an explicit non-goal for v1.
+Primary purpose: **the record of what users and agents did** — answering "what happened, who triggered it, and when?" Tamper-evidence is a v1.1 concern (hooks reserved in the schema, no migration needed to add later). Replay-as-executable-history is an explicit non-goal for v1.
+
+System-internal diagnostics (parse errors, watcher failures, startup chatter, performance counters) live in a separate **Trace Log**, not the Audit Log. See "Audit vs trace" below.
+
+## Audit vs trace
+
+**Audit answers "what did the user or agent do?"** It is the record of decisions and side effects with a user-visible consequence: a binding toggled in the UI, a Tool call inside a Run, a Memory write, a Permission decision, a Secret access, a Harness rewrite by the Agent Manager. Persisted in SQLite. Retained forever by default. Queryable with `hive audit query …`.
+
+**Trace answers "why didn't this work?"** It is the diagnostic stream the system writes about its own operation: malformed-manifest skip, filesystem watcher error, daemon startup phase, hot-reload rescan, gateway latency, CLI subprocess capture. Persisted as JSONL via Pino at `<runtime>/logs/daemon.log`. Rotation by tooling, retention modest, freely deletable.
+
+Same subscribe-pattern primitive (typed event streams from each module), two consumers:
+
+| Event | Goes to audit? | Goes to trace? |
+|---|---|---|
+| `harness.updated` (UI binding toggle) | **yes** | yes (any handler can log) |
+| `harness.updated` (Agent Manager Run rewrite) | **yes** | yes |
+| `agent.created` (Agent Manager creates a new Worker) | **yes** | yes |
+| `agent.created` at startup scan (inventory) | no | yes |
+| `capability.registered` at startup scan (inventory) | no | yes |
+| `capability.changed` from hot-reload (system) | no | yes |
+| `config.change` (user edited or set via Settings UI) | **yes** | yes |
+| `tool_use.executed` (agent invoked a Tool in a Run) | **yes** | yes |
+| `gateway.adapter.registered` at startup | no | yes |
+| malformed manifest, parse error | no | yes |
+| daemon startup chatter | no | yes |
+| MCP server crash/restart | **yes** (lifecycle visible to user) | yes (diagnostic detail) |
+
+The line: **was a user or agent the proximate cause?** If yes, the event is an audit fact ("this happened on the user's behalf"). If no — the system observed something during normal operation — it's trace.
+
+**Mechanics:**
+
+- Modules emit one typed event stream (`events: TypedEmitter<...>`). That stream is the shared input.
+- The Audit subscriber (`wireSubscriptions`) attaches a *partial* normalizer per source — only the event types that represent user/agent actions are written to `audit.db`.
+- The Trace channel is **not** an event subscriber. Modules import a Pino singleton (`src/lib/log.ts`) and write structured records directly: `log().warn({ module, path, err }, "skipped malformed manifest")`. Pino is a thin call, not a subscribe-pattern receiver; trace is "everything the module wanted to say about its own state."
+- Why no Trace subscriber? Diagnostic context is best emitted at the call site (full local state, full stack), not after normalization through an event schema. The subscribe pattern is right when the consumer wants a uniform shape; trace consumers want raw context.
+
+This split is what keeps `audit.db` quiet at boot (no startup-inventory storm) and lets `daemon.log` capture diagnostic detail that would be noise in audit. The two stores answer different questions; conflating them produced "is this row useful or noise?" on every query.
+
+## What changed when this section landed (amendment)
+
+The original ADR-0004 framed audit's purpose as "debuggability and inspection." That framing was too wide: it pulled diagnostic spew into the audit table. The sharpened framing is "what users and agents did"; diagnostic concerns moved to the Trace Log. The subscribe-pattern primitive and the SQLite schema are unchanged; what changed is which events the audit subscriber attaches a normalizer for.
 
 ## Subscribe, don't push
 

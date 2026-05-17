@@ -2,10 +2,9 @@
  * Integration tests for wireSubscriptions — the cross-module seam that
  * attaches emitter modules to the audit log.
  *
- * Verifies:
- *   - Config changes produce audit.config.change rows
- *   - Gateway adapter registration/unregistration produce audit rows
- *   - The disposer detaches all listeners (no leak across tests)
+ * Audit covers user/agent-driven side effects (ADR-0004 "Audit vs trace"
+ * amendment). System-driven scan/lifecycle events flow through the trace
+ * log, not audit — verified here by asserting their absence.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -54,31 +53,20 @@ describe("wireSubscriptions", () => {
     config.dispose();
   });
 
-  test("gateway adapter registration produces audit rows", async () => {
+  test("gateway adapter registration is NOT audited (trace, not audit)", async () => {
     const audit = createAudit({ mode: "memory" });
     const gateway = createGateway();
     const dispose = wireSubscriptions(audit, { gateway });
 
     const unregister = gateway.registerAdapter(fakeAdapter);
-    // TypedEmitter.emit awaits listeners; the prior call already resolved.
-    // No additional flush needed.
-
-    // audit.query() orders newest first (ts DESC, seq DESC).
-    const afterRegister = await audit.query({ source: "gateway" });
-    expect(afterRegister.length).toBe(1);
-    expect(afterRegister[0]?.event_type).toBe("gateway.adapter.registered");
-    expect(afterRegister[0]?.payload).toMatchObject({ providers: ["fake"] });
-
     unregister();
-    const afterUnregister = await audit.query({ source: "gateway" });
-    expect(afterUnregister.length).toBe(2);
-    expect(afterUnregister[0]?.event_type).toBe("gateway.adapter.unregistered");
-    expect(afterUnregister[1]?.event_type).toBe("gateway.adapter.registered");
 
+    const rows = await audit.query({ source: "gateway" });
+    expect(rows.length).toBe(0);
     dispose();
   });
 
-  test("registry.start() produces capability.registered audit rows", async () => {
+  test("registry.start() is NOT audited; scan-time events are trace-only", async () => {
     const audit = createAudit({ mode: "memory" });
     const fakeCap: Capability = {
       kind: "skill",
@@ -101,21 +89,12 @@ describe("wireSubscriptions", () => {
     await registry.start();
 
     const rows = await audit.query({ source: "registry" });
-    expect(rows.length).toBe(1);
-    expect(rows[0]?.event_type).toBe("capability.registered");
-    expect(rows[0]?.payload).toMatchObject({
-      name: "foo",
-      kind: "skill",
-      origin: "personal",
-      layer: "bundled",
-      source: "filesystem",
-    });
-
+    expect(rows.length).toBe(0);
     dispose();
     registry.dispose();
   });
 
-  test("catalog.start() produces agent.created audit rows", async () => {
+  test("catalog.start() (scan) is NOT audited; only user/agent actions are", async () => {
     const audit = createAudit({ mode: "memory" });
     const fakeAgent: Agent = {
       agentId: "root",
@@ -136,10 +115,9 @@ describe("wireSubscriptions", () => {
 
     await catalog.start();
 
+    // Scan-time agent.created should NOT appear in audit.
     const rows = await audit.query({ source: "catalog" });
-    expect(rows.length).toBe(1);
-    expect(rows[0]?.event_type).toBe("agent.created");
-    expect(rows[0]?.agent_id).toBe("root");
+    expect(rows.length).toBe(0);
 
     dispose();
     catalog.dispose();
