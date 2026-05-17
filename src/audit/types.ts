@@ -8,7 +8,9 @@ export type ModuleSource =
   | "memory"
   | "registry"
   | "lifecycle"
-  | "backend";
+  | "backend"
+  | "config"
+  | "gateway";
 
 export type AuditEvent = {
   id: string;

@@ -1,7 +1,6 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { claudeCliAdapter } from "../adapters/claude-cli.ts";
-import { complete } from "../index.ts";
-import { _resetRegistry, registerAdapter } from "../registry.ts";
+import { createGateway } from "../index.ts";
 import type { GatewayEvent } from "../types.ts";
 
 async function claudeOnPath(): Promise<boolean> {
@@ -28,20 +27,17 @@ describe("claude-cli adapter (smoke)", () => {
     }
   });
 
-  afterEach(() => {
-    _resetRegistry();
-  });
-
   test("real complete() emits text + done(stop) with HELLO", async () => {
     if (!available) {
       console.warn("skipped — claude CLI not on PATH");
       return;
     }
-    registerAdapter(claudeCliAdapter);
+    const gw = createGateway();
+    gw.registerAdapter(claudeCliAdapter);
 
     const events: GatewayEvent[] = [];
     let collectedText = "";
-    for await (const ev of complete({
+    for await (const ev of gw.complete({
       model: "claude-cli/sonnet",
       messages: [
         {

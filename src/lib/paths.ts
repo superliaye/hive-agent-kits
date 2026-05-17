@@ -1,16 +1,70 @@
-// User-data path resolution per ADR-0002 ("User data location").
-// All paths derive from one root: ~/.hive/. Single source of truth.
+// Path resolution for Hive's two-tier storage model.
+//
+// Two roots:
+//   - BUNDLED: lives with the Hive package (the repo's bundled/ in dev mode,
+//     the daemon's install resources in a packaged app). Immutable at runtime.
+//   - RUNTIME: lives in OS app-storage (~/.hive/ today; future: Electron's
+//     app.getPath('userData')). Mutable per install.
+//
+// Both roots are env-overridable for tests:
+//   HIVE_BUNDLED_ROOT, HIVE_RUNTIME_ROOT
+//
+// See docs/adr/0007-capability-lifecycle-and-storage.md.
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import type { Origin } from "./capability-types.ts";
 
-export const HIVE_DIR = join(homedir(), ".hive");
-export const HIVE_DB = join(HIVE_DIR, "hive.db");
-export const AUDIT_DB = join(HIVE_DIR, "audit.db");
-export const AUDIT_ARCHIVE_DIR = join(HIVE_DIR, "audit-archive");
-export const CAPABILITIES_DIR = join(HIVE_DIR, "capabilities");
-export const AGENTS_DIR = join(HIVE_DIR, "agents");
-export const MCP_DIR = join(HIVE_DIR, "mcp");
-export const LOGS_DIR = join(HIVE_DIR, "logs");
-export const TOKEN_FILE = join(HIVE_DIR, ".token");
-export const CONFIG_FILE = join(HIVE_DIR, "config.yaml");
+export function bundledRoot(): string {
+  if (process.env.HIVE_BUNDLED_ROOT) return process.env.HIVE_BUNDLED_ROOT;
+  // src/lib/paths.ts -> ../../bundled
+  return resolve(import.meta.dir, "..", "..", "bundled");
+}
+
+export function runtimeRoot(): string {
+  if (process.env.HIVE_RUNTIME_ROOT) return process.env.HIVE_RUNTIME_ROOT;
+  return join(homedir(), ".hive");
+}
+
+function bundledOriginRoot(origin: Origin, workplaceId?: string): string {
+  if (origin === "personal") return join(bundledRoot(), "personal");
+  if (!workplaceId) {
+    throw new Error("workplaceId required for workplace-origin paths");
+  }
+  return join(bundledRoot(), "workplace", workplaceId);
+}
+
+// Bundled — origin-aware Capability dirs. Workplace requires an id.
+export const bundled = {
+  root: bundledRoot,
+  skill: (origin: Origin, name: string, workplaceId?: string) =>
+    join(bundledOriginRoot(origin, workplaceId), "skills", name),
+  snippet: (origin: Origin, name: string, workplaceId?: string) =>
+    join(bundledOriginRoot(origin, workplaceId), "snippets", name),
+  mcp: (origin: Origin, name: string, workplaceId?: string) =>
+    join(bundledOriginRoot(origin, workplaceId), "mcp", name),
+  // Agents are not origin-tagged at the bundled layer — Root and Agent Manager
+  // are always there; Worker Agents never live in bundled.
+  agent: (id: string) => join(bundledRoot(), "agents", id),
+};
+
+// Runtime — implicit personal scope, no origin axis.
+export const runtime = {
+  root: runtimeRoot,
+  skill: (name: string) => join(runtimeRoot(), "capabilities", "skills", name),
+  snippet: (name: string) => join(runtimeRoot(), "capabilities", "snippets", name),
+  mcp: (name: string) => join(runtimeRoot(), "capabilities", "mcp", name),
+  agent: (id: string) => join(runtimeRoot(), "agents", id),
+  agentMemory: (id: string) => join(runtimeRoot(), "agents", id, "memory"),
+  agentThreads: (id: string) => join(runtimeRoot(), "agents", id, "threads"),
+};
+
+// Files that live only in the runtime tier.
+export const files = {
+  config: () => join(runtimeRoot(), "config.yaml"),
+  token: () => join(runtimeRoot(), ".token"),
+  auditDb: () => join(runtimeRoot(), "audit.db"),
+  auditArchiveDir: () => join(runtimeRoot(), "audit-archive"),
+  hiveDb: () => join(runtimeRoot(), "hive.db"),
+  logsDir: () => join(runtimeRoot(), "logs"),
+};

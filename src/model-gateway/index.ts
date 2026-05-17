@@ -2,16 +2,41 @@
 //
 // See docs/adr/0005-model-gateway-design.md.
 
-export { registerAdapter, resolve } from "./registry.ts";
-export { GatewayError, isRetryable } from "./errors.ts";
+import type { TypedEmitter } from "../lib/typed-emitter.ts";
+import { GatewayError, isRetryable } from "./errors.ts";
+import { createGatewayRegistry } from "./registry.ts";
+import type {
+  CompletionInput,
+  GatewayAdapter,
+  GatewayEvent,
+  GatewayModuleEvents,
+} from "./types.ts";
 
-import { resolve } from "./registry.ts";
-import type { CompletionInput, GatewayEvent } from "./types.ts";
+export type ModelGateway = {
+  // Stream a completion. Resolves the adapter by `input.model`'s provider
+  // prefix, then forwards. Per-completion events (deltas, tool calls, etc.)
+  // arrive on this stream — not on `events`.
+  complete(input: CompletionInput): AsyncIterable<GatewayEvent>;
 
-export function complete(input: CompletionInput): AsyncIterable<GatewayEvent> {
-  const adapter = resolve(input.model);
-  return adapter.complete(input);
+  // Register an adapter. Returns a disposer that unregisters the adapter
+  // and emits `adapter.unregistered`.
+  registerAdapter(adapter: GatewayAdapter): () => void;
+
+  // Module-level events: adapter registration changes. The audit subscriber
+  // attaches here for deployment-level visibility of which adapters are live.
+  events: TypedEmitter<GatewayModuleEvents>;
+};
+
+export function createGateway(): ModelGateway {
+  const registry = createGatewayRegistry();
+  return {
+    complete: (input) => registry.resolve(input.model).complete(input),
+    registerAdapter: registry.registerAdapter,
+    events: registry.events,
+  };
 }
+
+export { GatewayError, isRetryable };
 
 export type {
   AuthInput,
@@ -21,6 +46,7 @@ export type {
   GatewayAdapter,
   GatewayErrorCode,
   GatewayEvent,
+  GatewayModuleEvents,
   JsonSchema,
   Message,
   ThinkingEffort,

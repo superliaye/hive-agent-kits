@@ -1,8 +1,9 @@
 // Config module types per ADR-0006.
 
 import type { ZodType } from "zod";
+import type { TypedEmitter } from "../lib/typed-emitter.ts";
 
-// Public Config interface — three verbs per ADR-0006.
+// Public Config interface per ADR-0006.
 // Generic over the shape `S`; the production schema is `AppConfig` in schema.ts.
 export type Config<S extends Record<string, unknown>> = {
   // Current value, synchronous, no I/O.
@@ -12,8 +13,13 @@ export type Config<S extends Record<string, unknown>> = {
   set<K extends keyof S & string>(key: K, value: S[K]): Promise<void>;
 
   // Fires immediately with the current value, then again on every change.
-  // Returns a disposer.
+  // Returns a disposer. Implemented on top of `events`.
   watch<K extends keyof S & string>(key: K, listener: (value: S[K]) => void): () => void;
+
+  // Change-notification stream. Powers `watch()` internally and is the seam
+  // the audit subscriber attaches to (ADR-0004 subscribe pattern).
+  // Same event surface for every emitter module in the system.
+  events: TypedEmitter<ConfigEvents<S>>;
 };
 
 // Per-key change record carried on the internal event stream and consumed by

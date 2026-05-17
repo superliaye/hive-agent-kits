@@ -8,86 +8,17 @@
  *   4. Folder name != manifest's `name` field (silent mis-registration)
  *   5. Same-name collisions within a kind at the same layer
  *      (ADR-0007's load-time error condition)
- *
- * Schemas are defined inline here until the Capability module lands —
- * at which point the test imports from src/capabilities/schemas/ instead.
+ *   6. Harness bindings that reference Capabilities not in the bundled set
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { parse } from "yaml";
-import { z } from "zod";
+import { HarnessManifest, SkillManifest, SnippetManifest } from "../schemas.ts";
+import { bundledRoot } from "../../lib/paths.ts";
 
-const BUNDLED_ROOT = resolve(import.meta.dir, "..", "..", "..", "bundled");
-
-const NAME = z
-  .string()
-  .min(1)
-  .max(64)
-  .regex(/^[a-z0-9-]+$/, "must be lowercase kebab-case");
-
-const SOURCE = z
-  .object({
-    url: z.string().min(1),
-    ref: z.string().min(1),
-    fetchedAt: z.string().min(1),
-  })
-  .strict();
-
-const COMPATIBILITY = z
-  .object({
-    model: z.array(z.string()).optional(),
-    system: z
-      .object({
-        binaries: z.array(z.string()).optional(),
-        env: z.array(z.string()).optional(),
-        services: z.array(z.string()).optional(),
-        platforms: z.array(z.enum(["win32", "darwin", "linux"])).optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
-
-const SkillSchema = z
-  .object({
-    name: NAME,
-    description: z.string().min(1).max(2048),
-    tags: z.array(z.string()).optional(),
-    source: SOURCE.optional(),
-    manualInvocationOnly: z.boolean().optional(),
-    allowedTools: z.array(z.string()).optional(),
-    argumentHint: z.string().optional(),
-    compatibility: COMPATIBILITY.optional(),
-  })
-  .strict();
-
-const SnippetSchema = z
-  .object({
-    name: NAME,
-    description: z.string().min(1).max(2048),
-    tags: z.array(z.string()).optional(),
-    source: SOURCE.optional(),
-  })
-  .strict();
-
-const HarnessSchema = z
-  .object({
-    agentId: NAME,
-    backend: z.enum(["native", "claude-code", "codex"]),
-    domain: z.string().min(1),
-    bindings: z
-      .object({
-        skills: z.array(z.string()).default([]),
-        snippets: z.array(z.string()).default([]),
-        tools: z.array(z.string()).default([]),
-        mcp: z.array(z.string()).default([]),
-      })
-      .strict(),
-    config: z.record(z.string(), z.unknown()),
-  })
-  .strict();
+const BUNDLED_ROOT = bundledRoot();
 
 function readFrontmatter(filePath: string): Record<string, unknown> {
   const content = readFileSync(filePath, "utf8");
@@ -121,7 +52,7 @@ describe("bundled/personal/skills/*/SKILL.md", () => {
       expect(existsSync(skillPath)).toBe(true);
 
       const fm = readFrontmatter(skillPath);
-      const result = SkillSchema.safeParse(fm);
+      const result = SkillManifest.safeParse(fm);
       if (!result.success) {
         throw new Error(
           `${name}/SKILL.md schema error:\n${result.error.issues
@@ -152,7 +83,7 @@ describe("bundled/personal/snippets/*/SNIPPET.md", () => {
       expect(existsSync(path)).toBe(true);
 
       const fm = readFrontmatter(path);
-      const result = SnippetSchema.safeParse(fm);
+      const result = SnippetManifest.safeParse(fm);
       if (!result.success) {
         throw new Error(
           `${name}/SNIPPET.md schema error:\n${result.error.issues
@@ -180,7 +111,7 @@ describe("bundled/agents/*/HARNESS.md", () => {
       expect(existsSync(path)).toBe(true);
 
       const fm = readFrontmatter(path);
-      const result = HarnessSchema.safeParse(fm);
+      const result = HarnessManifest.safeParse(fm);
       if (!result.success) {
         throw new Error(
           `${name}/HARNESS.md schema error:\n${result.error.issues
@@ -204,7 +135,7 @@ describe("cross-bundled invariants", () => {
 
     for (const agent of listSubdirs(agentRoot)) {
       const fm = readFrontmatter(join(agentRoot, agent, "HARNESS.md"));
-      const parsed = HarnessSchema.parse(fm);
+      const parsed = HarnessManifest.parse(fm);
 
       for (const skillName of parsed.bindings.skills) {
         expect(skills.has(skillName)).toBe(true);

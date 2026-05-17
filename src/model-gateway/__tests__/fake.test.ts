@@ -1,14 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { makeFakeAdapter } from "../adapters/fake.ts";
-import { complete } from "../index.ts";
-import { _resetRegistry, registerAdapter } from "../registry.ts";
+import { createGateway } from "../index.ts";
 import type { GatewayEvent } from "../types.ts";
 
 describe("fake adapter", () => {
-  afterEach(() => {
-    _resetRegistry();
-  });
-
   test("emits scripted events in order", async () => {
     const script: GatewayEvent[] = [
       { type: "text_start", blockIndex: 0 },
@@ -18,10 +13,11 @@ describe("fake adapter", () => {
       { type: "usage", inputTokens: 3, outputTokens: 2 },
       { type: "done", finishReason: "stop" },
     ];
-    registerAdapter(makeFakeAdapter(["fake"], { "fake/echo": script }));
+    const gw = createGateway();
+    gw.registerAdapter(makeFakeAdapter(["fake"], { "fake/echo": script }));
 
     const got: GatewayEvent[] = [];
-    for await (const ev of complete({
+    for await (const ev of gw.complete({
       model: "fake/echo",
       messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
       auth: { kind: "apiKey", apiKey: "" },
@@ -32,9 +28,10 @@ describe("fake adapter", () => {
   });
 
   test("emits error + done when fixture is missing", async () => {
-    registerAdapter(makeFakeAdapter(["fake"], {}));
+    const gw = createGateway();
+    gw.registerAdapter(makeFakeAdapter(["fake"], {}));
     const got: GatewayEvent[] = [];
-    for await (const ev of complete({
+    for await (const ev of gw.complete({
       model: "fake/missing",
       messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
       auth: { kind: "apiKey", apiKey: "" },
@@ -88,10 +85,11 @@ describe("fake adapter", () => {
       },
       { type: "done", finishReason: "tool_use" },
     ];
-    registerAdapter(makeFakeAdapter(["fake"], { "fake/full": script }));
+    const gw = createGateway();
+    gw.registerAdapter(makeFakeAdapter(["fake"], { "fake/full": script }));
 
     const got: GatewayEvent[] = [];
-    for await (const ev of complete({
+    for await (const ev of gw.complete({
       model: "fake/full",
       messages: [{ role: "user", content: [{ type: "text", text: "x" }] }],
       auth: { kind: "apiKey", apiKey: "" },
@@ -108,10 +106,11 @@ describe("fake adapter", () => {
       { type: "text_delta", blockIndex: 0, delta: "b" },
       { type: "done", finishReason: "stop" },
     ];
-    registerAdapter(makeFakeAdapter(["fake"], { "fake/echo": script }));
+    const gw = createGateway();
+    gw.registerAdapter(makeFakeAdapter(["fake"], { "fake/echo": script }));
     const ctrl = new AbortController();
     const got: GatewayEvent[] = [];
-    for await (const ev of complete({
+    for await (const ev of gw.complete({
       model: "fake/echo",
       messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
       auth: { kind: "apiKey", apiKey: "" },

@@ -14,7 +14,7 @@ export function createConfigStore<S extends Record<string, unknown>>(
   initial: S,
   schema: ZodType<S>,
   persistence?: ConfigPersistence,
-): Config<S> & { dispose(): void; events: TypedEmitter<ConfigEvents<S>> } {
+): Config<S> & { dispose(): void } {
   let current: S = schema.parse(initial);
   const events = new TypedEmitter<ConfigEvents<S>>();
 

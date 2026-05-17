@@ -143,3 +143,12 @@ export type GatewayAdapter = {
   providers: string[];
   complete(input: CompletionInput): AsyncIterable<GatewayEvent>;
 };
+
+// Module-level event stream for adapter registration changes.
+// Per-completion events (text deltas, tool calls, etc.) flow through
+// `complete()`'s AsyncIterable<GatewayEvent>, not through here — those
+// are causally owned by the Run that triggered them.
+export type GatewayModuleEvents = {
+  "adapter.registered": { providers: readonly string[] };
+  "adapter.unregistered": { providers: readonly string[] };
+};
