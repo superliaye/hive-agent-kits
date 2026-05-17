@@ -3,6 +3,38 @@
 import { z } from "zod";
 import { AgentBackend, CapabilityKind, CapabilityLayer, KebabName, Origin } from "../lib/capability-types.ts";
 
+// Mirrors the ModuleSource union in src/audit/types.ts. Kept here so the
+// HTTP boundary validates incoming source filters without leaking the audit
+// module's types into route signatures.
+export const ModuleSourceSchema = z.enum([
+  "run",
+  "permission",
+  "secrets",
+  "mcp",
+  "memory",
+  "registry",
+  "catalog",
+  "lifecycle",
+  "backend",
+  "config",
+  "gateway",
+]);
+
+// Query params for GET /api/audit. Hono passes everything as strings — coerce
+// numeric fields. `limit` is clamped to 1000 server-side as a runaway guard.
+export const AuditQueryParams = z
+  .object({
+    source: ModuleSourceSchema.optional(),
+    event_type: z.string().min(1).max(128).optional(),
+    agent_id: KebabName.optional(),
+    run_id: z.string().min(1).max(128).optional(),
+    since: z.coerce.number().int().nonnegative().optional(),
+    until: z.coerce.number().int().nonnegative().optional(),
+    limit: z.coerce.number().int().min(1).max(1000).optional(),
+  })
+  .strict();
+export type AuditQueryParams = z.infer<typeof AuditQueryParams>;
+
 export const BindingPatchItem = z
   .object({
     kind: z.enum(["skill", "snippet", "tool", "mcp"]),

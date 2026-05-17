@@ -290,4 +290,64 @@ describe("server routes", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  test("GET /api/audit returns rows from the running audit log", async () => {
+    // Mutate state to generate an audit row, then query for it.
+    await server.app.fetch(
+      authed("/api/agents/root/bindings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          patches: [{ kind: "skill", name: "alpha", action: "unbind" }],
+        }),
+      }),
+    );
+
+    const res = await server.app.fetch(authed("/api/audit?source=catalog"));
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<{
+      source: string;
+      event_type: string;
+      agent_id: string | null;
+      payload: Record<string, unknown>;
+    }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.source === "catalog")).toBe(true);
+    const updated = rows.find((r) => r.event_type === "harness.updated");
+    expect(updated).toBeDefined();
+    expect(updated?.agent_id).toBe("root");
+  });
+
+  test("GET /api/audit filters by event_type", async () => {
+    await server.app.fetch(
+      authed("/api/agents/root/bindings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          patches: [{ kind: "skill", name: "alpha", action: "unbind" }],
+        }),
+      }),
+    );
+    const res = await server.app.fetch(
+      authed("/api/audit?source=catalog&event_type=harness.updated&limit=10"),
+    );
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<{ event_type: string }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.event_type === "harness.updated")).toBe(true);
+  });
+
+  test("GET /api/audit rejects unknown query keys", async () => {
+    const res = await server.app.fetch(
+      authed("/api/audit?bogus=true"),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("GET /api/audit rejects invalid source enum", async () => {
+    const res = await server.app.fetch(
+      authed("/api/audit?source=not-a-source"),
+    );
+    expect(res.status).toBe(400);
+  });
 });

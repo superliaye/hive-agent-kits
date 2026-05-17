@@ -49,7 +49,7 @@ Write an ADR only when all three are true: hard to reverse, surprising without c
 
 ## Running the app
 
-Two intended workflows. Agent: **do not** invoke either of these from a test/scripted shell — both spawn visible windows on the user's desktop.
+Two intended workflows. Agent: **do not** invoke either of these from the Bash tool — see the `run-app` skill at [.claude/skills/run-app/SKILL.md](.claude/skills/run-app/SKILL.md) for the PowerShell-tool path, common failures (`ELECTRON_RUN_AS_NODE`, port orphans, the `&&`-chain bug), and verification snippets.
 
 ### Debug (interactive, HMR)
 

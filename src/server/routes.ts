@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { ZodError } from "zod";
+import type { Audit } from "../audit/index.ts";
 import type { Capability } from "../capabilities/types.ts";
 import { AgentNotFoundError } from "../catalog/index.ts";
 import type { Agent, Catalog } from "../catalog/types.ts";
@@ -13,6 +14,7 @@ import { bearerAuth } from "./auth.ts";
 import {
   type AgentDetailWire,
   type AgentSummaryWire,
+  AuditQueryParams,
   BindingPatchBody,
   type CapabilityWire,
   type WireEvent,
@@ -21,6 +23,7 @@ import {
 export type RoutesDeps = {
   registry: Registry;
   catalog: Catalog;
+  audit: Audit;
   token: string;
 };
 
@@ -141,6 +144,21 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       }
       throw err;
     }
+  });
+
+  // Audit query — the durable answer to "what just happened" for any client
+  // (ad-hoc curl, future hive-audit CLI, future UI). Same auth gate; same
+  // redaction semantics (rows were redacted on write). Per ADR-0004.
+  app.get("/api/audit", async (c) => {
+    const parsed = AuditQueryParams.safeParse(c.req.query());
+    if (!parsed.success) {
+      return c.json(
+        { error: "invalid audit query", issues: zodIssues(parsed.error) },
+        400,
+      );
+    }
+    const rows = await deps.audit.query(parsed.data);
+    return c.json(rows);
   });
 
   app.get("/api/capabilities", (c) => {

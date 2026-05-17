@@ -98,7 +98,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const token = opts.token ?? (opts.mode === "memory" ? "test-token" : ensureToken());
   const port = opts.port ?? config.get("daemon").httpPort;
 
-  const app = buildRoutes({ registry, catalog, token });
+  const app = buildRoutes({ registry, catalog, audit, token });
 
   return {
     app,
