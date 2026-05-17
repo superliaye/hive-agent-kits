@@ -24,6 +24,7 @@ import {
   type Config,
   createConfig,
 } from "../config/index.ts";
+import { createLogger, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { createGateway, type ModelGateway } from "../model-gateway/index.ts";
 import { buildRoutes } from "./routes.ts";
@@ -59,6 +60,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // First-launch: ensure the runtime root exists before audit/config touch it.
     mkdirSync(runtimeRoot(), { recursive: true });
   }
+  // Install the trace logger before any other module emits a log line.
+  setLogger(createLogger({ mode: opts.mode === "memory" ? "silent" : "file" }));
   const audit =
     opts.mode === "memory"
       ? createAudit({ mode: "memory" })

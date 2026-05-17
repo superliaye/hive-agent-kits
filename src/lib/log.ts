@@ -5,54 +5,53 @@
 // watcher events, daemon startup chatter, performance counters, and other
 // diagnostics for "why didn't this work" questions. See ADR-0004.
 //
-// Pino writes JSONL to <runtime>/logs/daemon.log. Bun's runtime captures
-// stdout too, so a `tail -f <runtime>/logs/daemon.log` plus daemon stdout
-// covers most debugging.
+// Mode is explicit at creation, mirroring Audit/Config/Server: the daemon's
+// `createServer({mode})` chooses and installs the singleton; tests get the
+// safe default (silent) until they explicitly install one. No env-sniffing
+// inside the logger itself.
 
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync } from "node:fs";
 import pino, { type Logger } from "pino";
 import { files } from "./paths.ts";
 
-let cached: Logger | null = null;
+export type LogMode = "silent" | "file" | "stdout";
 
-// Modules call `log()` to get the singleton; tests can override via
-// `setLogger()` to inject a silent logger and assert on captured records.
+// Singleton — silent by default so unconfigured tests don't litter. The
+// daemon installs the real one via `setLogger(createLogger({mode: "file"}))`
+// during boot.
+let current: Logger = pino({ level: "silent" });
+
 export function log(): Logger {
-  if (cached) return cached;
-  cached = createDefaultLogger();
-  return cached;
+  return current;
 }
 
 export function setLogger(logger: Logger): void {
-  cached = logger;
+  current = logger;
 }
 
-// Test helper: silent logger that drops every write.
 export function silentLogger(): Logger {
   return pino({ level: "silent" });
 }
 
-function createDefaultLogger(): Logger {
-  // Bun's test runner sets a global flag we can sniff. In-process tests
-  // should never spam a real file.
-  const inTest =
-    typeof (globalThis as { Bun?: { jest?: unknown } }).Bun?.jest !== "undefined" ||
-    process.env.NODE_ENV === "test";
-  if (inTest) return silentLogger();
-
-  try {
-    const logPath = `${files.logsDir()}/daemon.log`;
-    mkdirSync(dirname(logPath), { recursive: true });
-    if (!existsSync(dirname(logPath))) {
-      return pino({ level: "info" });
+export function createLogger(opts: { mode: LogMode; level?: pino.Level }): Logger {
+  const level = opts.level ?? (process.env.HIVE_LOG_LEVEL as pino.Level | undefined) ?? "info";
+  switch (opts.mode) {
+    case "silent":
+      return pino({ level: "silent" });
+    case "stdout":
+      return pino({ level });
+    case "file": {
+      try {
+        const logPath = `${files.logsDir()}/daemon.log`;
+        mkdirSync(files.logsDir(), { recursive: true });
+        return pino(
+          { level },
+          pino.destination({ dest: logPath, sync: false, mkdir: true }),
+        );
+      } catch {
+        // Fall back to stdout JSONL if the runtime dir isn't writable.
+        return pino({ level });
+      }
     }
-    return pino(
-      { level: process.env.HIVE_LOG_LEVEL ?? "info" },
-      pino.destination({ dest: logPath, sync: false, mkdir: true }),
-    );
-  } catch {
-    // Fall back to stdout JSONL if the runtime dir isn't writable.
-    return pino({ level: process.env.HIVE_LOG_LEVEL ?? "info" });
   }
 }
