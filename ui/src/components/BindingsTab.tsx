@@ -30,6 +30,8 @@ const KIND_NOTES: Partial<Record<BindingKind, string>> = {
     "Snippets are consumed by the Agent Manager at agent-authoring time, not by this agent at runtime.",
 };
 
+const KIND_ORDER: BindingKind[] = ["skill", "snippet", "tool", "mcp"];
+
 export function BindingsTab({
   apiConfig,
   agent,
@@ -43,6 +45,7 @@ export function BindingsTab({
   });
 
   const editor = useAgentEditor(apiConfig, agent);
+  const [kind, setKind] = useState<BindingKind>("skill");
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [groupBy, setGroupBy] = useState<GroupKey>("none");
 
@@ -68,13 +71,13 @@ export function BindingsTab({
     return { skill, snippet, tool, mcp };
   }, [caps.data, agent.bindings.tools, editor.selected.tool]);
 
-  // Combine all four universes for facet extraction — the chip bar reflects
-  // every value present across all sections so the user can filter from one place.
-  const allCaps = useMemo(
-    () => [...universes.skill, ...universes.snippet, ...universes.tool, ...universes.mcp],
-    [universes],
+  const kindUniverse = universes[kind];
+  const facets = useMemo(() => extractFacets(kindUniverse), [kindUniverse]);
+  const filtered = useMemo(() => applyFilter(kindUniverse, filter), [kindUniverse, filter]);
+  const grouped = useMemo(
+    () => groupCapabilities(filtered, groupBy),
+    [filtered, groupBy],
   );
-  const facets = useMemo(() => extractFacets(allCaps), [allCaps]);
 
   function toggleAxis(axis: "tags" | "workspaces" | "sources", value: string): void {
     const set = new Set(filter[axis]);
@@ -89,29 +92,76 @@ export function BindingsTab({
     filter.workspaces.size > 0 ||
     filter.sources.size > 0;
 
+  // Bound count per kind shown in the kind tab labels for at-a-glance state.
+  const boundCounts: Record<BindingKind, number> = {
+    skill: editor.selected.skill.size,
+    snippet: editor.selected.snippet.size,
+    tool: editor.selected.tool.size,
+    mcp: editor.selected.mcp.size,
+  };
+
+  const note = KIND_NOTES[kind];
+
   return (
     <>
-      <FilterBar
-        facets={facets}
-        filter={filter}
-        setFilter={setFilter}
-        toggleAxis={toggleAxis}
-        groupBy={groupBy}
-        setGroupBy={setGroupBy}
-        filterActive={filterActive}
-        onClear={() => setFilter(EMPTY_FILTER)}
-      />
+      <div className="subtabs">
+        {KIND_ORDER.map((k) => (
+          <button
+            key={k}
+            className={`subtab ${kind === k ? "active" : ""}`}
+            onClick={() => setKind(k)}
+            data-testid={`bind-tab-${k}`}
+          >
+            {KIND_LABELS[k]}
+            <span className="empty" style={{ marginLeft: 6 }}>
+              ({boundCounts[k]})
+            </span>
+          </button>
+        ))}
+      </div>
 
-      {(["skill", "snippet", "tool", "mcp"] as BindingKind[]).map((kind) => (
-        <BindingSection
-          key={kind}
-          kind={kind}
-          universe={universes[kind]}
+      {note && <p className="empty">{note}</p>}
+
+      {kindUniverse.length > 0 && (
+        <FilterBar
+          facets={facets}
           filter={filter}
+          setFilter={setFilter}
+          toggleAxis={toggleAxis}
           groupBy={groupBy}
-          selected={editor.selected[kind]}
-          onToggle={(name) => editor.toggle(kind, name)}
+          setGroupBy={setGroupBy}
+          filterActive={filterActive}
+          onClear={() => setFilter(EMPTY_FILTER)}
+          total={kindUniverse.length}
+          shown={filtered.length}
         />
+      )}
+
+      {kind === "mcp" && kindUniverse.length === 0 && (
+        <div className="empty">No MCP servers bundled in this build.</div>
+      )}
+
+      {kindUniverse.length > 0 && filtered.length === 0 && (
+        <div className="empty">No matches for the current filter.</div>
+      )}
+
+      {grouped.map((group) => (
+        <div key={group.label || "all"}>
+          {groupBy !== "none" && (
+            <div className="binding-group-header">
+              {group.label} <span className="empty">({group.items.length})</span>
+            </div>
+          )}
+          {group.items.map((c) => (
+            <CapabilityCheckbox
+              key={c.name}
+              cap={c}
+              kind={kind}
+              checked={editor.selected[kind].has(c.name)}
+              onToggle={() => editor.toggle(kind, c.name)}
+            />
+          ))}
+        </div>
       ))}
 
       <div className="section">
@@ -156,6 +206,40 @@ export function BindingsTab({
   );
 }
 
+function CapabilityCheckbox({
+  cap,
+  kind,
+  checked,
+  onToggle,
+}: {
+  cap: CapabilityWire;
+  kind: BindingKind;
+  checked: boolean;
+  onToggle: () => void;
+}): JSX.Element {
+  const src = capabilitySource(cap);
+  return (
+    <label className="cap-row" data-testid={`bind-${kind}-${cap.name}`}>
+      <input type="checkbox" checked={checked} onChange={onToggle} />
+      <div>
+        <div className="name">
+          {cap.name}
+          <span className={`badge badge-${cap.layer}`} style={{ marginLeft: 8 }}>
+            {cap.layer}
+          </span>
+          <span className={`badge badge-${cap.origin}`}>
+            {workspaceLabel(capabilityWorkspace(cap))}
+          </span>
+          {src.kind === "upstream" && (
+            <span className="badge badge-source">{src.slug}</span>
+          )}
+        </div>
+        <div className="desc">{cap.description}</div>
+      </div>
+    </label>
+  );
+}
+
 function FilterBar({
   facets,
   filter,
@@ -165,6 +249,8 @@ function FilterBar({
   setGroupBy,
   filterActive,
   onClear,
+  total,
+  shown,
 }: {
   facets: ReturnType<typeof extractFacets>;
   filter: FilterState;
@@ -174,13 +260,15 @@ function FilterBar({
   setGroupBy: (next: GroupKey) => void;
   filterActive: boolean;
   onClear: () => void;
+  total: number;
+  shown: number;
 }): JSX.Element {
   return (
     <div className="filter-bar">
       <div className="filter-row">
         <input
           className="filter-search"
-          placeholder="Search bindings (name or description)…"
+          placeholder="Search name or description…"
           value={filter.search}
           onChange={(e) => setFilter({ ...filter, search: e.target.value })}
           data-testid="bind-search"
@@ -198,6 +286,9 @@ function FilterBar({
             <option value="workspace">Workspace</option>
           </select>
         </label>
+        <span className="filter-count">
+          {filterActive ? `${shown} / ${total}` : `${total} total`}
+        </span>
         {filterActive && (
           <button className="button ghost" onClick={onClear} data-testid="bind-filter-clear">
             Clear
@@ -284,79 +375,5 @@ function ChipFilter({
     >
       {label}
     </span>
-  );
-}
-
-function BindingSection({
-  kind,
-  universe,
-  filter,
-  groupBy,
-  selected,
-  onToggle,
-}: {
-  kind: BindingKind;
-  universe: CapabilityWire[];
-  filter: FilterState;
-  groupBy: GroupKey;
-  selected: ReadonlySet<string>;
-  onToggle: (name: string) => void;
-}): JSX.Element {
-  const filtered = useMemo(() => applyFilter(universe, filter), [universe, filter]);
-  const grouped = useMemo(
-    () => groupCapabilities(filtered, groupBy),
-    [filtered, groupBy],
-  );
-  const note = KIND_NOTES[kind];
-  const selectedCount = Array.from(selected).filter((name) =>
-    universe.some((c) => c.name === name),
-  ).length;
-
-  return (
-    <section className="section">
-      <h3>
-        {KIND_LABELS[kind]}{" "}
-        <span className="empty">
-          ({selectedCount} bound{filter.search || filter.tags.size > 0 ? `, ${filtered.length} shown` : ""})
-        </span>
-      </h3>
-      {note && <p className="empty">{note}</p>}
-      {filtered.length === 0 && <div className="empty">No matches.</div>}
-      {grouped.map((group) => (
-        <div key={group.label || "all"}>
-          {groupBy !== "none" && (
-            <div className="binding-group-header">
-              {group.label} <span className="empty">({group.items.length})</span>
-            </div>
-          )}
-          {group.items.map((c) => (
-            <label key={c.name} className="cap-row" data-testid={`bind-${kind}-${c.name}`}>
-              <input
-                type="checkbox"
-                checked={selected.has(c.name)}
-                onChange={() => onToggle(c.name)}
-              />
-              <div>
-                <div className="name">
-                  {c.name}
-                  <span className={`badge badge-${c.layer}`} style={{ marginLeft: 8 }}>
-                    {c.layer}
-                  </span>
-                  <span className={`badge badge-${c.origin}`}>
-                    {workspaceLabel(capabilityWorkspace(c))}
-                  </span>
-                  {capabilitySource(c).kind === "upstream" && (
-                    <span className="badge badge-source">
-                      {(capabilitySource(c) as { kind: "upstream"; slug: string }).slug}
-                    </span>
-                  )}
-                </div>
-                <div className="desc">{c.description}</div>
-              </div>
-            </label>
-          ))}
-        </div>
-      ))}
-    </section>
   );
 }
