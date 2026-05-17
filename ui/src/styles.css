@@ -109,3 +109,7 @@ pre.config { background: #ffffff; border: 1px solid #e0e0e6; border-radius: 4px;
   margin: 12px 0 4px 24px;
   font-weight: 500;
 }
+
+.group-header { cursor: pointer; user-select: none; }
+.group-header:hover { color: #2a2a55; }
+.group-caret { display: inline-block; width: 12px; color: #6a6a75; font-size: 12px; }

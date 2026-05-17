@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type AgentDetail, type ApiConfig, type CapabilityWire } from "../api.ts";
 import {
   applyFilter,
@@ -47,6 +47,18 @@ export function BindingsTab({
   const [kind, setKind] = useState<BindingKind>("skill");
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [groupBy, setGroupBy] = useState<GroupKey>("none");
+  // Collapsed groups within the current kind. Labels are unique within a
+  // (kind, groupBy) pair; reset whenever either changes so collapse state
+  // never points at stale labels.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => setCollapsed(new Set()), [groupBy, kind]);
+
+  function toggleCollapsed(key: string): void {
+    const next = new Set(collapsed);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setCollapsed(next);
+  }
 
   // Kind-scoped filter: a tag/source/workspace selection valid on one kind
   // is usually irrelevant on another. Switching kinds resets the filter to
@@ -141,24 +153,36 @@ export function BindingsTab({
         <div className="empty">No matches for the current filter.</div>
       )}
 
-      {grouped.map((group) => (
-        <div key={group.label || "all"}>
-          {groupBy !== "none" && (
-            <div className="binding-group-header">
-              {group.label} <span className="empty">({group.items.length})</span>
-            </div>
-          )}
-          {group.items.map((c) => (
-            <CapabilityCheckbox
-              key={c.name}
-              cap={c}
-              kind={kind}
-              checked={editor.selected[kind].has(c.name)}
-              onToggle={() => editor.toggle(kind, c.name)}
-            />
-          ))}
-        </div>
-      ))}
+      {grouped.map((group) => {
+        const key = group.label || "all";
+        const isCollapsed = collapsed.has(key);
+        return (
+          <div key={key}>
+            {groupBy !== "none" && (
+              <div
+                className="binding-group-header group-header"
+                onClick={() => toggleCollapsed(key)}
+                role="button"
+                aria-expanded={!isCollapsed}
+                data-testid={`bind-group-${group.label}`}
+              >
+                <span className="group-caret">{isCollapsed ? "▸" : "▾"}</span>{" "}
+                {group.label} <span className="empty">({group.items.length})</span>
+              </div>
+            )}
+            {!isCollapsed &&
+              group.items.map((c) => (
+                <CapabilityCheckbox
+                  key={c.name}
+                  cap={c}
+                  kind={kind}
+                  checked={editor.selected[kind].has(c.name)}
+                  onToggle={() => editor.toggle(kind, c.name)}
+                />
+              ))}
+          </div>
+        );
+      })}
 
       <div className="section">
         <button

@@ -384,4 +384,82 @@ body
     );
     expect(res.status).toBe(400);
   });
+
+  test("GET /api/events fans out a single emit to multiple concurrent clients", async () => {
+    // The SSE handler attaches per-stream listeners onto the same registry
+    // and catalog emitters. One emit must deliver to every connected stream.
+    // Without this test, removing the disposer cleanup or accidentally
+    // sharing one listener across clients would go unnoticed.
+
+    async function readSSEUntil(
+      res: Response,
+      predicate: (event: string, data: string) => boolean,
+      timeoutMs: number,
+    ): Promise<{ event: string; data: string } | null> {
+      if (!res.body) return null;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      const deadline = Date.now() + timeoutMs;
+      let buf = "";
+      while (Date.now() < deadline) {
+        const { value, done } = await Promise.race([
+          reader.read(),
+          new Promise<{ value: undefined; done: true }>((resolve) =>
+            setTimeout(() => resolve({ value: undefined, done: true }), 250),
+          ),
+        ]);
+        if (done) break;
+        if (value) buf += decoder.decode(value, { stream: true });
+        // SSE frames are blank-line-terminated.
+        const frames = buf.split(/\r?\n\r?\n/);
+        buf = frames.pop() ?? "";
+        for (const frame of frames) {
+          const eventLine = frame.split(/\r?\n/).find((l) => l.startsWith("event: "));
+          const dataLine = frame.split(/\r?\n/).find((l) => l.startsWith("data: "));
+          const event = eventLine?.slice("event: ".length) ?? "";
+          const data = dataLine?.slice("data: ".length) ?? "";
+          if (predicate(event, data)) {
+            await reader.cancel();
+            return { event, data };
+          }
+        }
+      }
+      await reader.cancel();
+      return null;
+    }
+
+    // Open two concurrent SSE streams. Hono's streamSSE returns a Response
+    // whose body is a ReadableStream — perfect for fan-out verification.
+    const stream1 = await server.app.fetch(
+      new Request(`http://localhost/api/events?token=${TOKEN}`),
+    );
+    const stream2 = await server.app.fetch(
+      new Request(`http://localhost/api/events?token=${TOKEN}`),
+    );
+    expect(stream1.status).toBe(200);
+    expect(stream2.status).toBe(200);
+
+    // Trigger a single mutation that produces one harness.updated event.
+    // Both listeners should receive it.
+    const [a, b, _patch] = await Promise.all([
+      readSSEUntil(stream1, (e) => e === "catalog.harness.updated", 5000),
+      readSSEUntil(stream2, (e) => e === "catalog.harness.updated", 5000),
+      server.app.fetch(
+        authed("/api/agents/root/bindings", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            patches: [{ kind: "skill", name: "alpha", action: "unbind" }],
+          }),
+        }),
+      ),
+    ]);
+
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(a?.event).toBe("catalog.harness.updated");
+    expect(b?.event).toBe("catalog.harness.updated");
+    // Both clients should see structurally identical payloads.
+    expect(a?.data).toBe(b?.data);
+  });
 });

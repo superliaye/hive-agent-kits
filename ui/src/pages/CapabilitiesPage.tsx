@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type ApiConfig, type CapabilityWire } from "../api.ts";
 import {
   applyFilter,
@@ -14,6 +14,7 @@ import {
   workspaceLabel,
 } from "../capability-filters.ts";
 import { CapabilityFilterBar } from "../components/CapabilityFilterBar.tsx";
+import { BINDING_FIELDS, type BindingKind } from "../editing-session.ts";
 
 type Kind = CapabilityWire["kind"];
 
@@ -40,6 +41,10 @@ export function CapabilitiesPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
   const [kind, setKind] = useState<Kind>("skill");
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [groupBy, setGroupBy] = useState<GroupKey>("none");
+  // Groups in the *collapsed* set are hidden. Default empty = all expanded.
+  // Reset whenever the grouping axis (or kind) changes — labels move.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => setCollapsed(new Set()), [groupBy, kind]);
 
   const kindCaps = useMemo(
     () => (caps.data ?? []).filter((c) => c.kind === kind),
@@ -51,7 +56,9 @@ export function CapabilitiesPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
 
   const whoBinds = (name: string, k: Kind): string[] => {
     if (!agents.data) return [];
-    const field = k === "skill" ? "skills" : k === "snippet" ? "snippets" : k === "tool" ? "tools" : "mcp";
+    // Kind→field mapping is shared with EditingSession's reducer; coordinating
+    // here keeps the daemon binding shape and the UI display in lockstep.
+    const field = BINDING_FIELDS[k as BindingKind];
     return agents.data.filter((a) => a.bindings[field].includes(name)).map((a) => a.agentId);
   };
 
@@ -100,14 +107,24 @@ export function CapabilitiesPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
         <div className="empty">No MCP servers bundled in this build.</div>
       )}
 
-      {grouped.map((group) => (
-        <CapabilityGroup
-          key={group.label || "all"}
-          group={group}
-          showHeader={groupBy !== "none"}
-          whoBinds={whoBinds}
-        />
-      ))}
+      {grouped.map((group) => {
+        const key = group.label || "all";
+        return (
+          <CapabilityGroup
+            key={key}
+            group={group}
+            showHeader={groupBy !== "none"}
+            collapsed={collapsed.has(key)}
+            onToggleCollapsed={() => {
+              const next = new Set(collapsed);
+              if (next.has(key)) next.delete(key);
+              else next.add(key);
+              setCollapsed(next);
+            }}
+            whoBinds={whoBinds}
+          />
+        );
+      })}
 
       {filterActive && filtered.length === 0 && (
         <div className="empty">No capabilities match the current filter.</div>
@@ -119,22 +136,34 @@ export function CapabilitiesPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
 function CapabilityGroup({
   group,
   showHeader,
+  collapsed,
+  onToggleCollapsed,
   whoBinds,
 }: {
   group: { label: string; items: CapabilityWire[] };
   showHeader: boolean;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   whoBinds: (name: string, kind: Kind) => string[];
 }): JSX.Element {
   return (
     <section className="section">
       {showHeader && (
-        <h3>
+        <h3
+          className="group-header"
+          onClick={onToggleCollapsed}
+          role="button"
+          aria-expanded={!collapsed}
+          data-testid={`group-header-${group.label}`}
+        >
+          <span className="group-caret">{collapsed ? "▸" : "▾"}</span>{" "}
           {group.label} <span className="empty">({group.items.length})</span>
         </h3>
       )}
-      {group.items.map((c) => (
-        <CapabilityRow key={c.name} cap={c} boundBy={whoBinds(c.name, c.kind)} />
-      ))}
+      {!collapsed &&
+        group.items.map((c) => (
+          <CapabilityRow key={c.name} cap={c} boundBy={whoBinds(c.name, c.kind)} />
+        ))}
     </section>
   );
 }
