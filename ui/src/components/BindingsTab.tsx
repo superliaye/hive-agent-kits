@@ -49,6 +49,15 @@ export function BindingsTab({
   const [filter, setFilter] = useState<FilterState>(EMPTY_FILTER);
   const [groupBy, setGroupBy] = useState<GroupKey>("none");
 
+  // Kind-scoped filter: a tag/source/workspace selection valid on one kind
+  // is usually irrelevant on another. Switching kinds resets the filter to
+  // avoid the silent dead-end UX where an invisible chip continues to AND.
+  function selectKind(next: BindingKind): void {
+    if (next === kind) return;
+    setKind(next);
+    setFilter(EMPTY_FILTER);
+  }
+
   // Build the per-kind universe. Tools have no on-disk Capability entries
   // today, so we synthesize placeholder entries for currently-bound names
   // so the user can at least unbind them.
@@ -109,7 +118,7 @@ export function BindingsTab({
           <button
             key={k}
             className={`subtab ${kind === k ? "active" : ""}`}
-            onClick={() => setKind(k)}
+            onClick={() => selectKind(k)}
             data-testid={`bind-tab-${k}`}
           >
             {KIND_LABELS[k]}

@@ -10,11 +10,18 @@ import { z } from "zod";
 import { AgentBackend, KebabName } from "../lib/capability-types.ts";
 
 // Source pin recorded on vendored capabilities (see ADR-0007).
+// `url` is rendered in the UI and used as a grouping key; constrained to a
+// sensible upper bound and to URL shape so a malformed manifest can't bloat
+// the UI or inject path-like garbage that flows into slug-based grouping.
 export const Source = z
   .object({
-    url: z.string().min(1),
-    ref: z.string().min(1),
-    fetchedAt: z.string().min(1),
+    url: z
+      .string()
+      .min(1)
+      .max(512)
+      .regex(/^(?:https?:\/\/)?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/, "must be a repo-style url (host/owner/repo)"),
+    ref: z.string().min(1).max(128),
+    fetchedAt: z.string().min(1).max(64),
   })
   .strict();
 export type Source = z.infer<typeof Source>;

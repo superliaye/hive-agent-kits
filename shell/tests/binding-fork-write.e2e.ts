@@ -98,9 +98,10 @@ test("binding fork-write — unbind my-commit, save, then reset", async () => {
   await window.locator('[data-testid="agent-root"]').waitFor({ timeout: 20_000 });
   await window.locator('[data-testid="agent-root"]').click();
 
-  // Bindings is the default sub-tab. Find the my-commit row.
+  // Bindings is the default sub-tab; Skills is the default kind subtab.
+  // Use `diagnose` — one of the two skills Root currently binds.
   const checkbox = window.locator(
-    '[data-testid="bind-skill-my-commit"] input[type="checkbox"]',
+    '[data-testid="bind-skill-diagnose"] input[type="checkbox"]',
   );
   await checkbox.waitFor({ timeout: 10_000 });
   await expect(checkbox).toBeChecked();
@@ -131,7 +132,7 @@ test("binding fork-write — unbind my-commit, save, then reset", async () => {
   };
   expect(payload.source).toBe("ui");
   expect(payload.diff).toEqual([
-    { kind: "skill", name: "my-commit", action: "unbind" },
+    { kind: "skill", name: "diagnose", action: "unbind" },
   ]);
 
   // Reset: wait for the button to become enabled (depends on the agent

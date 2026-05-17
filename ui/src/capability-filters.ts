@@ -49,9 +49,15 @@ export function sourceLabel(s: SourceFacet): string {
 // github.com/heygen-com/hyperframes → heygen-com/hyperframes
 // https://github.com/owner/repo/path → owner/repo
 // Anything else → null (caller falls back to the raw URL).
+//
+// Character class is intentionally tight: alphanumerics + `.`, `_`, `-` —
+// the exhaustive set of legal characters in GitHub/GitLab/Bitbucket owner
+// and repo names. Anything outside this class (including `<`, `>`, spaces)
+// fails the match, so manifests with junky urls never produce a slug that
+// flows into a grouping key.
 export function extractRepoSlug(url: string): string | null {
   const match = url.match(
-    /^(?:https?:\/\/)?(?:github\.com|gitlab\.com|bitbucket\.org)\/([^\/\s]+\/[^\/?\s#]+)/,
+    /^(?:https?:\/\/)?(?:github\.com|gitlab\.com|bitbucket\.org)\/([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+)/,
   );
   return match?.[1] ?? null;
 }

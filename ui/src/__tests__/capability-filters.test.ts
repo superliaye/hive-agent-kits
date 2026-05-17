@@ -46,6 +46,18 @@ describe("extractRepoSlug", () => {
   test("non-github URL returns null", () => {
     expect(extractRepoSlug("https://example.com/foo/bar")).toBeNull();
   });
+  test("gitlab URL works", () => {
+    expect(extractRepoSlug("gitlab.com/owner/repo")).toBe("owner/repo");
+  });
+  test("bitbucket URL works", () => {
+    expect(extractRepoSlug("https://bitbucket.org/owner/repo")).toBe("owner/repo");
+  });
+  test("rejects junk characters in slug (tightened regex)", () => {
+    // Tightened char class — anything outside [A-Za-z0-9._-] must not match.
+    expect(extractRepoSlug("github.com/<script>/x")).toBeNull();
+    expect(extractRepoSlug("github.com/owner/<img>")).toBeNull();
+    expect(extractRepoSlug("github.com/with spaces/repo")).toBeNull();
+  });
 });
 
 describe("capabilityWorkspace", () => {
@@ -163,6 +175,14 @@ describe("applyFilter", () => {
       }).map((c) => c.name),
     ).toEqual(["delta"]);
   });
+
+  test("search is case-insensitive", () => {
+    // `caps` includes alpha-thing, beta-thing, gamma, delta. Uppercased query
+    // must still match the lowercased name.
+    expect(
+      applyFilter(caps, { ...EMPTY_FILTER, search: "ALPHA" }).map((c) => c.name),
+    ).toEqual(["alpha-thing"]);
+  });
 });
 
 describe("groupCapabilities", () => {
@@ -205,5 +225,17 @@ describe("groupCapabilities", () => {
     const g = groupCapabilities(caps, "workspace");
     expect(g).toHaveLength(1);
     expect(g[0]?.label).toBe("personal");
+  });
+
+  test("by workspace with multiple workplaces → personal first, workplaces alpha", () => {
+    const multi = [
+      cap({ name: "p1" }), // personal
+      cap({ name: "p2" }), // personal
+      cap({ name: "w-zeta", origin: "workplace", workplaceId: "zeta" }),
+      cap({ name: "w-acme", origin: "workplace", workplaceId: "acme" }),
+    ];
+    const g = groupCapabilities(multi, "workspace");
+    expect(g.map((x) => x.label)).toEqual(["personal", "acme", "zeta"]);
+    expect(g[0]?.items.map((c) => c.name)).toEqual(["p1", "p2"]);
   });
 });

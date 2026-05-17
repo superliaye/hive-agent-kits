@@ -211,6 +211,40 @@ describe("server routes", () => {
     expect(res.status).toBe(400);
   });
 
+  test("GET /api/capabilities exposes manifest.source as wire.upstream", async () => {
+    // Seed a skill with a `source:` block (vendored from an upstream).
+    mkdirSync(join(bundledRoot, "personal", "skills", "vendored"), { recursive: true });
+    writeFileSync(
+      join(bundledRoot, "personal", "skills", "vendored", "SKILL.md"),
+      `---
+name: vendored
+description: vendored skill
+source:
+  url: github.com/example/repo
+  ref: "1.0.0"
+  fetchedAt: 2026-05-17
+---
+body
+`,
+    );
+    // Rebuild the server so the new file is picked up.
+    await server.dispose();
+    server = await createServer({ mode: "memory", token: TOKEN });
+
+    const res = await server.app.fetch(authed("/api/capabilities?kind=skill"));
+    expect(res.status).toBe(200);
+    const rows = (await res.json()) as Array<{
+      name: string;
+      upstream?: { url: string; ref: string };
+    }>;
+    const vendored = rows.find((r) => r.name === "vendored");
+    expect(vendored?.upstream).toEqual({ url: "github.com/example/repo", ref: "1.0.0" });
+    // The plain `alpha` skill (no source: block) must omit upstream entirely.
+    const plain = rows.find((r) => r.name === "alpha");
+    expect(plain).toBeDefined();
+    expect(plain?.upstream).toBeUndefined();
+  });
+
   test("audit log records harness.updated for binding patch", async () => {
     await server.app.fetch(
       authed("/api/agents/root/bindings", {
