@@ -153,56 +153,61 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     return streamSSE(c, async (stream) => {
       const disposers: Array<() => void> = [];
 
-      const pushBoth = async (env: WireEvent) => {
-        await stream.writeSSE({
-          event: `${env.source}.${env.type}`,
-          data: JSON.stringify(env),
-        });
+      // Per-listener try/catch: a single dead client must not propagate up
+      // through TypedEmitter.emit and fail the originating mutation.
+      const push = async (env: WireEvent): Promise<void> => {
+        try {
+          await stream.writeSSE({
+            event: `${env.source}.${env.type}`,
+            data: JSON.stringify(env),
+          });
+        } catch {
+          // Stream closed or write failed; swallow. onAbort will trigger cleanup.
+        }
       };
 
-      // Registry
-      disposers.push(
-        deps.registry.events.on("capability.registered", (e) =>
-          pushBoth({ source: "registry", type: "capability.registered", payload: e }),
-        ),
-      );
-      disposers.push(
-        deps.registry.events.on("capability.unregistered", (e) =>
-          pushBoth({ source: "registry", type: "capability.unregistered", payload: e }),
-        ),
-      );
-      disposers.push(
-        deps.registry.events.on("capability.changed", (e) =>
-          pushBoth({ source: "registry", type: "capability.changed", payload: e }),
-        ),
-      );
+      try {
+        disposers.push(
+          deps.registry.events.on("capability.registered", (e) =>
+            push({ source: "registry", type: "capability.registered", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.registry.events.on("capability.unregistered", (e) =>
+            push({ source: "registry", type: "capability.unregistered", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.registry.events.on("capability.changed", (e) =>
+            push({ source: "registry", type: "capability.changed", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.catalog.events.on("agent.created", (e) =>
+            push({ source: "catalog", type: "agent.created", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.catalog.events.on("agent.destroyed", (e) =>
+            push({ source: "catalog", type: "agent.destroyed", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.catalog.events.on("harness.updated", (e) =>
+            push({ source: "catalog", type: "harness.updated", payload: e }),
+          ),
+        );
 
-      // Catalog
-      disposers.push(
-        deps.catalog.events.on("agent.created", (e) =>
-          pushBoth({ source: "catalog", type: "agent.created", payload: e }),
-        ),
-      );
-      disposers.push(
-        deps.catalog.events.on("agent.destroyed", (e) =>
-          pushBoth({ source: "catalog", type: "agent.destroyed", payload: e }),
-        ),
-      );
-      disposers.push(
-        deps.catalog.events.on("harness.updated", (e) =>
-          pushBoth({ source: "catalog", type: "harness.updated", payload: e }),
-        ),
-      );
+        // Open marker so the client knows the stream is live.
+        await stream.writeSSE({ event: "ready", data: "{}" });
 
-      // Open marker so the client knows the stream is live.
-      await stream.writeSSE({ event: "ready", data: "{}" });
-
-      // Block until client disconnects. Hono's stream.abortSignal fires then.
-      await new Promise<void>((resolve) => {
-        stream.onAbort(() => resolve());
-      });
-
-      for (const d of disposers) d();
+        // Block until client disconnects.
+        await new Promise<void>((resolve) => {
+          stream.onAbort(() => resolve());
+        });
+      } finally {
+        for (const d of disposers) d();
+      }
     });
   });
 

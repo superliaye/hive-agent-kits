@@ -78,8 +78,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const catalog = createCatalog();
   const gateway = createGateway();
 
-  const dispose = wireSubscriptions(audit, {
-    config: config as unknown as Config<Record<string, unknown>>,
+  const dispose = wireSubscriptions<AppConfig>(audit, {
+    config,
     gateway,
     registry,
     catalog,

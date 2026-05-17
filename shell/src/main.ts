@@ -105,8 +105,8 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   if (daemon && spawnedByShell && !daemon.killed) {
-    // Windows: SIGTERM doesn't reliably reach a Bun subprocess spawned via
-    // shell:true. Use SIGKILL (process tree) to ensure we don't hang quit.
+    // SIGKILL on Windows because SIGTERM is not reliably delivered to a
+    // detached Bun subprocess; SIGTERM elsewhere for clean shutdown.
     daemon.kill(process.platform === "win32" ? "SIGKILL" : "SIGTERM");
   }
 });

@@ -4,13 +4,7 @@
 // writes to the runtime tier — bundled HARNESS.md is never touched.
 // Emits typed events the audit subscriber attaches to.
 
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { HarnessManifest } from "../capabilities/schemas.ts";
@@ -174,9 +168,4 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
       // with Registry — a future hot-reload watcher would close here.
     },
   };
-}
-
-// Exposed for the round-trip step in updateBindings; useful in tests too.
-export function readHarnessFile(path: string): string {
-  return readFileSync(path, "utf8");
 }

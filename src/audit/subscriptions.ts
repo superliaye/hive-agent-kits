@@ -15,8 +15,8 @@ import type { GatewayModuleEvents } from "../model-gateway/types.ts";
 import type { Audit } from "./audit.ts";
 import type { Normalizer } from "./types.ts";
 
-export type AuditSources = {
-  config?: Config<Record<string, unknown>>;
+export type AuditSources<S extends Record<string, unknown> = Record<string, unknown>> = {
+  config?: Config<S>;
   gateway?: ModelGateway;
   registry?: Registry;
   catalog?: Catalog;
@@ -28,17 +28,20 @@ export type AuditSources = {
   //   memory?:     { events: TypedEmitter<MemoryEvents> }
 };
 
-const configNormalizer: Normalizer<ConfigEvents<Record<string, unknown>>> = {
-  change: (event) => ({
-    event_type: "config.change",
-    payload: {
-      key: event.key,
-      previous: event.previous,
-      current: event.current,
-      source: event.source,
-    },
-  }),
-};
+// Generic over S so callers with a typed Config<AppConfig> don't need a cast.
+function configNormalizer<S extends Record<string, unknown>>(): Normalizer<ConfigEvents<S>> {
+  return {
+    change: (event) => ({
+      event_type: "config.change",
+      payload: {
+        key: event.key,
+        previous: event.previous,
+        current: event.current,
+        source: event.source,
+      },
+    }),
+  };
+}
 
 const gatewayNormalizer: Normalizer<GatewayModuleEvents> = {
   "adapter.registered": (event) => ({
@@ -103,11 +106,14 @@ const registryNormalizer: Normalizer<RegistryEvents> = {
 
 // Attaches every present source's event stream to the audit log.
 // Returns a disposer that detaches all listeners.
-export function wireSubscriptions(audit: Audit, sources: AuditSources = {}): () => void {
+export function wireSubscriptions<S extends Record<string, unknown> = Record<string, unknown>>(
+  audit: Audit,
+  sources: AuditSources<S> = {},
+): () => void {
   const disposers: Array<() => void> = [];
 
   if (sources.config) {
-    disposers.push(audit.attach("config", sources.config.events, configNormalizer));
+    disposers.push(audit.attach("config", sources.config.events, configNormalizer<S>()));
   }
 
   if (sources.gateway) {
