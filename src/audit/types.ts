@@ -7,6 +7,7 @@ export type ModuleSource =
   | "mcp"
   | "memory"
   | "registry"
+  | "catalog"
   | "lifecycle"
   | "backend"
   | "config"

@@ -62,6 +62,20 @@ export const SnippetManifest = z
   .strict();
 export type SnippetManifest = z.infer<typeof SnippetManifest>;
 
+export const McpManifest = z
+  .object({
+    name: KebabName,
+    description: Description,
+    title: z.string().optional(),
+    transport: z.enum(["stdio", "http"]),
+    command: z.array(z.string()).optional(),
+    url: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    compatibility: Compatibility.optional(),
+  })
+  .strict();
+export type McpManifest = z.infer<typeof McpManifest>;
+
 export const HarnessManifest = z
   .object({
     agentId: KebabName,

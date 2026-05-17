@@ -14,6 +14,10 @@ import { createAudit } from "../audit.ts";
 import { createConfig } from "../../config/index.ts";
 import { createGateway } from "../../model-gateway/index.ts";
 import type { GatewayAdapter } from "../../model-gateway/types.ts";
+import { createRegistry } from "../../capabilities/index.ts";
+import type { Capability } from "../../capabilities/types.ts";
+import { createCatalog } from "../../catalog/index.ts";
+import type { Agent } from "../../catalog/types.ts";
 import { wireSubscriptions } from "../subscriptions.ts";
 
 const fakeAdapter: GatewayAdapter = {
@@ -72,6 +76,73 @@ describe("wireSubscriptions", () => {
     expect(afterUnregister[1]?.event_type).toBe("gateway.adapter.registered");
 
     dispose();
+  });
+
+  test("registry.start() produces capability.registered audit rows", async () => {
+    const audit = createAudit({ mode: "memory" });
+    const fakeCap: Capability = {
+      kind: "skill",
+      name: "foo",
+      description: "test skill",
+      origin: "personal",
+      source: "filesystem",
+      layer: "bundled",
+      path: "/fake/foo/SKILL.md",
+      manifest: { name: "foo", description: "test skill" },
+      body: "",
+    };
+    const registry = createRegistry({
+      scanner: () => ({ capabilities: [fakeCap], errors: [] }),
+      watch: false,
+      logErrors: false,
+    });
+    const dispose = wireSubscriptions(audit, { registry });
+
+    await registry.start();
+
+    const rows = await audit.query({ source: "registry" });
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.event_type).toBe("capability.registered");
+    expect(rows[0]?.payload).toMatchObject({
+      name: "foo",
+      kind: "skill",
+      origin: "personal",
+      layer: "bundled",
+      source: "filesystem",
+    });
+
+    dispose();
+    registry.dispose();
+  });
+
+  test("catalog.start() produces agent.created audit rows", async () => {
+    const audit = createAudit({ mode: "memory" });
+    const fakeAgent: Agent = {
+      agentId: "root",
+      backend: "native",
+      domain: "orchestration",
+      bindings: { skills: [], snippets: [], tools: [], mcp: [] },
+      config: {},
+      promptBody: "",
+      layer: "bundled",
+      hasFork: false,
+      path: "/fake/bundled/agents/root/HARNESS.md",
+    };
+    const catalog = createCatalog({
+      scanner: () => ({ agents: [fakeAgent], errors: [] }),
+      logErrors: false,
+    });
+    const dispose = wireSubscriptions(audit, { catalog });
+
+    await catalog.start();
+
+    const rows = await audit.query({ source: "catalog" });
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.event_type).toBe("agent.created");
+    expect(rows[0]?.agent_id).toBe("root");
+
+    dispose();
+    catalog.dispose();
   });
 
   test("disposer detaches; later changes don't reach audit", async () => {

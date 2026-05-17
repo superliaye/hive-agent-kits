@@ -43,6 +43,14 @@ export const bundled = {
     join(bundledOriginRoot(origin, workplaceId), "snippets", name),
   mcp: (origin: Origin, name: string, workplaceId?: string) =>
     join(bundledOriginRoot(origin, workplaceId), "mcp", name),
+  skillsDir: (origin: Origin, workplaceId?: string) =>
+    join(bundledOriginRoot(origin, workplaceId), "skills"),
+  snippetsDir: (origin: Origin, workplaceId?: string) =>
+    join(bundledOriginRoot(origin, workplaceId), "snippets"),
+  mcpDir: (origin: Origin, workplaceId?: string) =>
+    join(bundledOriginRoot(origin, workplaceId), "mcp"),
+  workplaceDir: () => join(bundledRoot(), "workplace"),
+  agentsDir: () => join(bundledRoot(), "agents"),
   // Agents are not origin-tagged at the bundled layer — Root and Agent Manager
   // are always there; Worker Agents never live in bundled.
   agent: (id: string) => join(bundledRoot(), "agents", id),
@@ -54,6 +62,10 @@ export const runtime = {
   skill: (name: string) => join(runtimeRoot(), "capabilities", "skills", name),
   snippet: (name: string) => join(runtimeRoot(), "capabilities", "snippets", name),
   mcp: (name: string) => join(runtimeRoot(), "capabilities", "mcp", name),
+  skillsDir: () => join(runtimeRoot(), "capabilities", "skills"),
+  snippetsDir: () => join(runtimeRoot(), "capabilities", "snippets"),
+  mcpDir: () => join(runtimeRoot(), "capabilities", "mcp"),
+  agentsDir: () => join(runtimeRoot(), "agents"),
   agent: (id: string) => join(runtimeRoot(), "agents", id),
   agentMemory: (id: string) => join(runtimeRoot(), "agents", id, "memory"),
   agentThreads: (id: string) => join(runtimeRoot(), "agents", id, "threads"),
