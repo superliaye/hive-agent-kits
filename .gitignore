@@ -3,6 +3,7 @@ dist/
 data/
 *.log
 *.db
+*.tsbuildinfo
 .DS_Store
 .worktrees/
 org/*/.workspace/
