@@ -1,4 +1,11 @@
 // Electron main process. Probe-then-spawn the Bun daemon per ADR-0002.
+//
+// Two modes:
+//   - Packaged (app.isPackaged) — spawn the bundled daemon binary from
+//     <resources>/hive-daemon[.exe] and point it at <resources>/bundled.
+//     Load the UI from <appPath>/ui-dist/index.html.
+//   - Dev — spawn `bun run src/server/start.ts` against the repo source.
+//     Load the UI from ui/dist (if built) or the Vite dev URL.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -6,14 +13,26 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { app, BrowserWindow } from "electron";
 
+const isWin = process.platform === "win32";
 const PORT = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : 3117;
 const DAEMON_URL = `http://127.0.0.1:${PORT}`;
 const RUNTIME_ROOT = process.env.HIVE_RUNTIME_ROOT ?? join(homedir(), ".hive");
 const TOKEN_PATH = join(RUNTIME_ROOT, ".token");
+
 // __dirname = shell/dist after compile; repo root is two levels up.
+// Only meaningful in dev mode — packaged apps don't have a repo root.
 const REPO_ROOT = resolve(__dirname, "..", "..");
 const UI_DEV_URL = process.env.HIVE_UI_DEV_URL ?? "http://127.0.0.1:5173";
-const UI_DIST_INDEX = join(REPO_ROOT, "ui", "dist", "index.html");
+
+// Packaged-mode resource paths. process.resourcesPath is where
+// electron-builder's `extraResources` writes; app.getAppPath() is the asar.
+const PACKAGED_DAEMON = app.isPackaged
+  ? join(process.resourcesPath, isWin ? "hive-daemon.exe" : "hive-daemon")
+  : null;
+const PACKAGED_BUNDLED = app.isPackaged ? join(process.resourcesPath, "bundled") : null;
+const UI_DIST_INDEX = app.isPackaged
+  ? join(app.getAppPath(), "ui-dist", "index.html")
+  : join(REPO_ROOT, "ui", "dist", "index.html");
 
 let daemon: ChildProcess | null = null;
 let spawnedByShell = false;
@@ -38,14 +57,23 @@ async function waitForReady(timeoutMs = 10_000): Promise<void> {
 
 async function ensureDaemon(): Promise<void> {
   if (await isDaemonReady()) return;
-  // Spawn bun directly (no shell wrapper). Without shell:true on Windows,
-  // SIGKILL reaches bun.exe directly so teardown completes promptly.
-  const cmd = process.platform === "win32" ? "bun.exe" : "bun";
-  daemon = spawn(cmd, ["run", "src/server/start.ts"], {
-    cwd: REPO_ROOT,
-    stdio: ["ignore", "inherit", "inherit"],
-    windowsHide: true,
-  });
+  if (PACKAGED_DAEMON) {
+    // Packaged: spawn the bundled binary, point it at the bundled resource dir.
+    daemon = spawn(PACKAGED_DAEMON, [], {
+      stdio: ["ignore", "inherit", "inherit"],
+      windowsHide: true,
+      env: { ...process.env, HIVE_BUNDLED_ROOT: PACKAGED_BUNDLED ?? "" },
+    });
+  } else {
+    // Dev: bun against the source tree. No shell:true so SIGKILL reaches
+    // bun.exe directly and Electron quit completes promptly.
+    const cmd = isWin ? "bun.exe" : "bun";
+    daemon = spawn(cmd, ["run", "src/server/start.ts"], {
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "inherit", "inherit"],
+      windowsHide: true,
+    });
+  }
   spawnedByShell = true;
   daemon.on("error", (err) => {
     console.error("[shell] daemon spawn error:", err);
@@ -111,7 +139,7 @@ app.on("before-quit", (event) => {
   if (!daemon || !spawnedByShell || daemon.killed || quitting) return;
   event.preventDefault();
   quitting = true;
-  const sig: NodeJS.Signals = process.platform === "win32" ? "SIGKILL" : "SIGTERM";
+  const sig: NodeJS.Signals = isWin ? "SIGKILL" : "SIGTERM";
   daemon.once("exit", () => {
     daemon = null;
     app.quit();

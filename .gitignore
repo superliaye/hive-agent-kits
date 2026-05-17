@@ -12,3 +12,8 @@ role-skills/ui-ux-pro-max/
 shell/test-results/
 shell/test-results.json
 shell/playwright-report/
+# Ship build artifacts — derived
+shell/staging/
+shell/ui-dist/
+shell/release/
+shell/build-resources/
