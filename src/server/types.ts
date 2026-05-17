@@ -3,11 +3,19 @@
 import { z } from "zod";
 import { AgentBackend, CapabilityKind, CapabilityLayer, KebabName, Origin } from "../lib/capability-types.ts";
 
-export const BindingPatchBody = z
+export const BindingPatchItem = z
   .object({
     kind: z.enum(["skill", "snippet", "tool", "mcp"]),
     name: KebabName,
     action: z.enum(["bind", "unbind"]),
+  })
+  .strict();
+export type BindingPatchItem = z.infer<typeof BindingPatchItem>;
+
+// PATCH /api/agents/:id/bindings body. Batched all-or-nothing.
+export const BindingPatchBody = z
+  .object({
+    patches: z.array(BindingPatchItem).min(1),
   })
   .strict();
 export type BindingPatchBody = z.infer<typeof BindingPatchBody>;

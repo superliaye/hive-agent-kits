@@ -90,11 +90,9 @@ describe("createCatalog — real filesystem fork-on-write", () => {
       updated.push(e);
     });
 
-    const result = await catalog.updateBindings("root", {
-      kind: "skill",
-      name: "alpha",
-      action: "unbind",
-    });
+    const result = await catalog.updateBindings("root", [
+      { kind: "skill", name: "alpha", action: "unbind" },
+    ]);
 
     expect(result.layer).toBe("runtime");
     expect(result.hasFork).toBe(true);
@@ -108,7 +106,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     expect(updated[0]).toMatchObject({
       agentId: "root",
       source: "ui",
-      diff: { kind: "skill", name: "alpha", action: "unbind" },
+      diff: [{ kind: "skill", name: "alpha", action: "unbind" }],
     });
   });
 
@@ -117,21 +115,55 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     const catalog = createCatalog({ logErrors: false });
     await catalog.start();
 
-    await catalog.updateBindings("root", { kind: "tool", name: "ask_user", action: "bind" });
-    const result = await catalog.updateBindings("root", {
-      kind: "tool",
-      name: "save_artifact",
-      action: "bind",
-    });
+    await catalog.updateBindings("root", [
+      { kind: "tool", name: "ask_user", action: "bind" },
+    ]);
+    const result = await catalog.updateBindings("root", [
+      { kind: "tool", name: "save_artifact", action: "bind" },
+    ]);
 
     expect(result.bindings.tools).toEqual(["ask_user", "memory_read", "save_artifact"]);
+  });
+
+  test("updateBindings applies a batch of patches all-or-nothing in one write", async () => {
+    writeBundledHarness("root", "alpha");
+    const catalog = createCatalog({ logErrors: false });
+    await catalog.start();
+    const updated: CatalogEvents["harness.updated"][] = [];
+    catalog.events.on("harness.updated", (e) => {
+      updated.push(e);
+    });
+
+    const result = await catalog.updateBindings("root", [
+      { kind: "skill", name: "alpha", action: "unbind" },
+      { kind: "tool", name: "save_artifact", action: "bind" },
+      { kind: "tool", name: "ask_user", action: "unbind" },
+    ]);
+
+    expect(result.bindings.skills).not.toContain("alpha");
+    expect(result.bindings.tools).toContain("save_artifact");
+    expect(result.bindings.tools).not.toContain("ask_user");
+    // Single event for the whole batch, diff carries all three patches.
+    expect(updated).toHaveLength(1);
+    expect(updated[0]?.diff).toHaveLength(3);
+  });
+
+  test("updateBindings rejects an empty batch", async () => {
+    writeBundledHarness("root", "alpha");
+    const catalog = createCatalog({ logErrors: false });
+    await catalog.start();
+    await expect(catalog.updateBindings("root", [])).rejects.toThrow(
+      /at least one patch/,
+    );
   });
 
   test("resetToBundled deletes the fork and re-resolves to bundled", async () => {
     writeBundledHarness("root", "alpha");
     const catalog = createCatalog({ logErrors: false });
     await catalog.start();
-    await catalog.updateBindings("root", { kind: "skill", name: "alpha", action: "unbind" });
+    await catalog.updateBindings("root", [
+      { kind: "skill", name: "alpha", action: "unbind" },
+    ]);
 
     const runtimePath = join(runtimeRoot, "agents", "root", "HARNESS.md");
     expect(existsSync(runtimePath)).toBe(true);
@@ -181,7 +213,9 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     const catalog = createCatalog({ logErrors: false });
     await catalog.start();
     await expect(
-      catalog.updateBindings("nonexistent", { kind: "skill", name: "x", action: "bind" }),
+      catalog.updateBindings("nonexistent", [
+        { kind: "skill", name: "x", action: "bind" },
+      ]),
     ).rejects.toBeInstanceOf(AgentNotFoundError);
   });
 });

@@ -98,6 +98,12 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
     };
   }
 
+  function applyPatches(agent: Agent, patches: BindingPatch[]): Agent {
+    let result = agent;
+    for (const p of patches) result = applyPatch(result, p);
+    return result;
+  }
+
   async function refreshOne(agentId: string): Promise<Agent> {
     await performScan(true);
     const a = current.get(agentId);
@@ -112,7 +118,10 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
     get(agentId) {
       return current.get(agentId);
     },
-    async updateBindings(agentId, patch, source = "ui") {
+    async updateBindings(agentId, patches, source = "ui") {
+      if (patches.length === 0) {
+        throw new Error("updateBindings requires at least one patch");
+      }
       const agent = current.get(agentId);
       if (!agent) throw new AgentNotFoundError(agentId);
 
@@ -120,13 +129,14 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
       // If no fork yet, the bundled body becomes the seed for the fork.
       // promptBody on the resolved agent is already correct (it came from
       // whichever layer resolved); the fork carries that forward verbatim.
-      const next = applyPatch(agent, patch);
+      const next = applyPatches(agent, patches);
       const forked: Agent = {
         ...next,
         layer: "runtime",
         hasFork: true,
         path: runtimePath,
       };
+      // Single write — all-or-nothing for the batch.
       writeHarness(runtimePath, forked);
 
       // Re-read from disk so the cached Agent matches what's persisted —
@@ -135,7 +145,7 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
       await events.emit("harness.updated", {
         agentId,
         source,
-        diff: patch,
+        diff: patches,
       });
       return refreshed;
     },

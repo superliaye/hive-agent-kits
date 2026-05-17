@@ -120,7 +120,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       );
     }
     try {
-      const updated = await deps.catalog.updateBindings(id, parsed.data, "ui");
+      const updated = await deps.catalog.updateBindings(id, parsed.data.patches, "ui");
       return c.json(toAgentDetail(updated));
     } catch (err) {
       if (err instanceof AgentNotFoundError) {

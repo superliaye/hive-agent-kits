@@ -48,18 +48,19 @@ export type CatalogEvents = {
   "harness.updated": {
     agentId: string;
     source: "ui" | "agent-manager" | "reset";
-    diff: BindingPatch | { kind: "reset" };
+    diff: BindingPatch[] | { kind: "reset" };
   };
 };
 
 export type Catalog = {
   list(): readonly Agent[];
   get(agentId: string): Agent | undefined;
-  // Apply a single binding mutation. Writes/forks to the runtime tier,
-  // emits `harness.updated`. Bundled HARNESS.md is never modified.
+  // Apply a batch of binding mutations all-or-nothing. Writes/forks to the
+  // runtime tier with a single file write, emits one `harness.updated` event.
+  // Bundled HARNESS.md is never modified. Empty array is rejected.
   updateBindings(
     agentId: string,
-    patch: BindingPatch,
+    patches: BindingPatch[],
     source?: "ui" | "agent-manager",
   ): Promise<Agent>;
   // Delete the runtime fork file. Re-resolves to bundled. Emits

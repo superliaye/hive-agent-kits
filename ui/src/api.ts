@@ -89,10 +89,10 @@ async function call<T>(
 export const api = {
   listAgents: (cfg: ApiConfig) => call<AgentSummary[]>(cfg, "/api/agents"),
   getAgent: (cfg: ApiConfig, id: string) => call<AgentDetail>(cfg, `/api/agents/${id}`),
-  patchBindings: (cfg: ApiConfig, id: string, patch: BindingPatch) =>
+  patchBindings: (cfg: ApiConfig, id: string, patches: BindingPatch[]) =>
     call<AgentDetail>(cfg, `/api/agents/${id}/bindings`, {
       method: "PATCH",
-      body: JSON.stringify(patch),
+      body: JSON.stringify({ patches }),
     }),
   resetAgent: (cfg: ApiConfig, id: string) =>
     call<AgentDetail>(cfg, `/api/agents/${id}/reset`, { method: "POST" }),

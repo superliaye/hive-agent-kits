@@ -38,13 +38,11 @@ export function BindingsTab({
 
   const qc = useQueryClient();
   const patch = useMutation({
-    mutationFn: async () => {
+    mutationFn: () => {
       const patches = computePending(agent, selected);
-      let last = agent;
-      for (const p of patches) {
-        last = await api.patchBindings(apiConfig, agent.agentId, p);
-      }
-      return last;
+      // One batched PATCH — server applies all-or-nothing, so partial save
+      // is no longer a failure mode.
+      return api.patchBindings(apiConfig, agent.agentId, patches);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agents"] });

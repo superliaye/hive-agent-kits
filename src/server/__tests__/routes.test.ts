@@ -144,7 +144,9 @@ describe("server routes", () => {
       authed("/api/agents/root/bindings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "skill", name: "alpha", action: "unbind" }),
+        body: JSON.stringify({
+          patches: [{ kind: "skill", name: "alpha", action: "unbind" }],
+        }),
       }),
     );
     expect(res.status).toBe(200);
@@ -162,7 +164,9 @@ describe("server routes", () => {
       authed("/api/agents/root/bindings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "skill", action: "unbind" }),
+        body: JSON.stringify({
+          patches: [{ kind: "skill", action: "unbind" }],
+        }),
       }),
     );
     expect(res.status).toBe(400);
@@ -173,7 +177,9 @@ describe("server routes", () => {
       authed("/api/agents/root/bindings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "skill", name: "alpha", action: "unbind" }),
+        body: JSON.stringify({
+          patches: [{ kind: "skill", name: "alpha", action: "unbind" }],
+        }),
       }),
     );
     const forkPath = join(runtimeRoot, "agents", "root", "HARNESS.md");
@@ -210,7 +216,9 @@ describe("server routes", () => {
       authed("/api/agents/root/bindings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind: "skill", name: "alpha", action: "unbind" }),
+        body: JSON.stringify({
+          patches: [{ kind: "skill", name: "alpha", action: "unbind" }],
+        }),
       }),
     );
     const rows = await server.audit.query({ source: "catalog" });
@@ -219,7 +227,67 @@ describe("server routes", () => {
     expect(updated?.agent_id).toBe("root");
     expect(updated?.payload).toMatchObject({
       source: "ui",
-      diff: { kind: "skill", name: "alpha", action: "unbind" },
+      diff: [{ kind: "skill", name: "alpha", action: "unbind" }],
     });
+  });
+
+  test("PATCH applies a batch of patches in one shot", async () => {
+    // Seed an extra skill to remove + a snippet to bind.
+    mkdirSync(join(bundledRoot, "personal", "skills", "beta"), { recursive: true });
+    writeFileSync(
+      join(bundledRoot, "personal", "skills", "beta", "SKILL.md"),
+      skill("beta"),
+    );
+    // Reboot the server so the new skill is in the registry.
+    await server.dispose();
+    server = await createServer({ mode: "memory", token: TOKEN });
+
+    // First, bind beta so we have two skills to manipulate.
+    await server.app.fetch(
+      authed("/api/agents/root/bindings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          patches: [{ kind: "skill", name: "beta", action: "bind" }],
+        }),
+      }),
+    );
+
+    // Now batch: unbind alpha, unbind beta, bind core (snippet).
+    const res = await server.app.fetch(
+      authed("/api/agents/root/bindings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          patches: [
+            { kind: "skill", name: "alpha", action: "unbind" },
+            { kind: "skill", name: "beta", action: "unbind" },
+            { kind: "snippet", name: "core", action: "bind" },
+          ],
+        }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { bindings: { skills: string[]; snippets: string[] } };
+    expect(body.bindings.skills).toEqual([]);
+    expect(body.bindings.snippets).toEqual(["core"]);
+
+    const rows = await server.audit.query({ source: "catalog" });
+    const updates = rows.filter((r) => r.event_type === "harness.updated");
+    // Two PATCH calls in this test → exactly two harness.updated rows.
+    expect(updates).toHaveLength(2);
+    const latest = updates[0]?.payload as { diff: unknown[] };
+    expect(latest.diff).toHaveLength(3);
+  });
+
+  test("PATCH with empty patches array returns 400", async () => {
+    const res = await server.app.fetch(
+      authed("/api/agents/root/bindings", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ patches: [] }),
+      }),
+    );
+    expect(res.status).toBe(400);
   });
 });

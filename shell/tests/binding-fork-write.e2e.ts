@@ -127,14 +127,12 @@ test("binding fork-write — unbind my-commit, save, then reset", async () => {
   expect(updated?.agent_id).toBe("root");
   const payload = JSON.parse(updated?.payload ?? "{}") as {
     source: string;
-    diff: { kind: string; name: string; action: string };
+    diff: Array<{ kind: string; name: string; action: string }>;
   };
   expect(payload.source).toBe("ui");
-  expect(payload.diff).toMatchObject({
-    kind: "skill",
-    name: "my-commit",
-    action: "unbind",
-  });
+  expect(payload.diff).toEqual([
+    { kind: "skill", name: "my-commit", action: "unbind" },
+  ]);
 
   // Reset: wait for the button to become enabled (depends on the agent
   // refetch landing), click, then poll for fork removal.
