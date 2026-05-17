@@ -6,12 +6,6 @@ bindings:
   skills:
     - diagnose
     - grill-me
-    - my-clean-code
-    - my-commit
-    - my-commit-and-push
-    - my-create-pr
-    - my-explain
-    - my-fix-build
   snippets: []
   tools:
     - memory_read
