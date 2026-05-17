@@ -7,7 +7,9 @@
 // Linux:   x-terminal-emulator / gnome-terminal / xterm (first one found)
 
 import { spawn, type SpawnOptions } from "node:child_process";
-import { resolve } from "node:path";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 type Job = {
   title: string;
@@ -30,28 +32,48 @@ const jobs: Job[] = [
   },
   // Shell runs last so daemon + Vite are already serving by the time Electron
   // probes them. HIVE_UI_MODE=dev tells main.ts to load from the Vite URL
-  // instead of ui/dist/.
+  // instead of ui/dist/. ELECTRON_RUN_AS_NODE is unset here because if it's
+  // set globally in the user's env (Microsoft default, see e2e harness),
+  // Electron starts in plain-Node mode and never creates a window.
   {
     title: "Hive Shell (Electron)",
     cmd: "bun run start",
     cwd: "shell",
-    env: { HIVE_UI_MODE: "dev" },
+    env: { HIVE_UI_MODE: "dev", ELECTRON_RUN_AS_NODE: "" },
   },
 ];
 
 const isWin = process.platform === "win32";
 const isMac = process.platform === "darwin";
 
-function envPrefix(env: Job["env"]): string {
-  if (!env || Object.keys(env).length === 0) return "";
-  if (isWin) {
-    return `${Object.entries(env)
-      .map(([k, v]) => `set ${k}=${v}`)
-      .join(" && ")} && `;
-  }
-  return `${Object.entries(env)
+// Staging dir for the per-job launcher scripts. Writing each command to its
+// own file (`.bat` on Windows, `.sh` elsewhere) sidesteps quoting and `&&`
+// pitfalls — most importantly, `set VAR=` (clear an env var) is unreliable
+// when chained with `&&` on Windows cmd.
+const stageDir = mkdtempSync(join(tmpdir(), "hive-dev-"));
+
+function writeBat(job: Job, fullCwd: string): string {
+  const path = join(stageDir, `${job.title.replace(/\W+/g, "-")}.bat`);
+  const envLines = Object.entries(job.env ?? {})
+    .map(([k, v]) => `set ${k}=${v}`)
+    .join("\r\n");
+  const body = [`title ${job.title}`, `cd /d ${fullCwd}`, envLines, job.cmd]
+    .filter((line) => line.length > 0)
+    .join("\r\n");
+  writeFileSync(path, `${body}\r\n`);
+  return path;
+}
+
+function writeSh(job: Job, fullCwd: string): string {
+  const path = join(stageDir, `${job.title.replace(/\W+/g, "-")}.sh`);
+  const envLines = Object.entries(job.env ?? {})
     .map(([k, v]) => `export ${k}=${v}`)
-    .join(" && ")} && `;
+    .join("\n");
+  const body = ["#!/usr/bin/env bash", `cd '${fullCwd}'`, envLines, job.cmd]
+    .filter((line) => line.length > 0)
+    .join("\n");
+  writeFileSync(path, `${body}\nexec bash\n`, { mode: 0o755 });
+  return path;
 }
 
 function spawnTerminal(job: Job): void {
@@ -59,24 +81,24 @@ function spawnTerminal(job: Job): void {
   const opts: SpawnOptions = { detached: true, stdio: "ignore" };
 
   if (isWin) {
-    // /k keeps the cmd window open after the command exits — closing the
-    // window then requires a deliberate click, so "close to stop" is intuitive.
-    const inner = `${envPrefix(job.env)}cd /d "${fullCwd}" && ${job.cmd}`;
-    spawn("cmd", ["/c", "start", `"${job.title}"`, "cmd", "/k", inner], opts);
+    // Each job's command list is written to a per-job .bat so cmd /k can run
+    // it as a script — no quoting/chaining gotchas. /k keeps the window open
+    // after the script exits.
+    const bat = writeBat(job, fullCwd);
+    spawn("cmd", ["/c", "start", `"${job.title}"`, "cmd", "/k", bat], opts);
     return;
   }
   if (isMac) {
-    const inner = `${envPrefix(job.env)}cd '${fullCwd}' && ${job.cmd}`;
-    const script = `tell application "Terminal" to do script "${inner.replace(/"/g, '\\"')}"`;
+    const sh = writeSh(job, fullCwd);
+    const script = `tell application "Terminal" to do script "${sh}"`;
     spawn("osascript", ["-e", script], opts);
     return;
   }
-  // Linux: try common terminal emulators in order.
-  const inner = `${envPrefix(job.env)}cd '${fullCwd}' && ${job.cmd}; exec bash`;
+  const sh = writeSh(job, fullCwd);
   const candidates: Array<[string, string[]]> = [
-    ["x-terminal-emulator", ["-T", job.title, "-e", "bash", "-c", inner]],
-    ["gnome-terminal", ["--title", job.title, "--", "bash", "-c", inner]],
-    ["xterm", ["-T", job.title, "-e", "bash", "-c", inner]],
+    ["x-terminal-emulator", ["-T", job.title, "-e", "bash", sh]],
+    ["gnome-terminal", ["--title", job.title, "--", "bash", sh]],
+    ["xterm", ["-T", job.title, "-e", "bash", sh]],
   ];
   for (const [cmd, args] of candidates) {
     try {
@@ -105,3 +127,4 @@ for (let i = 0; i < jobs.length; i++) {
 
 console.log("\nClose a window to stop that piece. Daemon writes to ~/.hive/.");
 console.log("Token: cat ~/.hive/.token (Electron reads it automatically)");
+console.log(`(Launcher scripts staged at ${stageDir})`);
