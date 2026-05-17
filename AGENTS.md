@@ -47,6 +47,26 @@ When introducing or sharpening a domain term during design discussion, update `C
 
 Write an ADR only when all three are true: hard to reverse, surprising without context, the result of a real trade-off. Skip otherwise. ADRs live in [docs/adr/](docs/adr/), sequentially numbered, next-number = highest + 1.
 
+## Running the app
+
+Two intended workflows. Agent: **do not** invoke either of these from a test/scripted shell — both spawn visible windows on the user's desktop.
+
+### Debug (interactive, HMR)
+
+```
+bun run dev:full
+```
+
+Opens three visible terminals — daemon (`bun --watch`), Vite (UI HMR), Electron (loaded from Vite). Close any window to stop that piece. Daemon writes to `~/.hive/`. To stop everything, close all three windows.
+
+### Ship (production .msi / .dmg / .AppImage)
+
+```
+bun run ship
+```
+
+Builds UI, compiles daemon to a single binary, runs `electron-builder`. Installer output goes to `shell/release/`. After install, the user double-clicks the Hive icon — Electron spawns the bundled daemon as a hidden child, no terminal involved.
+
 ## Git conventions
 
 - One-line subject preferred. No emojis.
