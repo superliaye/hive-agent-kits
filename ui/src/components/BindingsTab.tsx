@@ -1,12 +1,8 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { api, type AgentDetail, type ApiConfig, type CapabilityWire } from "../api.ts";
-import {
-  type BindingKind,
-  computePending,
-  initialSelected,
-  togglePresent,
-} from "../pending.ts";
+import { type BindingKind } from "../editing-session.ts";
+import { useAgentEditor } from "../hooks/useAgentEditor.ts";
 
 const KIND_LABELS: Record<BindingKind, string> = {
   skill: "Skills",
@@ -27,50 +23,7 @@ export function BindingsTab({
     queryFn: () => api.listCapabilities(apiConfig),
   });
 
-  // Reset local selection whenever the persisted bindings change.
-  const baseline = useMemo(() => initialSelected(agent), [agent]);
-  const [selected, setSelected] = useState(baseline);
-  const [resetKey, setResetKey] = useState(agent.agentId);
-  if (resetKey !== agent.agentId) {
-    setResetKey(agent.agentId);
-    setSelected(baseline);
-  }
-
-  const qc = useQueryClient();
-  const patch = useMutation({
-    mutationFn: () => {
-      const patches = computePending(agent, selected);
-      // One batched PATCH — server applies all-or-nothing, so partial save
-      // is no longer a failure mode.
-      return api.patchBindings(apiConfig, agent.agentId, patches);
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["agents"] });
-      qc.invalidateQueries({ queryKey: ["agents", agent.agentId] });
-    },
-  });
-
-  const resetMutation = useMutation({
-    mutationFn: () => api.resetAgent(apiConfig, agent.agentId),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["agents"] });
-      qc.invalidateQueries({ queryKey: ["agents", agent.agentId] });
-    },
-  });
-
-  const pending = computePending(agent, selected);
-  const hasPending = pending.length > 0;
-
-  function toggle(kind: BindingKind, name: string): void {
-    setSelected((prev) => ({
-      ...prev,
-      [kind]: togglePresent(prev[kind], name),
-    }));
-  }
-
-  function discard(): void {
-    setSelected(baseline);
-  }
+  const editor = useAgentEditor(apiConfig, agent);
 
   return (
     <>
@@ -78,65 +31,67 @@ export function BindingsTab({
         kind="skill"
         agent={agent}
         capabilities={caps.data ?? []}
-        selected={selected.skill}
-        onToggle={(name) => toggle("skill", name)}
+        selected={editor.selected.skill}
+        onToggle={(name) => editor.toggle("skill", name)}
       />
       <BindingSection
         kind="snippet"
         agent={agent}
         capabilities={caps.data ?? []}
-        selected={selected.snippet}
-        onToggle={(name) => toggle("snippet", name)}
+        selected={editor.selected.snippet}
+        onToggle={(name) => editor.toggle("snippet", name)}
         note="Snippets are consumed by the Agent Manager at agent-authoring time, not by this agent at runtime."
       />
       <BindingSection
         kind="tool"
         agent={agent}
         capabilities={caps.data ?? []}
-        selected={selected.tool}
-        onToggle={(name) => toggle("tool", name)}
+        selected={editor.selected.tool}
+        onToggle={(name) => editor.toggle("tool", name)}
       />
       <BindingSection
         kind="mcp"
         agent={agent}
         capabilities={caps.data ?? []}
-        selected={selected.mcp}
-        onToggle={(name) => toggle("mcp", name)}
+        selected={editor.selected.mcp}
+        onToggle={(name) => editor.toggle("mcp", name)}
       />
 
       <div className="section">
         <button
           className="button ghost"
-          onClick={() => resetMutation.mutate()}
-          disabled={!agent.hasFork || resetMutation.isPending}
+          onClick={editor.reset}
+          disabled={!agent.hasFork || editor.isResetting}
           data-testid="reset-button"
         >
           Reset to bundled defaults
         </button>
       </div>
 
-      {hasPending && (
+      {editor.hasPending && (
         <div className="pending">
           <div className="changes">
-            <strong>{pending.length} pending change{pending.length === 1 ? "" : "s"}</strong>
+            <strong>
+              {editor.pending.length} pending change{editor.pending.length === 1 ? "" : "s"}
+            </strong>
             <ul data-testid="pending-list">
-              {pending.map((p) => (
+              {editor.pending.map((p) => (
                 <li key={`${p.kind}-${p.name}-${p.action}`}>
                   {p.action} {p.kind}: <code>{p.name}</code>
                 </li>
               ))}
             </ul>
           </div>
-          <button className="button ghost" onClick={discard} disabled={patch.isPending}>
+          <button className="button ghost" onClick={editor.discard} disabled={editor.isSaving}>
             Discard
           </button>
           <button
             className="button"
-            onClick={() => patch.mutate()}
-            disabled={patch.isPending}
+            onClick={editor.save}
+            disabled={editor.isSaving}
             data-testid="save-button"
           >
-            {patch.isPending ? "Saving…" : "Save"}
+            {editor.isSaving ? "Saving…" : "Save"}
           </button>
         </div>
       )}
