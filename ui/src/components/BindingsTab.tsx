@@ -10,13 +10,12 @@ import {
   type FilterState,
   groupCapabilities,
   type GroupKey,
-  sourceKey,
-  sourceLabel,
-  workspaceKey,
+  isFilterActive,
   workspaceLabel,
 } from "../capability-filters.ts";
 import { type BindingKind } from "../editing-session.ts";
 import { useAgentEditor } from "../hooks/useAgentEditor.ts";
+import { CapabilityFilterBar } from "./CapabilityFilterBar.tsx";
 
 const KIND_LABELS: Record<BindingKind, string> = {
   skill: "Skills",
@@ -88,18 +87,7 @@ export function BindingsTab({
     [filtered, groupBy],
   );
 
-  function toggleAxis(axis: "tags" | "workspaces" | "sources", value: string): void {
-    const set = new Set(filter[axis]);
-    if (set.has(value)) set.delete(value);
-    else set.add(value);
-    setFilter({ ...filter, [axis]: set });
-  }
-
-  const filterActive =
-    filter.search.length > 0 ||
-    filter.tags.size > 0 ||
-    filter.workspaces.size > 0 ||
-    filter.sources.size > 0;
+  const filterActive = isFilterActive(filter);
 
   // Bound count per kind shown in the kind tab labels for at-a-glance state.
   const boundCounts: Record<BindingKind, number> = {
@@ -132,17 +120,16 @@ export function BindingsTab({
       {note && <p className="empty">{note}</p>}
 
       {kindUniverse.length > 0 && (
-        <FilterBar
+        <CapabilityFilterBar
+          testIdPrefix="bind"
           facets={facets}
           filter={filter}
           setFilter={setFilter}
-          toggleAxis={toggleAxis}
           groupBy={groupBy}
           setGroupBy={setGroupBy}
           filterActive={filterActive}
           onClear={() => setFilter(EMPTY_FILTER)}
-          total={kindUniverse.length}
-          shown={filtered.length}
+          count={{ total: kindUniverse.length, shown: filtered.length }}
         />
       )}
 
@@ -249,140 +236,3 @@ function CapabilityCheckbox({
   );
 }
 
-function FilterBar({
-  facets,
-  filter,
-  setFilter,
-  toggleAxis,
-  groupBy,
-  setGroupBy,
-  filterActive,
-  onClear,
-  total,
-  shown,
-}: {
-  facets: ReturnType<typeof extractFacets>;
-  filter: FilterState;
-  setFilter: (next: FilterState) => void;
-  toggleAxis: (axis: "tags" | "workspaces" | "sources", value: string) => void;
-  groupBy: GroupKey;
-  setGroupBy: (next: GroupKey) => void;
-  filterActive: boolean;
-  onClear: () => void;
-  total: number;
-  shown: number;
-}): JSX.Element {
-  return (
-    <div className="filter-bar">
-      <div className="filter-row">
-        <input
-          className="filter-search"
-          placeholder="Search name or description…"
-          value={filter.search}
-          onChange={(e) => setFilter({ ...filter, search: e.target.value })}
-          data-testid="bind-search"
-        />
-        <label className="group-by">
-          Group by:&nbsp;
-          <select
-            value={groupBy}
-            onChange={(e) => setGroupBy(e.target.value as GroupKey)}
-            data-testid="bind-group-by"
-          >
-            <option value="none">None</option>
-            <option value="source">Source</option>
-            <option value="tag">Tag</option>
-            <option value="workspace">Workspace</option>
-          </select>
-        </label>
-        <span className="filter-count">
-          {filterActive ? `${shown} / ${total}` : `${total} total`}
-        </span>
-        {filterActive && (
-          <button className="button ghost" onClick={onClear} data-testid="bind-filter-clear">
-            Clear
-          </button>
-        )}
-      </div>
-
-      {facets.tags.length > 0 && (
-        <FacetRow label="Tags">
-          {facets.tags.map((t) => (
-            <ChipFilter
-              key={t}
-              label={t}
-              active={filter.tags.has(t)}
-              onToggle={() => toggleAxis("tags", t)}
-            />
-          ))}
-        </FacetRow>
-      )}
-
-      {facets.workspaces.length > 1 && (
-        <FacetRow label="Workspace">
-          {facets.workspaces.map((w) => {
-            const k = workspaceKey(w);
-            return (
-              <ChipFilter
-                key={k}
-                label={workspaceLabel(w)}
-                active={filter.workspaces.has(k)}
-                onToggle={() => toggleAxis("workspaces", k)}
-              />
-            );
-          })}
-        </FacetRow>
-      )}
-
-      {facets.sources.length > 1 && (
-        <FacetRow label="Source">
-          {facets.sources.map((s) => {
-            const k = sourceKey(s);
-            return (
-              <ChipFilter
-                key={k}
-                label={sourceLabel(s)}
-                active={filter.sources.has(k)}
-                onToggle={() => toggleAxis("sources", k)}
-              />
-            );
-          })}
-        </FacetRow>
-      )}
-    </div>
-  );
-}
-
-function FacetRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}): JSX.Element {
-  return (
-    <div className="facet-row">
-      <span className="facet-label">{label}:</span>
-      <div className="facet-chips">{children}</div>
-    </div>
-  );
-}
-
-function ChipFilter({
-  label,
-  active,
-  onToggle,
-}: {
-  label: string;
-  active: boolean;
-  onToggle: () => void;
-}): JSX.Element {
-  return (
-    <span
-      className={`tag-chip ${active ? "active" : ""}`}
-      onClick={onToggle}
-    >
-      {label}
-    </span>
-  );
-}

@@ -128,6 +128,32 @@ export const EMPTY_FILTER: FilterState = {
   sources: new Set(),
 };
 
+// True when any facet has a selection or search has any text. Single source
+// of truth so callers don't drift on the predicate.
+export function isFilterActive(f: FilterState): boolean {
+  return (
+    f.search.length > 0 ||
+    f.tags.size > 0 ||
+    f.workspaces.size > 0 ||
+    f.sources.size > 0
+  );
+}
+
+// Convenience: toggle a value in/out of one facet axis without callers
+// having to spread/Set-construct manually.
+export type FilterAxis = "tags" | "workspaces" | "sources";
+
+export function toggleFilterValue(
+  filter: FilterState,
+  axis: FilterAxis,
+  value: string,
+): FilterState {
+  const set = new Set(filter[axis]);
+  if (set.has(value)) set.delete(value);
+  else set.add(value);
+  return { ...filter, [axis]: set };
+}
+
 export function applyFilter(
   caps: readonly CapabilityWire[],
   filter: FilterState,
