@@ -22,7 +22,7 @@ function cap(overrides: Partial<CapabilityWire> & { name: string }): CapabilityW
     description: `desc ${overrides.name}`,
     origin: "personal",
     layer: "bundled",
-    source: "filesystem",
+    discovery: "filesystem",
     ...overrides,
   };
 }

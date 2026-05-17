@@ -34,7 +34,9 @@ export type CapabilityWire = {
   description: string;
   origin: "personal" | "workplace";
   layer: "bundled" | "runtime";
-  source: string;
+  // How the Registry discovered this capability. Distinct from `upstream`
+  // (where it was vendored from) — see src/server/types.ts.
+  discovery: string;
   workplaceId?: string;
   shadows?: Array<{ layer: string; origin: string; workplaceId?: string }>;
   tags?: string[];

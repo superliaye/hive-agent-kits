@@ -37,7 +37,7 @@ function toCapabilityWire(c: Capability): CapabilityWire {
     description: c.description,
     origin: c.origin,
     layer: c.layer,
-    source: c.source,
+    discovery: c.source,
     workplaceId: c.workplaceId,
     shadows: c.shadows?.map((s) => ({
       layer: s.layer,

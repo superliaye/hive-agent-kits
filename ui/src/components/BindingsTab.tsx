@@ -74,7 +74,7 @@ export function BindingsTab({
       description: "(built-in tool)",
       origin: "personal",
       layer: "bundled",
-      source: "builtin",
+      discovery: "builtin",
     }));
     return { skill, snippet, tool, mcp };
   }, [caps.data, agent.bindings.tools, editor.selected.tool]);
