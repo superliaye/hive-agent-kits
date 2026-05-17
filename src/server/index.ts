@@ -36,6 +36,10 @@ export type CreateServerOptions = {
   mode: ServerMode;
   // Override the bearer token (tests). Default: ensure file under runtime/.token.
   token?: string;
+  // Override the HTTP port. When set, takes precedence over Config's
+  // `daemon.httpPort` — used by e2e tests for isolation. Bypasses Config so
+  // a stale config.yaml value cannot fight the explicit choice.
+  port?: number;
 };
 
 export type ServerHandles = {
@@ -89,7 +93,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   await catalog.start();
 
   const token = opts.token ?? (opts.mode === "memory" ? "test-token" : ensureToken());
-  const port = config.get("daemon").httpPort;
+  const port = opts.port ?? config.get("daemon").httpPort;
 
   const app = buildRoutes({ registry, catalog, token });
 

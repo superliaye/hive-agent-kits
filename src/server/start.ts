@@ -4,19 +4,28 @@
 import { createServer } from "./index.ts";
 
 async function main(): Promise<void> {
-  const server = await createServer({ mode: "file" });
-  // HIVE_PORT env var overrides config — used by e2e tests for isolation.
-  const port = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : server.port;
+  // HIVE_PORT env var → explicit createServer({port}) override → Config default.
+  // Reading the env here keeps Config-vs-env precedence settled in one place.
+  const envPort = process.env.HIVE_PORT ? parsePort(process.env.HIVE_PORT) : undefined;
+  const server = await createServer({ mode: "file", port: envPort });
   Bun.serve({
-    port,
+    port: server.port,
     hostname: "127.0.0.1",
     fetch: server.app.fetch,
   });
   console.log(
-    `[daemon] listening on http://127.0.0.1:${port} | ` +
+    `[daemon] listening on http://127.0.0.1:${server.port} | ` +
       `registry=${server.registry.list().length} capabilities, ` +
       `catalog=${server.catalog.list().length} agents`,
   );
+}
+
+function parsePort(raw: string): number {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0 || n > 65535) {
+    throw new Error(`HIVE_PORT is invalid: ${raw}`);
+  }
+  return n;
 }
 
 main().catch((err) => {

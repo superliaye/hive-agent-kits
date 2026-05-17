@@ -103,10 +103,29 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
-  if (daemon && spawnedByShell && !daemon.killed) {
-    // SIGKILL on Windows because SIGTERM is not reliably delivered to a
-    // detached Bun subprocess; SIGTERM elsewhere for clean shutdown.
-    daemon.kill(process.platform === "win32" ? "SIGKILL" : "SIGTERM");
-  }
+// Block Electron's exit until the daemon child has actually exited. Without
+// this, on Windows the orphan bun.exe keeps `audit.db` open and binds the
+// port — e2e tests then race against cleanup.
+let quitting = false;
+app.on("before-quit", (event) => {
+  if (!daemon || !spawnedByShell || daemon.killed || quitting) return;
+  event.preventDefault();
+  quitting = true;
+  const sig: NodeJS.Signals = process.platform === "win32" ? "SIGKILL" : "SIGTERM";
+  daemon.once("exit", () => {
+    daemon = null;
+    app.quit();
+  });
+  daemon.kill(sig);
+  // Force-exit if the daemon hasn't responded in 3s.
+  setTimeout(() => {
+    if (daemon && !daemon.killed) {
+      try {
+        daemon.kill("SIGKILL");
+      } catch {
+        // already dead
+      }
+    }
+    if (quitting) app.exit(0);
+  }, 3_000).unref();
 });

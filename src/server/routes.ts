@@ -71,12 +71,19 @@ function toAgentDetail(a: Agent): AgentDetailWire {
 
 export function buildRoutes(deps: RoutesDeps): Hono {
   const app = new Hono();
-  // Daemon listens on 127.0.0.1; permissive CORS lets the Electron renderer
-  // (file://) and the Vite dev server (http://localhost:5173) reach it.
+  // Daemon listens on 127.0.0.1; CORS allowlist covers the two legitimate
+  // callers: Electron renderer (file:// → Origin header "null") and the Vite
+  // dev server. The bearer token is the real auth gate; this is defense in
+  // depth so an arbitrary localhost origin can't even attempt a request.
+  const allowedOrigins = new Set([
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "null",
+  ]);
   app.use(
     "/api/*",
     cors({
-      origin: (origin) => origin ?? "*",
+      origin: (origin) => (allowedOrigins.has(origin) ? origin : null),
       allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
       allowHeaders: ["authorization", "content-type"],
       credentials: true,
