@@ -36,7 +36,7 @@ export default function App({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elemen
       <div className="body">
         {page === "agents" && <AgentsPage apiConfig={apiConfig} />}
         {page === "capabilities" && <CapabilitiesPage apiConfig={apiConfig} />}
-        {page === "settings" && <SettingsPage />}
+        {page === "settings" && <SettingsPage apiConfig={apiConfig} />}
       </div>
     </div>
   );

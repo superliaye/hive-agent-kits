@@ -49,6 +49,19 @@ export type BindingPatch = {
   action: "bind" | "unbind";
 };
 
+export type ConfiguredProvider = {
+  provider: string;
+  kind: "apiKey" | "oauth";
+  status: "ok" | "expired";
+  addedAt: number;
+  refreshedAt?: number;
+};
+
+export type OAuthProvider = {
+  id: string;
+  name: string;
+};
+
 declare global {
   interface Window {
     __hive?: {
@@ -114,6 +127,91 @@ async function call<T>(cfg: ApiConfig, path: string, init: RequestInit = {}): Pr
   return (await res.json()) as T;
 }
 
+async function callVoid(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<void> {
+  const res = await fetch(`${cfg.baseUrl}${path}`, {
+    ...init,
+    headers: {
+      ...(init.headers ?? {}),
+      authorization: `Bearer ${cfg.token}`,
+      ...(init.body ? { "content-type": "application/json" } : {}),
+    },
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = await res.text();
+    } catch {
+      // ignore
+    }
+    throw new Error(`${res.status} ${res.statusText} on ${path}${detail ? `: ${detail}` : ""}`);
+  }
+}
+
+/**
+ * Consume an SSE response body line-by-line via the Fetch streams API.
+ *
+ * `onEvent(name, data)` fires once per SSE message. `data` is JSON-parsed
+ * if it looks like JSON, otherwise passed as a string. Returns when the
+ * stream ends naturally or when `signal` aborts (rejects with AbortError
+ * in that case).
+ */
+export async function consumeSSE(
+  cfg: ApiConfig,
+  path: string,
+  init: RequestInit,
+  onEvent: (name: string, data: unknown) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`${cfg.baseUrl}${path}`, {
+    ...init,
+    headers: {
+      ...(init.headers ?? {}),
+      authorization: `Bearer ${cfg.token}`,
+      ...(init.body ? { "content-type": "application/json" } : {}),
+      accept: "text/event-stream",
+    },
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    let detail = "";
+    try {
+      detail = await res.text();
+    } catch {
+      // ignore
+    }
+    throw new Error(`${res.status} ${res.statusText} on ${path}${detail ? `: ${detail}` : ""}`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // SSE messages are separated by a blank line.
+    let separatorIdx: number;
+    // biome-ignore lint/suspicious/noAssignInExpressions: standard SSE-parse pattern
+    while ((separatorIdx = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, separatorIdx);
+      buffer = buffer.slice(separatorIdx + 2);
+      let eventName = "message";
+      let dataStr = "";
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) eventName = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
+      }
+      if (!dataStr) continue;
+      let parsed: unknown = dataStr;
+      try {
+        parsed = JSON.parse(dataStr);
+      } catch {
+        // leave as string
+      }
+      onEvent(eventName, parsed);
+    }
+  }
+}
+
 export const api = {
   listAgents: (cfg: ApiConfig) => call<AgentSummary[]>(cfg, "/api/agents"),
   getAgent: (cfg: ApiConfig, id: string) => call<AgentDetail>(cfg, `/api/agents/${id}`),
@@ -126,4 +224,38 @@ export const api = {
     call<AgentDetail>(cfg, `/api/agents/${id}/reset`, { method: "POST" }),
   listCapabilities: (cfg: ApiConfig, kind?: CapabilityWire["kind"]) =>
     call<CapabilityWire[]>(cfg, `/api/capabilities${kind ? `?kind=${kind}` : ""}`),
+
+  // ─── Secrets ─────────────────────────────────────────────────────────
+  listSecrets: (cfg: ApiConfig) => call<ConfiguredProvider[]>(cfg, "/api/secrets"),
+  listOAuthProviders: (cfg: ApiConfig) =>
+    call<OAuthProvider[]>(cfg, "/api/secrets/oauth-providers"),
+  setApiKey: (cfg: ApiConfig, provider: string, apiKey: string) =>
+    callVoid(cfg, `/api/secrets/${encodeURIComponent(provider)}/api-key`, {
+      method: "POST",
+      body: JSON.stringify({ apiKey }),
+    }),
+  removeSecret: (cfg: ApiConfig, provider: string) =>
+    callVoid(cfg, `/api/secrets/${encodeURIComponent(provider)}`, { method: "DELETE" }),
+  /**
+   * Start a provider's OAuth login. Returns when the SSE stream ends with
+   * `done` (success) or `error`. Caller receives streaming events via
+   * `onEvent` — typically:
+   *   - "auth"    { url, instructions? }   open URL via openUrl()
+   *   - "progress" { message }              informational
+   *   - "done"    { provider }              credentials stored
+   *   - "error"   { message }               login failed
+   */
+  startOAuthLogin: (
+    cfg: ApiConfig,
+    provider: string,
+    onEvent: (name: string, data: unknown) => void,
+    signal?: AbortSignal,
+  ) =>
+    consumeSSE(
+      cfg,
+      `/api/secrets/${encodeURIComponent(provider)}/oauth/login`,
+      { method: "POST" },
+      onEvent,
+      signal,
+    ),
 };
