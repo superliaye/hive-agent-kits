@@ -62,6 +62,117 @@ export type OAuthProvider = {
   name: string;
 };
 
+// ─── Threads + Runs ────────────────────────────────────────────────────
+
+// Wire ContentBlock — Anthropic-flavored content blocks, mirrors
+// model-gateway/types.ts (server side). Kept in sync manually for now.
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: unknown }
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string | ContentBlock[];
+      is_error?: boolean;
+    }
+  | {
+      type: "thinking";
+      thinking: string;
+      signature?: string;
+      providerMetadata?: Record<string, unknown>;
+    }
+  | {
+      type: "image";
+      source: { type: "base64" | "url"; media_type?: string; data: string };
+    };
+
+export type ThreadSummary = {
+  id: string;
+  agentId: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ThreadMessage = {
+  id: string;
+  idx: number;
+  role: "user" | "assistant";
+  content: ContentBlock[];
+  createdAt: number;
+};
+
+export type ThreadDetail = ThreadSummary & { messages: ThreadMessage[] };
+
+export type RunInfo = {
+  id: string;
+  threadId: string;
+  agentId: string;
+  model: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  startedAt: number;
+  endedAt?: number;
+  finishReason?: string;
+  errorCode?: string;
+  errorMessage?: string;
+};
+
+// ─── RunEvent types — match server's runs/types.ts. ─────────────────────
+
+export type GatewayEventWire =
+  | { type: "text_start"; blockIndex: number }
+  | { type: "text_delta"; blockIndex: number; delta: string }
+  | { type: "text_end"; blockIndex: number }
+  | { type: "thinking_start"; blockIndex: number }
+  | { type: "thinking_delta"; blockIndex: number; delta: string }
+  | { type: "thinking_end"; blockIndex: number; providerMetadata?: Record<string, unknown> }
+  | { type: "refusal_delta"; delta: string }
+  | { type: "tool_use_start"; blockIndex: number; id: string; name: string }
+  | { type: "tool_use_delta"; blockIndex: number; id: string; delta: string }
+  | { type: "tool_use_end"; blockIndex: number; id: string; args: unknown }
+  | {
+      type: "server_tool";
+      blockIndex: number;
+      id: string;
+      name: string;
+      phase: "start" | "progress" | "result";
+      payload?: unknown;
+    }
+  | {
+      type: "usage";
+      inputTokens: number;
+      outputTokens: number;
+      reasoningTokens?: number;
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+    }
+  | { type: "done"; finishReason: string }
+  | { type: "error"; code: string; message: string; retryable: boolean };
+
+export type RunEventWire =
+  | {
+      type: "run.started";
+      runId: string;
+      threadId: string;
+      agentId: string;
+      model: string;
+      ts: number;
+    }
+  | { type: "model.event"; runId: string; event: GatewayEventWire }
+  | {
+      type: "run.completed";
+      runId: string;
+      finishReason: string;
+      finalMessage: ThreadMessage;
+      ts: number;
+    }
+  | {
+      type: "run.failed";
+      runId: string;
+      error: { code: string; message: string };
+      ts: number;
+    }
+  | { type: "run.cancelled"; runId: string; ts: number };
+
 declare global {
   interface Window {
     __hive?: {
@@ -258,4 +369,48 @@ export const api = {
       onEvent,
       signal,
     ),
+
+  // ─── Threads ────────────────────────────────────────────────────────
+  listThreads: (cfg: ApiConfig) => call<ThreadSummary[]>(cfg, "/api/threads"),
+  createThread: (cfg: ApiConfig, agentId: string) =>
+    call<ThreadSummary>(cfg, "/api/threads", {
+      method: "POST",
+      body: JSON.stringify({ agentId }),
+    }),
+  getThread: (cfg: ApiConfig, threadId: string) =>
+    call<ThreadDetail>(cfg, `/api/threads/${encodeURIComponent(threadId)}`),
+  deleteThread: (cfg: ApiConfig, threadId: string) =>
+    callVoid(cfg, `/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
+  listRuns: (cfg: ApiConfig, threadId: string) =>
+    call<RunInfo[]>(cfg, `/api/threads/${encodeURIComponent(threadId)}/runs`),
+
+  // ─── Runs ───────────────────────────────────────────────────────────
+  /**
+   * Start a Run on a thread. SSE: events are typed; consumer dispatches on
+   * `event.type` to apply lifecycle / model deltas to local state.
+   */
+  startRun: (
+    cfg: ApiConfig,
+    threadId: string,
+    userMessage: ContentBlock[],
+    onEvent: (event: RunEventWire) => void,
+    options: { modelOverride?: string; signal?: AbortSignal } = {},
+  ) => {
+    const body: { userMessage: ContentBlock[]; modelOverride?: string } = { userMessage };
+    if (options.modelOverride) body.modelOverride = options.modelOverride;
+    return consumeSSE(
+      cfg,
+      `/api/threads/${encodeURIComponent(threadId)}/runs`,
+      { method: "POST", body: JSON.stringify(body) },
+      (_eventName, data) => {
+        // `data` is the JSON-parsed RunEvent; `event:` name matches `data.type`.
+        onEvent(data as RunEventWire);
+      },
+      options.signal,
+    );
+  },
+  cancelRun: (cfg: ApiConfig, runId: string) =>
+    callVoid(cfg, `/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
+  getRun: (cfg: ApiConfig, runId: string) =>
+    call<RunInfo>(cfg, `/api/runs/${encodeURIComponent(runId)}`),
 };
