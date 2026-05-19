@@ -4,29 +4,24 @@
 // both production boot (Bun.serve picks up app.fetch) and tests
 // (app.fetch(req) with no listener).
 
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Hono } from "hono";
-import { createAudit, type Audit } from "../audit/index.ts";
+import { type Audit, createAudit } from "../audit/index.ts";
 import { wireSubscriptions } from "../audit/subscriptions.ts";
-import { createRegistry, type Registry } from "../capabilities/index.ts";
-import { createCatalog, type Catalog } from "../catalog/index.ts";
+import { type Registry, createRegistry } from "../capabilities/index.ts";
+import { type Catalog, createCatalog } from "../catalog/index.ts";
 import {
-  type AppConfig,
   APP_CONFIG_DEFAULTS,
+  type AppConfig,
   AppConfigSchema,
   type Config,
   createConfig,
 } from "../config/index.ts";
 import { createLogger, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
-import { createGateway, type ModelGateway } from "../model-gateway/index.ts";
+import { createPiAiAdapter } from "../model-gateway/adapters/pi-ai.ts";
+import { type ModelGateway, createGateway } from "../model-gateway/index.ts";
 import { buildRoutes } from "./routes.ts";
 
 export type ServerMode = "file" | "memory";
@@ -84,6 +79,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const registry = createRegistry({ watch: opts.mode === "file" });
   const catalog = createCatalog();
   const gateway = createGateway();
+
+  // Register the default multi-provider adapter (ADR-0002 §"Model abstraction":
+  // pi-ai is the v1 default for anthropic/openai/google/mistral/bedrock/…).
+  // Tests that want to override a provider can `registerAdapter(makeFakeAdapter([provider], …))`
+  // — last registration wins per registry.test.ts.
+  gateway.registerAdapter(createPiAiAdapter());
 
   const dispose = wireSubscriptions<AppConfig>(audit, {
     config,

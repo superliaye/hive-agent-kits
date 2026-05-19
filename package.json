@@ -13,6 +13,7 @@
     "ship": "bun run scripts/ship.ts"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "0.75.3",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.19",
     "pino": "^10.3.1",
