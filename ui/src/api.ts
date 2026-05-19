@@ -51,7 +51,36 @@ export type BindingPatch = {
 
 declare global {
   interface Window {
-    __hive?: { baseUrl: string; token: string };
+    __hive?: {
+      baseUrl: string;
+      token: string;
+      // Open an http(s) URL in the user's default external browser. Only
+      // present in Electron (preload bridge). Use the `openUrl()` helper
+      // below instead of touching this directly — it falls back to
+      // `window.open()` in browser-tab mode (Vite dev).
+      openExternal?: (url: string) => Promise<void>;
+    };
+  }
+}
+
+/**
+ * Open an http(s) URL in the user's default external browser.
+ *
+ * In Electron: calls the preload bridge → main process's
+ * `shell.openExternal(url)`. The OAuth login flow uses this so the user's
+ * real browser handles the Anthropic consent screen, not the in-app
+ * webview.
+ *
+ * In a plain browser tab (Vite dev): falls back to `window.open(url, "_blank")`.
+ */
+export async function openUrl(url: string): Promise<void> {
+  const bridge = typeof window !== "undefined" ? window.__hive?.openExternal : undefined;
+  if (bridge) {
+    await bridge(url);
+    return;
+  }
+  if (typeof window !== "undefined") {
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 }
 
@@ -70,11 +99,7 @@ export function resolveApiConfig(): ApiConfig {
   return { baseUrl: "http://127.0.0.1:3117", token: "" };
 }
 
-async function call<T>(
-  cfg: ApiConfig,
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
+async function call<T>(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${cfg.baseUrl}${path}`, {
     ...init,
     headers: {

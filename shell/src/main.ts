@@ -7,11 +7,11 @@
 //   - Dev — spawn `bun run src/server/start.ts` against the repo source.
 //     Load the UI from ui/dist (if built) or the Vite dev URL.
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { app, BrowserWindow } from "electron";
+import { BrowserWindow, app, ipcMain, shell } from "electron";
 
 const isWin = process.platform === "win32";
 const PORT = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : 3117;
@@ -111,6 +111,30 @@ async function createWindow(): Promise<void> {
     await win.loadURL(UI_DEV_URL);
   }
 }
+
+// Renderer → main bridge for `shell.openExternal`. The preload exposes this
+// as `window.__hive.openExternal(url)`. Used by the OAuth login UI so the
+// user's default browser handles the Anthropic consent screen instead of
+// Electron's webview.
+//
+// Strict allowlist: only http(s) URLs. `shell.openExternal` can launch
+// arbitrary URI handlers (file://, custom protocols, even mailto:) — a
+// compromised renderer must not be able to trigger those.
+ipcMain.handle("hive:openExternal", async (_event, url: unknown) => {
+  if (typeof url !== "string") {
+    throw new Error("openExternal: url must be a string");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("openExternal: invalid URL");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error(`openExternal: refused protocol ${parsed.protocol}`);
+  }
+  await shell.openExternal(url);
+});
 
 app.whenReady().then(async () => {
   try {

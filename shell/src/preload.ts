@@ -1,7 +1,13 @@
-// Electron preload — runs in an isolated context, exposes the daemon URL
-// and bearer token to the renderer through contextBridge. Nothing else.
+// Electron preload — runs in an isolated context, exposes a narrow surface
+// to the renderer through contextBridge. Two responsibilities:
+//
+//   1. Daemon URL + bearer token (passed in via `additionalArguments`).
+//   2. `openExternal(url)` — opens an http/https URL in the user's default
+//      browser via the main process's `shell.openExternal`. Used for the
+//      OAuth login flow so the user's browser handles the Anthropic
+//      consent screen rather than the in-app webview.
 
-import { contextBridge } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 
 function readArg(prefix: string): string {
   const arg = process.argv.find((a) => a.startsWith(prefix));
@@ -11,4 +17,8 @@ function readArg(prefix: string): string {
 const baseUrl = readArg("--hive-base=");
 const token = readArg("--hive-token=");
 
-contextBridge.exposeInMainWorld("__hive", { baseUrl, token });
+contextBridge.exposeInMainWorld("__hive", {
+  baseUrl,
+  token,
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke("hive:openExternal", url),
+});
