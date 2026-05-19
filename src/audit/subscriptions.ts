@@ -10,6 +10,8 @@ import type { Catalog } from "../catalog/index.ts";
 import type { CatalogEvents } from "../catalog/types.ts";
 import type { Config, ConfigEvents } from "../config/types.ts";
 import type { ModelGateway } from "../model-gateway/index.ts";
+import type { RunExecutor } from "../runs/index.ts";
+import type { RunModuleEvents } from "../runs/types.ts";
 import type { Secrets } from "../secrets/index.ts";
 import type { SecretEvents } from "../secrets/types.ts";
 import type { Audit } from "./audit.ts";
@@ -21,8 +23,8 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   registry?: Registry;
   catalog?: Catalog;
   secrets?: Secrets;
+  runs?: RunExecutor;
   // Future:
-  //   run?:        { events: TypedEmitter<RunEvents> }
   //   permission?: { events: TypedEmitter<PermissionEvents> }
   //   mcp?:        { events: TypedEmitter<McpLifecycleEvents> }
   //   memory?:     { events: TypedEmitter<MemoryEvents> }
@@ -110,7 +112,40 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
     disposers.push(audit.attach("secrets", sources.secrets.events, secretsNormalizer));
   }
 
+  if (sources.runs) {
+    disposers.push(audit.attach("run", sources.runs.events, runsNormalizer));
+  }
+
   return () => {
     for (const d of disposers) d();
   };
 }
+
+// Runs: lifecycle only (started/completed/failed/cancelled). Per-token
+// model events do NOT flow through the audit log — they're causally
+// owned by the streaming consumer (ADR-0004 "audit vs trace"). Run rows
+// in `hive.db` are the durable record of what happened; this normalizer
+// is for cross-module correlation in `audit.db`.
+const runsNormalizer: Normalizer<RunModuleEvents> = {
+  "run.started": (event) => ({
+    event_type: "run.started",
+    run_id: event.runId,
+    agent_id: event.agentId,
+    payload: { thread_id: event.threadId, model: event.model },
+  }),
+  "run.completed": (event) => ({
+    event_type: "run.completed",
+    run_id: event.runId,
+    payload: { finish_reason: event.finishReason },
+  }),
+  "run.failed": (event) => ({
+    event_type: "run.failed",
+    run_id: event.runId,
+    payload: { code: event.code, message: event.message },
+  }),
+  "run.cancelled": (event) => ({
+    event_type: "run.cancelled",
+    run_id: event.runId,
+    payload: {},
+  }),
+};

@@ -18,11 +18,14 @@ import {
   type Config,
   createConfig,
 } from "../config/index.ts";
+import { openHiveDb } from "../db/hive-db.ts";
 import { createLogger, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { createPiAiAdapter } from "../model-gateway/adapters/pi-ai.ts";
 import { type ModelGateway, createGateway } from "../model-gateway/index.ts";
+import { type RunExecutor, createRunExecutor, createRunsStore } from "../runs/index.ts";
 import { type Secrets, createSecrets } from "../secrets/index.ts";
+import { type Threads, createThreads } from "../threads/index.ts";
 import { buildRoutes } from "./routes.ts";
 
 export type ServerMode = "file" | "memory";
@@ -47,6 +50,8 @@ export type ServerHandles = {
   catalog: Catalog;
   gateway: ModelGateway;
   secrets: Secrets;
+  threads: Threads;
+  runs: RunExecutor;
   token: string;
   port: number;
   dispose(): Promise<void>;
@@ -86,11 +91,28 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       ? createSecrets({ mode: "memory" })
       : createSecrets({ mode: "file", path: files.secrets() });
 
+  // Shared hot-state SQLite (`~/.hive/hive.db` in file mode, `:memory:` in
+  // memory mode). Threads + Runs both consume this handle.
+  const hiveDb = openHiveDb(opts.mode === "memory" ? ":memory:" : files.hiveDb());
+  const threads = createThreads({ mode: "shared", db: hiveDb });
+  const runsStore = createRunsStore(hiveDb);
+  // Boot-time stale-Run recovery: any Run still `running` from a previous
+  // process is flipped to `failed(daemon_restart)`. Per ADR for Part 3.
+  runsStore.markStaleAsFailed();
+
   // Register the default multi-provider adapter (ADR-0002 §"Model abstraction":
   // pi-ai is the v1 default for anthropic/openai/google/mistral/bedrock/…).
   // Tests that want to override a provider can `registerAdapter(makeFakeAdapter([provider], …))`
   // — last registration wins per registry.test.ts.
   gateway.registerAdapter(createPiAiAdapter());
+
+  const runs = createRunExecutor({
+    threads,
+    runs: runsStore,
+    catalog,
+    gateway,
+    secrets,
+  });
 
   const dispose = wireSubscriptions<AppConfig>(audit, {
     config,
@@ -98,6 +120,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     registry,
     catalog,
     secrets,
+    runs,
   });
 
   await registry.start();
@@ -116,6 +139,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     catalog,
     gateway,
     secrets,
+    threads,
+    runs,
     token,
     port,
     async dispose() {
