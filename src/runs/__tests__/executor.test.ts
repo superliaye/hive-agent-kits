@@ -242,15 +242,13 @@ describe("RunExecutor — failure paths", () => {
     }
   });
 
-  test("missing thread → startRun throws (caller bug, not a Run failure)", async () => {
+  test("missing thread → startRun throws synchronously (caller bug, not a Run failure)", () => {
     const { executor } = setup({
       fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
     });
-    await expect(
-      collect(
-        executor.startRun({ threadId: "missing", userMessage: [{ type: "text", text: "hi" }] }),
-      ),
-    ).rejects.toThrow(/thread not found/);
+    expect(() =>
+      executor.startRun({ threadId: "missing", userMessage: [{ type: "text", text: "hi" }] }),
+    ).toThrow(/thread not found/);
   });
 });
 
@@ -295,11 +293,10 @@ describe("RunExecutor — model resolution", () => {
 // ─── concurrency + cancellation ─────────────────────────────────────────────
 
 describe("RunExecutor — concurrency + cancellation", () => {
-  test("concurrent startRun on same Thread throws", async () => {
+  test("concurrent startRun on same Thread throws synchronously", async () => {
     const { executor, threadId } = setup({
       fixtures: {
         "anthropic/claude-haiku-4-5": (() => {
-          // Long-ish script so first run is still going when second is attempted
           const evs: GatewayEvent[] = [];
           for (let i = 0; i < 200; i++) {
             evs.push({ type: "text_delta", blockIndex: 0, delta: "x" });
@@ -310,39 +307,22 @@ describe("RunExecutor — concurrency + cancellation", () => {
       },
     });
 
-    // Start one run but don't consume it yet — its initial steps run inside
-    // the async iterator. Begin consuming, then start a second concurrent
-    // run on the same thread; expect throw.
+    // First run — busy-thread set is populated synchronously by startRun,
+    // even before the iterator is advanced.
     const firstIter = executor.startRun({
       threadId,
       userMessage: [{ type: "text", text: "go" }],
     });
-    const it = firstIter[Symbol.asyncIterator]();
-    // Pull one event so the executor enters its run loop and marks the thread busy.
-    await it.next();
-    // Now try a second concurrent run — should throw synchronously when the
-    // generator function checks the busy-thread guard.
-    expect(() => {
-      const second = executor.startRun({
+    // Second concurrent run on the same thread now throws synchronously.
+    expect(() =>
+      executor.startRun({
         threadId,
         userMessage: [{ type: "text", text: "again" }],
-      });
-      // Force generator body to run via a sync iteration call — but the
-      // body is async, so the throw will surface as a rejected promise.
-      // The `expect` in this test pattern uses `.toThrow` only for sync;
-      // wrap in an async assert.
-      void second;
-    }).not.toThrow();
-    // Actual assertion: collecting the second iterator rejects.
-    const second = executor.startRun({
-      threadId,
-      userMessage: [{ type: "text", text: "again" }],
-    });
-    await expect(collect(second)).rejects.toThrow(/already in flight/);
-    // Drain the first.
-    while (true) {
-      const { done } = await it.next();
-      if (done) break;
+      }),
+    ).toThrow(/already in flight/);
+    // Drain the first so the busy-thread reservation is released.
+    for await (const _ev of firstIter) {
+      void _ev;
     }
   });
 });

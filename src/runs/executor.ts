@@ -106,36 +106,40 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     return { type: "run.failed", runId, error: { code, message }, ts: now() };
   }
 
-  return {
-    events,
+  // Pre-flight runs synchronously in `startRun` (not inside the generator
+  // body) so caller-error checks fire BEFORE the iterable is constructed.
+  // Without this split, an unconsumed iterable's generator body never
+  // executes, and concurrent-Run / missing-Thread checks become race-prone.
+  function startRun(input: StartRunInput): AsyncIterable<RunEvent> {
+    const { threadId } = input;
+    const thread = threads.get(threadId);
+    if (!thread) {
+      throw new Error(`runs/executor: thread not found: ${threadId}`);
+    }
+    if (threadsWithRun.has(threadId)) {
+      throw new Error(`runs/executor: a Run is already in flight on thread ${threadId}`);
+    }
+    // Reserve the thread synchronously. Any path through `runIterator` —
+    // including pre-iteration abandonment by the caller — must release it.
+    threadsWithRun.add(threadId);
+    return runIterator(input, thread.agentId);
+  }
 
-    async *startRun(input): AsyncIterable<RunEvent> {
-      const { threadId, userMessage, modelOverride } = input;
-
-      // Pre-flight: thread exists?
-      const thread = threads.get(threadId);
-      if (!thread) {
-        // No Run row created yet — there's no run.failed event for a
-        // request that never started. Caller bug; surface as a thrown
-        // ThreadNotFoundError analogue. Mirroring threads/store.
-        throw new Error(`runs/executor: thread not found: ${threadId}`);
-      }
-
-      // Concurrency check: reject second Run on a busy thread.
-      if (threadsWithRun.has(threadId)) {
-        throw new Error(`runs/executor: a Run is already in flight on thread ${threadId}`);
-      }
-
+  async function* runIterator(input: StartRunInput, agentId: string): AsyncIterable<RunEvent> {
+    const { threadId, userMessage, modelOverride } = input;
+    // Outer try/finally guarantees the busy-thread reservation made
+    // synchronously in `startRun` is released even if the iterator is
+    // abandoned mid-iteration.
+    try {
       // Agent lookup.
-      const agent = catalog.get(thread.agentId);
+      const agent = catalog.get(agentId);
       if (!agent) {
-        // Surface as a Run row so the failure is auditable + queryable.
         const run = runs.create({
           threadId,
-          agentId: thread.agentId,
+          agentId,
           model: modelOverride ?? MODEL_FALLBACK,
         });
-        yield emitFailed(run.id, "agent_not_found", `unknown agent: ${thread.agentId}`);
+        yield emitFailed(run.id, "agent_not_found", `unknown agent: ${agentId}`);
         return;
       }
 
@@ -148,11 +152,11 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // is just for the Secrets lookup).
       const slash = model.indexOf("/");
       if (slash < 1) {
-        const run = runs.create({ threadId, agentId: thread.agentId, model });
+        const run = runs.create({ threadId, agentId, model });
         yield emitFailed(
           run.id,
           "invalid_request",
-          `agent ${thread.agentId} has malformed model: ${JSON.stringify(model)}`,
+          `agent ${agentId} has malformed model: ${JSON.stringify(model)}`,
         );
         return;
       }
@@ -161,7 +165,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // Auth lookup.
       const auth = secrets.getAuth(provider);
       if (!auth) {
-        const run = runs.create({ threadId, agentId: thread.agentId, model });
+        const run = runs.create({ threadId, agentId, model });
         yield emitFailed(
           run.id,
           "no_credentials",
@@ -175,24 +179,11 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       threads.append({ threadId, role: "user", content: userMessage });
 
       // Insert the Run row, emit run.started.
-      const run = runs.create({ threadId, agentId: thread.agentId, model });
+      const run = runs.create({ threadId, agentId, model });
       const controller = new AbortController();
       inflight.set(run.id, { threadId, controller });
-      threadsWithRun.add(threadId);
-      void events.emit("run.started", {
-        runId: run.id,
-        threadId,
-        agentId: thread.agentId,
-        model,
-      });
-      yield {
-        type: "run.started",
-        runId: run.id,
-        threadId,
-        agentId: thread.agentId,
-        model,
-        ts: now(),
-      };
+      void events.emit("run.started", { runId: run.id, threadId, agentId, model });
+      yield { type: "run.started", runId: run.id, threadId, agentId, model, ts: now() };
 
       // Build CompletionInput. Re-read history (which now includes the
       // user message we just appended).
@@ -213,7 +204,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
       try {
         for await (const ev of gateway.complete(completionInput)) {
-          // Accumulate into ContentBlock[] for the message we'll persist.
           accumulator.consume(ev);
           if (ev.type === "error") {
             latestError = { code: ev.code, message: ev.message };
@@ -224,7 +214,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
           yield { type: "model.event", runId: run.id, event: ev };
         }
       } catch (err) {
-        // Gateway shouldn't throw — but defensive.
         log().warn(
           { module: "runs/executor", runId: run.id, err },
           "gateway.complete threw out of band",
@@ -233,7 +222,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         finishReason = "error";
       } finally {
         inflight.delete(run.id);
-        threadsWithRun.delete(threadId);
       }
 
       // Decide how to finalize.
@@ -250,9 +238,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         return;
       }
       if (!finishReason) {
-        // Gateway ended its iterable without `done` — protocol violation
-        // by the adapter (the fake adapter and pi-ai both always emit
-        // done). Surface defensively.
         yield emitFailed(run.id, "unknown", "gateway stream ended without a `done` event");
         return;
       }
@@ -266,25 +251,23 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       });
       runs.complete({ runId: run.id, finishReason });
       void events.emit("run.completed", { runId: run.id, finishReason });
-      yield {
-        type: "run.completed",
-        runId: run.id,
-        finishReason,
-        finalMessage,
-        ts: now(),
-      };
-    },
+      yield { type: "run.completed", runId: run.id, finishReason, finalMessage, ts: now() };
+    } finally {
+      threadsWithRun.delete(threadId);
+    }
+  }
 
+  return {
+    events,
+    startRun,
     getRun(runId) {
       return runs.get(runId);
     },
-
     cancelRun(runId) {
       const entry = inflight.get(runId);
       if (!entry) return;
       entry.controller.abort();
     },
-
     listByThread(threadId) {
       return runs.listByThread(threadId);
     },

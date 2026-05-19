@@ -5,11 +5,16 @@ import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { ZodError } from "zod";
 import type { Audit } from "../audit/index.ts";
+import type { Registry } from "../capabilities/index.ts";
 import type { Capability } from "../capabilities/types.ts";
 import { AgentNotFoundError } from "../catalog/index.ts";
 import type { Agent, Catalog } from "../catalog/types.ts";
-import type { Registry } from "../capabilities/index.ts";
 import { CapabilityKind } from "../lib/capability-types.ts";
+import type { ContentBlock } from "../model-gateway/types.ts";
+import type { RunExecutor } from "../runs/index.ts";
+import type { Run } from "../runs/types.ts";
+import type { Threads } from "../threads/index.ts";
+import type { Thread, ThreadMessage } from "../threads/types.ts";
 import { bearerAuth } from "./auth.ts";
 import {
   type AgentDetailWire,
@@ -17,6 +22,11 @@ import {
   AuditQueryParams,
   BindingPatchBody,
   type CapabilityWire,
+  CreateThreadBody,
+  type RunWire,
+  StartRunBody,
+  type ThreadDetailWire,
+  type ThreadSummaryWire,
   type WireEvent,
 } from "./types.ts";
 
@@ -24,13 +34,14 @@ export type RoutesDeps = {
   registry: Registry;
   catalog: Catalog;
   audit: Audit;
+  threads: Threads;
+  runs: RunExecutor;
   token: string;
 };
 
 function toCapabilityWire(c: Capability): CapabilityWire {
   const tags = c.kind === "skill" || c.kind === "snippet" ? c.manifest.tags : undefined;
-  const manifestSource =
-    c.kind === "skill" || c.kind === "snippet" ? c.manifest.source : undefined;
+  const manifestSource = c.kind === "skill" || c.kind === "snippet" ? c.manifest.source : undefined;
   return {
     name: c.name,
     kind: c.kind,
@@ -75,17 +86,50 @@ function toAgentDetail(a: Agent): AgentDetailWire {
   };
 }
 
+function toThreadSummary(t: Thread): ThreadSummaryWire {
+  return {
+    id: t.id,
+    agentId: t.agentId,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+  };
+}
+
+function toThreadDetail(t: Thread, messages: ThreadMessage[]): ThreadDetailWire {
+  return {
+    ...toThreadSummary(t),
+    messages: messages.map((m) => ({
+      id: m.id,
+      idx: m.idx,
+      role: m.role,
+      content: m.content,
+      createdAt: m.createdAt,
+    })),
+  };
+}
+
+function toRunWire(r: Run): RunWire {
+  return {
+    id: r.id,
+    threadId: r.threadId,
+    agentId: r.agentId,
+    model: r.model,
+    status: r.status,
+    startedAt: r.startedAt,
+    ...(r.endedAt !== undefined && { endedAt: r.endedAt }),
+    ...(r.finishReason !== undefined && { finishReason: r.finishReason }),
+    ...(r.errorCode !== undefined && { errorCode: r.errorCode }),
+    ...(r.errorMessage !== undefined && { errorMessage: r.errorMessage }),
+  };
+}
+
 export function buildRoutes(deps: RoutesDeps): Hono {
   const app = new Hono();
   // Daemon listens on 127.0.0.1; CORS allowlist covers the two legitimate
   // callers: Electron renderer (file:// → Origin header "null") and the Vite
   // dev server. The bearer token is the real auth gate; this is defense in
   // depth so an arbitrary localhost origin can't even attempt a request.
-  const allowedOrigins = new Set([
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "null",
-  ]);
+  const allowedOrigins = new Set(["http://localhost:5173", "http://127.0.0.1:5173", "null"]);
   app.use(
     "/api/*",
     cors({
@@ -120,10 +164,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     }
     const parsed = BindingPatchBody.safeParse(body);
     if (!parsed.success) {
-      return c.json(
-        { error: "invalid binding patch", issues: zodIssues(parsed.error) },
-        400,
-      );
+      return c.json({ error: "invalid binding patch", issues: zodIssues(parsed.error) }, 400);
     }
     try {
       const updated = await deps.catalog.updateBindings(id, parsed.data.patches, "ui");
@@ -155,10 +196,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
   app.get("/api/audit", async (c) => {
     const parsed = AuditQueryParams.safeParse(c.req.query());
     if (!parsed.success) {
-      return c.json(
-        { error: "invalid audit query", issues: zodIssues(parsed.error) },
-        400,
-      );
+      return c.json({ error: "invalid audit query", issues: zodIssues(parsed.error) }, 400);
     }
     const rows = await deps.audit.query(parsed.data);
     return c.json(rows);
@@ -171,12 +209,127 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       if (!parsed.success) {
         return c.json({ error: "invalid kind" }, 400);
       }
-      return c.json(
-        deps.registry.list({ kind: parsed.data }).map(toCapabilityWire),
-      );
+      return c.json(deps.registry.list({ kind: parsed.data }).map(toCapabilityWire));
     }
     return c.json(deps.registry.list().map(toCapabilityWire));
   });
+
+  // ─── Threads ─────────────────────────────────────────────────────────
+
+  app.get("/api/threads", (c) => {
+    return c.json(deps.threads.list().map(toThreadSummary));
+  });
+
+  app.post("/api/threads", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = CreateThreadBody.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid thread body", issues: zodIssues(parsed.error) }, 400);
+    }
+    // Validate that the Agent exists at creation time — better error here
+    // than at first startRun.
+    const agent = deps.catalog.get(parsed.data.agentId);
+    if (!agent) {
+      return c.json({ error: `unknown agent: ${parsed.data.agentId}` }, 404);
+    }
+    const thread = deps.threads.create({ agentId: parsed.data.agentId });
+    return c.json(toThreadSummary(thread), 201);
+  });
+
+  app.get("/api/threads/:id", (c) => {
+    const id = c.req.param("id");
+    const detail = deps.threads.getWithMessages(id);
+    if (!detail) return c.json({ error: "thread not found" }, 404);
+    return c.json(toThreadDetail(detail, detail.messages));
+  });
+
+  app.delete("/api/threads/:id", (c) => {
+    const id = c.req.param("id");
+    if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
+    deps.threads.remove(id);
+    return c.body(null, 204);
+  });
+
+  app.get("/api/threads/:id/runs", (c) => {
+    const id = c.req.param("id");
+    if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
+    return c.json(deps.runs.listByThread(id).map(toRunWire));
+  });
+
+  // Start a Run. Returns Server-Sent Events: one SSE message per RunEvent.
+  // Event names match the RunEvent.type discriminator (`run.started`,
+  // `model.event`, `run.completed`, `run.failed`, `run.cancelled`). Data is
+  // the JSON-encoded RunEvent. Connection closes after the terminal event.
+  app.post("/api/threads/:id/runs", async (c) => {
+    const threadId = c.req.param("id");
+    if (!deps.threads.get(threadId)) {
+      return c.json({ error: "thread not found" }, 404);
+    }
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = StartRunBody.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid run body", issues: zodIssues(parsed.error) }, 400);
+    }
+    // Defensive: catch the synchronous-throw concurrency check before we
+    // open the SSE stream. A 409 is more useful to clients than a stream
+    // that immediately errors.
+    let runIterable: AsyncIterable<unknown>;
+    try {
+      runIterable = deps.runs.startRun({
+        threadId,
+        userMessage: parsed.data.userMessage as ContentBlock[],
+        ...(parsed.data.modelOverride !== undefined && {
+          modelOverride: parsed.data.modelOverride,
+        }),
+      });
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg.includes("already in flight")) {
+        return c.json({ error: msg }, 409);
+      }
+      if (msg.includes("thread not found")) {
+        return c.json({ error: msg }, 404);
+      }
+      throw err;
+    }
+    return streamSSE(c, async (stream) => {
+      try {
+        for await (const ev of runIterable as AsyncIterable<{ type: string }>) {
+          await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });
+        }
+      } catch {
+        // Stream client disconnected mid-Run; iterable will continue in the
+        // background and persist results normally.
+      }
+    });
+  });
+
+  // ─── Runs ─────────────────────────────────────────────────────────────
+
+  app.get("/api/runs/:id", (c) => {
+    const r = deps.runs.getRun(c.req.param("id"));
+    if (!r) return c.json({ error: "run not found" }, 404);
+    return c.json(toRunWire(r));
+  });
+
+  app.post("/api/runs/:id/cancel", (c) => {
+    const id = c.req.param("id");
+    if (!deps.runs.getRun(id)) return c.json({ error: "run not found" }, 404);
+    deps.runs.cancelRun(id);
+    return c.body(null, 202);
+  });
+
+  // ─── Module event stream ─────────────────────────────────────────────
 
   app.get("/api/events", (c) => {
     return streamSSE(c, async (stream) => {

@@ -1,7 +1,13 @@
 // HTTP wire types and request-body schemas for the daemon's /api routes.
 
 import { z } from "zod";
-import { AgentBackend, CapabilityKind, CapabilityLayer, KebabName, Origin } from "../lib/capability-types.ts";
+import {
+  AgentBackend,
+  CapabilityKind,
+  CapabilityLayer,
+  KebabName,
+  Origin,
+} from "../lib/capability-types.ts";
 
 // Mirrors the ModuleSource union in src/audit/types.ts. Kept here so the
 // HTTP boundary validates incoming source filters without leaking the audit
@@ -114,4 +120,145 @@ export type WireEvent = {
   source: "registry" | "catalog" | "config" | "gateway";
   type: string;
   payload: unknown;
+};
+
+// ─── Threads + Runs (Part 4a) ─────────────────────────────────────────────
+
+// Wire ContentBlock — Zod-validated at the HTTP boundary. Mirrors
+// model-gateway's ContentBlock TypeScript type. Per AGENTS.md "Zod at
+// every external boundary".
+//
+// `tool_result` has a recursive `content` field (string or nested
+// ContentBlock[]). Zod discriminated unions can't be lazy, so the
+// outer schema is a plain union; runtime discrimination happens via
+// `type` literals.
+
+type ContentBlockWire =
+  | { type: "text"; text: string }
+  | { type: "tool_use"; id: string; name: string; input: unknown }
+  | {
+      type: "tool_result";
+      tool_use_id: string;
+      content: string | ContentBlockWire[];
+      is_error?: boolean;
+    }
+  | {
+      type: "thinking";
+      thinking: string;
+      signature?: string;
+      providerMetadata?: Record<string, unknown>;
+    }
+  | {
+      type: "image";
+      source: { type: "base64" | "url"; media_type?: string; data: string };
+    };
+
+// Forward declaration to break the recursion cycle. TS's interaction
+// between z.lazy and explicit z.ZodType<T> annotations fights us on
+// recursive unions; cast via Zod's `pipe` to recover the expected type
+// without leaning on `as unknown as`. The cast says: "this schema parses
+// `unknown` and outputs ContentBlockWire" — true at runtime.
+const ContentBlockSchema: z.ZodType<ContentBlockWire> = z.lazy(
+  () => ContentBlockUnion,
+) as z.ZodType<ContentBlockWire>;
+
+const ContentBlockUnion = z.union([
+  z.object({ type: z.literal("text"), text: z.string() }).strict(),
+  z
+    .object({
+      type: z.literal("tool_use"),
+      id: z.string().min(1),
+      name: z.string().min(1),
+      input: z.unknown(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("tool_result"),
+      tool_use_id: z.string().min(1),
+      content: z.union([z.string(), z.array(ContentBlockSchema)]),
+      is_error: z.boolean().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("thinking"),
+      thinking: z.string(),
+      signature: z.string().optional(),
+      providerMetadata: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("image"),
+      source: z
+        .object({
+          type: z.enum(["base64", "url"]),
+          media_type: z.string().optional(),
+          data: z.string(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
+export { ContentBlockSchema };
+export type { ContentBlockWire };
+
+// POST /api/threads body.
+export const CreateThreadBody = z
+  .object({
+    agentId: KebabName,
+  })
+  .strict();
+export type CreateThreadBody = z.infer<typeof CreateThreadBody>;
+
+// POST /api/threads/:id/runs body. `userMessage` is the next user turn —
+// content blocks (typically a single text block, but tool_results land
+// here too for the upcoming Part 7 tool-execution loop). `modelOverride`
+// is the per-Run override; the executor walks: override → harness config
+// → deployment default.
+export const StartRunBody = z
+  .object({
+    userMessage: z.array(ContentBlockSchema).min(1),
+    modelOverride: z
+      .string()
+      .min(1)
+      // "provider/model" — gateway registry rejects malformed; just sanity-check.
+      .regex(/^[^/]+\/.+$/, "must be 'provider/model-id'")
+      .optional(),
+  })
+  .strict();
+export type StartRunBody = z.infer<typeof StartRunBody>;
+
+// Wire shapes returned by GET endpoints.
+
+export type ThreadSummaryWire = {
+  id: string;
+  agentId: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type ThreadDetailWire = ThreadSummaryWire & {
+  messages: Array<{
+    id: string;
+    idx: number;
+    role: "user" | "assistant";
+    content: ContentBlockWire[];
+    createdAt: number;
+  }>;
+};
+
+export type RunWire = {
+  id: string;
+  threadId: string;
+  agentId: string;
+  model: string;
+  status: "running" | "completed" | "failed" | "cancelled";
+  startedAt: number;
+  endedAt?: number;
+  finishReason?: string;
+  errorCode?: string;
+  errorMessage?: string;
 };
