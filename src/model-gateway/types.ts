@@ -40,6 +40,22 @@ export type AuthInput =
   | {
       kind: "oauth";
       credentials: { access: string; refresh: string; expires: number };
+      /**
+       * Token-refresh contract — load-bearing for every adapter that
+       * handles `kind: "oauth"`.
+       *
+       * When the adapter refreshes the access token (typically because
+       * it was expired before the call), it MUST `await onRefresh(newCreds)`
+       * before using the new apiKey. The caller (Secrets module) is
+       * responsible for persisting `newCreds` so the next Run starts with
+       * an unexpired token. Adapters that skip this call will appear to
+       * work in-memory but force re-login on every daemon restart.
+       *
+       * If `onRefresh` throws, the adapter should surface
+       * `{type: "error", code: "auth_failed"}` — persistence failure
+       * downstream of a successful refresh leaves the on-disk state
+       * inconsistent with what the model just accepted.
+       */
       onRefresh: (newCreds: {
         access: string;
         refresh: string;
@@ -139,6 +155,18 @@ export type GatewayEvent =
       retryable: boolean;
     };
 
+/**
+ * An adapter at the ModelGateway Seam. One verb (`complete`); contract
+ * covered by the GatewayEvent stream + the obligations below.
+ *
+ * Adapters that accept `auth.kind === "oauth"` MUST honor the token-refresh
+ * contract documented on `AuthInput.onRefresh`: when the adapter refreshes
+ * an access token mid-call, it must `await onRefresh(newCreds)` so the
+ * Secrets module can persist them. Adapters that only handle `apiKey`
+ * (e.g. `fake` for tests, the `claude-cli` adapter) are exempt.
+ *
+ * See ADR-0005 (§AuthInput, §Adapters) and ADR-0008 (§OAuth refresh).
+ */
 export type GatewayAdapter = {
   providers: string[];
   complete(input: CompletionInput): AsyncIterable<GatewayEvent>;

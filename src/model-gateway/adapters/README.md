@@ -33,8 +33,14 @@ registerAdapter(myAdapter);
 - **Surface errors via the stream, not by throwing.** Adapters do not throw out
   of `complete()`; they `yield {type: "error", ...}` and end.
 - **Don't retry inside the adapter.** The Run executor owns retry policy.
-- **Auth is the caller's job.** `AuthInput` arrives resolved. You read it, you
-  don't refresh it (except for OAuth callback per ADR-0005).
+- **Auth is the caller's job.** `AuthInput` arrives resolved. You read it.
+  - For `kind: "apiKey"` you just use the key.
+  - For `kind: "oauth"` you may need to refresh the access token (typical:
+    pi-ai's `getOAuthApiKey` does this internally). When refresh produces
+    new credentials, you MUST `await auth.onRefresh(newCreds)` before
+    completing the call — that's how the Secrets module learns to persist
+    the new tokens. Skipping the callback works in-memory but forces a
+    re-login on every daemon restart. See `AuthInput.onRefresh` JSDoc.
 
 ## Reference adapters
 

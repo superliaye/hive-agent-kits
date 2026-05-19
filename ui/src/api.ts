@@ -64,27 +64,12 @@ export type OAuthProvider = {
 
 // ─── Threads + Runs ────────────────────────────────────────────────────
 
-// Wire ContentBlock — Anthropic-flavored content blocks, mirrors
-// model-gateway/types.ts (server side). Kept in sync manually for now.
-export type ContentBlock =
-  | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: unknown }
-  | {
-      type: "tool_result";
-      tool_use_id: string;
-      content: string | ContentBlock[];
-      is_error?: boolean;
-    }
-  | {
-      type: "thinking";
-      thinking: string;
-      signature?: string;
-      providerMetadata?: Record<string, unknown>;
-    }
-  | {
-      type: "image";
-      source: { type: "base64" | "url"; media_type?: string; data: string };
-    };
+// Canonical ContentBlock lives in the daemon's model-gateway types. The UI
+// imports it directly (rather than mirroring) so a new block kind added on
+// the server surfaces as a TypeScript error in the UI's discriminated
+// `renderBlock` switches — no silent drift.
+import type { ContentBlock } from "../../src/model-gateway/types.ts";
+export type { ContentBlock };
 
 export type ThreadSummary = {
   id: string;

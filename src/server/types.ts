@@ -124,43 +124,23 @@ export type WireEvent = {
 
 // ─── Threads + Runs (Part 4a) ─────────────────────────────────────────────
 
-// Wire ContentBlock — Zod-validated at the HTTP boundary. Mirrors
-// model-gateway's ContentBlock TypeScript type. Per AGENTS.md "Zod at
-// every external boundary".
+// Wire ContentBlock — Zod-validated at the HTTP boundary. The shape *is*
+// the canonical `ContentBlock` from model-gateway/types.ts; the schema
+// validates inbound JSON against that single source of truth.
+// Per AGENTS.md "Zod at every external boundary".
 //
 // `tool_result` has a recursive `content` field (string or nested
 // ContentBlock[]). Zod discriminated unions can't be lazy, so the
 // outer schema is a plain union; runtime discrimination happens via
-// `type` literals.
+// `type` literals. TS's interaction between `z.lazy` and explicit
+// `z.ZodType<T>` annotations fights us on recursive unions; the cast on
+// the lazy wrapper says "this schema parses `unknown` and outputs
+// ContentBlock" — true at runtime.
+import type { ContentBlock as DaemonContentBlock } from "../model-gateway/types.ts";
 
-type ContentBlockWire =
-  | { type: "text"; text: string }
-  | { type: "tool_use"; id: string; name: string; input: unknown }
-  | {
-      type: "tool_result";
-      tool_use_id: string;
-      content: string | ContentBlockWire[];
-      is_error?: boolean;
-    }
-  | {
-      type: "thinking";
-      thinking: string;
-      signature?: string;
-      providerMetadata?: Record<string, unknown>;
-    }
-  | {
-      type: "image";
-      source: { type: "base64" | "url"; media_type?: string; data: string };
-    };
-
-// Forward declaration to break the recursion cycle. TS's interaction
-// between z.lazy and explicit z.ZodType<T> annotations fights us on
-// recursive unions; cast via Zod's `pipe` to recover the expected type
-// without leaning on `as unknown as`. The cast says: "this schema parses
-// `unknown` and outputs ContentBlockWire" — true at runtime.
-const ContentBlockSchema: z.ZodType<ContentBlockWire> = z.lazy(
+const ContentBlockSchema: z.ZodType<DaemonContentBlock> = z.lazy(
   () => ContentBlockUnion,
-) as z.ZodType<ContentBlockWire>;
+) as z.ZodType<DaemonContentBlock>;
 
 const ContentBlockUnion = z.union([
   z.object({ type: z.literal("text"), text: z.string() }).strict(),
@@ -203,7 +183,6 @@ const ContentBlockUnion = z.union([
 ]);
 
 export { ContentBlockSchema };
-export type { ContentBlockWire };
 
 // POST /api/threads body.
 export const CreateThreadBody = z
@@ -245,7 +224,7 @@ export type ThreadDetailWire = ThreadSummaryWire & {
     id: string;
     idx: number;
     role: "user" | "assistant";
-    content: ContentBlockWire[];
+    content: DaemonContentBlock[];
     createdAt: number;
   }>;
 };

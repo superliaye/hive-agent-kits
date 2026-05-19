@@ -11,7 +11,6 @@ import type { Capability } from "../capabilities/types.ts";
 import { AgentNotFoundError } from "../catalog/index.ts";
 import type { Agent, Catalog } from "../catalog/types.ts";
 import { CapabilityKind } from "../lib/capability-types.ts";
-import type { ContentBlock } from "../model-gateway/types.ts";
 import type { RunExecutor } from "../runs/index.ts";
 import type { Run } from "../runs/types.ts";
 import type { Secrets } from "../secrets/index.ts";
@@ -306,7 +305,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     try {
       runIterable = deps.runs.startRun({
         threadId,
-        userMessage: parsed.data.userMessage as ContentBlock[],
+        userMessage: parsed.data.userMessage,
         ...(parsed.data.modelOverride !== undefined && {
           modelOverride: parsed.data.modelOverride,
         }),
