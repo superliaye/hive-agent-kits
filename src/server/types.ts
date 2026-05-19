@@ -262,3 +262,26 @@ export type RunWire = {
   errorCode?: string;
   errorMessage?: string;
 };
+
+// ─── Secrets (Part 4b) ────────────────────────────────────────────────────
+
+// POST /api/secrets/:provider/api-key body.
+export const SetApiKeyBody = z
+  .object({
+    apiKey: z.string().min(1).max(2048),
+  })
+  .strict();
+export type SetApiKeyBody = z.infer<typeof SetApiKeyBody>;
+
+export type ConfiguredProviderWire = {
+  provider: string;
+  kind: "apiKey" | "oauth";
+  status: "ok" | "expired";
+  addedAt: number;
+  refreshedAt?: number;
+};
+
+export type OAuthProviderWire = {
+  id: string;
+  name: string;
+};

@@ -1,5 +1,6 @@
 // Hono route definitions. Pure routing — module dependencies are passed in.
 
+import { getOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
@@ -13,6 +14,8 @@ import { CapabilityKind } from "../lib/capability-types.ts";
 import type { ContentBlock } from "../model-gateway/types.ts";
 import type { RunExecutor } from "../runs/index.ts";
 import type { Run } from "../runs/types.ts";
+import type { Secrets } from "../secrets/index.ts";
+import type { ConfiguredProvider } from "../secrets/types.ts";
 import type { Threads } from "../threads/index.ts";
 import type { Thread, ThreadMessage } from "../threads/types.ts";
 import { bearerAuth } from "./auth.ts";
@@ -22,8 +25,11 @@ import {
   AuditQueryParams,
   BindingPatchBody,
   type CapabilityWire,
+  type ConfiguredProviderWire,
   CreateThreadBody,
+  type OAuthProviderWire,
   type RunWire,
+  SetApiKeyBody,
   StartRunBody,
   type ThreadDetailWire,
   type ThreadSummaryWire,
@@ -36,6 +42,7 @@ export type RoutesDeps = {
   audit: Audit;
   threads: Threads;
   runs: RunExecutor;
+  secrets: Secrets;
   token: string;
 };
 
@@ -120,6 +127,18 @@ function toRunWire(r: Run): RunWire {
     ...(r.finishReason !== undefined && { finishReason: r.finishReason }),
     ...(r.errorCode !== undefined && { errorCode: r.errorCode }),
     ...(r.errorMessage !== undefined && { errorMessage: r.errorMessage }),
+  };
+}
+
+function toConfiguredProviderWire(p: ConfiguredProvider): ConfiguredProviderWire | undefined {
+  // The Secrets `list()` never yields "missing"; defensive narrowing.
+  if (p.status === "missing") return undefined;
+  return {
+    provider: p.provider,
+    kind: p.kind,
+    status: p.status,
+    addedAt: p.addedAt,
+    ...(p.refreshedAt !== undefined && { refreshedAt: p.refreshedAt }),
   };
 }
 
@@ -327,6 +346,117 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     if (!deps.runs.getRun(id)) return c.json({ error: "run not found" }, 404);
     deps.runs.cancelRun(id);
     return c.body(null, 202);
+  });
+
+  // ─── Secrets ─────────────────────────────────────────────────────────
+
+  app.get("/api/secrets", (c) => {
+    const out = deps.secrets
+      .list()
+      .map(toConfiguredProviderWire)
+      .filter((w): w is ConfiguredProviderWire => w !== undefined);
+    return c.json(out);
+  });
+
+  // Available OAuth providers from pi-ai's registry. UI shows these as
+  // "Log in with X" actions in Settings. Filtered to providers Hive's
+  // pi-ai adapter actually routes to (so we don't offer login to a
+  // provider we couldn't then use).
+  app.get("/api/secrets/oauth-providers", (c) => {
+    const providers = getOAuthProviders().map<OAuthProviderWire>((p) => ({
+      id: p.id,
+      name: p.name,
+    }));
+    return c.json(providers);
+  });
+
+  app.post("/api/secrets/:provider/api-key", async (c) => {
+    const provider = c.req.param("provider");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = SetApiKeyBody.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid body", issues: zodIssues(parsed.error) }, 400);
+    }
+    deps.secrets.setApiKey(provider, parsed.data.apiKey);
+    return c.body(null, 204);
+  });
+
+  app.delete("/api/secrets/:provider", (c) => {
+    const provider = c.req.param("provider");
+    if (deps.secrets.status(provider) === "missing") {
+      return c.json({ error: "provider not configured" }, 404);
+    }
+    deps.secrets.remove(provider);
+    return c.body(null, 204);
+  });
+
+  // Start an OAuth login. Returns Server-Sent Events; pi-ai's login flow
+  // signals progress and asks for the auth URL to be opened via the
+  // `onAuth` callback. v1 only supports the callback-server flow (no
+  // interactive prompts over HTTP); providers that require manual code
+  // input fail with a clear error.
+  //
+  // Event names:
+  //   - `auth`     — { url, instructions? }    open this URL in a browser
+  //   - `progress` — { message }              optional info
+  //   - `done`     — { provider }             credentials stored
+  //   - `error`    — { message }              login failed
+  app.post("/api/secrets/:provider/oauth/login", async (c) => {
+    const provider = c.req.param("provider");
+    return streamSSE(c, async (stream) => {
+      try {
+        await deps.secrets.startOAuthLogin(provider, {
+          onAuth: (info) => {
+            // pi-ai's onAuth is synchronous; fire-and-forget the SSE write.
+            // Order is preserved by the underlying stream.
+            void stream.writeSSE({
+              event: "auth",
+              data: JSON.stringify({
+                url: info.url,
+                ...(info.instructions !== undefined && { instructions: info.instructions }),
+              }),
+            });
+          },
+          onProgress: (message) => {
+            void stream.writeSSE({ event: "progress", data: JSON.stringify({ message }) });
+          },
+          // v1 doesn't support interactive prompts over HTTP. If pi-ai's
+          // provider needs one (manual code input, multi-step selection),
+          // surface a clear error and bail. Settings UI can guide the
+          // user to a CLI-based login flow as a fallback in a later part.
+          onPrompt: async () => {
+            const msg =
+              "interactive prompt not yet supported over HTTP; OAuth provider requires manual input";
+            await stream.writeSSE({ event: "error", data: JSON.stringify({ message: msg }) });
+            throw new Error(msg);
+          },
+          onManualCodeInput: async () => {
+            const msg = "manual code input not yet supported over HTTP";
+            await stream.writeSSE({ event: "error", data: JSON.stringify({ message: msg }) });
+            throw new Error(msg);
+          },
+          onSelect: async () => {
+            const msg = "interactive selection not yet supported over HTTP";
+            await stream.writeSSE({ event: "error", data: JSON.stringify({ message: msg }) });
+            throw new Error(msg);
+          },
+        });
+        await stream.writeSSE({
+          event: "done",
+          data: JSON.stringify({ provider }),
+        });
+      } catch (err) {
+        await stream.writeSSE({
+          event: "error",
+          data: JSON.stringify({ message: (err as Error).message }),
+        });
+      }
+    });
   });
 
   // ─── Module event stream ─────────────────────────────────────────────
