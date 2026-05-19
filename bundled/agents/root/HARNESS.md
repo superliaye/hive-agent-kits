@@ -17,8 +17,8 @@ bindings:
     - spawn_sub_agent
   mcp: []
 config:
-  model: claude-opus-4-7
-  modelFallback: claude-sonnet-4-6
+  model: anthropic/claude-opus-4-7
+  modelFallback: anthropic/claude-sonnet-4-6
   thinkingEffort: high
   temperature: 1.0
   maxTokens: 16000
