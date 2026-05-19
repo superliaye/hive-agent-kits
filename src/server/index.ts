@@ -22,6 +22,7 @@ import { createLogger, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { createPiAiAdapter } from "../model-gateway/adapters/pi-ai.ts";
 import { type ModelGateway, createGateway } from "../model-gateway/index.ts";
+import { type Secrets, createSecrets } from "../secrets/index.ts";
 import { buildRoutes } from "./routes.ts";
 
 export type ServerMode = "file" | "memory";
@@ -45,6 +46,7 @@ export type ServerHandles = {
   registry: Registry;
   catalog: Catalog;
   gateway: ModelGateway;
+  secrets: Secrets;
   token: string;
   port: number;
   dispose(): Promise<void>;
@@ -79,6 +81,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const registry = createRegistry({ watch: opts.mode === "file" });
   const catalog = createCatalog();
   const gateway = createGateway();
+  const secrets =
+    opts.mode === "memory"
+      ? createSecrets({ mode: "memory" })
+      : createSecrets({ mode: "file", path: files.secrets() });
 
   // Register the default multi-provider adapter (ADR-0002 §"Model abstraction":
   // pi-ai is the v1 default for anthropic/openai/google/mistral/bedrock/…).
@@ -91,6 +97,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     gateway,
     registry,
     catalog,
+    secrets,
   });
 
   await registry.start();
@@ -108,6 +115,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     registry,
     catalog,
     gateway,
+    secrets,
     token,
     port,
     async dispose() {

@@ -10,6 +10,8 @@ import type { Catalog } from "../catalog/index.ts";
 import type { CatalogEvents } from "../catalog/types.ts";
 import type { Config, ConfigEvents } from "../config/types.ts";
 import type { ModelGateway } from "../model-gateway/index.ts";
+import type { Secrets } from "../secrets/index.ts";
+import type { SecretEvents } from "../secrets/types.ts";
 import type { Audit } from "./audit.ts";
 import type { Normalizer } from "./types.ts";
 
@@ -18,10 +20,10 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   gateway?: ModelGateway;
   registry?: Registry;
   catalog?: Catalog;
+  secrets?: Secrets;
   // Future:
   //   run?:        { events: TypedEmitter<RunEvents> }
   //   permission?: { events: TypedEmitter<PermissionEvents> }
-  //   secrets?:    { events: TypedEmitter<SecretEvents> }
   //   mcp?:        { events: TypedEmitter<McpLifecycleEvents> }
   //   memory?:     { events: TypedEmitter<MemoryEvents> }
 };
@@ -60,6 +62,28 @@ const catalogNormalizer: Partial<Normalizer<CatalogEvents>> = {
 // capability adds land (Settings UI drop-zone), add a normalizer here with
 // a filter on the source/origin.
 
+// Secrets: every event is user/agent-driven (read by agent for a Run,
+// write/refresh/remove by user via Settings). Payloads carry only the
+// provider key — never credential values or refs (ADR-0004 redaction).
+const secretsNormalizer: Normalizer<SecretEvents> = {
+  "secret.read": (event) => ({
+    event_type: "secret.read",
+    payload: { provider: event.provider, kind: event.kind },
+  }),
+  "secret.write": (event) => ({
+    event_type: "secret.write",
+    payload: { provider: event.provider, kind: event.kind, op: event.op },
+  }),
+  "secret.refresh": (event) => ({
+    event_type: "secret.refresh",
+    payload: { provider: event.provider },
+  }),
+  "secret.remove": (event) => ({
+    event_type: "secret.remove",
+    payload: { provider: event.provider },
+  }),
+};
+
 // Attaches every present source's event stream to the audit log.
 // Returns a disposer that detaches all listeners.
 export function wireSubscriptions<S extends Record<string, unknown> = Record<string, unknown>>(
@@ -80,6 +104,10 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
 
   if (sources.catalog) {
     disposers.push(audit.attach("catalog", sources.catalog.events, catalogNormalizer));
+  }
+
+  if (sources.secrets) {
+    disposers.push(audit.attach("secrets", sources.secrets.events, secretsNormalizer));
   }
 
   return () => {

@@ -1,8 +1,10 @@
+import { describe, expect, mock, test } from "bun:test";
 import type { AssistantMessage, AssistantMessageEvent, Usage } from "@earendil-works/pi-ai";
-import { describe, expect, test } from "bun:test";
+import type { getOAuthApiKey } from "@earendil-works/pi-ai/oauth";
 import {
   classifyError,
   createPiAiAdapter,
+  resolveOAuthApiKey,
   translateMessages,
   translatePiAiStream,
 } from "../adapters/pi-ai.ts";
@@ -82,9 +84,7 @@ describe("classifyError", () => {
 
 describe("translateMessages", () => {
   test("simple user text", () => {
-    const out = translateMessages([
-      { role: "user", content: [{ type: "text", text: "hi" }] },
-    ]);
+    const out = translateMessages([{ role: "user", content: [{ type: "text", text: "hi" }] }]);
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
     if (out[0]?.role === "user") {
@@ -132,7 +132,9 @@ describe("translateMessages", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
     if (out[0]?.role === "user") {
-      expect(JSON.stringify(out[0].content)).toContain("tool_result for unknown tool_use_id=missing");
+      expect(JSON.stringify(out[0].content)).toContain(
+        "tool_result for unknown tool_use_id=missing",
+      );
     }
   });
 
@@ -416,7 +418,10 @@ describe("pi-ai adapter — short-circuit paths", () => {
     expect(got[got.length - 1]).toEqual({ type: "done", finishReason: "error" });
   });
 
-  test("OAuth auth surfaces auth_failed", async () => {
+  test("OAuth with bogus credentials surfaces auth_failed via pi-ai", async () => {
+    // Real pi-ai rejects bogus refresh tokens (or returns null); the adapter
+    // catches and emits auth_failed. We don't assert which path triggered —
+    // both produce the same observable outcome.
     const adapter = createPiAiAdapter();
     const got: GatewayEvent[] = [];
     for await (const ev of adapter.complete({
@@ -424,7 +429,7 @@ describe("pi-ai adapter — short-circuit paths", () => {
       messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
       auth: {
         kind: "oauth",
-        credentials: { access: "a", refresh: "r", expires: 0 },
+        credentials: { access: "bogus-acc", refresh: "bogus-ref", expires: 0 },
         onRefresh: async () => {},
       },
     })) {
@@ -474,6 +479,67 @@ describe("pi-ai adapter — short-circuit paths", () => {
   });
 });
 
+// ─── resolveOAuthApiKey — OAuth → apiKey translation ───────────────────────
+
+describe("resolveOAuthApiKey", () => {
+  const creds = { access: "acc-1", refresh: "ref-1", expires: 9_000_000_000_000 };
+
+  test("returns the apiKey when pi-ai resolves successfully", async () => {
+    const stub: typeof getOAuthApiKey = async (provider, credentialsMap) => {
+      expect(provider).toBe("anthropic");
+      expect(credentialsMap.anthropic?.access).toBe("acc-1");
+      return { newCredentials: creds, apiKey: "sk-resolved-1" };
+    };
+    const onRefresh = mock(async (_: typeof creds) => {});
+    const apiKey = await resolveOAuthApiKey("anthropic", creds, onRefresh, stub);
+    expect(apiKey).toBe("sk-resolved-1");
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  test("fires onRefresh when pi-ai returns refreshed credentials", async () => {
+    const refreshed = { access: "acc-2", refresh: "ref-2", expires: 9_000_000_000_001 };
+    const stub: typeof getOAuthApiKey = async () => ({
+      newCredentials: refreshed,
+      apiKey: "sk-after-refresh",
+    });
+    const onRefresh = mock(async (_: typeof creds) => {});
+    const apiKey = await resolveOAuthApiKey("anthropic", creds, onRefresh, stub);
+    expect(apiKey).toBe("sk-after-refresh");
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(onRefresh.mock.calls[0]?.[0]).toEqual(refreshed);
+  });
+
+  test("does NOT fire onRefresh when access string is unchanged", async () => {
+    const stub: typeof getOAuthApiKey = async () => ({
+      // Same access value as input → no refresh occurred
+      newCredentials: { ...creds, expires: creds.expires + 1 },
+      apiKey: "sk-same",
+    });
+    const onRefresh = mock(async (_: typeof creds) => {});
+    await resolveOAuthApiKey("anthropic", creds, onRefresh, stub);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  test("returns null when pi-ai returns null", async () => {
+    const stub: typeof getOAuthApiKey = async () => null;
+    const onRefresh = mock(async (_: typeof creds) => {});
+    const apiKey = await resolveOAuthApiKey("anthropic", creds, onRefresh, stub);
+    expect(apiKey).toBeNull();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  test("propagates errors thrown by pi-ai", async () => {
+    const stub: typeof getOAuthApiKey = async () => {
+      throw new Error("network down");
+    };
+    const onRefresh = mock(async (_: typeof creds) => {});
+    await expect(resolveOAuthApiKey("anthropic", creds, onRefresh, stub)).rejects.toThrow(
+      "network down",
+    );
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+});
+
 // ─── smoke test (real Anthropic call, skipped without key) ──────────────────
 
 describe("pi-ai adapter (smoke)", () => {
@@ -490,9 +556,7 @@ describe("pi-ai adapter (smoke)", () => {
     let text = "";
     for await (const ev of gw.complete({
       model: "anthropic/claude-haiku-4-5",
-      messages: [
-        { role: "user", content: [{ type: "text", text: "Reply with one word: HELLO" }] },
-      ],
+      messages: [{ role: "user", content: [{ type: "text", text: "Reply with one word: HELLO" }] }],
       auth: { kind: "apiKey", apiKey },
       limits: { maxTokens: 32 },
     })) {

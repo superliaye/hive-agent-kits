@@ -38,6 +38,7 @@ import type {
   UserMessage,
 } from "@earendil-works/pi-ai";
 import { Type, getModels, streamSimple } from "@earendil-works/pi-ai";
+import { getOAuthApiKey } from "@earendil-works/pi-ai/oauth";
 import type {
   CompletionInput,
   ContentBlock,
@@ -345,6 +346,47 @@ function buildUsageEvent(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// OAuth → apiKey resolution
+// ─────────────────────────────────────────────────────────────────────────────
+
+type OAuthCreds = { access: string; refresh: string; expires: number };
+
+/**
+ * Convert OAuth credentials into an apiKey usable by `streamSimple`. Calls
+ * pi-ai's `getOAuthApiKey`, which automatically refreshes if the access
+ * token is expired. When refresh produces new credentials, fires
+ * `onRefresh(newCreds)` so the Secrets module can persist them — this is
+ * how mid-call OAuth refresh round-trips back to disk per ADR-0005
+ * §AuthInput.
+ *
+ * Returns `null` when pi-ai cannot produce a usable apiKey (provider
+ * doesn't implement OAuth or credentials are malformed past recovery).
+ *
+ * Exported for tests.
+ */
+export async function resolveOAuthApiKey(
+  provider: string,
+  credentials: OAuthCreds,
+  onRefresh: (newCreds: OAuthCreds) => Promise<void>,
+  apiKeyResolver: typeof getOAuthApiKey = getOAuthApiKey,
+): Promise<string | null> {
+  const result = await apiKeyResolver(provider, { [provider]: credentials });
+  if (!result) return null;
+  // pi-ai's `newCredentials` is the refreshed set if the access token had
+  // expired, otherwise identical to the input. Detect "actually refreshed"
+  // by comparing the access string — same value means no on-disk write
+  // is needed.
+  if (result.newCredentials.access !== credentials.access) {
+    await onRefresh({
+      access: result.newCredentials.access,
+      refresh: result.newCredentials.refresh,
+      expires: result.newCredentials.expires,
+    });
+  }
+  return result.apiKey;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Adapter
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -381,18 +423,41 @@ async function* complete(input: CompletionInput): AsyncIterable<GatewayEvent> {
     return;
   }
 
-  // 2. Auth. OAuth handling is a deferred sub-part of Part 1.
-  if (input.auth.kind !== "apiKey") {
-    yield {
-      type: "error",
-      code: "auth_failed",
-      message: "pi-ai adapter: OAuth credentials not yet supported (use apiKey)",
-      retryable: false,
-    };
-    yield { type: "done", finishReason: "error" };
-    return;
+  // 2. Auth. apiKey is a straight pass-through; OAuth resolves via
+  //    pi-ai's `getOAuthApiKey`, which refreshes expired tokens and
+  //    fires `auth.onRefresh(newCreds)` so the Secrets module persists.
+  //    Mid-stream expiry (the new token also expires before the stream
+  //    finishes) is not handled in v1 — surfaces as a pi-ai error event.
+  let apiKey: string;
+  if (input.auth.kind === "apiKey") {
+    apiKey = input.auth.apiKey;
+  } else {
+    const { credentials, onRefresh } = input.auth;
+    let resolved: string | null;
+    try {
+      resolved = await resolveOAuthApiKey(provider, credentials, onRefresh);
+    } catch (err) {
+      yield {
+        type: "error",
+        code: "auth_failed",
+        message: `OAuth refresh failed for "${provider}": ${(err as Error).message}`,
+        retryable: false,
+      };
+      yield { type: "done", finishReason: "error" };
+      return;
+    }
+    if (!resolved) {
+      yield {
+        type: "error",
+        code: "auth_failed",
+        message: `OAuth resolution returned no apiKey for "${provider}"`,
+        retryable: false,
+      };
+      yield { type: "done", finishReason: "error" };
+      return;
+    }
+    apiKey = resolved;
   }
-  const apiKey = input.auth.apiKey;
 
   // 3. Resolve model. pi-ai's `getModel(provider, modelId)` is statically
   //    typed on literal (provider, modelId) pairs; at runtime we have plain
