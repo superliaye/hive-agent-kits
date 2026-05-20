@@ -87,11 +87,22 @@ function buildTokens(config: ThemeConfig, mode: ResolvedMode): TokenMap {
   tokens["font-size-code"] = `${codeSize}px`;
 
   // Contrast: blend fg-default toward bg-base. 100 = pure fg-default
-  // (max contrast), 0 = pure bg-base (no contrast). Default 50 ≈ neutral.
+  // (max contrast), 0 = pure bg-base (no contrast). Only applied when
+  // the user moved the slider — at DEFAULT_CONTRAST we trust the named
+  // palette's hand-tuned muted/border colors.
   const contrast = config.contrast ?? DEFAULT_CONTRAST;
-  const clamped = Math.max(0, Math.min(100, contrast));
-  tokens["color-fg-muted"] =
-    `color-mix(in srgb, ${tokens["color-fg-default"]} ${clamped}%, ${tokens["color-bg-base"]})`;
+  if (contrast !== DEFAULT_CONTRAST) {
+    const clamped = Math.max(0, Math.min(100, contrast));
+    const fg = tokens["color-fg-default"] ?? "#000000";
+    const bg = tokens["color-bg-base"] ?? "#ffffff";
+    tokens["color-fg-muted"] = `color-mix(in srgb, ${fg} ${clamped}%, ${bg})`;
+    // Borders track contrast proportionally — much lower percent so they
+    // don't visually compete with body text but still respond to the slider.
+    const borderPct = Math.max(10, Math.round(clamped * 0.32));
+    tokens["color-border-default"] = `color-mix(in srgb, ${fg} ${borderPct}%, ${bg})`;
+    const strongPct = Math.max(20, Math.round(clamped * 0.5));
+    tokens["color-border-strong"] = `color-mix(in srgb, ${fg} ${strongPct}%, ${bg})`;
+  }
 
   tokens["sidebar-opacity"] = config.translucentSidebar ? "0.78" : "1";
 

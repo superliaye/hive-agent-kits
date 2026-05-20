@@ -11,6 +11,7 @@ import {
   FONT_SUGGESTIONS,
   findNamedTheme,
   type Mode,
+  type NamedTheme,
   namedThemesFor,
   type Preferences,
   type ReduceMotion,
@@ -18,6 +19,24 @@ import {
   exportPreferencesWire,
   useTheme,
 } from "../theming/index.ts";
+
+// Keys on ThemeConfig that count as "overrides" the user can clear in
+// bulk. themeId is the named-palette selection — NOT an override.
+const OVERRIDE_KEYS: ReadonlyArray<Exclude<keyof ThemeConfig, "themeId">> = [
+  "accent",
+  "background",
+  "foreground",
+  "fontUi",
+  "fontCode",
+  "fontUiSize",
+  "fontCodeSize",
+  "contrast",
+  "translucentSidebar",
+];
+
+function hasOverrides(config: ThemeConfig): boolean {
+  return OVERRIDE_KEYS.some((k) => config[k] !== undefined);
+}
 
 export function AppearanceSettings(): JSX.Element {
   const theme = useTheme();
@@ -40,10 +59,17 @@ export function AppearanceSettings(): JSX.Element {
 
   function patchConfig(patch: Partial<ThemeConfig>): void {
     const next = { ...editingConfig, ...patch };
-    // Drop undefined keys so the wire stays tidy.
     for (const k of Object.keys(next) as (keyof ThemeConfig)[]) {
       if (next[k] === undefined || next[k] === "") delete next[k];
     }
+    patchPrefs(editingMode === "dark" ? { dark: next } : { light: next });
+  }
+
+  function resetOverrides(): void {
+    // Keep themeId (the user's named-palette choice), drop everything else.
+    const next: ThemeConfig = editingConfig.themeId
+      ? { themeId: editingConfig.themeId }
+      : {};
     patchPrefs(editingMode === "dark" ? { dark: next } : { light: next });
   }
 
@@ -128,31 +154,33 @@ export function AppearanceSettings(): JSX.Element {
         </div>
       </div>
 
-      <div className="section">
+      <div className="section settings-card">
         <div className="appearance-card-header">
           <h3>{editingMode === "dark" ? "Dark" : "Light"} theme</h3>
-          <label className="appearance-theme-picker">
-            <span className="appearance-theme-picker-icon" aria-hidden="true">
-              Aa
-            </span>
-            <select
-              value={currentTheme.id}
-              onChange={(e) => patchConfig({ themeId: e.target.value })}
-              aria-label="Named theme"
-              data-testid="theme-named-picker"
+          {hasOverrides(editingConfig) && (
+            <button
+              type="button"
+              className="appearance-reset-link"
+              onClick={() => resetOverrides()}
+              data-testid="theme-reset-overrides"
+              title="Clear all per-mode customizations and use the named theme as-is"
             >
-              {themes.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </label>
+              Reset overrides
+            </button>
+          )}
         </div>
         <p className="meta">
-          Pick a curated palette, then tweak any field below. Overrides layer on top of the named
-          theme. {editingMode === "dark" ? "Dark" : "Light"} and the other mode persist
-          independently — switch the top picker to edit the other.
+          Pick a curated palette below, then tweak any field. Overrides layer on top of the named
+          theme — switch the top mode picker to edit the other mode.
+        </p>
+
+        <ThemeGallery
+          themes={themes}
+          activeId={currentTheme.id}
+          onPick={(id) => patchConfig({ themeId: id })}
+        />
+        <p className="meta appearance-theme-active-meta" data-testid="theme-active-name">
+          Active: <strong>{currentTheme.name}</strong>
         </p>
 
         <ColorOverride
@@ -509,6 +537,58 @@ function TriStateRow({
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+function ThemeGallery({
+  themes,
+  activeId,
+  onPick,
+}: {
+  themes: readonly NamedTheme[];
+  activeId: string;
+  onPick: (id: string) => void;
+}): JSX.Element {
+  return (
+    <div className="theme-gallery" data-testid="theme-gallery">
+      {themes.map((t) => {
+        const tokens = t.palette.tokens;
+        const isActive = t.id === activeId;
+        return (
+          <button
+            type="button"
+            key={t.id}
+            className={`theme-gallery-item${isActive ? " active" : ""}`}
+            onClick={() => onPick(t.id)}
+            data-testid={`theme-gallery-${t.id}`}
+            aria-pressed={isActive}
+            aria-label={`Use ${t.name}`}
+          >
+            <div className="theme-gallery-preview">
+              <span
+                className="theme-gallery-swatch theme-gallery-swatch--bg"
+                style={{ background: tokens["color-bg-base"] }}
+                aria-hidden="true"
+              >
+                <span
+                  className="theme-gallery-swatch--surface"
+                  style={{ background: tokens["color-bg-surface"] }}
+                />
+                <span
+                  className="theme-gallery-swatch--accent"
+                  style={{ background: tokens["color-accent"] }}
+                />
+                <span
+                  className="theme-gallery-swatch--fg"
+                  style={{ background: tokens["color-fg-default"] }}
+                />
+              </span>
+            </div>
+            <div className="theme-gallery-name">{t.name}</div>
+          </button>
+        );
+      })}
     </div>
   );
 }

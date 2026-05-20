@@ -868,34 +868,106 @@ pre.config {
   justify-content: space-between;
   gap: 12px;
 }
-.appearance-theme-picker {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  border: 1px solid var(--color-border-default);
-  border-radius: 6px;
-  background: var(--color-bg-surface);
-  overflow: hidden;
-}
-.appearance-theme-picker-icon {
-  padding: 6px 10px;
-  font-family: var(--font-code);
-  font-size: 12px;
-  color: var(--color-fg-muted);
-  background: var(--color-bg-hover);
-  border-right: 1px solid var(--color-border-default);
-}
-.appearance-theme-picker select {
-  border: none;
+.appearance-reset-link {
   background: transparent;
-  color: var(--color-fg-default);
+  border: none;
+  color: var(--color-fg-muted);
   font: inherit;
-  padding: 6px 10px;
-  padding-right: 28px;
+  font-size: 12px;
   cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
 }
-.appearance-theme-picker select:focus {
-  outline: none;
+.appearance-reset-link:hover {
+  color: var(--color-fg-default);
+  background: var(--color-bg-hover);
+}
+
+/* Elevated card chrome for the per-mode settings panel. */
+.settings-card {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+.settings-card h3 {
+  margin-top: 0;
+}
+
+/* Theme gallery — clickable cards with mini swatch preview per palette. */
+.theme-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 10px 0 8px;
+}
+.theme-gallery-item {
+  background: var(--color-bg-base);
+  border: 2px solid var(--color-border-default);
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--color-fg-default);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: border-color 120ms ease;
+}
+.theme-gallery-item:hover {
+  border-color: var(--color-border-strong);
+}
+.theme-gallery-item.active {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+.theme-gallery-preview {
+  height: 56px;
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
+  border: 1px solid var(--color-border-default);
+}
+.theme-gallery-swatch--bg {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+.theme-gallery-swatch--surface {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 8px;
+  bottom: 22px;
+  border-radius: 4px;
+  display: block;
+}
+.theme-gallery-swatch--accent {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: block;
+}
+.theme-gallery-swatch--fg {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  right: 28px;
+  height: 3px;
+  border-radius: 2px;
+  display: block;
+}
+.theme-gallery-name {
+  font-size: 12px;
+  font-weight: 500;
+}
+.appearance-theme-active-meta {
+  margin: 4px 0 12px;
+  font-size: 12px;
 }
 .appearance-sub-btn {
   padding: 4px 10px;
