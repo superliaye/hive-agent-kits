@@ -52,4 +52,66 @@ describe("AppConfigSchema", () => {
   test("rejects missing required keys", () => {
     expect(() => AppConfigSchema.parse({ audit: APP_CONFIG_DEFAULTS.audit })).toThrow();
   });
+
+  // The HTTP route at /api/appearance Zod-checks its body before calling
+  // config.set; a hand-edited config.yaml however hits the inner schema
+  // directly via reloadFromDisk → schema.parse. These cover that path.
+  describe("appearance subtree", () => {
+    test("rejects fontUiSize above 48 (hand-edited config)", () => {
+      expect(() =>
+        AppConfigSchema.parse({
+          ...APP_CONFIG_DEFAULTS,
+          appearance: {
+            ...APP_CONFIG_DEFAULTS.appearance,
+            light: { fontUiSize: 999 },
+          },
+        }),
+      ).toThrow();
+    });
+
+    test("rejects negative contrast", () => {
+      expect(() =>
+        AppConfigSchema.parse({
+          ...APP_CONFIG_DEFAULTS,
+          appearance: {
+            ...APP_CONFIG_DEFAULTS.appearance,
+            dark: { contrast: -5 },
+          },
+        }),
+      ).toThrow();
+    });
+
+    test("rejects contrast above 100", () => {
+      expect(() =>
+        AppConfigSchema.parse({
+          ...APP_CONFIG_DEFAULTS,
+          appearance: {
+            ...APP_CONFIG_DEFAULTS.appearance,
+            dark: { contrast: 101 },
+          },
+        }),
+      ).toThrow();
+    });
+
+    test("rejects unknown ThemeConfig fields (strict schema)", () => {
+      expect(() =>
+        AppConfigSchema.parse({
+          ...APP_CONFIG_DEFAULTS,
+          appearance: {
+            ...APP_CONFIG_DEFAULTS.appearance,
+            light: { surprise: true },
+          },
+        }),
+      ).toThrow();
+    });
+
+    test("rejects unknown reduceMotion value", () => {
+      expect(() =>
+        AppConfigSchema.parse({
+          ...APP_CONFIG_DEFAULTS,
+          appearance: { ...APP_CONFIG_DEFAULTS.appearance, reduceMotion: "always" },
+        }),
+      ).toThrow();
+    });
+  });
 });

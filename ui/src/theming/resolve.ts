@@ -49,10 +49,11 @@ export function resolveTokens(config: ThemeConfig, mode: ResolvedMode): TokenMap
   // Contrast: blend fg-default toward bg-base. 100 = pure fg-default
   // (max contrast), 0 = pure bg-base (no contrast). Only applied when
   // the user moved the slider — at DEFAULT_CONTRAST we trust the named
-  // palette's hand-tuned muted/border colors.
-  const contrast = config.contrast ?? DEFAULT_CONTRAST;
-  if (contrast !== DEFAULT_CONTRAST) {
-    const clamped = Math.max(0, Math.min(100, contrast));
+  // palette's hand-tuned muted/border colors. Compare on the clamped
+  // integer so a YAML float (50.0000001) doesn't take the override path.
+  const rawContrast = config.contrast ?? DEFAULT_CONTRAST;
+  const clamped = Math.max(0, Math.min(100, Math.round(rawContrast)));
+  if (clamped !== DEFAULT_CONTRAST) {
     const fg = tokens["color-fg-default"] ?? "#000000";
     const bg = tokens["color-bg-base"] ?? "#ffffff";
     tokens["color-fg-muted"] = `color-mix(in srgb, ${fg} ${clamped}%, ${bg})`;

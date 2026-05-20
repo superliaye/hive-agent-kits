@@ -19,6 +19,12 @@ export function createConfigStore<S extends Record<string, unknown>>(
   let current: S = schema.parse(initial);
   const events = new TypedEmitter<ConfigEvents<S>>();
 
+  // Serialize concurrent `set()` calls. Without this, two awaited sets
+  // each snapshot `current` before either persistence.write lands, and
+  // the second write clobbers the first key. Surfaced in /gstack-review
+  // adversarial pass during the Appearance fold.
+  let writeQueue: Promise<unknown> = Promise.resolve();
+
   const fileWatcherDispose = persistence?.watchExternal(() => {
     reloadFromDisk();
   });
@@ -28,25 +34,34 @@ export function createConfigStore<S extends Record<string, unknown>>(
   }
 
   async function set<K extends keyof S & string>(key: K, value: S[K]): Promise<void> {
-    // Validate the proposed next state as a whole — catches cross-field
-    // constraints if the schema has any.
-    const proposed = { ...current, [key]: value } as S;
-    schema.parse(proposed);
+    // Queue behind any in-flight write. Snapshotting `current` AFTER the
+    // queue drains is what guarantees no last-writer-wins clobber.
+    const run = async (): Promise<void> => {
+      const proposed = { ...current, [key]: value } as S;
+      // Validate the proposed next state as a whole — catches cross-field
+      // constraints if the schema has any.
+      schema.parse(proposed);
 
-    const previous = current[key];
-    if (deepEquals(previous, value)) return;
+      const previous = current[key];
+      if (deepEquals(previous, value)) return;
 
-    if (persistence) {
-      persistence.write(proposed);
-    }
-    current = proposed;
+      if (persistence) {
+        persistence.write(proposed);
+      }
+      current = proposed;
 
-    await events.emit("change", {
-      key,
-      previous,
-      current: value,
-      source: "set",
-    });
+      await events.emit("change", {
+        key,
+        previous,
+        current: value,
+        source: "set",
+      });
+    };
+    const next = writeQueue.then(run, run);
+    // Keep the chain alive even if this call rejects, so subsequent writes
+    // still run. Each call gets its own promise to await.
+    writeQueue = next.catch(() => undefined);
+    return next;
   }
 
   function watch<K extends keyof S & string>(key: K, listener: (value: S[K]) => void): () => void {

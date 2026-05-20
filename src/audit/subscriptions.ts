@@ -31,18 +31,27 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
 };
 
 // Generic over S so callers with a typed Config<AppConfig> don't need a cast.
+// The `appearance` subtree carries user color choices; those aren't useful in
+// audit and could leak personal taste in a future shared-deployment scenario.
+// Strip the payload to just the mode picker, matching the privacy posture of
+// the pre-fold appearanceNormalizer.
 function configNormalizer<S extends Record<string, unknown>>(): Normalizer<ConfigEvents<S>> {
   return {
     change: (event) => ({
       event_type: "config.change",
       payload: {
         key: event.key,
-        previous: event.previous,
-        current: event.current,
+        previous: event.key === "appearance" ? redactAppearance(event.previous) : event.previous,
+        current: event.key === "appearance" ? redactAppearance(event.current) : event.current,
         source: event.source,
       },
     }),
   };
+}
+
+function redactAppearance(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  return { mode: (value as { mode?: string }).mode };
 }
 
 // Gateway adapter registration is startup-only / diagnostic; trace, not audit.

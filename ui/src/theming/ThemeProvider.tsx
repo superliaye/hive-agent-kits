@@ -133,15 +133,21 @@ export function ThemeProvider({
 
   const setPreferences = useCallback(
     async (next: Preferences) => {
+      // Optimistic local apply, but snapshot the previous value so we can
+      // roll back if the daemon rejects the payload (Zod 400, network
+      // failure, etc). Otherwise the UI paints a state the server never
+      // accepted, and the next page-load reverts it without explanation.
+      const previous = preferences;
       setPreferencesState(next);
       setSaveError(null);
       try {
         await persistence.save(next);
       } catch (err) {
+        setPreferencesState(previous);
         setSaveError((err as Error).message);
       }
     },
-    [persistence],
+    [persistence, preferences],
   );
 
   const exportPrefs = useCallback(() => serialize(preferences), [preferences]);
