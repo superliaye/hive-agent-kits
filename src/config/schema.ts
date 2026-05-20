@@ -14,7 +14,6 @@ export const AuditConfigSchema = z.object({
 });
 
 export const UiConfigSchema = z.object({
-  theme: z.enum(["light", "dark", "auto"]),
   language: z.string().min(1),
 });
 
@@ -23,9 +22,45 @@ export const DaemonConfigSchema = z.object({
   logLevel: z.enum(["trace", "debug", "info", "warn", "error"]),
 });
 
+// Theme/font preferences — what CONTEXT.md calls "UI theme". A single
+// nested subtree under the top-level `appearance` key. Per-mode configs
+// persist independently (the user can customize Light and Dark without
+// either clobbering the other).
+const ColorString = z.string().min(1).max(64);
+const FontString = z.string().min(1).max(256);
+
+export const ThemeConfigSchema = z
+  .object({
+    themeId: z.string().min(1).max(64).optional(),
+    accent: ColorString.optional(),
+    background: ColorString.optional(),
+    foreground: ColorString.optional(),
+    fontUi: FontString.optional(),
+    fontCode: FontString.optional(),
+    fontUiSize: z.number().int().min(8).max(48).optional(),
+    fontCodeSize: z.number().int().min(8).max(48).optional(),
+    contrast: z.number().min(0).max(100).optional(),
+    translucentSidebar: z.boolean().optional(),
+  })
+  .strict();
+
+export const AppearanceConfigSchema = z
+  .object({
+    mode: z.enum(["light", "dark", "system"]),
+    light: ThemeConfigSchema,
+    dark: ThemeConfigSchema,
+    reduceMotion: z.enum(["system", "on", "off"]),
+    pointerCursors: z.boolean(),
+  })
+  .strict();
+
+export type AppearanceConfig = z.infer<typeof AppearanceConfigSchema>;
+export type ThemeConfig = z.infer<typeof ThemeConfigSchema>;
+
 export const AppConfigSchema = z.object({
   audit: AuditConfigSchema,
   ui: UiConfigSchema,
+  appearance: AppearanceConfigSchema,
   daemon: DaemonConfigSchema,
 });
 
@@ -42,8 +77,14 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
     },
   },
   ui: {
-    theme: "auto",
     language: "en",
+  },
+  appearance: {
+    mode: "system",
+    light: {},
+    dark: {},
+    reduceMotion: "system",
+    pointerCursors: false,
   },
   daemon: {
     httpPort: 3117,

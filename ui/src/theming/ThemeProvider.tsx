@@ -15,22 +15,10 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  DEFAULT_CONTRAST,
-  DEFAULT_FONT_CODE_SIZE,
-  DEFAULT_FONT_UI_SIZE,
-  findNamedTheme,
-} from "./presets.ts";
+import { resolveMode, resolveReduceMotion, resolveTokens } from "./resolve.ts";
 import { importPreferences as deserialize, exportPreferences as serialize } from "./serialize.ts";
 import { getSystemMode, watchSystemMode } from "./system.ts";
-import type {
-  Persistence,
-  Preferences,
-  ResolvedMode,
-  ResolvedTheme,
-  ThemeConfig,
-  TokenMap,
-} from "./types.ts";
+import type { Persistence, Preferences, ResolvedMode, ResolvedTheme } from "./types.ts";
 
 export type ThemeContextValue = {
   resolved: ResolvedTheme;
@@ -64,50 +52,9 @@ const DEFAULT_BOOTSTRAP: Preferences = {
   pointerCursors: false,
 };
 
-function resolveMode(prefs: Preferences, systemMode: ResolvedMode): ResolvedMode {
-  if (prefs.mode === "light" || prefs.mode === "dark") return prefs.mode;
-  return systemMode;
-}
-
-function buildTokens(config: ThemeConfig, mode: ResolvedMode): TokenMap {
-  const palette = findNamedTheme(mode, config.themeId).palette;
-  const tokens: TokenMap = { ...palette.tokens };
-
-  if (config.accent) {
-    tokens["color-accent"] = config.accent;
-  }
-  if (config.background) tokens["color-bg-base"] = config.background;
-  if (config.foreground) tokens["color-fg-default"] = config.foreground;
-  if (config.fontUi) tokens["font-ui"] = config.fontUi;
-  if (config.fontCode) tokens["font-code"] = config.fontCode;
-
-  const uiSize = config.fontUiSize ?? DEFAULT_FONT_UI_SIZE;
-  const codeSize = config.fontCodeSize ?? DEFAULT_FONT_CODE_SIZE;
-  tokens["font-size-ui"] = `${uiSize}px`;
-  tokens["font-size-code"] = `${codeSize}px`;
-
-  // Contrast: blend fg-default toward bg-base. 100 = pure fg-default
-  // (max contrast), 0 = pure bg-base (no contrast). Only applied when
-  // the user moved the slider — at DEFAULT_CONTRAST we trust the named
-  // palette's hand-tuned muted/border colors.
-  const contrast = config.contrast ?? DEFAULT_CONTRAST;
-  if (contrast !== DEFAULT_CONTRAST) {
-    const clamped = Math.max(0, Math.min(100, contrast));
-    const fg = tokens["color-fg-default"] ?? "#000000";
-    const bg = tokens["color-bg-base"] ?? "#ffffff";
-    tokens["color-fg-muted"] = `color-mix(in srgb, ${fg} ${clamped}%, ${bg})`;
-    // Borders track contrast proportionally — much lower percent so they
-    // don't visually compete with body text but still respond to the slider.
-    const borderPct = Math.max(10, Math.round(clamped * 0.32));
-    tokens["color-border-default"] = `color-mix(in srgb, ${fg} ${borderPct}%, ${bg})`;
-    const strongPct = Math.max(20, Math.round(clamped * 0.5));
-    tokens["color-border-strong"] = `color-mix(in srgb, ${fg} ${strongPct}%, ${bg})`;
-  }
-
-  tokens["sidebar-opacity"] = config.translucentSidebar ? "0.78" : "1";
-
-  return tokens;
-}
+// Theming math (mode resolution, palette layering, contrast modulation)
+// lives in resolve.ts so it's testable + callable from any context.
+// ThemeProvider here is just the React glue around it.
 
 export function ThemeProvider({
   persistence,
@@ -143,12 +90,11 @@ export function ThemeProvider({
   const resolved = useMemo<ResolvedTheme>(() => {
     const resolvedMode = resolveMode(preferences, systemMode);
     const config = resolvedMode === "dark" ? preferences.dark : preferences.light;
-    const tokens = buildTokens(config, resolvedMode);
     return {
       resolvedMode,
       fromSystem: preferences.mode === "system",
       config,
-      tokens,
+      tokens: resolveTokens(config, resolvedMode),
     };
   }, [preferences, systemMode]);
 
@@ -166,9 +112,9 @@ export function ThemeProvider({
     }
     lastAppliedRef.current = nextKeys;
     root.setAttribute("data-theme", resolved.resolvedMode);
-    root.setAttribute("data-reduce-motion", reduceMotionValue(preferences, systemMode));
+    root.setAttribute("data-reduce-motion", resolveReduceMotion(preferences, prefersReducedMotion()));
     root.setAttribute("data-pointer-cursors", preferences.pointerCursors ? "on" : "off");
-  }, [resolved, preferences, systemMode]);
+  }, [resolved, preferences]);
 
   // Unmount cleanup — strip everything we put on :root.
   useEffect(() => {
@@ -225,10 +171,7 @@ export function ThemeProvider({
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
-function reduceMotionValue(prefs: Preferences, _systemMode: ResolvedMode): "on" | "off" {
-  if (prefs.reduceMotion === "on") return "on";
-  if (prefs.reduceMotion === "off") return "off";
-  // "system" — read prefers-reduced-motion at this moment.
-  if (typeof window === "undefined" || !window.matchMedia) return "off";
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "on" : "off";
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || !window.matchMedia) return false;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }

@@ -49,4 +49,5 @@ export {
   importPreferences,
 } from "./serialize.ts";
 export type { ImportResult, PreferencesFile } from "./serialize.ts";
+export { resolveMode, resolveReduceMotion, resolveTokens } from "./resolve.ts";
 export { getSystemMode, watchSystemMode } from "./system.ts";

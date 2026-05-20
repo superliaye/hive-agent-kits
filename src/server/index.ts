@@ -7,7 +7,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Hono } from "hono";
-import { type Appearance, createAppearance } from "../appearance/index.ts";
 import { type Audit, createAudit } from "../audit/index.ts";
 import { wireSubscriptions } from "../audit/subscriptions.ts";
 import { type Registry, createRegistry } from "../capabilities/index.ts";
@@ -51,7 +50,6 @@ export type ServerHandles = {
   catalog: Catalog;
   gateway: ModelGateway;
   secrets: Secrets;
-  appearance: Appearance;
   threads: Threads;
   runs: RunExecutor;
   token: string;
@@ -92,11 +90,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     opts.mode === "memory"
       ? createSecrets({ mode: "memory" })
       : createSecrets({ mode: "file", path: files.secrets() });
-  const appearance =
-    opts.mode === "memory"
-      ? createAppearance({ mode: "memory" })
-      : createAppearance({ mode: "file", path: files.appearance() });
-
   // Shared hot-state SQLite (`~/.hive/hive.db` in file mode, `:memory:` in
   // memory mode). Threads + Runs both consume this handle.
   const hiveDb = openHiveDb(opts.mode === "memory" ? ":memory:" : files.hiveDb());
@@ -126,7 +119,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     registry,
     catalog,
     secrets,
-    appearance,
     runs,
   });
 
@@ -143,7 +135,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     threads,
     runs,
     secrets,
-    appearance,
+    config,
     token,
   });
 
@@ -155,7 +147,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     catalog,
     gateway,
     secrets,
-    appearance,
     threads,
     runs,
     token,

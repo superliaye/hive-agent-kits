@@ -38,7 +38,7 @@ describe("AppConfigSchema", () => {
     expect(() =>
       AppConfigSchema.parse({
         ...APP_CONFIG_DEFAULTS,
-        ui: { theme: "neon", language: "en" },
+        appearance: { ...APP_CONFIG_DEFAULTS.appearance, mode: "neon" },
       }),
     ).toThrow();
     expect(() =>

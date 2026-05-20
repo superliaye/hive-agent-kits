@@ -1,13 +1,16 @@
 /**
- * HTTP routes for Appearance — get/put preferences. Validates Zod shape
- * rejection + persistence round-trip + audit event capture.
+ * HTTP routes for `/api/appearance` — get/put preferences. Post-fold:
+ * the route is a thin wrapper over `config.get("appearance")` and
+ * `config.set("appearance", …)`. Tests verify shape validation +
+ * round-trip + that the daemon doesn't accept malformed payloads.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_PREFERENCES, type Preferences } from "../../appearance/types.ts";
+import { APP_CONFIG_DEFAULTS } from "../../config/schema.ts";
+import type { AppearanceConfig } from "../../config/schema.ts";
 import { type ServerHandles, createServer } from "../index.ts";
 
 const TOKEN = "test-token";
@@ -23,7 +26,7 @@ function authed(path: string, init: RequestInit = {}): Request {
   });
 }
 
-describe("server routes — appearance", () => {
+describe("server routes — appearance (via Config)", () => {
   let bundledRoot: string;
   let runtimeRoot: string;
   let server: ServerHandles;
@@ -49,31 +52,34 @@ describe("server routes — appearance", () => {
     if (existsSync(runtimeRoot)) rmSync(runtimeRoot, { recursive: true, force: true });
   });
 
-  test("GET /api/appearance returns default preferences initially", async () => {
+  test("GET /api/appearance returns the config appearance subtree initially", async () => {
     const res = await server.app.fetch(authed("/api/appearance"));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Preferences;
-    expect(body).toEqual(DEFAULT_PREFERENCES);
+    const body = (await res.json()) as AppearanceConfig;
+    expect(body).toEqual(APP_CONFIG_DEFAULTS.appearance);
   });
 
-  test("PUT /api/appearance replaces preferences", async () => {
-    const next: Preferences = { ...DEFAULT_PREFERENCES, mode: "dark" };
+  test("PUT /api/appearance writes through Config", async () => {
+    const next: AppearanceConfig = { ...APP_CONFIG_DEFAULTS.appearance, mode: "dark" };
     const put = await server.app.fetch(
       authed("/api/appearance", { method: "PUT", body: JSON.stringify(next) }),
     );
     expect(put.status).toBe(200);
     const after = await server.app.fetch(authed("/api/appearance"));
-    const body = (await after.json()) as Preferences;
+    const body = (await after.json()) as AppearanceConfig;
     expect(body).toEqual(next);
+    // Config got it too — independent reach-through.
+    expect(server.config.get("appearance")).toEqual(next);
   });
 
-  test("PUT accepts full preferences shape (per-mode configs)", async () => {
-    const prefs: Preferences = {
+  test("PUT accepts the full appearance shape (per-mode configs + a11y)", async () => {
+    const prefs: AppearanceConfig = {
       mode: "dark",
       light: { accent: "#0a0a0f", fontUiSize: 15 },
       dark: {
-        accent: "#4a8eff",
-        background: "#0d1117",
+        themeId: "dracula",
+        accent: "#bd93f9",
+        background: "#282a36",
         fontUi: '"Inter", sans-serif',
         fontCode: '"Fira Code", monospace',
         fontUiSize: 16,
@@ -88,7 +94,7 @@ describe("server routes — appearance", () => {
       authed("/api/appearance", { method: "PUT", body: JSON.stringify(prefs) }),
     );
     expect(put.status).toBe(200);
-    const body = (await put.json()) as Preferences;
+    const body = (await put.json()) as AppearanceConfig;
     expect(body).toEqual(prefs);
   });
 
@@ -96,7 +102,7 @@ describe("server routes — appearance", () => {
     const put = await server.app.fetch(
       authed("/api/appearance", {
         method: "PUT",
-        body: JSON.stringify({ ...DEFAULT_PREFERENCES, mode: "weird" }),
+        body: JSON.stringify({ ...APP_CONFIG_DEFAULTS.appearance, mode: "weird" }),
       }),
     );
     expect(put.status).toBe(400);
@@ -106,7 +112,7 @@ describe("server routes — appearance", () => {
     const put = await server.app.fetch(
       authed("/api/appearance", {
         method: "PUT",
-        body: JSON.stringify({ ...DEFAULT_PREFERENCES, surprise: true }),
+        body: JSON.stringify({ ...APP_CONFIG_DEFAULTS.appearance, surprise: true }),
       }),
     );
     expect(put.status).toBe(400);

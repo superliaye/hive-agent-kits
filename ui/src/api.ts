@@ -69,6 +69,7 @@ export type OAuthProvider = {
 // the server surfaces as a TypeScript error in the UI's discriminated
 // `renderBlock` switches — no silent drift.
 import type { ContentBlock } from "../../src/model-gateway/types.ts";
+import type { Preferences } from "./theming/index.ts";
 export type { ContentBlock };
 
 export type ThreadSummary = {
@@ -409,33 +410,14 @@ export const api = {
 
   // ─── Appearance ────────────────────────────────────────────────────
   // Theming module talks to this through a thin wrapper in
-  // `theming-hive-persistence.ts`. The wire shape mirrors the theming
-  // module's `Preferences` exactly.
-  getAppearance: (cfg: ApiConfig) => call<AppearanceWire>(cfg, "/api/appearance"),
-  putAppearance: (cfg: ApiConfig, prefs: AppearanceWire) =>
-    call<AppearanceWire>(cfg, "/api/appearance", {
+  // `theming-hive-persistence.ts`. The wire shape IS the theming
+  // module's `Preferences` type — no parallel wire definition.
+  // (Server-side the route is plumbed through the Config module under
+  // the `appearance` key per the fold.)
+  getAppearance: (cfg: ApiConfig) => call<Preferences>(cfg, "/api/appearance"),
+  putAppearance: (cfg: ApiConfig, prefs: Preferences) =>
+    call<Preferences>(cfg, "/api/appearance", {
       method: "PUT",
       body: JSON.stringify(prefs),
     }),
-};
-
-export type ThemeConfigWire = {
-  themeId?: string;
-  accent?: string;
-  background?: string;
-  foreground?: string;
-  fontUi?: string;
-  fontCode?: string;
-  fontUiSize?: number;
-  fontCodeSize?: number;
-  contrast?: number;
-  translucentSidebar?: boolean;
-};
-
-export type AppearanceWire = {
-  mode: "light" | "dark" | "system";
-  light: ThemeConfigWire;
-  dark: ThemeConfigWire;
-  reduceMotion: "system" | "on" | "off";
-  pointerCursors: boolean;
 };

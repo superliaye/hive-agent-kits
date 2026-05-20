@@ -5,8 +5,6 @@
 // parameter and a `case` here when they ship — reading this file gives
 // the full graph of who feeds the audit log.
 
-import type { Appearance } from "../appearance/index.ts";
-import type { AppearanceEvents } from "../appearance/types.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Catalog } from "../catalog/index.ts";
 import type { CatalogEvents } from "../catalog/types.ts";
@@ -25,7 +23,6 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   registry?: Registry;
   catalog?: Catalog;
   secrets?: Secrets;
-  appearance?: Appearance;
   runs?: RunExecutor;
   // Future:
   //   permission?: { events: TypedEmitter<PermissionEvents> }
@@ -70,22 +67,8 @@ const catalogNormalizer: Partial<Normalizer<CatalogEvents>> = {
 // Secrets: every event is user/agent-driven (read by agent for a Run,
 // write/refresh/remove by user via Settings). Payloads carry only the
 // provider key — never credential values or refs (ADR-0004 redaction).
-// Appearance: theme/font preference changes. User-driven, persisted, so
-// they belong in the audit log (under the existing `config` source since
-// appearance is conceptually a user-config). Payload is just the mode
-// picker — color values are not interesting in audit and could be a
-// privacy concern in a future shared-deployment scenario.
-const appearanceNormalizer: Normalizer<AppearanceEvents> = {
-  "appearance.read": (event) => ({
-    event_type: "appearance.read",
-    payload: { mode: event.mode },
-  }),
-  "appearance.changed": (event) => ({
-    event_type: "appearance.changed",
-    payload: { mode: event.mode },
-  }),
-};
-
+// (Appearance/theme changes flow through the Config module since the
+// fold; their audit rows are `config.change` events with key="appearance".)
 const secretsNormalizer: Normalizer<SecretEvents> = {
   "secret.read": (event) => ({
     event_type: "secret.read",
@@ -129,10 +112,6 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
 
   if (sources.secrets) {
     disposers.push(audit.attach("secrets", sources.secrets.events, secretsNormalizer));
-  }
-
-  if (sources.appearance) {
-    disposers.push(audit.attach("config", sources.appearance.events, appearanceNormalizer));
   }
 
   if (sources.runs) {
