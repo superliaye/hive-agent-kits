@@ -72,17 +72,17 @@ const catalogNormalizer: Partial<Normalizer<CatalogEvents>> = {
 // provider key — never credential values or refs (ADR-0004 redaction).
 // Appearance: theme/font preference changes. User-driven, persisted, so
 // they belong in the audit log (under the existing `config` source since
-// appearance is conceptually a user-config). Payload is just the preset
-// id — color values are not interesting in audit and could be a privacy
-// concern in a future shared-deployment scenario.
+// appearance is conceptually a user-config). Payload is just the mode
+// picker — color values are not interesting in audit and could be a
+// privacy concern in a future shared-deployment scenario.
 const appearanceNormalizer: Normalizer<AppearanceEvents> = {
   "appearance.read": (event) => ({
     event_type: "appearance.read",
-    payload: { presetId: event.presetId },
+    payload: { mode: event.mode },
   }),
   "appearance.changed": (event) => ({
     event_type: "appearance.changed",
-    payload: { presetId: event.presetId },
+    payload: { mode: event.mode },
   }),
 };
 

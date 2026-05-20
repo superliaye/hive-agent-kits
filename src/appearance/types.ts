@@ -1,48 +1,44 @@
 // Appearance module — types + Zod schemas for the user's theme + font
 // preferences. Persisted to `~/.hive/appearance.json` so the UI's theme
-// survives daemon restarts. Mirrors the Secrets module's shape: store +
-// persistence + events, narrow public Interface.
+// survives daemon restarts.
 //
-// The shape is intentionally a thin wire mirror of the theming module's
-// `Preferences` type (UI side). We hand-mirror — the theming module is
-// portable and has no Zod dependency; the daemon owns the HTTP-boundary
-// validation per AGENTS.md.
+// The shape mirrors the UI's portable theming module Preferences type.
+// We hand-mirror — the theming module is portable and has no Zod
+// dependency; the daemon owns HTTP-boundary validation per AGENTS.md.
 
 import { z } from "zod";
 
 export const APPEARANCE_FILE_VERSION = 1;
 
-// Free-form hex / named-color string at the wire — value validation is
-// the theming module's job on read. The daemon just guards shape.
 const ColorString = z.string().min(1).max(64);
+const FontString = z.string().min(1).max(256);
 
-const OverridesSchema = z
+const ThemeConfigSchema = z
   .object({
     accent: ColorString.optional(),
     background: ColorString.optional(),
     foreground: ColorString.optional(),
-  })
-  .strict();
-
-const FontsSchema = z
-  .object({
-    ui: z.string().min(1).max(256).optional(),
-    code: z.string().min(1).max(256).optional(),
+    fontUi: FontString.optional(),
+    fontCode: FontString.optional(),
+    fontUiSize: z.number().int().min(8).max(48).optional(),
+    fontCodeSize: z.number().int().min(8).max(48).optional(),
+    contrast: z.number().min(0).max(100).optional(),
+    translucentSidebar: z.boolean().optional(),
   })
   .strict();
 
 export const PreferencesSchema = z
   .object({
-    // Built-in preset id ("light" | "dark" | "dim" | "high-contrast") OR
-    // "system" to follow the OS preference. Stored as a string so future
-    // presets are additive at the wire.
-    presetId: z.string().min(1).max(64),
-    overrides: OverridesSchema.optional(),
-    fonts: FontsSchema.optional(),
+    mode: z.enum(["light", "dark", "system"]),
+    light: ThemeConfigSchema,
+    dark: ThemeConfigSchema,
+    reduceMotion: z.enum(["system", "on", "off"]),
+    pointerCursors: z.boolean(),
   })
   .strict();
 
 export type Preferences = z.infer<typeof PreferencesSchema>;
+export type ThemeConfig = z.infer<typeof ThemeConfigSchema>;
 
 export const AppearanceFileSchema = z.object({
   version: z.literal(APPEARANCE_FILE_VERSION),
@@ -51,17 +47,17 @@ export const AppearanceFileSchema = z.object({
 
 export type AppearanceFile = z.infer<typeof AppearanceFileSchema>;
 
-// Default preferences when no file exists yet. System-follow is the
-// expected first-launch behavior per ADR-0006's reactive-defaults pattern.
 export const DEFAULT_PREFERENCES: Preferences = {
-  presetId: "system",
+  mode: "system",
+  light: {},
+  dark: {},
+  reduceMotion: "system",
+  pointerCursors: false,
 };
 
-// Events emitted by the Appearance module. Audit subscribes via the
-// standard pattern (ADR-0004). Payloads carry the preset id but never
-// the full preferences object — the audit log shouldn't replay user-
-// chosen colors verbatim.
+// Audit payloads carry only the mode picker (which is non-sensitive
+// taste signal). Color values + per-mode configs stay out of the log.
 export type AppearanceEvents = {
-  "appearance.read": { presetId: string };
-  "appearance.changed": { presetId: string };
+  "appearance.read": { mode: Preferences["mode"] };
+  "appearance.changed": { mode: Preferences["mode"] };
 };

@@ -1,66 +1,74 @@
-// AppearanceSettings — the host-app side of theming. Consumes useTheme()
-// from the portable theming module. This file IS hive-aware (it sits in
-// hive's components/), so it can render hive-flavored copy and use hive's
-// existing styling conventions.
+// AppearanceSettings — Codex-style: mode picker (Light/Dark/System) with
+// a per-mode settings card below it that holds colors, fonts, sliders,
+// and toggles. Share group (Export to file / Copy theme / Import) sits
+// below.
 
 import { useRef, useState } from "react";
-import { FONT_OPTIONS, type Preferences, useTheme } from "../theming/index.ts";
-
-const SYSTEM_OPTION_ID = "system";
+import {
+  DEFAULT_CONTRAST,
+  DEFAULT_FONT_CODE_SIZE,
+  DEFAULT_FONT_UI_SIZE,
+  FONT_SUGGESTIONS,
+  type Mode,
+  type Preferences,
+  type ReduceMotion,
+  type ResolvedMode,
+  type ThemeConfig,
+  exportPreferencesWire,
+  paletteFor,
+  useTheme,
+} from "../theming/index.ts";
 
 export function AppearanceSettings(): JSX.Element {
   const theme = useTheme();
   const [importError, setImportError] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // System-follow is presented as a synthetic option alongside the real
-  // presets. Selecting it stores `presetId: "system"`; the theming module
-  // resolves to Light/Dark via matchMedia.
-  const allOptions: Array<{ id: string; name: string; mode: "light" | "dark" | "auto" }> = [
-    { id: SYSTEM_OPTION_ID, name: "System", mode: "auto" },
-    ...theme.presets.map((p) => ({ id: p.id, name: p.name, mode: p.mode })),
-  ];
+  const prefs = theme.preferences;
+  // The settings card edits the *configured* mode, defaulting to the
+  // currently-resolved mode when system-follow is active.
+  const [editingModeState, setEditingModeState] = useState<ResolvedMode | null>(null);
+  const editingMode: ResolvedMode =
+    editingModeState ?? (prefs.mode === "system" ? theme.resolved.resolvedMode : prefs.mode);
+  const editingConfig: ThemeConfig = editingMode === "dark" ? prefs.dark : prefs.light;
+  const palette = paletteFor(editingMode);
 
-  function changePreferences(patch: Partial<Preferences>): void {
-    void theme.setPreferences({ ...theme.preferences, ...patch });
+  function patchPrefs(patch: Partial<Preferences>): void {
+    void theme.setPreferences({ ...prefs, ...patch });
   }
 
-  function setOverride(
-    key: "accent" | "background" | "foreground",
-    value: string | undefined,
-  ): void {
-    const next = { ...(theme.preferences.overrides ?? {}) };
-    if (value === undefined || value === "") {
-      delete next[key];
-    } else {
-      next[key] = value;
+  function patchConfig(patch: Partial<ThemeConfig>): void {
+    const next = { ...editingConfig, ...patch };
+    // Drop undefined keys so the wire stays tidy.
+    for (const k of Object.keys(next) as (keyof ThemeConfig)[]) {
+      if (next[k] === undefined || next[k] === "") delete next[k];
     }
-    const cleaned = Object.keys(next).length === 0 ? undefined : next;
-    void theme.setPreferences({ ...theme.preferences, overrides: cleaned });
+    patchPrefs(editingMode === "dark" ? { dark: next } : { light: next });
   }
 
-  function setFont(key: "ui" | "code", value: string | undefined): void {
-    const next = { ...(theme.preferences.fonts ?? {}) };
-    if (value === undefined || value === "") {
-      delete next[key];
-    } else {
-      next[key] = value;
-    }
-    const cleaned = Object.keys(next).length === 0 ? undefined : next;
-    void theme.setPreferences({ ...theme.preferences, fonts: cleaned });
-  }
-
-  function onExportClick(): void {
+  function onExportFile(): void {
     const json = theme.exportPreferences();
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `hive-theme-${theme.preferences.presetId}.json`;
+    a.download = `hive-theme-${prefs.mode}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  async function onCopyTheme(): Promise<void> {
+    const wire = exportPreferencesWire(prefs);
+    try {
+      await navigator.clipboard.writeText(wire);
+      setCopyStatus("Copied!");
+    } catch {
+      setCopyStatus("Copy failed (clipboard blocked)");
+    }
+    window.setTimeout(() => setCopyStatus(null), 2000);
   }
 
   async function onImportFile(e: React.ChangeEvent<HTMLInputElement>): Promise<void> {
@@ -70,120 +78,189 @@ export function AppearanceSettings(): JSX.Element {
     const text = await file.text();
     const result = await theme.importPreferences(text);
     if (!result.ok) setImportError(result.error);
-    // Reset the input so the same file can be re-selected.
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  const overrides = theme.preferences.overrides ?? {};
-  const fonts = theme.preferences.fonts ?? {};
-  const currentUiFont = fonts.ui ?? "";
-  const currentCodeFont = fonts.code ?? "";
+  async function onPasteImport(): Promise<void> {
+    setImportError(null);
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      setImportError("Clipboard read blocked — use Import File instead");
+      return;
+    }
+    const result = await theme.importPreferences(text);
+    if (!result.ok) setImportError(result.error);
+  }
+
+  const modeOptions: Array<{ id: Mode; label: string }> = [
+    { id: "light", label: "Light" },
+    { id: "dark", label: "Dark" },
+    { id: "system", label: "System" },
+  ];
 
   return (
     <>
       <div className="section">
         <h3>Theme</h3>
         <p className="meta">
-          Active: <strong>{theme.resolved.preset.name}</strong>
+          Use light, dark, or match your system. Each mode keeps its own colors and fonts.
           {theme.resolved.fromSystem && (
-            <span className="meta"> (following system: {theme.resolved.preset.mode})</span>
+            <>
+              {" "}
+              Following system: <strong>{theme.resolved.resolvedMode}</strong>.
+            </>
           )}
         </p>
-        <div className="appearance-presets" data-testid="theme-presets">
-          {allOptions.map((opt) => {
-            const active = theme.preferences.presetId === opt.id;
-            const preset = theme.presets.find((p) => p.id === opt.id);
-            const swatches = preset
-              ? [
-                  preset.tokens["color-bg-base"],
-                  preset.tokens["color-bg-surface"],
-                  preset.tokens["color-accent"],
-                  preset.tokens["color-fg-default"],
-                ]
-              : null;
-            return (
-              <button
-                type="button"
-                key={opt.id}
-                className={`appearance-preset${active ? " active" : ""}`}
-                onClick={() => changePreferences({ presetId: opt.id })}
-                data-testid={`theme-preset-${opt.id}`}
-              >
-                <div className="appearance-preset-name">{opt.name}</div>
-                <div className="appearance-preset-mode">{opt.mode}</div>
-                {swatches && (
-                  <div className="appearance-preset-swatches">
-                    {swatches.map((c, i) => (
-                      <span
-                        // biome-ignore lint/suspicious/noArrayIndexKey: stable per preset
-                        key={i}
-                        className="appearance-swatch"
-                        style={{ background: c }}
-                      />
-                    ))}
-                  </div>
-                )}
-              </button>
-            );
-          })}
+        <div className="appearance-mode-row" data-testid="theme-mode-row">
+          {modeOptions.map((opt) => (
+            <button
+              type="button"
+              key={opt.id}
+              className={`appearance-mode-btn${prefs.mode === opt.id ? " active" : ""}`}
+              onClick={() => patchPrefs({ mode: opt.id })}
+              data-testid={`theme-mode-${opt.id}`}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
       </div>
 
       <div className="section">
-        <h3>Colors</h3>
+        <div className="appearance-card-header">
+          <h3>{editingMode === "dark" ? "Dark" : "Light"} theme</h3>
+          <div className="appearance-card-mode-toggle">
+            <button
+              type="button"
+              className={`appearance-sub-btn${editingMode === "light" ? " active" : ""}`}
+              onClick={() => setEditingModeState("light")}
+              aria-pressed={editingMode === "light"}
+            >
+              Light
+            </button>
+            <button
+              type="button"
+              className={`appearance-sub-btn${editingMode === "dark" ? " active" : ""}`}
+              onClick={() => setEditingModeState("dark")}
+              aria-pressed={editingMode === "dark"}
+            >
+              Dark
+            </button>
+          </div>
+        </div>
         <p className="meta">
-          Layer custom colors on top of the chosen theme. Leave a field blank to fall back to the
-          preset's value. Color inputs accept any CSS color string.
+          Edit this mode's palette and typography. These persist independently from the other mode.
         </p>
+
         <ColorOverride
           label="Accent"
-          value={overrides.accent ?? ""}
-          fallback={theme.resolved.preset.tokens["color-accent"] ?? "#000000"}
-          onChange={(v) => setOverride("accent", v)}
+          value={editingConfig.accent ?? ""}
+          fallback={palette.tokens["color-accent"] ?? "#000000"}
+          onChange={(v) => patchConfig({ accent: v })}
         />
         <ColorOverride
           label="Background"
-          value={overrides.background ?? ""}
-          fallback={theme.resolved.preset.tokens["color-bg-base"] ?? "#ffffff"}
-          onChange={(v) => setOverride("background", v)}
+          value={editingConfig.background ?? ""}
+          fallback={palette.tokens["color-bg-base"] ?? "#ffffff"}
+          onChange={(v) => patchConfig({ background: v })}
         />
         <ColorOverride
           label="Foreground"
-          value={overrides.foreground ?? ""}
-          fallback={theme.resolved.preset.tokens["color-fg-default"] ?? "#000000"}
-          onChange={(v) => setOverride("foreground", v)}
+          value={editingConfig.foreground ?? ""}
+          fallback={palette.tokens["color-fg-default"] ?? "#000000"}
+          onChange={(v) => patchConfig({ foreground: v })}
+        />
+
+        <FontInput
+          label="UI font"
+          value={editingConfig.fontUi ?? ""}
+          fallback={palette.tokens["font-ui"] ?? ""}
+          suggestions={FONT_SUGGESTIONS.ui}
+          onChange={(v) => patchConfig({ fontUi: v })}
+        />
+        <FontInput
+          label="Code font"
+          value={editingConfig.fontCode ?? ""}
+          fallback={palette.tokens["font-code"] ?? ""}
+          suggestions={FONT_SUGGESTIONS.code}
+          onChange={(v) => patchConfig({ fontCode: v })}
+        />
+
+        <SizeInput
+          label="UI font size"
+          value={editingConfig.fontUiSize ?? DEFAULT_FONT_UI_SIZE}
+          onChange={(v) => patchConfig({ fontUiSize: v })}
+        />
+        <SizeInput
+          label="Code font size"
+          value={editingConfig.fontCodeSize ?? DEFAULT_FONT_CODE_SIZE}
+          onChange={(v) => patchConfig({ fontCodeSize: v })}
+        />
+
+        <SliderRow
+          label="Contrast"
+          value={editingConfig.contrast ?? DEFAULT_CONTRAST}
+          onChange={(v) => patchConfig({ contrast: v })}
+        />
+
+        <ToggleRow
+          label="Translucent sidebar"
+          checked={editingConfig.translucentSidebar ?? false}
+          onChange={(v) => patchConfig({ translucentSidebar: v })}
         />
       </div>
 
       <div className="section">
-        <h3>Fonts</h3>
-        <FontPicker
-          label="UI"
-          options={FONT_OPTIONS.ui as readonly { name: string; value: string }[]}
-          value={currentUiFont}
-          fallback={theme.resolved.preset.tokens["font-ui"] ?? ""}
-          onChange={(v) => setFont("ui", v || undefined)}
+        <h3>Accessibility</h3>
+        <TriStateRow
+          label="Reduce motion"
+          description="Reduce animations or match your system"
+          value={prefs.reduceMotion}
+          onChange={(v) => patchPrefs({ reduceMotion: v })}
         />
-        <FontPicker
-          label="Code"
-          options={FONT_OPTIONS.code as readonly { name: string; value: string }[]}
-          value={currentCodeFont}
-          fallback={theme.resolved.preset.tokens["font-code"] ?? ""}
-          onChange={(v) => setFont("code", v || undefined)}
+        <ToggleRow
+          label="Use pointer cursors"
+          description="Change the cursor to a pointer when hovering over interactive elements"
+          checked={prefs.pointerCursors}
+          onChange={(v) => patchPrefs({ pointerCursors: v })}
         />
       </div>
 
       <div className="section">
         <h3>Share</h3>
-        <p className="meta">Export your current theme as JSON, or import one a friend shared.</p>
+        <p className="meta">
+          Copy a one-line wire form to share via chat, or export/import a JSON file.
+        </p>
         <div className="appearance-actions">
           <button
             type="button"
             className="button ghost"
-            onClick={onExportClick}
+            onClick={() => {
+              void onCopyTheme();
+            }}
+            data-testid="theme-copy"
+          >
+            {copyStatus ?? "Copy theme"}
+          </button>
+          <button
+            type="button"
+            className="button ghost"
+            onClick={() => {
+              void onPasteImport();
+            }}
+            data-testid="theme-paste"
+          >
+            Paste import
+          </button>
+          <button
+            type="button"
+            className="button ghost"
+            onClick={onExportFile}
             data-testid="theme-export"
           >
-            Export…
+            Export file…
           </button>
           <button
             type="button"
@@ -191,7 +268,7 @@ export function AppearanceSettings(): JSX.Element {
             onClick={() => fileInputRef.current?.click()}
             data-testid="theme-import"
           >
-            Import…
+            Import file…
           </button>
           <input
             ref={fileInputRef}
@@ -229,79 +306,212 @@ function ColorOverride({
   fallback: string;
   onChange: (next: string | undefined) => void;
 }): JSX.Element {
-  // The native color input only accepts `#rrggbb` (no named colors, no
-  // rgba). Use the text input for full CSS-string fidelity; the color
-  // picker is a convenience.
   const effective = value || fallback;
   const slug = label.toLowerCase().replace(/\s+/g, "-");
   return (
-    <div className="appearance-override-row">
-      <label htmlFor={`color-override-${slug}-text`}>{label}</label>
-      <div style={{ display: "flex", gap: 8 }}>
+    <div className="appearance-row">
+      <label htmlFor={`color-${slug}-text`}>{label}</label>
+      <div className="appearance-row-control">
         <input
-          id={`color-override-${slug}-picker`}
+          id={`color-${slug}-picker`}
           type="color"
           value={normalizeForColorInput(effective)}
           onChange={(e) => onChange(e.target.value)}
           aria-label={`${label} color picker`}
         />
         <input
-          id={`color-override-${slug}-text`}
+          id={`color-${slug}-text`}
           type="text"
           placeholder={fallback}
           value={value}
           onChange={(e) => onChange(e.target.value || undefined)}
           aria-label={`${label} color value`}
-          style={{ flex: 1 }}
         />
+        <button
+          type="button"
+          className="reset"
+          onClick={() => onChange(undefined)}
+          disabled={value === ""}
+          title={value === "" ? "No override" : "Reset to preset"}
+        >
+          Reset
+        </button>
       </div>
-      <button
-        type="button"
-        className="reset"
-        onClick={() => onChange(undefined)}
-        disabled={value === ""}
-        title={value === "" ? "No override" : "Reset to preset"}
-      >
-        Reset
-      </button>
     </div>
   );
 }
 
-function FontPicker({
+function FontInput({
   label,
-  options,
   value,
   fallback,
+  suggestions,
   onChange,
 }: {
   label: string;
-  options: readonly { name: string; value: string }[];
   value: string;
   fallback: string;
-  onChange: (next: string) => void;
+  suggestions: readonly { name: string; value: string }[];
+  onChange: (next: string | undefined) => void;
 }): JSX.Element {
-  // `value === ""` means "use preset default". Match the synthetic empty
-  // option in the select.
   const slug = label.toLowerCase().replace(/\s+/g, "-");
+  const listId = `font-${slug}-list`;
   return (
-    <div className="appearance-font-row">
-      <label htmlFor={`font-${slug}-select`}>{label}</label>
-      <select id={`font-${slug}-select`} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">(preset default — {truncate(fallback, 40)})</option>
-        {options.map((o) => (
-          <option key={o.name} value={o.value}>
-            {o.name}
-          </option>
-        ))}
-      </select>
+    <div className="appearance-row">
+      <label htmlFor={`font-${slug}-input`}>{label}</label>
+      <div className="appearance-row-control">
+        <input
+          id={`font-${slug}-input`}
+          type="text"
+          list={listId}
+          placeholder={truncate(fallback, 60)}
+          value={value}
+          onChange={(e) => onChange(e.target.value || undefined)}
+        />
+        <datalist id={listId}>
+          {suggestions.map((s) => (
+            <option key={s.name} value={s.value} label={s.name} />
+          ))}
+        </datalist>
+        <button
+          type="button"
+          className="reset"
+          onClick={() => onChange(undefined)}
+          disabled={value === ""}
+        >
+          Reset
+        </button>
+      </div>
     </div>
   );
 }
 
-// `<input type="color">` requires a 7-char `#rrggbb`. Anything else (named
-// colors, `var(--…)`, rgba) gets normalized to black so the picker still
-// renders; the text input retains full fidelity.
+function SizeInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (next: number | undefined) => void;
+}): JSX.Element {
+  const slug = label.toLowerCase().replace(/\s+/g, "-");
+  return (
+    <div className="appearance-row">
+      <label htmlFor={`size-${slug}-input`}>{label}</label>
+      <div className="appearance-row-control appearance-row-control--narrow">
+        <input
+          id={`size-${slug}-input`}
+          type="number"
+          min={8}
+          max={48}
+          value={value}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            if (!Number.isFinite(n)) return;
+            onChange(n);
+          }}
+        />
+        <span className="meta">px</span>
+      </div>
+    </div>
+  );
+}
+
+function SliderRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (next: number) => void;
+}): JSX.Element {
+  const slug = label.toLowerCase().replace(/\s+/g, "-");
+  return (
+    <div className="appearance-row">
+      <label htmlFor={`slider-${slug}`}>{label}</label>
+      <div className="appearance-row-control">
+        <input
+          id={`slider-${slug}`}
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+        />
+        <span className="meta appearance-slider-value">{value}</span>
+      </div>
+    </div>
+  );
+}
+
+function ToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string;
+  description?: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+}): JSX.Element {
+  const slug = label.toLowerCase().replace(/\s+/g, "-");
+  return (
+    <div className="appearance-row">
+      <div className="appearance-row-label">
+        <label htmlFor={`toggle-${slug}`}>{label}</label>
+        {description && <span className="meta">{description}</span>}
+      </div>
+      <div className="appearance-row-control">
+        <input
+          id={`toggle-${slug}`}
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+      </div>
+    </div>
+  );
+}
+
+function TriStateRow({
+  label,
+  description,
+  value,
+  onChange,
+}: {
+  label: string;
+  description?: string;
+  value: ReduceMotion;
+  onChange: (next: ReduceMotion) => void;
+}): JSX.Element {
+  const opts: ReduceMotion[] = ["system", "on", "off"];
+  return (
+    <div className="appearance-row">
+      <div className="appearance-row-label">
+        <span>{label}</span>
+        {description && <span className="meta">{description}</span>}
+      </div>
+      <div className="appearance-row-control appearance-tri-state">
+        {opts.map((opt) => (
+          <button
+            type="button"
+            key={opt}
+            className={`appearance-sub-btn${value === opt ? " active" : ""}`}
+            onClick={() => onChange(opt)}
+            aria-pressed={value === opt}
+          >
+            {opt.charAt(0).toUpperCase() + opt.slice(1)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function normalizeForColorInput(value: string): string {
   if (/^#[0-9a-f]{6}$/i.test(value)) return value;
   if (/^#[0-9a-f]{3}$/i.test(value)) {

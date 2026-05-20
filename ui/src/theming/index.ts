@@ -14,26 +14,33 @@ export { ThemeProvider } from "./ThemeProvider.tsx";
 export type { ThemeContextValue, ThemeProviderProps } from "./ThemeProvider.tsx";
 export { useTheme } from "./useTheme.ts";
 export {
-  BUILT_IN_PRESETS,
-  DARK_PRESET,
-  DIM_PRESET,
-  FONT_OPTIONS,
-  HIGH_CONTRAST_PRESET,
-  LIGHT_PRESET,
-  defaultPresetForMode,
-  findPresetById,
+  DARK_PALETTE,
+  DEFAULT_CONTRAST,
+  DEFAULT_FONT_CODE,
+  DEFAULT_FONT_CODE_SIZE,
+  DEFAULT_FONT_UI,
+  DEFAULT_FONT_UI_SIZE,
+  FONT_SUGGESTIONS,
+  LIGHT_PALETTE,
+  paletteFor,
 } from "./presets.ts";
 export type {
+  Mode,
+  ModePalette,
   Persistence,
   Preferences,
+  ReduceMotion,
+  ResolvedMode,
   ResolvedTheme,
-  Theme,
+  ThemeConfig,
   TokenMap,
   TokenName,
 } from "./types.ts";
 export {
   PREFERENCES_FILE_VERSION,
+  THEME_WIRE_PREFIX,
   exportPreferences,
+  exportPreferencesWire,
   importPreferences,
 } from "./serialize.ts";
 export type { ImportResult, PreferencesFile } from "./serialize.ts";

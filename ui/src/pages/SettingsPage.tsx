@@ -10,7 +10,7 @@ export function SettingsPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Eleme
       <div className="section">
         <h3>Appearance</h3>
         <p className="meta">
-          Theme, accent / background / foreground colors, and fonts. Preferences live in{" "}
+          Theme mode, per-mode palette + typography, accessibility toggles. Preferences live in{" "}
           <code>~/.hive/appearance.json</code>. The theming layer is a portable module — see{" "}
           <code>ui/src/theming/README.md</code>.
         </p>

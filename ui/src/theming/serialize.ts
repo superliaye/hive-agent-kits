@@ -1,12 +1,14 @@
-// JSON export/import for Preferences. Used by the Settings UI to
-// download/upload theme files so users can share with friends.
+// Serialize/parse Preferences for share-with-friends. Two surface forms:
+//   - File export: plain JSON, downloadable.
+//   - Clipboard copy: same JSON prefixed with `codex-theme-v1:` so it can
+//     be pasted into any text field and round-tripped.
 //
-// Schema is intentionally explicit + versioned so a v2 export can
-// migrate v1 inputs forward without ambiguity. The validator is hand-
-// written — the theming module has no Zod dependency.
+// importPreferences accepts both forms (strips the prefix if present).
+// Validation is structural only — color/font strings pass through.
 
-import type { Preferences } from "./types.ts";
+import type { Preferences, ReduceMotion, ThemeConfig } from "./types.ts";
 
+export const THEME_WIRE_PREFIX = "codex-theme-v1:";
 export const PREFERENCES_FILE_VERSION = 1;
 
 export type PreferencesFile = {
@@ -14,10 +16,7 @@ export type PreferencesFile = {
   preferences: Preferences;
 };
 
-/**
- * Serialize current preferences to a JSON string suitable for download.
- * The result includes a `version` field for forward compatibility.
- */
+/** JSON-only form for file download. */
 export function exportPreferences(prefs: Preferences): string {
   const out: PreferencesFile = {
     version: PREFERENCES_FILE_VERSION,
@@ -26,18 +25,21 @@ export function exportPreferences(prefs: Preferences): string {
   return JSON.stringify(out, null, 2);
 }
 
+/** Wire form for clipboard copy/paste (single line, prefix-tagged). */
+export function exportPreferencesWire(prefs: Preferences): string {
+  const out: PreferencesFile = {
+    version: PREFERENCES_FILE_VERSION,
+    preferences: prefs,
+  };
+  return `${THEME_WIRE_PREFIX}${JSON.stringify(out)}`;
+}
+
 export type ImportResult = { ok: true; preferences: Preferences } | { ok: false; error: string };
 
-/**
- * Parse + structurally validate a JSON string. No throws; returns a
- * tagged result so the caller can render a friendly error inline.
- *
- * Validation is structural only — color strings and font stacks are
- * passed through. Bad colors render as the browser's invalid-color
- * fallback (transparent / black); that's acceptable as a user-facing
- * "you imported a broken theme" signal.
- */
-export function importPreferences(json: string): ImportResult {
+export function importPreferences(text: string): ImportResult {
+  let json = text.trim();
+  if (json.startsWith(THEME_WIRE_PREFIX)) json = json.slice(THEME_WIRE_PREFIX.length).trim();
+
   let raw: unknown;
   try {
     raw = JSON.parse(json);
@@ -56,51 +58,66 @@ export function importPreferences(json: string): ImportResult {
     return { ok: false, error: "missing `preferences` object" };
   }
   const p = prefs as Record<string, unknown>;
-  if (typeof p.presetId !== "string" || p.presetId.length === 0) {
-    return { ok: false, error: "preferences.presetId must be a non-empty string" };
-  }
-  const out: Preferences = { presetId: p.presetId };
 
-  if (p.overrides !== undefined) {
-    if (!p.overrides || typeof p.overrides !== "object") {
-      return { ok: false, error: "preferences.overrides must be an object" };
-    }
-    const ov = p.overrides as Record<string, unknown>;
-    const cleaned: Preferences["overrides"] = {};
-    if (ov.accent !== undefined) {
-      if (typeof ov.accent !== "string")
-        return { ok: false, error: "overrides.accent must be a string" };
-      cleaned.accent = ov.accent;
-    }
-    if (ov.background !== undefined) {
-      if (typeof ov.background !== "string")
-        return { ok: false, error: "overrides.background must be a string" };
-      cleaned.background = ov.background;
-    }
-    if (ov.foreground !== undefined) {
-      if (typeof ov.foreground !== "string")
-        return { ok: false, error: "overrides.foreground must be a string" };
-      cleaned.foreground = ov.foreground;
-    }
-    if (Object.keys(cleaned).length > 0) out.overrides = cleaned;
+  if (p.mode !== "light" && p.mode !== "dark" && p.mode !== "system") {
+    return { ok: false, error: 'preferences.mode must be "light" | "dark" | "system"' };
   }
 
-  if (p.fonts !== undefined) {
-    if (!p.fonts || typeof p.fonts !== "object") {
-      return { ok: false, error: "preferences.fonts must be an object" };
-    }
-    const f = p.fonts as Record<string, unknown>;
-    const cleaned: Preferences["fonts"] = {};
-    if (f.ui !== undefined) {
-      if (typeof f.ui !== "string") return { ok: false, error: "fonts.ui must be a string" };
-      cleaned.ui = f.ui;
-    }
-    if (f.code !== undefined) {
-      if (typeof f.code !== "string") return { ok: false, error: "fonts.code must be a string" };
-      cleaned.code = f.code;
-    }
-    if (Object.keys(cleaned).length > 0) out.fonts = cleaned;
+  const light = parseConfig(p.light, "light");
+  if ("error" in light) return { ok: false, error: light.error };
+  const dark = parseConfig(p.dark, "dark");
+  if ("error" in dark) return { ok: false, error: dark.error };
+
+  if (
+    p.reduceMotion !== undefined &&
+    p.reduceMotion !== "system" &&
+    p.reduceMotion !== "on" &&
+    p.reduceMotion !== "off"
+  ) {
+    return { ok: false, error: 'preferences.reduceMotion must be "system" | "on" | "off"' };
+  }
+  if (p.pointerCursors !== undefined && typeof p.pointerCursors !== "boolean") {
+    return { ok: false, error: "preferences.pointerCursors must be a boolean" };
   }
 
-  return { ok: true, preferences: out };
+  return {
+    ok: true,
+    preferences: {
+      mode: p.mode,
+      light: light.config,
+      dark: dark.config,
+      reduceMotion: (p.reduceMotion as ReduceMotion | undefined) ?? "system",
+      pointerCursors: (p.pointerCursors as boolean | undefined) ?? false,
+    },
+  };
+}
+
+function parseConfig(value: unknown, key: string): { config: ThemeConfig } | { error: string } {
+  if (value === undefined) return { config: {} };
+  if (!value || typeof value !== "object") {
+    return { error: `preferences.${key} must be an object` };
+  }
+  const c = value as Record<string, unknown>;
+  const out: ThemeConfig = {};
+  for (const k of ["accent", "background", "foreground", "fontUi", "fontCode"] as const) {
+    const v = c[k];
+    if (v === undefined) continue;
+    if (typeof v !== "string") return { error: `preferences.${key}.${k} must be a string` };
+    out[k] = v;
+  }
+  for (const k of ["fontUiSize", "fontCodeSize", "contrast"] as const) {
+    const v = c[k];
+    if (v === undefined) continue;
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      return { error: `preferences.${key}.${k} must be a number` };
+    }
+    out[k] = v;
+  }
+  if (c.translucentSidebar !== undefined) {
+    if (typeof c.translucentSidebar !== "boolean") {
+      return { error: `preferences.${key}.translucentSidebar must be a boolean` };
+    }
+    out.translucentSidebar = c.translucentSidebar;
+  }
+  return { config: out };
 }

@@ -41,14 +41,14 @@ export function createAppearanceStore(
     events,
 
     get() {
-      void events.emit("appearance.read", { presetId: current.presetId });
+      void events.emit("appearance.read", { mode: current.mode });
       return current;
     },
 
     set(prefs) {
       current = prefs;
       flush();
-      void events.emit("appearance.changed", { presetId: current.presetId });
+      void events.emit("appearance.changed", { mode: current.mode });
     },
 
     snapshot() {

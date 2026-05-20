@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DEFAULT_PREFERENCES, type Preferences } from "../../appearance/types.ts";
 import { type ServerHandles, createServer } from "../index.ts";
 
 const TOKEN = "test-token";
@@ -51,40 +52,52 @@ describe("server routes — appearance", () => {
   test("GET /api/appearance returns default preferences initially", async () => {
     const res = await server.app.fetch(authed("/api/appearance"));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { presetId: string };
-    expect(body.presetId).toBe("system");
+    const body = (await res.json()) as Preferences;
+    expect(body).toEqual(DEFAULT_PREFERENCES);
   });
 
   test("PUT /api/appearance replaces preferences", async () => {
+    const next: Preferences = { ...DEFAULT_PREFERENCES, mode: "dark" };
     const put = await server.app.fetch(
-      authed("/api/appearance", {
-        method: "PUT",
-        body: JSON.stringify({ presetId: "dark" }),
-      }),
+      authed("/api/appearance", { method: "PUT", body: JSON.stringify(next) }),
     );
     expect(put.status).toBe(200);
     const after = await server.app.fetch(authed("/api/appearance"));
-    const body = (await after.json()) as { presetId: string };
-    expect(body.presetId).toBe("dark");
+    const body = (await after.json()) as Preferences;
+    expect(body).toEqual(next);
   });
 
-  test("PUT accepts full preferences shape (overrides + fonts)", async () => {
-    const prefs = {
-      presetId: "dim",
-      overrides: { accent: "#4a8eff", background: "#0d1117" },
-      fonts: { ui: '"Inter", sans-serif', code: '"Fira Code", monospace' },
+  test("PUT accepts full preferences shape (per-mode configs)", async () => {
+    const prefs: Preferences = {
+      mode: "dark",
+      light: { accent: "#0a0a0f", fontUiSize: 15 },
+      dark: {
+        accent: "#4a8eff",
+        background: "#0d1117",
+        fontUi: '"Inter", sans-serif',
+        fontCode: '"Fira Code", monospace',
+        fontUiSize: 16,
+        fontCodeSize: 13,
+        contrast: 60,
+        translucentSidebar: true,
+      },
+      reduceMotion: "on",
+      pointerCursors: true,
     };
     const put = await server.app.fetch(
       authed("/api/appearance", { method: "PUT", body: JSON.stringify(prefs) }),
     );
     expect(put.status).toBe(200);
-    const body = (await put.json()) as typeof prefs;
+    const body = (await put.json()) as Preferences;
     expect(body).toEqual(prefs);
   });
 
-  test("PUT rejects empty presetId with 400", async () => {
+  test("PUT rejects invalid mode with 400", async () => {
     const put = await server.app.fetch(
-      authed("/api/appearance", { method: "PUT", body: JSON.stringify({ presetId: "" }) }),
+      authed("/api/appearance", {
+        method: "PUT",
+        body: JSON.stringify({ ...DEFAULT_PREFERENCES, mode: "weird" }),
+      }),
     );
     expect(put.status).toBe(400);
   });
@@ -93,7 +106,7 @@ describe("server routes — appearance", () => {
     const put = await server.app.fetch(
       authed("/api/appearance", {
         method: "PUT",
-        body: JSON.stringify({ presetId: "dark", surprise: true }),
+        body: JSON.stringify({ ...DEFAULT_PREFERENCES, surprise: true }),
       }),
     );
     expect(put.status).toBe(400);

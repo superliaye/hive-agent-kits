@@ -11,7 +11,7 @@
 import { type ApiConfig, api } from "./api.ts";
 import type { Persistence, Preferences } from "./theming/index.ts";
 
-const CACHE_KEY = "hive.appearance.preferences.v1";
+const CACHE_KEY = "hive.appearance.preferences.v2";
 
 /** Synchronous read of the localStorage paint-cache. Returns undefined when absent. */
 export function readBootstrap(): Preferences | undefined {
@@ -22,7 +22,7 @@ export function readBootstrap(): Preferences | undefined {
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return undefined;
     const p = parsed as Record<string, unknown>;
-    if (typeof p.presetId !== "string") return undefined;
+    if (p.mode !== "light" && p.mode !== "dark" && p.mode !== "system") return undefined;
     return parsed as Preferences;
   } catch {
     return undefined;

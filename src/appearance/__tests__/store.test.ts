@@ -22,20 +22,27 @@ describe("createAppearanceStore", () => {
     const store = createAppearanceStore(EMPTY);
     const log: string[] = [];
     store.events.on("appearance.changed", (e) => {
-      log.push(e.presetId);
+      log.push(e.mode);
     });
-    store.set({ presetId: "dark" });
-    expect(store.get()).toEqual({ presetId: "dark" });
+    store.set({ ...DEFAULT_PREFERENCES, mode: "dark" });
+    expect(store.get()).toEqual({ ...DEFAULT_PREFERENCES, mode: "dark" });
     await Promise.resolve();
     expect(log).toEqual(["dark"]);
   });
 
-  test("set with overrides + fonts roundtrips through get", () => {
+  test("set with per-mode overrides + fonts roundtrips through get", () => {
     const store = createAppearanceStore(EMPTY);
     const prefs = {
-      presetId: "dim",
-      overrides: { accent: "#4a8eff" },
-      fonts: { code: '"JetBrains Mono", monospace' },
+      mode: "dark" as const,
+      light: {},
+      dark: {
+        accent: "#4a8eff",
+        fontCode: '"JetBrains Mono", monospace',
+        fontCodeSize: 14,
+        contrast: 65,
+      },
+      reduceMotion: "system" as const,
+      pointerCursors: false,
     };
     store.set(prefs);
     expect(store.get()).toEqual(prefs);
@@ -45,11 +52,11 @@ describe("createAppearanceStore", () => {
     const store = createAppearanceStore(EMPTY);
     const log: string[] = [];
     store.events.on("appearance.read", (e) => {
-      log.push(e.presetId);
+      log.push(e.mode);
     });
     store.get();
     await Promise.resolve();
-    expect(log).toEqual([DEFAULT_PREFERENCES.presetId]);
+    expect(log).toEqual([DEFAULT_PREFERENCES.mode]);
   });
 });
 
@@ -61,8 +68,18 @@ describe("createAppearance (memory mode)", () => {
 
   test("set + get roundtrips", () => {
     const a = createAppearance({ mode: "memory" });
-    a.set({ presetId: "high-contrast", overrides: { background: "#000" } });
-    expect(a.get()).toEqual({ presetId: "high-contrast", overrides: { background: "#000" } });
+    a.set({
+      ...DEFAULT_PREFERENCES,
+      mode: "dark",
+      dark: { background: "#000" },
+      pointerCursors: true,
+    });
+    expect(a.get()).toEqual({
+      ...DEFAULT_PREFERENCES,
+      mode: "dark",
+      dark: { background: "#000" },
+      pointerCursors: true,
+    });
   });
 });
 
@@ -81,9 +98,9 @@ describe("createAppearance (file mode)", () => {
 
   test("persists across new instances", () => {
     const a = createAppearance({ mode: "file", path });
-    a.set({ presetId: "dark" });
+    a.set({ ...DEFAULT_PREFERENCES, mode: "dark" });
     const b = createAppearance({ mode: "file", path });
-    expect(b.get()).toEqual({ presetId: "dark" });
+    expect(b.get()).toEqual({ ...DEFAULT_PREFERENCES, mode: "dark" });
   });
 
   test("returns defaults when file is missing", () => {
@@ -93,15 +110,14 @@ describe("createAppearance (file mode)", () => {
 
   test("atomic write leaves no .tmp on disk", () => {
     const a = createAppearance({ mode: "file", path });
-    a.set({ presetId: "light" });
+    a.set({ ...DEFAULT_PREFERENCES, mode: "light" });
     expect(existsSync(`${path}.tmp`)).toBe(false);
     expect(existsSync(path)).toBe(true);
   });
 
   test("read throws on shape violation", () => {
     const p = new AppearancePersistence(path);
-    p.write({ version: APPEARANCE_FILE_VERSION, preferences: { presetId: "x" } });
-    // Corrupt by writing bad JSON via direct File API.
+    p.write({ version: APPEARANCE_FILE_VERSION, preferences: DEFAULT_PREFERENCES });
     Bun.write(path, JSON.stringify({ version: 999, preferences: {} }));
     const p2 = new AppearancePersistence(path);
     expect(() => p2.read()).toThrow();

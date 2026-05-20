@@ -18,9 +18,16 @@ body,
 }
 body {
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: var(--font-size-ui);
   color: var(--color-fg-default);
   background: var(--color-bg-base);
+}
+code,
+kbd,
+pre,
+.code {
+  font-family: var(--font-code);
+  font-size: var(--font-size-code);
 }
 
 .app {
@@ -56,7 +63,11 @@ body {
 .sidebar {
   width: 260px;
   border-right: 1px solid var(--color-border-default);
-  background: var(--color-bg-surface);
+  background: color-mix(
+    in srgb,
+    var(--color-bg-surface) calc(var(--sidebar-opacity) * 100%),
+    transparent
+  );
   overflow: auto;
 }
 .sidebar h2 {
@@ -759,65 +770,105 @@ pre.config {
   color: #d0a8f0;
 }
 
-/* Appearance settings */
-.appearance-presets {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
-  margin-top: 8px;
-}
-.appearance-preset {
-  border: 2px solid var(--color-border-default);
-  border-radius: 6px;
-  padding: 10px 12px;
-  cursor: pointer;
-  background: var(--color-bg-surface);
-  color: var(--color-fg-default);
-  text-align: left;
-  font: inherit;
-}
-.appearance-preset:hover {
-  border-color: var(--color-border-strong);
-}
-.appearance-preset.active {
-  border-color: var(--color-accent);
-}
-.appearance-preset-name {
-  font-weight: 500;
-}
-.appearance-preset-mode {
-  font-size: 11px;
-  color: var(--color-fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-top: 2px;
-}
-.appearance-preset-swatches {
-  display: flex;
-  gap: 4px;
-  margin-top: 8px;
-}
-.appearance-swatch {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
+/* Appearance settings — Codex-style mode picker + per-mode settings card */
+
+.appearance-mode-row {
+  display: inline-flex;
   border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+.appearance-mode-btn {
+  padding: 6px 14px;
+  border: none;
+  background: var(--color-bg-surface);
+  color: var(--color-fg-muted);
+  font: inherit;
+  cursor: pointer;
+  border-right: 1px solid var(--color-border-default);
+}
+.appearance-mode-btn:last-child {
+  border-right: none;
+}
+.appearance-mode-btn:hover {
+  color: var(--color-fg-default);
+}
+.appearance-mode-btn.active {
+  background: var(--color-accent);
+  color: var(--color-fg-on-accent);
 }
 
-.appearance-override-row {
+.appearance-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.appearance-card-mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.appearance-sub-btn {
+  padding: 4px 10px;
+  border: none;
+  background: var(--color-bg-surface);
+  color: var(--color-fg-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-right: 1px solid var(--color-border-default);
+}
+.appearance-sub-btn:last-child {
+  border-right: none;
+}
+.appearance-sub-btn.active {
+  background: var(--color-bg-hover);
+  color: var(--color-fg-default);
+}
+
+.appearance-row {
   display: grid;
-  grid-template-columns: 110px 1fr auto;
-  gap: 10px;
+  grid-template-columns: 150px 1fr;
+  gap: 12px;
   align-items: center;
   padding: 6px 0;
 }
-.appearance-override-row label {
+.appearance-row > label,
+.appearance-row-label {
   font-size: 12px;
   color: var(--color-fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.appearance-override-row input[type="color"] {
+.appearance-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.appearance-row-label label,
+.appearance-row-label > span:first-child {
+  font-size: 12px;
+  color: var(--color-fg-default);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.appearance-row-label .meta {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+}
+.appearance-row-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.appearance-row-control--narrow input[type="number"] {
+  width: 70px;
+}
+.appearance-row-control input[type="color"] {
   height: 28px;
   width: 50px;
   border: 1px solid var(--color-border-default);
@@ -825,8 +876,10 @@ pre.config {
   padding: 0;
   background: transparent;
   cursor: pointer;
+  flex-shrink: 0;
 }
-.appearance-override-row input[type="text"] {
+.appearance-row-control input[type="text"],
+.appearance-row-control input[type="number"] {
   padding: 6px 8px;
   border: 1px solid var(--color-border-strong);
   border-radius: 4px;
@@ -834,8 +887,25 @@ pre.config {
   background: var(--color-bg-surface);
   color: var(--color-fg-default);
   font-family: var(--font-code);
+  font-size: var(--font-size-code);
+  flex: 1;
+  min-width: 0;
 }
-.appearance-override-row .reset {
+.appearance-row-control input[type="range"] {
+  flex: 1;
+  accent-color: var(--color-accent);
+}
+.appearance-row-control input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-accent);
+}
+.appearance-slider-value {
+  min-width: 28px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.appearance-row-control .reset {
   background: transparent;
   border: 1px solid var(--color-border-default);
   border-radius: 4px;
@@ -843,32 +913,22 @@ pre.config {
   cursor: pointer;
   font-size: 11px;
   color: var(--color-fg-muted);
+  flex-shrink: 0;
 }
-
-.appearance-font-row {
-  display: grid;
-  grid-template-columns: 110px 1fr;
-  gap: 10px;
-  align-items: center;
-  padding: 6px 0;
+.appearance-tri-state {
+  display: inline-flex;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  overflow: hidden;
+  width: max-content;
 }
-.appearance-font-row label {
-  font-size: 12px;
-  color: var(--color-fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.appearance-font-row select {
-  padding: 6px 8px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 4px;
-  font: inherit;
-  background: var(--color-bg-surface);
-  color: var(--color-fg-default);
+.appearance-tri-state .appearance-sub-btn {
+  padding: 4px 12px;
 }
 
 .appearance-actions {
   display: flex;
   gap: 8px;
   margin-top: 10px;
+  flex-wrap: wrap;
 }

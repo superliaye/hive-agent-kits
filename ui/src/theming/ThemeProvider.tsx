@@ -1,8 +1,8 @@
-// ThemeProvider — applies tokens to `:root` and exposes the active state
-// via context. No styled-component framework involved: CSS variables are
-// the only mechanism, and the rest of the app reads them via `var(--…)`.
+// ThemeProvider — resolves Preferences to a TokenMap and applies it to
+// `:root` as CSS variables. Also sets data-* attributes that app CSS can
+// branch on (data-theme, data-reduce-motion, data-pointer-cursors).
 //
-// Rendering model: the resolved TokenMap is applied imperatively in an
+// Rendering model: the resolved tokens are applied imperatively in an
 // effect via `style.setProperty`. That keeps theme switches fast (no
 // React re-render of styled subtrees) and side-effect-isolated.
 
@@ -15,70 +15,99 @@ import {
   useRef,
   useState,
 } from "react";
-import { BUILT_IN_PRESETS, defaultPresetForMode, findPresetById } from "./presets.ts";
+import {
+  DEFAULT_CONTRAST,
+  DEFAULT_FONT_CODE_SIZE,
+  DEFAULT_FONT_UI_SIZE,
+  paletteFor,
+} from "./presets.ts";
 import { importPreferences as deserialize, exportPreferences as serialize } from "./serialize.ts";
 import { getSystemMode, watchSystemMode } from "./system.ts";
-import type { Persistence, Preferences, ResolvedTheme, Theme, TokenMap } from "./types.ts";
-
-const SYSTEM_ID = "system";
+import type {
+  Persistence,
+  Preferences,
+  ResolvedMode,
+  ResolvedTheme,
+  ThemeConfig,
+  TokenMap,
+} from "./types.ts";
 
 export type ThemeContextValue = {
-  /** Resolved active theme — preset + applied tokens. */
   resolved: ResolvedTheme;
-  /** User-facing preferences (presetId, overrides, fonts). */
   preferences: Preferences;
-  /** All available presets (built-ins + caller extras). */
-  presets: readonly Theme[];
   /** Update preferences. Persists asynchronously; UI updates immediately. */
   setPreferences: (next: Preferences) => Promise<void>;
-  /** Export current preferences as a JSON string (caller triggers download). */
+  /** Export current preferences as a string (with codex-theme-v1: prefix). */
   exportPreferences: () => string;
-  /** Import a JSON string. Returns `{ok}` on success; on success, persists. */
+  /** Import a string (with or without prefix). Returns tagged result. */
   importPreferences: (
-    json: string,
+    text: string,
   ) => Promise<{ ok: true; preferences: Preferences } | { ok: false; error: string }>;
-  /** True once initial persisted state has been loaded. */
   ready: boolean;
-  /** Last save error, if any (network failure, etc.). */
   saveError: string | null;
 };
 
 export const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export type ThemeProviderProps = {
-  /** Caller-supplied persistence adapter. Module never imports storage. */
   persistence: Persistence;
-  /** Additional presets to expose alongside BUILT_IN_PRESETS. */
-  extraPresets?: readonly Theme[];
-  /**
-   * Preferences to use until persistence resolves on first paint. The
-   * caller can pass a `localStorage`-cached value here for instant
-   * paint with no flash. When omitted, system-follow defaults are used.
-   */
+  /** Preferences for the first paint before persistence resolves. */
   bootstrap?: Preferences;
   children: ReactNode;
 };
 
-const DEFAULT_BOOTSTRAP: Preferences = { presetId: SYSTEM_ID };
+const DEFAULT_BOOTSTRAP: Preferences = {
+  mode: "system",
+  light: {},
+  dark: {},
+  reduceMotion: "system",
+  pointerCursors: false,
+};
+
+function resolveMode(prefs: Preferences, systemMode: ResolvedMode): ResolvedMode {
+  if (prefs.mode === "light" || prefs.mode === "dark") return prefs.mode;
+  return systemMode;
+}
+
+function buildTokens(config: ThemeConfig, mode: ResolvedMode): TokenMap {
+  const palette = paletteFor(mode);
+  const tokens: TokenMap = { ...palette.tokens };
+
+  if (config.accent) {
+    tokens["color-accent"] = config.accent;
+  }
+  if (config.background) tokens["color-bg-base"] = config.background;
+  if (config.foreground) tokens["color-fg-default"] = config.foreground;
+  if (config.fontUi) tokens["font-ui"] = config.fontUi;
+  if (config.fontCode) tokens["font-code"] = config.fontCode;
+
+  const uiSize = config.fontUiSize ?? DEFAULT_FONT_UI_SIZE;
+  const codeSize = config.fontCodeSize ?? DEFAULT_FONT_CODE_SIZE;
+  tokens["font-size-ui"] = `${uiSize}px`;
+  tokens["font-size-code"] = `${codeSize}px`;
+
+  // Contrast: blend fg-default toward bg-base. 100 = pure fg-default
+  // (max contrast), 0 = pure bg-base (no contrast). Default 50 ≈ neutral.
+  const contrast = config.contrast ?? DEFAULT_CONTRAST;
+  const clamped = Math.max(0, Math.min(100, contrast));
+  tokens["color-fg-muted"] =
+    `color-mix(in srgb, ${tokens["color-fg-default"]} ${clamped}%, ${tokens["color-bg-base"]})`;
+
+  tokens["sidebar-opacity"] = config.translucentSidebar ? "0.78" : "1";
+
+  return tokens;
+}
 
 export function ThemeProvider({
   persistence,
-  extraPresets,
   bootstrap,
   children,
 }: ThemeProviderProps): JSX.Element {
-  const presets = useMemo<readonly Theme[]>(
-    () => [...BUILT_IN_PRESETS, ...(extraPresets ?? [])],
-    [extraPresets],
-  );
   const [preferences, setPreferencesState] = useState<Preferences>(bootstrap ?? DEFAULT_BOOTSTRAP);
-  const [systemMode, setSystemMode] = useState<"light" | "dark">(getSystemMode);
+  const [systemMode, setSystemMode] = useState<ResolvedMode>(getSystemMode);
   const [ready, setReady] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Load persisted prefs on mount. If load fails we keep bootstrap state
-  // and surface no error — the user can still pick a theme manually; the
-  // failure to load is a startup detail, not a user-facing error.
   useEffect(() => {
     let cancelled = false;
     void persistence
@@ -96,37 +125,22 @@ export function ThemeProvider({
     };
   }, [persistence]);
 
-  // Watch OS preference changes; only material when presetId === "system".
   useEffect(() => {
     return watchSystemMode((m) => setSystemMode(m));
   }, []);
 
-  // Resolve active preset + apply overrides + fonts → TokenMap.
   const resolved = useMemo<ResolvedTheme>(() => {
-    const fromSystem = preferences.presetId === SYSTEM_ID;
-    const basePreset = fromSystem
-      ? defaultPresetForMode(presets, systemMode)
-      : (findPresetById(presets, preferences.presetId) ?? defaultPresetForMode(presets, "light"));
+    const resolvedMode = resolveMode(preferences, systemMode);
+    const config = resolvedMode === "dark" ? preferences.dark : preferences.light;
+    const tokens = buildTokens(config, resolvedMode);
+    return {
+      resolvedMode,
+      fromSystem: preferences.mode === "system",
+      config,
+      tokens,
+    };
+  }, [preferences, systemMode]);
 
-    const tokens: TokenMap = { ...basePreset.tokens };
-    if (preferences.overrides?.background)
-      tokens["color-bg-base"] = preferences.overrides.background;
-    if (preferences.overrides?.foreground)
-      tokens["color-fg-default"] = preferences.overrides.foreground;
-    if (preferences.overrides?.accent) tokens["color-accent"] = preferences.overrides.accent;
-    if (preferences.fonts?.ui) tokens["font-ui"] = preferences.fonts.ui;
-    if (preferences.fonts?.code) tokens["font-code"] = preferences.fonts.code;
-
-    return { preset: basePreset, fromSystem, tokens };
-  }, [preferences, presets, systemMode]);
-
-  // Apply tokens to :root. Imperative; this is the whole point of the
-  // CSS-variable architecture.
-  //
-  // Cleanup on unmount: remove every token we applied + clear the
-  // `data-theme*` attributes. Harmless in hive (the provider lives at the
-  // app root), but the portable charter demands a host app that toggles
-  // <ThemeProvider> on/off can do so without leaking tokens to :root.
   const lastAppliedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -136,20 +150,16 @@ export function ThemeProvider({
       root.style.setProperty(`--${name}`, value);
       nextKeys.add(name);
     }
-    // Remove tokens that were present last time but not this time.
     for (const stale of lastAppliedRef.current) {
       if (!nextKeys.has(stale)) root.style.removeProperty(`--${stale}`);
     }
     lastAppliedRef.current = nextKeys;
-    // `data-theme` is a convenience hook for stylesheets that want to
-    // branch on mode (`[data-theme="dark"] { ... }`).
-    root.setAttribute("data-theme", resolved.preset.mode);
-    root.setAttribute("data-theme-id", resolved.preset.id);
-  }, [resolved]);
+    root.setAttribute("data-theme", resolved.resolvedMode);
+    root.setAttribute("data-reduce-motion", reduceMotionValue(preferences, systemMode));
+    root.setAttribute("data-pointer-cursors", preferences.pointerCursors ? "on" : "off");
+  }, [resolved, preferences, systemMode]);
 
-  // Unmount cleanup — separate effect with no deps so it runs only at
-  // teardown. Reads the latest applied-token set from the ref, removes
-  // every variable, clears the data attributes.
+  // Unmount cleanup — strip everything we put on :root.
   useEffect(() => {
     return () => {
       if (typeof document === "undefined") return;
@@ -159,7 +169,8 @@ export function ThemeProvider({
       }
       lastAppliedRef.current = new Set();
       root.removeAttribute("data-theme");
-      root.removeAttribute("data-theme-id");
+      root.removeAttribute("data-reduce-motion");
+      root.removeAttribute("data-pointer-cursors");
     };
   }, []);
 
@@ -178,8 +189,8 @@ export function ThemeProvider({
 
   const exportPrefs = useCallback(() => serialize(preferences), [preferences]);
   const importPrefs = useCallback(
-    async (json: string) => {
-      const result = deserialize(json);
+    async (text: string) => {
+      const result = deserialize(text);
       if (!result.ok) return result;
       await setPreferences(result.preferences);
       return result;
@@ -191,15 +202,22 @@ export function ThemeProvider({
     () => ({
       resolved,
       preferences,
-      presets,
       setPreferences,
       exportPreferences: exportPrefs,
       importPreferences: importPrefs,
       ready,
       saveError,
     }),
-    [resolved, preferences, presets, setPreferences, exportPrefs, importPrefs, ready, saveError],
+    [resolved, preferences, setPreferences, exportPrefs, importPrefs, ready, saveError],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+
+function reduceMotionValue(prefs: Preferences, _systemMode: ResolvedMode): "on" | "off" {
+  if (prefs.reduceMotion === "on") return "on";
+  if (prefs.reduceMotion === "off") return "off";
+  // "system" — read prefers-reduced-motion at this moment.
+  if (typeof window === "undefined" || !window.matchMedia) return "off";
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "on" : "off";
 }

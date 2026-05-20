@@ -403,23 +403,30 @@ export const api = {
   // Theming module talks to this through a thin wrapper in
   // `theming-hive-persistence.ts`. The wire shape mirrors the theming
   // module's `Preferences` exactly.
-  getAppearance: (cfg: ApiConfig) =>
-    call<{
-      presetId: string;
-      overrides?: { accent?: string; background?: string; foreground?: string };
-      fonts?: { ui?: string; code?: string };
-    }>(cfg, "/api/appearance"),
-  putAppearance: (
-    cfg: ApiConfig,
-    prefs: {
-      presetId: string;
-      overrides?: { accent?: string; background?: string; foreground?: string };
-      fonts?: { ui?: string; code?: string };
-    },
-  ) =>
-    call<{
-      presetId: string;
-      overrides?: { accent?: string; background?: string; foreground?: string };
-      fonts?: { ui?: string; code?: string };
-    }>(cfg, "/api/appearance", { method: "PUT", body: JSON.stringify(prefs) }),
+  getAppearance: (cfg: ApiConfig) => call<AppearanceWire>(cfg, "/api/appearance"),
+  putAppearance: (cfg: ApiConfig, prefs: AppearanceWire) =>
+    call<AppearanceWire>(cfg, "/api/appearance", {
+      method: "PUT",
+      body: JSON.stringify(prefs),
+    }),
+};
+
+export type ThemeConfigWire = {
+  accent?: string;
+  background?: string;
+  foreground?: string;
+  fontUi?: string;
+  fontCode?: string;
+  fontUiSize?: number;
+  fontCodeSize?: number;
+  contrast?: number;
+  translucentSidebar?: boolean;
+};
+
+export type AppearanceWire = {
+  mode: "light" | "dark" | "system";
+  light: ThemeConfigWire;
+  dark: ThemeConfigWire;
+  reduceMotion: "system" | "on" | "off";
+  pointerCursors: boolean;
 };
