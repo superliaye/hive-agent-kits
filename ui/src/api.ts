@@ -398,4 +398,28 @@ export const api = {
     callVoid(cfg, `/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
   getRun: (cfg: ApiConfig, runId: string) =>
     call<RunInfo>(cfg, `/api/runs/${encodeURIComponent(runId)}`),
+
+  // ─── Appearance ────────────────────────────────────────────────────
+  // Theming module talks to this through a thin wrapper in
+  // `theming-hive-persistence.ts`. The wire shape mirrors the theming
+  // module's `Preferences` exactly.
+  getAppearance: (cfg: ApiConfig) =>
+    call<{
+      presetId: string;
+      overrides?: { accent?: string; background?: string; foreground?: string };
+      fonts?: { ui?: string; code?: string };
+    }>(cfg, "/api/appearance"),
+  putAppearance: (
+    cfg: ApiConfig,
+    prefs: {
+      presetId: string;
+      overrides?: { accent?: string; background?: string; foreground?: string };
+      fonts?: { ui?: string; code?: string };
+    },
+  ) =>
+    call<{
+      presetId: string;
+      overrides?: { accent?: string; background?: string; foreground?: string };
+      fonts?: { ui?: string; code?: string };
+    }>(cfg, "/api/appearance", { method: "PUT", body: JSON.stringify(prefs) }),
 };

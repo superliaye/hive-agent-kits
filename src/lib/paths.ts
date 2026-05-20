@@ -76,6 +76,7 @@ export const files = {
   config: () => join(runtimeRoot(), "config.yaml"),
   token: () => join(runtimeRoot(), ".token"),
   secrets: () => join(runtimeRoot(), "secrets.json"),
+  appearance: () => join(runtimeRoot(), "appearance.json"),
   auditDb: () => join(runtimeRoot(), "audit.db"),
   auditArchiveDir: () => join(runtimeRoot(), "audit-archive"),
   hiveDb: () => join(runtimeRoot(), "hive.db"),

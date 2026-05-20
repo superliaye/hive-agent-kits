@@ -1,10 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode, useEffect } from "react";
+import { StrictMode, useEffect, useMemo } from "react";
 import { createRoot } from "react-dom/client";
-import { resolveApiConfig } from "./api.ts";
 import App from "./App.tsx";
+import { resolveApiConfig } from "./api.ts";
 import { startEventStream } from "./events.ts";
 import "./styles.css";
+import { createHivePersistence, readBootstrap } from "./theming-hive-persistence.ts";
+import { ThemeProvider } from "./theming/index.ts";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
@@ -14,10 +16,16 @@ const apiConfig = resolveApiConfig();
 
 function Root(): JSX.Element {
   useEffect(() => startEventStream(apiConfig, queryClient), []);
+  // Persistence + bootstrap are stable for the lifetime of the page;
+  // memoize so a re-render of Root doesn't tear down the ThemeProvider.
+  const persistence = useMemo(() => createHivePersistence(apiConfig), []);
+  const bootstrap = useMemo(() => readBootstrap(), []);
   return (
-    <QueryClientProvider client={queryClient}>
-      <App apiConfig={apiConfig} />
-    </QueryClientProvider>
+    <ThemeProvider persistence={persistence} bootstrap={bootstrap}>
+      <QueryClientProvider client={queryClient}>
+        <App apiConfig={apiConfig} />
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }
 

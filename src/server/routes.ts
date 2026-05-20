@@ -5,6 +5,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { ZodError } from "zod";
+import type { Appearance } from "../appearance/index.ts";
+import { PreferencesSchema } from "../appearance/index.ts";
 import type { Audit } from "../audit/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Capability } from "../capabilities/types.ts";
@@ -42,6 +44,7 @@ export type RoutesDeps = {
   threads: Threads;
   runs: RunExecutor;
   secrets: Secrets;
+  appearance: Appearance;
   token: string;
 };
 
@@ -456,6 +459,30 @@ export function buildRoutes(deps: RoutesDeps): Hono {
         });
       }
     });
+  });
+
+  // ─── Appearance (theme + font preferences) ───────────────────────────
+
+  app.get("/api/appearance", (c) => {
+    return c.json(deps.appearance.get());
+  });
+
+  app.put("/api/appearance", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = PreferencesSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid preferences", issues: zodIssues(parsed.error) }, 400);
+    }
+    deps.appearance.set(parsed.data);
+    // Return the parsed data we just wrote — avoids a second `.get()` call
+    // that would emit a redundant `appearance.read` audit event next to the
+    // `appearance.changed` event the set() already emitted.
+    return c.json(parsed.data);
   });
 
   // ─── Module event stream ─────────────────────────────────────────────
