@@ -20,6 +20,9 @@ const token = readArg("--hive-token=");
 contextBridge.exposeInMainWorld("__hive", {
   baseUrl,
   token,
+  /** "win32" | "darwin" | "linux" — renderer uses this to position the
+   * window-controls reservation in the draggable top strip. */
+  platform: process.platform,
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("hive:openExternal", url),
   /** Update Electron window chrome (title bar overlay + nativeTheme) to
    * match the active theme. Renderer calls this whenever theme resolves. */

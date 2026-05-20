@@ -15,6 +15,13 @@ const queryClient = new QueryClient({
 
 const apiConfig = resolveApiConfig();
 
+// Stamp the platform on <html> so CSS can branch on Win/Mac/Linux
+// for window-controls reservation in the draggable title strip.
+if (typeof document !== "undefined") {
+  const platform = typeof window !== "undefined" ? window.__hive?.platform : undefined;
+  document.documentElement.setAttribute("data-platform", platform ?? "web");
+}
+
 function Root(): JSX.Element {
   useEffect(() => startEventStream(apiConfig, queryClient), []);
   // Persistence + bootstrap are stable for the lifetime of the page;

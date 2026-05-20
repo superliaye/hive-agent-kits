@@ -163,6 +163,8 @@ declare global {
     __hive?: {
       baseUrl: string;
       token: string;
+      /** "win32" | "darwin" | "linux" — undefined outside Electron. */
+      platform?: string;
       // Open an http(s) URL in the user's default external browser. Only
       // present in Electron (preload bridge). Use the `openUrl()` helper
       // below instead of touching this directly — it falls back to

@@ -35,12 +35,26 @@ pre,
   flex-direction: column;
   height: 100%;
 }
+/* The top tab strip doubles as the window drag region under
+ * titleBarStyle:'hidden'. Buttons inside it opt out via no-drag so
+ * clicks reach the React handlers. We reserve space at one edge for
+ * the OS-drawn window-controls: right on Windows (titleBarOverlay),
+ * left on macOS (traffic lights). Plain web / Linux gets default
+ * padding (no reservation; the OS frame is separate). */
 .tabs {
   display: flex;
   gap: 0;
   border-bottom: 1px solid var(--color-border-strong);
   background: var(--color-bg-surface);
   padding: 0 16px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+:root[data-platform="win32"] .tabs {
+  padding-right: 140px;
+}
+:root[data-platform="darwin"] .tabs {
+  padding-left: 80px;
 }
 .tab {
   padding: 10px 16px;
@@ -49,6 +63,7 @@ pre,
   background: none;
   font: inherit;
   color: var(--color-fg-muted);
+  -webkit-app-region: no-drag;
 }
 .tab.active {
   color: var(--color-accent);

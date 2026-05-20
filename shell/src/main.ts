@@ -93,12 +93,17 @@ async function createWindow(): Promise<void> {
   const win = new BrowserWindow({
     width: 1100,
     height: 720,
-    // Themed chrome: hide the menu by default (Alt to reveal on Win/Linux)
-    // and ask the OS to draw the title bar buttons over a renderer-painted
-    // strip. Renderer updates the overlay colors on theme change via
-    // `hive:setChromeTheme`.
+    // Themed chrome: Windows + macOS get a custom title bar; the renderer
+    // marks the top strip as -webkit-app-region: drag. Linux keeps its
+    // native frame (window-manager-dependent; cleaner than rolling our
+    // own controls). Menu bar autohides on Win/Linux (Alt reveals).
     autoHideMenuBar: true,
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
+    titleBarStyle:
+      process.platform === "darwin"
+        ? "hiddenInset"
+        : process.platform === "win32"
+          ? "hidden"
+          : "default",
     titleBarOverlay:
       process.platform === "win32"
         ? { color: "#0d1117", symbolColor: "#e6edf3", height: 32 }
