@@ -19,7 +19,7 @@ import {
   DEFAULT_CONTRAST,
   DEFAULT_FONT_CODE_SIZE,
   DEFAULT_FONT_UI_SIZE,
-  paletteFor,
+  findNamedTheme,
 } from "./presets.ts";
 import { importPreferences as deserialize, exportPreferences as serialize } from "./serialize.ts";
 import { getSystemMode, watchSystemMode } from "./system.ts";
@@ -70,7 +70,7 @@ function resolveMode(prefs: Preferences, systemMode: ResolvedMode): ResolvedMode
 }
 
 function buildTokens(config: ThemeConfig, mode: ResolvedMode): TokenMap {
-  const palette = paletteFor(mode);
+  const palette = findNamedTheme(mode, config.themeId).palette;
   const tokens: TokenMap = { ...palette.tokens };
 
   if (config.accent) {

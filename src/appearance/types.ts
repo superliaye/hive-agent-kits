@@ -15,6 +15,7 @@ const FontString = z.string().min(1).max(256);
 
 const ThemeConfigSchema = z
   .object({
+    themeId: z.string().min(1).max(64).optional(),
     accent: ColorString.optional(),
     background: ColorString.optional(),
     foreground: ColorString.optional(),

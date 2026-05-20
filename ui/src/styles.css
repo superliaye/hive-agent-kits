@@ -868,11 +868,34 @@ pre.config {
   justify-content: space-between;
   gap: 12px;
 }
-.appearance-card-mode-toggle {
+.appearance-theme-picker {
   display: inline-flex;
+  align-items: center;
+  gap: 0;
   border: 1px solid var(--color-border-default);
   border-radius: 6px;
+  background: var(--color-bg-surface);
   overflow: hidden;
+}
+.appearance-theme-picker-icon {
+  padding: 6px 10px;
+  font-family: var(--font-code);
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  background: var(--color-bg-hover);
+  border-right: 1px solid var(--color-border-default);
+}
+.appearance-theme-picker select {
+  border: none;
+  background: transparent;
+  color: var(--color-fg-default);
+  font: inherit;
+  padding: 6px 10px;
+  padding-right: 28px;
+  cursor: pointer;
+}
+.appearance-theme-picker select:focus {
+  outline: none;
 }
 .appearance-sub-btn {
   padding: 4px 10px;

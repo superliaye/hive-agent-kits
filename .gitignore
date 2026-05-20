@@ -8,6 +8,7 @@ data/
 .worktrees/
 org/*/.workspace/
 .claude/skills/ui-ux-pro-max/
+.claude/settings.local.json
 # Playwright artifacts
 shell/test-results/
 shell/test-results.json

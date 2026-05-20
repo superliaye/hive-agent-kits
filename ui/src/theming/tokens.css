@@ -61,3 +61,31 @@
 :root[data-pointer-cursors="on"] select:not([disabled]) {
   cursor: pointer;
 }
+
+/* Themed scrollbars — narrow, semi-transparent, hover-reveal. Matches
+ * Codex desktop's restrained chrome. WebKit + Blink only (Firefox uses
+ * scrollbar-width below). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-fg-muted) 40%, transparent) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-fg-muted) 35%, transparent);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-fg-muted) 65%, transparent);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}

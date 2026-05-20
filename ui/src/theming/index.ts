@@ -15,6 +15,7 @@ export type { ThemeContextValue, ThemeProviderProps } from "./ThemeProvider.tsx"
 export { useTheme } from "./useTheme.ts";
 export {
   DARK_PALETTE,
+  DARK_THEMES,
   DEFAULT_CONTRAST,
   DEFAULT_FONT_CODE,
   DEFAULT_FONT_CODE_SIZE,
@@ -22,8 +23,12 @@ export {
   DEFAULT_FONT_UI_SIZE,
   FONT_SUGGESTIONS,
   LIGHT_PALETTE,
+  LIGHT_THEMES,
+  findNamedTheme,
+  namedThemesFor,
   paletteFor,
 } from "./presets.ts";
+export type { NamedTheme } from "./presets.ts";
 export type {
   Mode,
   ModePalette,

@@ -9,13 +9,13 @@ import {
   DEFAULT_FONT_CODE_SIZE,
   DEFAULT_FONT_UI_SIZE,
   FONT_SUGGESTIONS,
+  findNamedTheme,
   type Mode,
+  namedThemesFor,
   type Preferences,
   type ReduceMotion,
-  type ResolvedMode,
   type ThemeConfig,
   exportPreferencesWire,
-  paletteFor,
   useTheme,
 } from "../theming/index.ts";
 
@@ -26,13 +26,13 @@ export function AppearanceSettings(): JSX.Element {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const prefs = theme.preferences;
-  // The settings card edits the *configured* mode, defaulting to the
-  // currently-resolved mode when system-follow is active.
-  const [editingModeState, setEditingModeState] = useState<ResolvedMode | null>(null);
-  const editingMode: ResolvedMode =
-    editingModeState ?? (prefs.mode === "system" ? theme.resolved.resolvedMode : prefs.mode);
+  // Card always edits the mode that's currently *applied* (resolved from
+  // system-follow when needed). Matches Codex: one card, one mode.
+  const editingMode = theme.resolved.resolvedMode;
   const editingConfig: ThemeConfig = editingMode === "dark" ? prefs.dark : prefs.light;
-  const palette = paletteFor(editingMode);
+  const themes = namedThemesFor(editingMode);
+  const currentTheme = findNamedTheme(editingMode, editingConfig.themeId);
+  const palette = currentTheme.palette;
 
   function patchPrefs(patch: Partial<Preferences>): void {
     void theme.setPreferences({ ...prefs, ...patch });
@@ -131,27 +131,28 @@ export function AppearanceSettings(): JSX.Element {
       <div className="section">
         <div className="appearance-card-header">
           <h3>{editingMode === "dark" ? "Dark" : "Light"} theme</h3>
-          <div className="appearance-card-mode-toggle">
-            <button
-              type="button"
-              className={`appearance-sub-btn${editingMode === "light" ? " active" : ""}`}
-              onClick={() => setEditingModeState("light")}
-              aria-pressed={editingMode === "light"}
+          <label className="appearance-theme-picker">
+            <span className="appearance-theme-picker-icon" aria-hidden="true">
+              Aa
+            </span>
+            <select
+              value={currentTheme.id}
+              onChange={(e) => patchConfig({ themeId: e.target.value })}
+              aria-label="Named theme"
+              data-testid="theme-named-picker"
             >
-              Light
-            </button>
-            <button
-              type="button"
-              className={`appearance-sub-btn${editingMode === "dark" ? " active" : ""}`}
-              onClick={() => setEditingModeState("dark")}
-              aria-pressed={editingMode === "dark"}
-            >
-              Dark
-            </button>
-          </div>
+              {themes.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <p className="meta">
-          Edit this mode's palette and typography. These persist independently from the other mode.
+          Pick a curated palette, then tweak any field below. Overrides layer on top of the named
+          theme. {editingMode === "dark" ? "Dark" : "Light"} and the other mode persist
+          independently — switch the top picker to edit the other.
         </p>
 
         <ColorOverride

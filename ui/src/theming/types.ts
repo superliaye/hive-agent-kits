@@ -55,6 +55,8 @@ export type ReduceMotion = "system" | "on" | "off";
  * the user customizes each independently (matches Codex desktop's model).
  */
 export type ThemeConfig = {
+  /** Named palette id (see presets.ts: LIGHT_THEMES / DARK_THEMES). */
+  themeId?: string;
   accent?: string;
   background?: string;
   foreground?: string;

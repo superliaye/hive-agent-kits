@@ -412,6 +412,7 @@ export const api = {
 };
 
 export type ThemeConfigWire = {
+  themeId?: string;
   accent?: string;
   background?: string;
   foreground?: string;

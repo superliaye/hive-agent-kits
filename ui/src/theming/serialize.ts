@@ -99,7 +99,7 @@ function parseConfig(value: unknown, key: string): { config: ThemeConfig } | { e
   }
   const c = value as Record<string, unknown>;
   const out: ThemeConfig = {};
-  for (const k of ["accent", "background", "foreground", "fontUi", "fontCode"] as const) {
+  for (const k of ["themeId", "accent", "background", "foreground", "fontUi", "fontCode"] as const) {
     const v = c[k];
     if (v === undefined) continue;
     if (typeof v !== "string") return { error: `preferences.${key}.${k} must be a string` };
