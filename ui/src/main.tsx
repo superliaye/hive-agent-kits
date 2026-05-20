@@ -3,6 +3,7 @@ import { StrictMode, useEffect, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import { resolveApiConfig } from "./api.ts";
+import { ChromeBridge } from "./components/ChromeBridge.tsx";
 import { startEventStream } from "./events.ts";
 import "./styles.css";
 import { createHivePersistence, readBootstrap } from "./theming-hive-persistence.ts";
@@ -22,6 +23,7 @@ function Root(): JSX.Element {
   const bootstrap = useMemo(() => readBootstrap(), []);
   return (
     <ThemeProvider persistence={persistence} bootstrap={bootstrap}>
+      <ChromeBridge />
       <QueryClientProvider client={queryClient}>
         <App apiConfig={apiConfig} />
       </QueryClientProvider>

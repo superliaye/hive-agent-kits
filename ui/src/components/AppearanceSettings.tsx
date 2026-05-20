@@ -156,7 +156,16 @@ export function AppearanceSettings(): JSX.Element {
 
       <div className="section settings-card">
         <div className="appearance-card-header">
-          <h3>{editingMode === "dark" ? "Dark" : "Light"} theme</h3>
+          <h3 className="settings-card-title">
+            {editingMode === "dark" ? "Dark" : "Light"} theme
+            {hasOverrides(editingConfig) && (
+              <span
+                className="settings-card-modified-dot"
+                title="This mode has unsaved overrides on top of the named theme"
+                aria-label="Modified"
+              />
+            )}
+          </h3>
           {hasOverrides(editingConfig) && (
             <button
               type="button"
@@ -169,18 +178,14 @@ export function AppearanceSettings(): JSX.Element {
             </button>
           )}
         </div>
-        <p className="meta">
-          Pick a curated palette below, then tweak any field. Overrides layer on top of the named
-          theme — switch the top mode picker to edit the other mode.
-        </p>
 
         <ThemeGallery
           themes={themes}
           activeId={currentTheme.id}
           onPick={(id) => patchConfig({ themeId: id })}
         />
-        <p className="meta appearance-theme-active-meta" data-testid="theme-active-name">
-          Active: <strong>{currentTheme.name}</strong>
+        <p className="meta appearance-card-helper">
+          Tweak any field below to override this theme.
         </p>
 
         <ColorOverride
@@ -202,43 +207,46 @@ export function AppearanceSettings(): JSX.Element {
           onChange={(v) => patchConfig({ foreground: v })}
         />
 
-        <FontInput
-          label="UI font"
-          value={editingConfig.fontUi ?? ""}
-          fallback={palette.tokens["font-ui"] ?? ""}
-          suggestions={FONT_SUGGESTIONS.ui}
-          onChange={(v) => patchConfig({ fontUi: v })}
-        />
-        <FontInput
-          label="Code font"
-          value={editingConfig.fontCode ?? ""}
-          fallback={palette.tokens["font-code"] ?? ""}
-          suggestions={FONT_SUGGESTIONS.code}
-          onChange={(v) => patchConfig({ fontCode: v })}
-        />
+        <details className="appearance-details" data-testid="typography-disclosure">
+          <summary>Typography &amp; density</summary>
 
-        <SizeInput
-          label="UI font size"
-          value={editingConfig.fontUiSize ?? DEFAULT_FONT_UI_SIZE}
-          onChange={(v) => patchConfig({ fontUiSize: v })}
-        />
-        <SizeInput
-          label="Code font size"
-          value={editingConfig.fontCodeSize ?? DEFAULT_FONT_CODE_SIZE}
-          onChange={(v) => patchConfig({ fontCodeSize: v })}
-        />
+          <FontInput
+            label="UI font"
+            value={editingConfig.fontUi ?? ""}
+            fallback={palette.tokens["font-ui"] ?? ""}
+            suggestions={FONT_SUGGESTIONS.ui}
+            onChange={(v) => patchConfig({ fontUi: v })}
+          />
+          <FontInput
+            label="Code font"
+            value={editingConfig.fontCode ?? ""}
+            fallback={palette.tokens["font-code"] ?? ""}
+            suggestions={FONT_SUGGESTIONS.code}
+            onChange={(v) => patchConfig({ fontCode: v })}
+          />
 
-        <SliderRow
-          label="Contrast"
-          value={editingConfig.contrast ?? DEFAULT_CONTRAST}
-          onChange={(v) => patchConfig({ contrast: v })}
-        />
+          <SizeInput
+            label="UI font size"
+            value={editingConfig.fontUiSize ?? DEFAULT_FONT_UI_SIZE}
+            onChange={(v) => patchConfig({ fontUiSize: v })}
+          />
+          <SizeInput
+            label="Code font size"
+            value={editingConfig.fontCodeSize ?? DEFAULT_FONT_CODE_SIZE}
+            onChange={(v) => patchConfig({ fontCodeSize: v })}
+          />
 
-        <ToggleRow
-          label="Translucent sidebar"
-          checked={editingConfig.translucentSidebar ?? false}
-          onChange={(v) => patchConfig({ translucentSidebar: v })}
-        />
+          <ContrastSlider
+            value={editingConfig.contrast ?? DEFAULT_CONTRAST}
+            onChange={(v) => patchConfig({ contrast: v })}
+          />
+
+          <ToggleRow
+            label="Translucent sidebar"
+            checked={editingConfig.translucentSidebar ?? false}
+            onChange={(v) => patchConfig({ translucentSidebar: v })}
+          />
+        </details>
       </div>
 
       <div className="section">
@@ -356,15 +364,16 @@ function ColorOverride({
           onChange={(e) => onChange(e.target.value || undefined)}
           aria-label={`${label} color value`}
         />
-        <button
-          type="button"
-          className="reset"
-          onClick={() => onChange(undefined)}
-          disabled={value === ""}
-          title={value === "" ? "No override" : "Reset to preset"}
-        >
-          Reset
-        </button>
+        {value !== "" && (
+          <button
+            type="button"
+            className="reset"
+            onClick={() => onChange(undefined)}
+            title="Reset to theme value"
+          >
+            Reset
+          </button>
+        )}
       </div>
     </div>
   );
@@ -402,14 +411,16 @@ function FontInput({
             <option key={s.name} value={s.value} label={s.name} />
           ))}
         </datalist>
-        <button
-          type="button"
-          className="reset"
-          onClick={() => onChange(undefined)}
-          disabled={value === ""}
-        >
-          Reset
-        </button>
+        {value !== "" && (
+          <button
+            type="button"
+            className="reset"
+            onClick={() => onChange(undefined)}
+            title="Reset to theme value"
+          >
+            Reset
+          </button>
+        )}
       </div>
     </div>
   );
@@ -447,30 +458,40 @@ function SizeInput({
   );
 }
 
-function SliderRow({
-  label,
+function ContrastSlider({
   value,
   onChange,
 }: {
-  label: string;
   value: number;
   onChange: (next: number) => void;
 }): JSX.Element {
-  const slug = label.toLowerCase().replace(/\s+/g, "-");
+  const adjusted = value !== DEFAULT_CONTRAST;
   return (
     <div className="appearance-row">
-      <label htmlFor={`slider-${slug}`}>{label}</label>
-      <div className="appearance-row-control">
+      <label htmlFor="slider-contrast">Contrast</label>
+      <div className="appearance-row-control appearance-slider-control">
+        <span className="appearance-slider-axis-label">Softer</span>
         <input
-          id={`slider-${slug}`}
+          id="slider-contrast"
           type="range"
           min={0}
           max={100}
           step={1}
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
+          list="contrast-ticks"
+          aria-valuetext={adjusted ? `${value}, adjusted from default 50` : "default 50"}
         />
-        <span className="meta appearance-slider-value">{value}</span>
+        <datalist id="contrast-ticks">
+          <option value={DEFAULT_CONTRAST} label="default" />
+        </datalist>
+        <span className="appearance-slider-axis-label">Sharper</span>
+        <span
+          className={`appearance-slider-value${adjusted ? " adjusted" : ""}`}
+          aria-hidden="true"
+        >
+          {value}
+        </span>
       </div>
     </div>
   );
@@ -553,7 +574,6 @@ function ThemeGallery({
   return (
     <div className="theme-gallery" data-testid="theme-gallery">
       {themes.map((t) => {
-        const tokens = t.palette.tokens;
         const isActive = t.id === activeId;
         return (
           <button
@@ -565,30 +585,51 @@ function ThemeGallery({
             aria-pressed={isActive}
             aria-label={`Use ${t.name}`}
           >
-            <div className="theme-gallery-preview">
-              <span
-                className="theme-gallery-swatch theme-gallery-swatch--bg"
-                style={{ background: tokens["color-bg-base"] }}
-                aria-hidden="true"
-              >
-                <span
-                  className="theme-gallery-swatch--surface"
-                  style={{ background: tokens["color-bg-surface"] }}
-                />
-                <span
-                  className="theme-gallery-swatch--accent"
-                  style={{ background: tokens["color-accent"] }}
-                />
-                <span
-                  className="theme-gallery-swatch--fg"
-                  style={{ background: tokens["color-fg-default"] }}
-                />
-              </span>
+            <ThemePreview tokens={t.palette.tokens} />
+            <div className="theme-gallery-name">
+              {t.name}
+              {isActive && (
+                <span className="theme-gallery-check" aria-hidden="true">
+                  ✓
+                </span>
+              )}
             </div>
-            <div className="theme-gallery-name">{t.name}</div>
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function ThemePreview({ tokens }: { tokens: Record<string, string> }): JSX.Element {
+  // Structured mock: title-bar + two text lines (fg + muted) + status
+  // dots (accent / success / warning / danger). Uses all 7 semantic
+  // tokens per theme so palettes are visually distinguishable.
+  const bgBase = tokens["color-bg-base"] ?? "#000";
+  const bgSurface = tokens["color-bg-surface"] ?? "#111";
+  const fg = tokens["color-fg-default"] ?? "#fff";
+  const fgMuted = tokens["color-fg-muted"] ?? "#888";
+  const accent = tokens["color-accent"] ?? "#4a8eff";
+  const success = tokens["color-success"] ?? "#56d364";
+  const warning = tokens["color-warning"] ?? "#ffb454";
+  const danger = tokens["color-danger"] ?? "#ff6b6b";
+  return (
+    <div className="theme-preview" style={{ background: bgBase }} aria-hidden="true">
+      <div className="theme-preview-titlebar" style={{ background: bgSurface }} />
+      <div
+        className="theme-preview-line theme-preview-line--primary"
+        style={{ background: fg }}
+      />
+      <div
+        className="theme-preview-line theme-preview-line--secondary"
+        style={{ background: fgMuted }}
+      />
+      <div className="theme-preview-dots">
+        <span className="theme-preview-dot" style={{ background: accent }} />
+        <span className="theme-preview-dot" style={{ background: success }} />
+        <span className="theme-preview-dot" style={{ background: warning }} />
+        <span className="theme-preview-dot" style={{ background: danger }} />
+      </div>
     </div>
   );
 }

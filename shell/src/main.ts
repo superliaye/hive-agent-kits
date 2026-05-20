@@ -11,7 +11,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BrowserWindow, app, ipcMain, shell } from "electron";
+import { BrowserWindow, app, ipcMain, nativeTheme, shell } from "electron";
 
 const isWin = process.platform === "win32";
 const PORT = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : 3117;
@@ -93,6 +93,17 @@ async function createWindow(): Promise<void> {
   const win = new BrowserWindow({
     width: 1100,
     height: 720,
+    // Themed chrome: hide the menu by default (Alt to reveal on Win/Linux)
+    // and ask the OS to draw the title bar buttons over a renderer-painted
+    // strip. Renderer updates the overlay colors on theme change via
+    // `hive:setChromeTheme`.
+    autoHideMenuBar: true,
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
+    titleBarOverlay:
+      process.platform === "win32"
+        ? { color: "#0d1117", symbolColor: "#e6edf3", height: 32 }
+        : undefined,
+    backgroundColor: "#0d1117",
     webPreferences: {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -120,6 +131,35 @@ async function createWindow(): Promise<void> {
 // Strict allowlist: only http(s) URLs. `shell.openExternal` can launch
 // arbitrary URI handlers (file://, custom protocols, even mailto:) — a
 // compromised renderer must not be able to trigger those.
+// Renderer → main: update window chrome to match the active theme.
+// Called on every theme resolution from the ThemeProvider bridge. The
+// payload is structurally typed; bad values are silently ignored (chrome
+// just stays at the previous value — non-fatal).
+ipcMain.handle("hive:setChromeTheme", (event, payload: unknown) => {
+  if (!payload || typeof payload !== "object") return;
+  const p = payload as Record<string, unknown>;
+  const mode = p.mode === "light" || p.mode === "dark" ? p.mode : undefined;
+  const bg = typeof p.bg === "string" ? p.bg : undefined;
+  const fg = typeof p.fg === "string" ? p.fg : undefined;
+  if (mode) nativeTheme.themeSource = mode;
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && process.platform === "win32" && bg && fg) {
+    try {
+      win.setTitleBarOverlay({ color: bg, symbolColor: fg, height: 32 });
+    } catch {
+      // setTitleBarOverlay requires titleBarStyle:'hidden' at create time;
+      // older windows from before this commit won't accept the call.
+    }
+  }
+  if (win && bg) {
+    try {
+      win.setBackgroundColor(bg);
+    } catch {
+      // No-op
+    }
+  }
+});
+
 ipcMain.handle("hive:openExternal", async (_event, url: unknown) => {
   if (typeof url !== "string") {
     throw new Error("openExternal: url must be a string");

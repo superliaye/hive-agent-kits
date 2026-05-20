@@ -195,6 +195,19 @@ pre,
   margin: 0 0 8px;
   letter-spacing: 0.5px;
 }
+/* Appearance card titles use real heading weight, not overline-caps. */
+.settings-card h3.settings-card-title,
+.appearance-details > summary {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-fg-default);
+  margin: 0 0 4px;
+  letter-spacing: 0;
+  text-transform: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
 .cap-row {
   display: flex;
@@ -882,6 +895,57 @@ pre.config {
   color: var(--color-fg-default);
   background: var(--color-bg-hover);
 }
+.settings-card-modified-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  display: inline-block;
+}
+.appearance-card-helper {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.appearance-details {
+  margin-top: 14px;
+  border-top: 1px solid var(--color-border-default);
+  padding-top: 10px;
+}
+.appearance-details > summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  padding: 4px 0;
+}
+.appearance-details > summary::-webkit-details-marker {
+  display: none;
+}
+.appearance-details > summary::before {
+  content: "›";
+  display: inline-block;
+  width: 14px;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+  transition: transform 120ms ease;
+}
+.appearance-details[open] > summary::before {
+  transform: rotate(90deg);
+}
+.appearance-slider-control {
+  flex: 1;
+  gap: 10px;
+}
+.appearance-slider-axis-label {
+  font-size: 11px;
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+.appearance-slider-value.adjusted {
+  color: var(--color-fg-default);
+  font-weight: 600;
+}
 
 /* Elevated card chrome for the per-mode settings panel. */
 .settings-card {
@@ -894,7 +958,7 @@ pre.config {
   margin-top: 0;
 }
 
-/* Theme gallery — clickable cards with mini swatch preview per palette. */
+/* Theme gallery — clickable cards with structured mini-mock previews. */
 .theme-gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -903,7 +967,7 @@ pre.config {
 }
 .theme-gallery-item {
   background: var(--color-bg-base);
-  border: 2px solid var(--color-border-default);
+  border: 1px solid var(--color-border-default);
   border-radius: 8px;
   padding: 10px;
   cursor: pointer;
@@ -913,61 +977,73 @@ pre.config {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  transition: border-color 120ms ease;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 .theme-gallery-item:hover {
   border-color: var(--color-border-strong);
 }
 .theme-gallery-item.active {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 1px var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-base));
 }
-.theme-gallery-preview {
-  height: 56px;
+
+/* Structured theme preview — title bar + text bars + status dots. */
+.theme-preview {
+  height: 72px;
   border-radius: 6px;
   overflow: hidden;
   position: relative;
-  border: 1px solid var(--color-border-default);
+  border: 1px solid color-mix(in srgb, var(--color-fg-default) 18%, transparent);
 }
-.theme-gallery-swatch--bg {
+.theme-preview-titlebar {
   position: absolute;
-  inset: 0;
-  display: block;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-fg-default) 12%, transparent);
 }
-.theme-gallery-swatch--surface {
+.theme-preview-line {
   position: absolute;
+  height: 4px;
+  border-radius: 2px;
+}
+.theme-preview-line--primary {
+  top: 26px;
   left: 8px;
-  right: 8px;
-  top: 8px;
-  bottom: 22px;
-  border-radius: 4px;
-  display: block;
+  width: 60%;
 }
-.theme-gallery-swatch--accent {
+.theme-preview-line--secondary {
+  top: 36px;
+  left: 8px;
+  width: 38%;
+}
+.theme-preview-dots {
   position: absolute;
-  right: 8px;
   bottom: 8px;
-  width: 14px;
-  height: 14px;
+  left: 8px;
+  display: flex;
+  gap: 5px;
+}
+.theme-preview-dot {
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   display: block;
-}
-.theme-gallery-swatch--fg {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  right: 28px;
-  height: 3px;
-  border-radius: 2px;
-  display: block;
+  /* 1px ring helps light-mode palettes where dots fade into the bg. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 20%, transparent);
 }
 .theme-gallery-name {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 12.5px;
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
 }
-.appearance-theme-active-meta {
-  margin: 4px 0 12px;
-  font-size: 12px;
+.theme-gallery-check {
+  color: var(--color-accent);
+  font-weight: 700;
 }
 .appearance-sub-btn {
   padding: 4px 10px;

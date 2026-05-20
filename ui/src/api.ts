@@ -168,6 +168,12 @@ declare global {
       // below instead of touching this directly — it falls back to
       // `window.open()` in browser-tab mode (Vite dev).
       openExternal?: (url: string) => Promise<void>;
+      /** Update Electron title-bar overlay + nativeTheme.themeSource. */
+      setChromeTheme?: (payload: {
+        mode: "light" | "dark";
+        bg: string;
+        fg: string;
+      }) => Promise<void>;
     };
   }
 }
