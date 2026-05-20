@@ -1,37 +1,76 @@
+import { useState } from "react";
 import type { ApiConfig } from "../api.ts";
 import { AppearanceSettings } from "../components/AppearanceSettings.tsx";
 import { SecretsSettings } from "../components/SecretsSettings.tsx";
 
+type SectionId = "appearance" | "secrets" | "other";
+
+type Section = {
+  id: SectionId;
+  label: string;
+  description: string;
+};
+
+const SECTIONS: readonly Section[] = [
+  {
+    id: "appearance",
+    label: "Appearance",
+    description:
+      "Theme mode, per-mode palette + typography, accessibility toggles. Preferences live in ~/.hive/appearance.json.",
+  },
+  {
+    id: "secrets",
+    label: "Secrets",
+    description:
+      "API keys and OAuth credentials for model providers. Stored locally in ~/.hive/secrets.json with file mode 0600.",
+  },
+  {
+    id: "other",
+    label: "Other",
+    description:
+      "Audit retention, daemon port, and log level. Configurable via ~/.hive/config.yaml in v1; UI editor lands in v1.1 per ADR-0006.",
+  },
+];
+
 export function SettingsPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
+  const [active, setActive] = useState<SectionId>("appearance");
+  const activeSection = SECTIONS.find((s) => s.id === active) ?? SECTIONS[0];
+
   return (
-    <div className="detail">
-      <h1>Settings</h1>
-
-      <div className="section">
-        <h3>Appearance</h3>
-        <p className="meta">
-          Theme mode, per-mode palette + typography, accessibility toggles. Preferences live in{" "}
-          <code>~/.hive/appearance.json</code>. The theming layer is a portable module — see{" "}
-          <code>ui/src/theming/README.md</code>.
-        </p>
-      </div>
-      <AppearanceSettings />
-
-      <div className="section">
-        <h3>Secrets</h3>
-        <p className="meta">
-          API keys and OAuth credentials for model providers. Used by the Run executor on every Run.
-          Stored locally in <code>~/.hive/secrets.json</code> with file mode <code>0600</code>.
-        </p>
-      </div>
-      <SecretsSettings apiConfig={apiConfig} />
-
-      <div className="section">
-        <h3>Other</h3>
-        <p className="empty">
-          Audit retention, daemon port, and log level are configurable via{" "}
-          <code>~/.hive/config.yaml</code> in v1; UI editor lands in v1.1 per ADR-0006.
-        </p>
+    <div className="settings-layout">
+      <nav className="settings-nav" aria-label="Settings sections">
+        <h2 className="settings-nav-title">Settings</h2>
+        <ul>
+          {SECTIONS.map((s) => (
+            <li key={s.id}>
+              <button
+                type="button"
+                className={`settings-nav-item${active === s.id ? " active" : ""}`}
+                onClick={() => setActive(s.id)}
+                data-testid={`settings-nav-${s.id}`}
+                aria-current={active === s.id ? "page" : undefined}
+              >
+                {s.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      <div className="settings-detail">
+        <header className="settings-detail-header">
+          <h1>{activeSection.label}</h1>
+          <p className="meta">{activeSection.description}</p>
+        </header>
+        {active === "appearance" && <AppearanceSettings />}
+        {active === "secrets" && <SecretsSettings apiConfig={apiConfig} />}
+        {active === "other" && (
+          <div className="section">
+            <p className="empty">
+              Configurable via <code>~/.hive/config.yaml</code> in v1; UI editor lands in v1.1 per
+              ADR-0006.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );
