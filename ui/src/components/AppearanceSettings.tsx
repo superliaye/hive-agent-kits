@@ -599,32 +599,41 @@ function ThemeGallery({
 }
 
 function ThemePreview({ tokens }: { tokens: Record<string, string> }): JSX.Element {
-  // Structured mock: title-bar + two text lines (fg + muted) + status
-  // dots (accent / success / warning / danger). Uses all 7 semantic
-  // tokens per theme so palettes are visually distinguishable.
+  // App-shaped mock: sidebar (bg-surface) + content area (bg-base) +
+  // prominent accent bar + two text lines + a row of status dots.
+  // Uses 8 semantic tokens so subtle palette differences (Solarized's
+  // cream surface, Catppuccin's lavender tint, Dim's blue cast) read
+  // at a glance instead of melting into a generic dark/light rectangle.
   const bgBase = tokens["color-bg-base"] ?? "#000";
   const bgSurface = tokens["color-bg-surface"] ?? "#111";
   const fg = tokens["color-fg-default"] ?? "#fff";
   const fgMuted = tokens["color-fg-muted"] ?? "#888";
   const accent = tokens["color-accent"] ?? "#4a8eff";
+  const border = tokens["color-border-default"] ?? "#33333355";
   const success = tokens["color-success"] ?? "#56d364";
-  const warning = tokens["color-warning"] ?? "#ffb454";
   const danger = tokens["color-danger"] ?? "#ff6b6b";
   return (
-    <div className="theme-preview" style={{ background: bgBase }} aria-hidden="true">
-      <div className="theme-preview-titlebar" style={{ background: bgSurface }} />
+    <div
+      className="theme-preview"
+      style={{ background: bgBase, borderColor: border }}
+      aria-hidden="true"
+    >
+      <div
+        className="theme-preview-sidebar"
+        style={{ background: bgSurface, borderRightColor: border }}
+      />
+      <div className="theme-preview-accent" style={{ background: accent }} />
       <div
         className="theme-preview-line theme-preview-line--primary"
         style={{ background: fg }}
       />
       <div
-        className="theme-preview-line theme-preview-line--secondary"
+        className="theme-preview-line theme-preview-line--muted"
         style={{ background: fgMuted }}
       />
       <div className="theme-preview-dots">
         <span className="theme-preview-dot" style={{ background: accent }} />
         <span className="theme-preview-dot" style={{ background: success }} />
-        <span className="theme-preview-dot" style={{ background: warning }} />
         <span className="theme-preview-dot" style={{ background: danger }} />
       </div>
     </div>

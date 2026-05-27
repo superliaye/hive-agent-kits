@@ -15,8 +15,7 @@ const SECTIONS: readonly Section[] = [
   {
     id: "appearance",
     label: "Appearance",
-    description:
-      "Theme mode, per-mode palette + typography, accessibility toggles. Preferences live in ~/.hive/config.yaml under the appearance key.",
+    description: "Theme mode, per-mode palette and typography, accessibility toggles.",
   },
   {
     id: "secrets",

@@ -262,17 +262,26 @@ pre,
   background: #f0e8d8;
   color: #6a4a2a;
 }
+/* Origin badges — load-bearing per CONTEXT.md. Bolder than other
+ * badges so they read as the categorical answer ("is this Capability
+ * Personal or Workplace?"), not as a stylistic chip. */
 .badge-personal {
   background: #dff0e0;
   color: #2a6a3a;
+  font-weight: 600;
 }
 .badge-workplace {
   background: #f0dfdf;
   color: #6a2a2a;
+  font-weight: 600;
 }
+/* Source = where a capability came from (e.g. "heygen-com/hyperframes").
+ * Informational, not categorical — render demoted so the load-bearing
+ * origin badges (PERSONAL / WORKPLACE per CONTEXT.md) read primary. */
 .badge-source {
-  background: #e8e0f0;
-  color: #4a2a6a;
+  background: transparent;
+  color: var(--color-fg-muted);
+  border: 1px solid var(--color-border-default);
 }
 
 .search-row {
@@ -619,8 +628,8 @@ pre.config {
 }
 .message-user {
   align-self: flex-end;
-  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-surface));
-  border-color: color-mix(in srgb, var(--color-accent) 30%, var(--color-border-default));
+  background: color-mix(in srgb, var(--color-accent) 22%, var(--color-bg-surface));
+  border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border-default));
 }
 .message-assistant {
   align-self: flex-start;
@@ -857,8 +866,9 @@ pre.config {
   color: #f0a0a0;
 }
 [data-theme="dark"] .badge-source {
-  background: #3a214a;
-  color: #d0a8f0;
+  background: transparent;
+  color: var(--color-fg-muted);
+  border-color: var(--color-border-default);
 }
 
 /* Appearance settings — Codex-style mode picker + per-mode settings card */
@@ -1027,41 +1037,55 @@ pre.config {
   background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-base));
 }
 
-/* Structured theme preview — title bar + text bars + status dots. */
+/* Structured theme preview — app-shaped mock: sidebar (bg-surface)
+ * along the left, content area (bg-base) on the right, a prominent
+ * accent bar at top-right, two text lines in fg + fg-muted, and a
+ * status-dot row at the bottom. Surface differences (Solarized cream
+ * vs Catppuccin lavender vs Dim blue) read at-a-glance instead of
+ * compressing into a generic dark/light rectangle. */
 .theme-preview {
-  height: 72px;
+  height: 80px;
   border-radius: 6px;
   overflow: hidden;
   position: relative;
-  border: 1px solid color-mix(in srgb, var(--color-fg-default) 18%, transparent);
+  border-style: solid;
+  border-width: 1px;
 }
-.theme-preview-titlebar {
+.theme-preview-sidebar {
   position: absolute;
   top: 0;
+  bottom: 0;
   left: 0;
-  right: 0;
-  height: 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-fg-default) 12%, transparent);
+  width: 22px;
+  border-right-style: solid;
+  border-right-width: 1px;
+}
+.theme-preview-accent {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  height: 6px;
+  width: 36px;
+  border-radius: 3px;
 }
 .theme-preview-line {
   position: absolute;
   height: 4px;
   border-radius: 2px;
+  left: 32px;
 }
 .theme-preview-line--primary {
-  top: 26px;
-  left: 8px;
-  width: 60%;
+  top: 28px;
+  width: 56%;
 }
-.theme-preview-line--secondary {
-  top: 36px;
-  left: 8px;
+.theme-preview-line--muted {
+  top: 40px;
   width: 38%;
 }
 .theme-preview-dots {
   position: absolute;
   bottom: 8px;
-  left: 8px;
+  left: 32px;
   display: flex;
   gap: 5px;
 }
