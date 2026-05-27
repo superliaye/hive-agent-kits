@@ -94,6 +94,24 @@ export function importPreferences(text: string): ImportResult {
   };
 }
 
+// Bounds mirror the daemon's AppearanceConfigSchema (src/config/schema.ts).
+// Kept in sync by the cross-package drift test at
+// src/server/__tests__/appearance-shape-drift.test.ts. Keep these
+// constants verbatim — the test asserts both validators agree.
+const STRING_FIELDS = {
+  themeId: { min: 1, max: 64 },
+  accent: { min: 1, max: 64 },
+  background: { min: 1, max: 64 },
+  foreground: { min: 1, max: 64 },
+  fontUi: { min: 1, max: 256 },
+  fontCode: { min: 1, max: 256 },
+} as const;
+const NUMBER_FIELDS = {
+  fontUiSize: { min: 8, max: 48, int: true },
+  fontCodeSize: { min: 8, max: 48, int: true },
+  contrast: { min: 0, max: 100, int: false },
+} as const;
+
 function parseConfig(value: unknown, key: string): { config: ThemeConfig } | { error: string } {
   if (value === undefined) return { config: {} };
   if (!value || typeof value !== "object") {
@@ -101,17 +119,28 @@ function parseConfig(value: unknown, key: string): { config: ThemeConfig } | { e
   }
   const c = value as Record<string, unknown>;
   const out: ThemeConfig = {};
-  for (const k of ["themeId", "accent", "background", "foreground", "fontUi", "fontCode"] as const) {
+  for (const k of Object.keys(STRING_FIELDS) as Array<keyof typeof STRING_FIELDS>) {
     const v = c[k];
     if (v === undefined) continue;
     if (typeof v !== "string") return { error: `preferences.${key}.${k} must be a string` };
+    const { min, max } = STRING_FIELDS[k];
+    if (v.length < min || v.length > max) {
+      return { error: `preferences.${key}.${k} must be ${min}..${max} characters` };
+    }
     out[k] = v;
   }
-  for (const k of ["fontUiSize", "fontCodeSize", "contrast"] as const) {
+  for (const k of Object.keys(NUMBER_FIELDS) as Array<keyof typeof NUMBER_FIELDS>) {
     const v = c[k];
     if (v === undefined) continue;
     if (typeof v !== "number" || !Number.isFinite(v)) {
       return { error: `preferences.${key}.${k} must be a number` };
+    }
+    const { min, max, int } = NUMBER_FIELDS[k];
+    if (v < min || v > max) {
+      return { error: `preferences.${key}.${k} must be in ${min}..${max}` };
+    }
+    if (int && !Number.isInteger(v)) {
+      return { error: `preferences.${key}.${k} must be an integer` };
     }
     out[k] = v;
   }

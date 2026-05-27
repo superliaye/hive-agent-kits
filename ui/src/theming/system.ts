@@ -13,9 +13,14 @@ export function getSystemMode(): "light" | "dark" {
 /**
  * Subscribe to OS preference changes. Returns a disposer.
  *
- * The listener is called only on transitions (light → dark or dark → light),
+ * The listener fires only on transitions (light → dark or dark → light),
  * not on every theme-related event. Safe to call repeatedly; each call
  * returns its own subscription.
+ *
+ * Targets `MediaQueryList.addEventListener` — Safari 14+ (Sept 2020),
+ * every other modern browser, and all Electron Chromium versions. The
+ * legacy `addListener` fallback was dropped along with the
+ * `as unknown as` cast that supported it (AGENTS.md bans the cast).
  */
 export function watchSystemMode(listener: (mode: "light" | "dark") => void): () => void {
   if (typeof window === "undefined" || !window.matchMedia) return () => {};
@@ -23,18 +28,6 @@ export function watchSystemMode(listener: (mode: "light" | "dark") => void): () 
   const handler = (e: MediaQueryListEvent): void => {
     listener(e.matches ? "dark" : "light");
   };
-  // Both modern (`addEventListener`) and Safari ≤14 (`addListener`) paths.
-  if (typeof mql.addEventListener === "function") {
-    mql.addEventListener("change", handler);
-    return () => mql.removeEventListener("change", handler);
-  }
-  // biome-ignore lint/suspicious/noExplicitAny: legacy Safari MediaQueryList shape
-  const legacy = mql as unknown as {
-    addListener: (h: (e: MediaQueryListEvent) => void) => void;
-    removeListener: (h: (e: MediaQueryListEvent) => void) => void;
-  };
-  legacy.addListener(handler);
-  return () => {
-    legacy.removeListener(handler);
-  };
+  mql.addEventListener("change", handler);
+  return () => mql.removeEventListener("change", handler);
 }

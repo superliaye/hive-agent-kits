@@ -66,13 +66,22 @@ export function ThemeProvider({
   const [ready, setReady] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Tracks the last value the daemon successfully accepted. Rollback
+  // target on save failure — closing over `preferences` captures a stale
+  // snapshot when the user fires multiple sets() before any resolves
+  // (rapid slider drags, etc).
+  const lastSavedRef = useRef<Preferences>(bootstrap ?? DEFAULT_BOOTSTRAP);
+
   useEffect(() => {
     let cancelled = false;
     void persistence
       .load()
       .then((loaded) => {
         if (cancelled) return;
-        if (loaded) setPreferencesState(loaded);
+        if (loaded) {
+          setPreferencesState(loaded);
+          lastSavedRef.current = loaded;
+        }
         setReady(true);
       })
       .catch(() => {
@@ -81,7 +90,7 @@ export function ThemeProvider({
     return () => {
       cancelled = true;
     };
-  }, [persistence]);
+  }, [persistence, bootstrap]);
 
   useEffect(() => {
     return watchSystemMode((m) => setSystemMode(m));
@@ -133,21 +142,22 @@ export function ThemeProvider({
 
   const setPreferences = useCallback(
     async (next: Preferences) => {
-      // Optimistic local apply, but snapshot the previous value so we can
-      // roll back if the daemon rejects the payload (Zod 400, network
-      // failure, etc). Otherwise the UI paints a state the server never
-      // accepted, and the next page-load reverts it without explanation.
-      const previous = preferences;
+      // Optimistic local apply. On failure, roll back to the last value
+      // the daemon ACTUALLY ACCEPTED — held in lastSavedRef — not to
+      // whatever the React state was at callback-creation. Under rapid
+      // sets() the closed-over value goes stale and a rejection there
+      // would revert past the user's earlier good edits.
       setPreferencesState(next);
       setSaveError(null);
       try {
         await persistence.save(next);
+        lastSavedRef.current = next;
       } catch (err) {
-        setPreferencesState(previous);
+        setPreferencesState(lastSavedRef.current);
         setSaveError((err as Error).message);
       }
     },
-    [persistence, preferences],
+    [persistence],
   );
 
   const exportPrefs = useCallback(() => serialize(preferences), [preferences]);

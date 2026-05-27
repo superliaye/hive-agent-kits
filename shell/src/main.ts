@@ -12,6 +12,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { BrowserWindow, app, ipcMain, nativeTheme, shell } from "electron";
+import { z } from "zod";
+
+// Renderer→main IPC contracts. AGENTS.md requires Zod at external
+// boundaries — the renderer process is its own untrusted context even
+// when we wrote the code that runs in it.
+const ChromeThemePayloadSchema = z
+  .object({
+    mode: z.enum(["light", "dark"]),
+    bg: z.string().min(1).max(64),
+    fg: z.string().min(1).max(64),
+  })
+  .strict();
 
 const isWin = process.platform === "win32";
 const PORT = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : 3117;
@@ -137,18 +149,17 @@ async function createWindow(): Promise<void> {
 // arbitrary URI handlers (file://, custom protocols, even mailto:) — a
 // compromised renderer must not be able to trigger those.
 // Renderer → main: update window chrome to match the active theme.
-// Called on every theme resolution from the ThemeProvider bridge. The
-// payload is structurally typed; bad values are silently ignored (chrome
-// just stays at the previous value — non-fatal).
+// Called on every theme resolution from the ThemeProvider bridge. Bad
+// payloads are silently ignored (chrome just stays at the previous
+// value — non-fatal). Zod-validated to keep the IPC contract honest.
 ipcMain.handle("hive:setChromeTheme", (event, payload: unknown) => {
-  if (!payload || typeof payload !== "object") return;
-  const p = payload as Record<string, unknown>;
-  const mode = p.mode === "light" || p.mode === "dark" ? p.mode : undefined;
-  const bg = typeof p.bg === "string" ? p.bg : undefined;
-  const fg = typeof p.fg === "string" ? p.fg : undefined;
-  if (mode) nativeTheme.themeSource = mode;
+  const parsed = ChromeThemePayloadSchema.safeParse(payload);
+  if (!parsed.success) return;
+  const { mode, bg, fg } = parsed.data;
+  nativeTheme.themeSource = mode;
   const win = BrowserWindow.fromWebContents(event.sender);
-  if (win && process.platform === "win32" && bg && fg) {
+  if (!win) return;
+  if (process.platform === "win32") {
     try {
       win.setTitleBarOverlay({ color: bg, symbolColor: fg, height: 32 });
     } catch {
@@ -156,12 +167,10 @@ ipcMain.handle("hive:setChromeTheme", (event, payload: unknown) => {
       // older windows from before this commit won't accept the call.
     }
   }
-  if (win && bg) {
-    try {
-      win.setBackgroundColor(bg);
-    } catch {
-      // No-op
-    }
+  try {
+    win.setBackgroundColor(bg);
+  } catch {
+    // No-op
   }
 });
 

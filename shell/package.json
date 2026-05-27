@@ -8,6 +8,9 @@
     "build": "tsc",
     "test:e2e": "playwright test"
   },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
   "devDependencies": {
     "@electron/packager": "^20.0.0",
     "@playwright/test": "^1.49.0",
