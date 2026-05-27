@@ -10,13 +10,17 @@ import { useTheme } from "../theming/index.ts";
 
 export function ChromeBridge(): null {
   const { resolved } = useTheme();
+  // Depend on the two scalars we actually pipe to IPC, not the whole
+  // tokens object. resolveTokens() returns a fresh TokenMap on every
+  // change (font-size, contrast, etc), so depending on the object would
+  // re-fire setChromeTheme on every keystroke into the font-size input.
+  const bg = resolved.tokens["color-bg-base"];
+  const fg = resolved.tokens["color-fg-default"];
   useEffect(() => {
     const bridge = typeof window !== "undefined" ? window.__hive?.setChromeTheme : undefined;
     if (!bridge) return;
-    const bg = resolved.tokens["color-bg-base"];
-    const fg = resolved.tokens["color-fg-default"];
     if (!bg || !fg) return;
     void bridge({ mode: resolved.resolvedMode, bg, fg });
-  }, [resolved.resolvedMode, resolved.tokens]);
+  }, [resolved.resolvedMode, bg, fg]);
   return null;
 }

@@ -89,7 +89,7 @@ The version prefix is `codex-theme-v1:` for parity with Codex desktop's clipboar
 ## Adding a customizable override
 
 1. Extend `ThemeConfig` in `types.ts`.
-2. Apply it inside `buildTokens()` in `ThemeProvider.tsx`.
+2. Apply it inside `resolveTokens()` in `resolve.ts` (pure function — no React, no DOM).
 3. Add the input control to your appearance settings UI.
 4. Extend the parser in `serialize.ts` (else import drops the field silently).
 

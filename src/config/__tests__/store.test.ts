@@ -106,4 +106,27 @@ describe("Config store (memory mode)", () => {
     });
     await expect(config.set("ui", { theme: "light" })).rejects.toThrow("listener veto");
   });
+
+  // Regression: two interleaved set() calls each snapshot `current`
+  // before either persistence.write lands, so the second writer
+  // clobbers the first key. Fixed by the writeQueue chain in store.ts.
+  test("concurrent set() calls do not clobber each other", async () => {
+    const p1 = config.set("ui", { theme: "light" });
+    const p2 = config.set("audit", { retention: { autoRotate: true, days: 30 } });
+    await Promise.all([p1, p2]);
+    expect(config.get("ui")).toEqual({ theme: "light" });
+    expect(config.get("audit")).toEqual({ retention: { autoRotate: true, days: 30 } });
+  });
+
+  // The writeQueue must keep draining even after a rejected set(), so
+  // a one-off schema failure can't strand subsequent valid writes.
+  test("queue drains past a rejected set()", async () => {
+    const bad = config.set("audit", {
+      retention: { autoRotate: false, days: -1 },
+    } as TestConfig["audit"]);
+    const good = config.set("ui", { theme: "light" });
+    await expect(bad).rejects.toThrow();
+    await good;
+    expect(config.get("ui")).toEqual({ theme: "light" });
+  });
 });

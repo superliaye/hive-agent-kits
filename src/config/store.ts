@@ -59,8 +59,12 @@ export function createConfigStore<S extends Record<string, unknown>>(
     };
     const next = writeQueue.then(run, run);
     // Keep the chain alive even if this call rejects, so subsequent writes
-    // still run. Each call gets its own promise to await.
-    writeQueue = next.catch(() => undefined);
+    // still run. Each call gets its own promise to await. Log failures
+    // to trace so dropped writes are diagnosable — the original error
+    // still surfaces to the awaited `next` promise for the caller.
+    writeQueue = next.catch((err) => {
+      log().warn({ module: "config", key, err: String(err) }, "config.set failed");
+    });
     return next;
   }
 

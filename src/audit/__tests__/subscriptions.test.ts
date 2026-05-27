@@ -53,6 +53,42 @@ describe("wireSubscriptions", () => {
     config.dispose();
   });
 
+  // Privacy redaction: the audit subscriber must strip color hex out of
+  // `appearance` change payloads (mode-picker is fine, accent / overrides
+  // are personal taste). Documented in audit/subscriptions.ts.
+  test("appearance config.change records only the mode, never color hex", async () => {
+    const audit = createAudit({ mode: "memory" });
+    const schema = z.object({
+      appearance: z.object({
+        mode: z.enum(["light", "dark", "system"]),
+        dark: z.object({ accent: z.string().optional() }).optional(),
+      }),
+    });
+    const config = createConfig({
+      mode: "memory",
+      initial: { appearance: { mode: "system" } },
+      schema,
+    });
+    const dispose = wireSubscriptions(audit, { config });
+
+    await config.set("appearance", {
+      mode: "dark",
+      dark: { accent: "#deadbeef" },
+    });
+
+    const rows = await audit.query({ source: "config" });
+    expect(rows.length).toBe(1);
+    const payload = rows[0]?.payload as { key: string; previous: unknown; current: unknown };
+    expect(payload.key).toBe("appearance");
+    expect(payload.previous).toEqual({ mode: "system" });
+    expect(payload.current).toEqual({ mode: "dark" });
+    // Defense-in-depth: the literal hex must not appear anywhere in the row.
+    expect(JSON.stringify(rows[0])).not.toContain("deadbeef");
+
+    dispose();
+    config.dispose();
+  });
+
   test("gateway adapter registration is NOT audited (trace, not audit)", async () => {
     const audit = createAudit({ mode: "memory" });
     const gateway = createGateway();

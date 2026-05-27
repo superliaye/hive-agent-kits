@@ -6,7 +6,7 @@
 // importPreferences accepts both forms (strips the prefix if present).
 // Validation is structural only — color/font strings pass through.
 
-import type { Preferences, ReduceMotion, ThemeConfig } from "./types.ts";
+import type { Preferences, ThemeConfig } from "./types.ts";
 
 export const THEME_WIRE_PREFIX = "codex-theme-v1:";
 export const PREFERENCES_FILE_VERSION = 1;
@@ -80,14 +80,16 @@ export function importPreferences(text: string): ImportResult {
     return { ok: false, error: "preferences.pointerCursors must be a boolean" };
   }
 
+  // After the guards above, TS narrows p.reduceMotion to the literal
+  // union and p.pointerCursors to boolean | undefined. No casts needed.
   return {
     ok: true,
     preferences: {
       mode: p.mode,
       light: light.config,
       dark: dark.config,
-      reduceMotion: (p.reduceMotion as ReduceMotion | undefined) ?? "system",
-      pointerCursors: (p.pointerCursors as boolean | undefined) ?? false,
+      reduceMotion: p.reduceMotion ?? "system",
+      pointerCursors: p.pointerCursors ?? false,
     },
   };
 }
