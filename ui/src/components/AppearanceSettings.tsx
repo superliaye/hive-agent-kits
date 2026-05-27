@@ -158,24 +158,24 @@ export function AppearanceSettings(): JSX.Element {
         <div className="appearance-card-header">
           <h3 className="settings-card-title">
             {editingMode === "dark" ? "Dark" : "Light"} theme
-            {hasOverrides(editingConfig) && (
+          </h3>
+          {hasOverrides(editingConfig) && (
+            <div className="appearance-card-modified-cluster">
               <span
                 className="settings-card-modified-dot"
                 title="This mode has unsaved overrides on top of the named theme"
                 aria-label="Modified"
               />
-            )}
-          </h3>
-          {hasOverrides(editingConfig) && (
-            <button
-              type="button"
-              className="appearance-reset-link"
-              onClick={() => resetOverrides()}
-              data-testid="theme-reset-overrides"
-              title="Clear all per-mode customizations and use the named theme as-is"
-            >
-              Reset overrides
-            </button>
+              <button
+                type="button"
+                className="appearance-reset-link"
+                onClick={() => resetOverrides()}
+                data-testid="theme-reset-overrides"
+                title="Clear all per-mode customizations and use the named theme as-is"
+              >
+                Reset overrides
+              </button>
+            </div>
           )}
         </div>
 
@@ -184,9 +184,8 @@ export function AppearanceSettings(): JSX.Element {
           activeId={currentTheme.id}
           onPick={(id) => patchConfig({ themeId: id })}
         />
-        <p className="meta appearance-card-helper">
-          Tweak any field below to override this theme.
-        </p>
+
+        <h4 className="appearance-subhead">Custom colors</h4>
 
         <ColorOverride
           label="Accent"
@@ -585,15 +584,13 @@ function ThemeGallery({
             aria-pressed={isActive}
             aria-label={`Use ${t.name}`}
           >
+            {isActive && (
+              <span className="theme-gallery-check" aria-hidden="true">
+                ✓
+              </span>
+            )}
             <ThemePreview tokens={t.palette.tokens} />
-            <div className="theme-gallery-name">
-              {t.name}
-              {isActive && (
-                <span className="theme-gallery-check" aria-hidden="true">
-                  ✓
-                </span>
-              )}
-            </div>
+            <div className="theme-gallery-name">{t.name}</div>
           </button>
         );
       })}

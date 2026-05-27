@@ -885,9 +885,15 @@ pre.config {
 .appearance-mode-btn:hover {
   color: var(--color-fg-default);
 }
+/* Mode picker active state — neutral fill, NOT accent. Mode is an axis
+ * orthogonal to accent; tinting it with the user's chosen accent
+ * conflates the two and visually distorts when the accent is unusual
+ * (e.g. a pink override turning the Dark button hot pink). */
 .appearance-mode-btn.active {
-  background: var(--color-accent);
-  color: var(--color-fg-on-accent);
+  background: var(--color-bg-hover);
+  color: var(--color-fg-default);
+  font-weight: 500;
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
 .appearance-card-header {
@@ -910,16 +916,27 @@ pre.config {
   color: var(--color-fg-default);
   background: var(--color-bg-hover);
 }
+/* Modified cluster — single visual group, not split across the header. */
+.appearance-card-modified-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .settings-card-modified-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--color-accent);
+  /* Semantic warning color, not user-accent — the indicator stays
+   * legible regardless of what the user customized the accent to. */
+  background: var(--color-warning);
   display: inline-block;
 }
-.appearance-card-helper {
-  margin: 8px 0 0;
-  font-size: 12px;
+/* Inline section heading inside the per-mode card. */
+.appearance-subhead {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-fg-default);
+  margin: 14px 0 4px;
 }
 .appearance-details {
   margin-top: 14px;
@@ -973,12 +990,19 @@ pre.config {
   margin-top: 0;
 }
 
-/* Theme gallery — clickable cards with structured mini-mock previews. */
+/* Theme gallery — clickable cards with structured mini-mock previews.
+ * Cap at 4 columns so 8 dark themes always wrap as 4×2 (or 4×1 on
+ * narrow widths) — avoids the orphaned-row look of auto-fill. */
 .theme-gallery {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
   margin: 10px 0 8px;
+}
+@media (min-width: 700px) {
+  .theme-gallery {
+    grid-template-columns: repeat(4, 1fr);
+  }
 }
 .theme-gallery-item {
   background: var(--color-bg-base);
@@ -992,6 +1016,7 @@ pre.config {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: relative;
   transition: background 120ms ease, border-color 120ms ease;
 }
 .theme-gallery-item:hover {
@@ -1045,20 +1070,32 @@ pre.config {
   height: 9px;
   border-radius: 50%;
   display: block;
-  /* 1px ring helps light-mode palettes where dots fade into the bg. */
-  box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 20%, transparent);
+  /* Ring helps Light themes where a near-black accent on white card bg
+   * fades into the surface and looks defective. The ring is derived
+   * from --color-fg-default which is visible on every theme by design. */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-fg-default) 35%, transparent);
 }
 .theme-gallery-name {
   font-size: 12.5px;
   font-weight: 600;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 6px;
 }
+/* Check glyph as a corner badge — separates the "selected" signal from
+ * the swatch's preview dots which already live near the card bottom. */
 .theme-gallery-check {
-  color: var(--color-accent);
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  color: var(--color-fg-on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
   font-weight: 700;
+  z-index: 1;
 }
 .appearance-sub-btn {
   padding: 4px 10px;
@@ -1117,28 +1154,39 @@ pre.config {
 .appearance-row-control--narrow input[type="number"] {
   width: 70px;
 }
+/* Color swatch is the primary click target — bigger, visible ring,
+ * affordance-y border so users know it opens a color picker. */
 .appearance-row-control input[type="color"] {
-  height: 28px;
-  width: 50px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 4px;
-  padding: 0;
-  background: transparent;
+  height: 32px;
+  width: 44px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  padding: 2px;
+  background: var(--color-bg-surface);
   cursor: pointer;
   flex-shrink: 0;
 }
+.appearance-row-control input[type="color"]:hover {
+  border-color: var(--color-fg-muted);
+}
 .appearance-row-control input[type="text"],
 .appearance-row-control input[type="number"] {
-  padding: 6px 8px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
   font: inherit;
-  background: var(--color-bg-surface);
+  background: var(--color-bg-base);
   color: var(--color-fg-default);
   font-family: var(--font-code);
   font-size: var(--font-size-code);
   flex: 1;
   min-width: 0;
+}
+.appearance-row-control input[type="text"]:focus,
+.appearance-row-control input[type="number"]:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  background: var(--color-bg-surface);
 }
 .appearance-row-control input[type="range"] {
   flex: 1;

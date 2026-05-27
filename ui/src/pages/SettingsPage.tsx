@@ -39,7 +39,6 @@ export function SettingsPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Eleme
   return (
     <div className="settings-layout">
       <nav className="settings-nav" aria-label="Settings sections">
-        <h2 className="settings-nav-title">Settings</h2>
         <ul>
           {SECTIONS.map((s) => (
             <li key={s.id}>
