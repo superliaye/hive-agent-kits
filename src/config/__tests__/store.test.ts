@@ -129,4 +129,58 @@ describe("Config store (memory mode)", () => {
     await good;
     expect(config.get("ui")).toEqual({ theme: "light" });
   });
+
+  // setPath: dotted-path setter for granular updates without
+  // read-modify-write at the call site.
+  describe("setPath (nested setter)", () => {
+    test("updates a single nested leaf without touching siblings", async () => {
+      await config.setPath("audit.retention.days", 30);
+      expect(config.get("audit")).toEqual({
+        retention: { autoRotate: false, days: 30 },
+      });
+    });
+
+    test("validates the FULL merged tree, not just the leaf", async () => {
+      await expect(config.setPath("audit.retention.days", -1)).rejects.toThrow();
+      // Original value preserved
+      expect(config.get("audit").retention.days).toBe(90);
+    });
+
+    test("empty path segment rejects", async () => {
+      await expect(config.setPath("", 42)).rejects.toThrow();
+    });
+
+    test("single-segment path behaves like set(key, value)", async () => {
+      await config.setPath("ui", { theme: "light" });
+      expect(config.get("ui")).toEqual({ theme: "light" });
+    });
+
+    test("emits a single change event keyed by the top-level segment", async () => {
+      const seen: Array<{ key: string; current: unknown }> = [];
+      config.events.on("change", (e) => {
+        seen.push({ key: e.key, current: e.current });
+      });
+      await config.setPath("audit.retention.days", 60);
+      expect(seen.length).toBe(1);
+      expect(seen[0]).toEqual({
+        key: "audit",
+        current: { retention: { autoRotate: false, days: 60 } },
+      });
+    });
+
+    test("no-op when the value is unchanged", async () => {
+      const seen: number[] = [];
+      config.events.on("change", () => seen.push(1));
+      await config.setPath("audit.retention.days", 90);
+      expect(seen.length).toBe(0);
+    });
+
+    test("concurrent setPath calls don't clobber (same writeQueue)", async () => {
+      const p1 = config.setPath("ui.theme", "light");
+      const p2 = config.setPath("audit.retention.days", 30);
+      await Promise.all([p1, p2]);
+      expect(config.get("ui").theme).toBe("light");
+      expect(config.get("audit").retention.days).toBe(30);
+    });
+  });
 });

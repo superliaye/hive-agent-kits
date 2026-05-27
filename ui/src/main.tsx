@@ -6,7 +6,7 @@ import { resolveApiConfig } from "./api.ts";
 import { ChromeBridge } from "./components/ChromeBridge.tsx";
 import { startEventStream } from "./events.ts";
 import "./styles.css";
-import { createHivePersistence, readBootstrap } from "./theming-hive-persistence.ts";
+import { createHivePersistence } from "./theming-hive-persistence.ts";
 import { ThemeProvider } from "./theming/index.ts";
 
 const queryClient = new QueryClient({
@@ -27,7 +27,10 @@ function Root(): JSX.Element {
   // Persistence + bootstrap are stable for the lifetime of the page;
   // memoize so a re-render of Root doesn't tear down the ThemeProvider.
   const persistence = useMemo(() => createHivePersistence(apiConfig), []);
-  const bootstrap = useMemo(() => readBootstrap(), []);
+  // Synchronous read of last-cached preferences so first paint never
+  // flashes. The cache is paint-only — load() resolves the canonical
+  // value asynchronously and overwrites it.
+  const bootstrap = useMemo(() => persistence.getCached() ?? undefined, [persistence]);
   return (
     <ThemeProvider persistence={persistence} bootstrap={bootstrap}>
       <ChromeBridge />

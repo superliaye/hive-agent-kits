@@ -12,6 +12,16 @@ export type Config<S extends Record<string, unknown>> = {
   // Validate + persist + broadcast. Rejects on schema failure or persistence error.
   set<K extends keyof S & string>(key: K, value: S[K]): Promise<void>;
 
+  // Deep-merge a single value into the tree at a dotted path
+  // (e.g. "appearance.dark.contrast"). Validates the FULL merged tree
+  // through the schema (catches cross-field constraints). Atomic write
+  // via the same writeQueue as `set()`, so concurrent calls don't
+  // clobber. Emits one `change` event keyed by the path's top-level
+  // segment; the audit subscriber sees the same shape it sees from
+  // `set()`. Use over `set()` when only one leaf is changing — avoids
+  // read-modify-write boilerplate at the call site.
+  setPath(path: string, value: unknown): Promise<void>;
+
   // Fires immediately with the current value, then again on every change.
   // Returns a disposer. Implemented on top of `events`.
   watch<K extends keyof S & string>(key: K, listener: (value: S[K]) => void): () => void;

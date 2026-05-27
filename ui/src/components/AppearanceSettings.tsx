@@ -3,122 +3,39 @@
 // and toggles. Share group (Export to file / Copy theme / Import) sits
 // below.
 
-import { useRef, useState } from "react";
 import {
   DEFAULT_CONTRAST,
   DEFAULT_FONT_CODE_SIZE,
   DEFAULT_FONT_UI_SIZE,
   FONT_SUGGESTIONS,
-  findNamedTheme,
   type Mode,
   type NamedTheme,
-  namedThemesFor,
-  type Preferences,
   type ReduceMotion,
-  type ThemeConfig,
-  exportPreferencesWire,
-  useTheme,
 } from "../theming/index.ts";
-
-// Keys on ThemeConfig that count as "overrides" the user can clear in
-// bulk. themeId is the named-palette selection — NOT an override.
-const OVERRIDE_KEYS: ReadonlyArray<Exclude<keyof ThemeConfig, "themeId">> = [
-  "accent",
-  "background",
-  "foreground",
-  "fontUi",
-  "fontCode",
-  "fontUiSize",
-  "fontCodeSize",
-  "contrast",
-  "translucentSidebar",
-];
-
-function hasOverrides(config: ThemeConfig): boolean {
-  return OVERRIDE_KEYS.some((k) => config[k] !== undefined);
-}
+import { useAppearanceSettings } from "./useAppearanceSettings.ts";
 
 export function AppearanceSettings(): JSX.Element {
-  const theme = useTheme();
-  const [importError, setImportError] = useState<string | null>(null);
-  const [copyStatus, setCopyStatus] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const prefs = theme.preferences;
-  // Card always edits the mode that's currently *applied* (resolved from
-  // system-follow when needed). Matches Codex: one card, one mode.
-  const editingMode = theme.resolved.resolvedMode;
-  const editingConfig: ThemeConfig = editingMode === "dark" ? prefs.dark : prefs.light;
-  const themes = namedThemesFor(editingMode);
-  const currentTheme = findNamedTheme(editingMode, editingConfig.themeId);
-  const palette = currentTheme.palette;
-
-  function patchPrefs(patch: Partial<Preferences>): void {
-    void theme.setPreferences({ ...prefs, ...patch });
-  }
-
-  function patchConfig(patch: Partial<ThemeConfig>): void {
-    const next = { ...editingConfig, ...patch };
-    for (const k of Object.keys(next) as (keyof ThemeConfig)[]) {
-      if (next[k] === undefined || next[k] === "") delete next[k];
-    }
-    patchPrefs(editingMode === "dark" ? { dark: next } : { light: next });
-  }
-
-  function resetOverrides(): void {
-    // Keep themeId (the user's named-palette choice), drop everything else.
-    const next: ThemeConfig = editingConfig.themeId
-      ? { themeId: editingConfig.themeId }
-      : {};
-    patchPrefs(editingMode === "dark" ? { dark: next } : { light: next });
-  }
-
-  function onExportFile(): void {
-    const json = theme.exportPreferences();
-    const blob = new Blob([json], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `hive-theme-${prefs.mode}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  }
-
-  async function onCopyTheme(): Promise<void> {
-    const wire = exportPreferencesWire(prefs);
-    try {
-      await navigator.clipboard.writeText(wire);
-      setCopyStatus("Copied!");
-    } catch {
-      setCopyStatus("Copy failed (clipboard blocked)");
-    }
-    window.setTimeout(() => setCopyStatus(null), 2000);
-  }
-
-  async function onImportFile(e: React.ChangeEvent<HTMLInputElement>): Promise<void> {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setImportError(null);
-    const text = await file.text();
-    const result = await theme.importPreferences(text);
-    if (!result.ok) setImportError(result.error);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  }
-
-  async function onPasteImport(): Promise<void> {
-    setImportError(null);
-    let text: string;
-    try {
-      text = await navigator.clipboard.readText();
-    } catch {
-      setImportError("Clipboard read blocked — use Import File instead");
-      return;
-    }
-    const result = await theme.importPreferences(text);
-    if (!result.ok) setImportError(result.error);
-  }
+  const {
+    prefs,
+    editingMode,
+    editingConfig,
+    themes,
+    currentTheme,
+    palette,
+    hasOverrides,
+    resolved,
+    saveError,
+    importError,
+    copyStatus,
+    fileInputRef,
+    patchPrefs,
+    patchConfig,
+    resetOverrides,
+    onExportFile,
+    onCopyTheme,
+    onImportFile,
+    onPasteImport,
+  } = useAppearanceSettings();
 
   const modeOptions: Array<{ id: Mode; label: string }> = [
     { id: "light", label: "Light" },
@@ -132,10 +49,10 @@ export function AppearanceSettings(): JSX.Element {
         <h3>Theme</h3>
         <p className="meta">
           Use light, dark, or match your system. Each mode keeps its own colors and fonts.
-          {theme.resolved.fromSystem && (
+          {resolved.fromSystem && (
             <>
               {" "}
-              Following system: <strong>{theme.resolved.resolvedMode}</strong>.
+              Following system: <strong>{resolved.resolvedMode}</strong>.
             </>
           )}
         </p>
@@ -159,7 +76,7 @@ export function AppearanceSettings(): JSX.Element {
           <h3 className="settings-card-title">
             {editingMode === "dark" ? "Dark" : "Light"} theme
           </h3>
-          {hasOverrides(editingConfig) && (
+          {hasOverrides && (
             <div className="appearance-card-modified-cluster">
               <span
                 className="settings-card-modified-dot"
@@ -321,9 +238,9 @@ export function AppearanceSettings(): JSX.Element {
             Import failed: {importError}
           </div>
         )}
-        {theme.saveError && (
+        {saveError && (
           <div className="banner-error" data-testid="theme-save-error">
-            Save failed: {theme.saveError}
+            Save failed: {saveError}
           </div>
         )}
       </div>

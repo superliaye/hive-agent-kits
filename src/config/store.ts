@@ -68,6 +68,37 @@ export function createConfigStore<S extends Record<string, unknown>>(
     return next;
   }
 
+  async function setPath(path: string, value: unknown): Promise<void> {
+    const parts = path.split(".");
+    if (parts.length === 0 || parts[0] === "") {
+      throw new Error(`invalid config path: "${path}"`);
+    }
+    const top = parts[0] as keyof S & string;
+    const run = async (): Promise<void> => {
+      const proposedTop = mergeByPath(current[top], parts.slice(1), value);
+      const proposed = { ...current, [top]: proposedTop } as S;
+      schema.parse(proposed);
+
+      const previousTop = current[top];
+      if (deepEquals(previousTop, proposedTop)) return;
+
+      if (persistence) persistence.write(proposed);
+      current = proposed;
+
+      await events.emit("change", {
+        key: top,
+        previous: previousTop,
+        current: proposedTop,
+        source: "set",
+      });
+    };
+    const next = writeQueue.then(run, run);
+    writeQueue = next.catch((err) => {
+      log().warn({ module: "config", path, err: String(err) }, "config.setPath failed");
+    });
+    return next;
+  }
+
   function watch<K extends keyof S & string>(key: K, listener: (value: S[K]) => void): () => void {
     // Initial fire — eliminates the "init from current state, then subscribe"
     // two-step every caller would otherwise repeat.
@@ -114,5 +145,19 @@ export function createConfigStore<S extends Record<string, unknown>>(
     fileWatcherDispose?.();
   }
 
-  return { get, set, watch, dispose, events };
+  return { get, set, setPath, watch, dispose, events };
+}
+
+// Deep-merge `value` into `current` at the path described by `parts`.
+// `parts` is the path tail after the top-level key. Empty `parts` = full
+// replacement. Objects along the path are cloned (no mutation of inputs).
+function mergeByPath(current: unknown, parts: string[], value: unknown): unknown {
+  if (parts.length === 0) return value;
+  const [head, ...rest] = parts;
+  const base =
+    current && typeof current === "object" && !Array.isArray(current)
+      ? { ...(current as Record<string, unknown>) }
+      : ({} as Record<string, unknown>);
+  base[head] = mergeByPath(base[head], rest, value);
+  return base;
 }

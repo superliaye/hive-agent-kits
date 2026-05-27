@@ -1,0 +1,183 @@
+// Orchestration hook for the Appearance settings panel.
+//
+// The component itself is ~650 lines of JSX. Extracting the state
+// machine (which mode is being edited, has this mode been customized,
+// what does Reset clear, how do export/import/clipboard flows behave)
+// into a hook means:
+//
+//   - The hook becomes the testable surface (no DOM mount required).
+//   - The component file becomes pure JSX threaded against a single
+//     hook return value — easier to scan, easier to restyle.
+//   - Sub-components stay where they are (already presentation-only).
+//
+// One consumer today (AppearanceSettings.tsx). The deepening payoff is
+// separation of concerns, not reuse.
+
+import { useCallback, useRef, useState } from "react";
+import {
+  exportPreferencesWire,
+  findNamedTheme,
+  type NamedTheme,
+  namedThemesFor,
+  type Preferences,
+  type ResolvedMode,
+  type ResolvedTheme,
+  type ThemeConfig,
+  useTheme,
+} from "../theming/index.ts";
+
+// Keys on ThemeConfig that count as "overrides" the user can clear in
+// bulk. themeId is the named-palette selection — NOT an override.
+const OVERRIDE_KEYS: ReadonlyArray<Exclude<keyof ThemeConfig, "themeId">> = [
+  "accent",
+  "background",
+  "foreground",
+  "fontUi",
+  "fontCode",
+  "fontUiSize",
+  "fontCodeSize",
+  "contrast",
+  "translucentSidebar",
+];
+
+export function hasOverrides(config: ThemeConfig): boolean {
+  return OVERRIDE_KEYS.some((k) => config[k] !== undefined);
+}
+
+export type UseAppearanceSettingsReturn = {
+  // Read state
+  prefs: Preferences;
+  editingMode: ResolvedMode;
+  editingConfig: ThemeConfig;
+  themes: readonly NamedTheme[];
+  currentTheme: NamedTheme;
+  palette: NamedTheme["palette"];
+  hasOverrides: boolean;
+  resolved: ResolvedTheme;
+  saveError: string | null;
+  // Transient UI state (import errors, "Copied!" feedback)
+  importError: string | null;
+  copyStatus: string | null;
+  fileInputRef: React.RefObject<HTMLInputElement>;
+  // Mutators
+  patchPrefs: (patch: Partial<Preferences>) => void;
+  patchConfig: (patch: Partial<ThemeConfig>) => void;
+  resetOverrides: () => void;
+  // Share actions
+  onExportFile: () => void;
+  onCopyTheme: () => Promise<void>;
+  onImportFile: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  onPasteImport: () => Promise<void>;
+};
+
+export function useAppearanceSettings(): UseAppearanceSettingsReturn {
+  const theme = useTheme();
+  const [importError, setImportError] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const prefs = theme.preferences;
+  // Card always edits the mode that's currently *applied* (resolved from
+  // system-follow when needed). Matches Codex: one card, one mode.
+  const editingMode = theme.resolved.resolvedMode;
+  const editingConfig: ThemeConfig = editingMode === "dark" ? prefs.dark : prefs.light;
+  const themes = namedThemesFor(editingMode);
+  const currentTheme = findNamedTheme(editingMode, editingConfig.themeId);
+  const palette = currentTheme.palette;
+
+  const patchPrefs = useCallback(
+    (patch: Partial<Preferences>): void => {
+      void theme.setPreferences({ ...prefs, ...patch });
+    },
+    [prefs, theme.setPreferences],
+  );
+
+  const patchConfig = useCallback(
+    (patch: Partial<ThemeConfig>): void => {
+      const next = { ...editingConfig, ...patch };
+      for (const k of Object.keys(next) as (keyof ThemeConfig)[]) {
+        if (next[k] === undefined || next[k] === "") delete next[k];
+      }
+      patchPrefs(editingMode === "dark" ? { dark: next } : { light: next });
+    },
+    [editingConfig, editingMode, patchPrefs],
+  );
+
+  const resetOverrides = useCallback((): void => {
+    // Keep themeId (the user's named-palette choice), drop everything else.
+    const next: ThemeConfig = editingConfig.themeId ? { themeId: editingConfig.themeId } : {};
+    patchPrefs(editingMode === "dark" ? { dark: next } : { light: next });
+  }, [editingConfig.themeId, editingMode, patchPrefs]);
+
+  const onExportFile = useCallback((): void => {
+    const json = theme.exportPreferences();
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `hive-theme-${prefs.mode}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [prefs.mode, theme.exportPreferences]);
+
+  const onCopyTheme = useCallback(async (): Promise<void> => {
+    const wire = exportPreferencesWire(prefs);
+    try {
+      await navigator.clipboard.writeText(wire);
+      setCopyStatus("Copied!");
+    } catch {
+      setCopyStatus("Copy failed (clipboard blocked)");
+    }
+    window.setTimeout(() => setCopyStatus(null), 2000);
+  }, [prefs]);
+
+  const onImportFile = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      setImportError(null);
+      const text = await file.text();
+      const result = await theme.importPreferences(text);
+      if (!result.ok) setImportError(result.error);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    },
+    [theme.importPreferences],
+  );
+
+  const onPasteImport = useCallback(async (): Promise<void> => {
+    setImportError(null);
+    let text: string;
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      setImportError("Clipboard read blocked — use Import File instead");
+      return;
+    }
+    const result = await theme.importPreferences(text);
+    if (!result.ok) setImportError(result.error);
+  }, [theme.importPreferences]);
+
+  return {
+    prefs,
+    editingMode,
+    editingConfig,
+    themes,
+    currentTheme,
+    palette,
+    hasOverrides: hasOverrides(editingConfig),
+    resolved: theme.resolved,
+    saveError: theme.saveError,
+    importError,
+    copyStatus,
+    fileInputRef,
+    patchPrefs,
+    patchConfig,
+    resetOverrides,
+    onExportFile,
+    onCopyTheme,
+    onImportFile,
+    onPasteImport,
+  };
+}

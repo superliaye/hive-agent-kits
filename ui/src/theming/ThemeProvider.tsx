@@ -1,24 +1,22 @@
-// ThemeProvider — resolves Preferences to a TokenMap and applies it to
-// `:root` as CSS variables. Also sets data-* attributes that app CSS can
-// branch on (data-theme, data-reduce-motion, data-pointer-cursors).
+// ThemeProvider — the React glue around the theming module.
 //
-// Rendering model: the resolved tokens are applied imperatively in an
-// effect via `style.setProperty`. That keeps theme switches fast (no
-// React re-render of styled subtrees) and side-effect-isolated.
+// State management (load, optimistic apply, rollback on save failure)
+// lives in `usePreferences` / `createPreferencesController` — fully
+// testable without React. Theming math (mode resolution, palette
+// layering, contrast modulation) lives in `resolve.ts` — pure
+// functions. This component does two things only:
+//
+//   1. Wire the controller's snapshot into a React Context.
+//   2. Apply the resolved TokenMap to `:root` via setProperty.
+//
+// Everything else is delegated.
 
-import {
-  type ReactNode,
-  createContext,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type ReactNode, createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { resolveMode, resolveReduceMotion, resolveTokens } from "./resolve.ts";
 import { importPreferences as deserialize, exportPreferences as serialize } from "./serialize.ts";
 import { getSystemMode, watchSystemMode } from "./system.ts";
 import type { Persistence, Preferences, ResolvedMode, ResolvedTheme } from "./types.ts";
+import { usePreferences } from "./usePreferences.ts";
 
 export type ThemeContextValue = {
   resolved: ResolvedTheme;
@@ -52,49 +50,18 @@ const DEFAULT_BOOTSTRAP: Preferences = {
   pointerCursors: false,
 };
 
-// Theming math (mode resolution, palette layering, contrast modulation)
-// lives in resolve.ts so it's testable + callable from any context.
-// ThemeProvider here is just the React glue around it.
-
 export function ThemeProvider({
   persistence,
   bootstrap,
   children,
 }: ThemeProviderProps): JSX.Element {
-  const [preferences, setPreferencesState] = useState<Preferences>(bootstrap ?? DEFAULT_BOOTSTRAP);
+  const { preferences, setPreferences, ready, saveError } = usePreferences(
+    persistence,
+    bootstrap ?? DEFAULT_BOOTSTRAP,
+  );
   const [systemMode, setSystemMode] = useState<ResolvedMode>(getSystemMode);
-  const [ready, setReady] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Tracks the last value the daemon successfully accepted. Rollback
-  // target on save failure — closing over `preferences` captures a stale
-  // snapshot when the user fires multiple sets() before any resolves
-  // (rapid slider drags, etc).
-  const lastSavedRef = useRef<Preferences>(bootstrap ?? DEFAULT_BOOTSTRAP);
-
-  useEffect(() => {
-    let cancelled = false;
-    void persistence
-      .load()
-      .then((loaded) => {
-        if (cancelled) return;
-        if (loaded) {
-          setPreferencesState(loaded);
-          lastSavedRef.current = loaded;
-        }
-        setReady(true);
-      })
-      .catch(() => {
-        if (!cancelled) setReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [persistence, bootstrap]);
-
-  useEffect(() => {
-    return watchSystemMode((m) => setSystemMode(m));
-  }, []);
+  useEffect(() => watchSystemMode((m) => setSystemMode(m)), []);
 
   const resolved = useMemo<ResolvedTheme>(() => {
     const resolvedMode = resolveMode(preferences, systemMode);
@@ -107,6 +74,9 @@ export function ThemeProvider({
     };
   }, [preferences, systemMode]);
 
+  // Apply resolved tokens to :root imperatively — the whole point of
+  // the CSS-variable architecture. Track applied keys so unmount + theme
+  // switches can strip stale `--*` properties cleanly.
   const lastAppliedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -121,11 +91,15 @@ export function ThemeProvider({
     }
     lastAppliedRef.current = nextKeys;
     root.setAttribute("data-theme", resolved.resolvedMode);
-    root.setAttribute("data-reduce-motion", resolveReduceMotion(preferences, prefersReducedMotion()));
+    root.setAttribute(
+      "data-reduce-motion",
+      resolveReduceMotion(preferences, prefersReducedMotion()),
+    );
     root.setAttribute("data-pointer-cursors", preferences.pointerCursors ? "on" : "off");
   }, [resolved, preferences]);
 
-  // Unmount cleanup — strip everything we put on :root.
+  // Unmount cleanup — portable charter demands a host app can toggle
+  // <ThemeProvider> on/off without leaking tokens to :root.
   useEffect(() => {
     return () => {
       if (typeof document === "undefined") return;
@@ -139,26 +113,6 @@ export function ThemeProvider({
       root.removeAttribute("data-pointer-cursors");
     };
   }, []);
-
-  const setPreferences = useCallback(
-    async (next: Preferences) => {
-      // Optimistic local apply. On failure, roll back to the last value
-      // the daemon ACTUALLY ACCEPTED — held in lastSavedRef — not to
-      // whatever the React state was at callback-creation. Under rapid
-      // sets() the closed-over value goes stale and a rejection there
-      // would revert past the user's earlier good edits.
-      setPreferencesState(next);
-      setSaveError(null);
-      try {
-        await persistence.save(next);
-        lastSavedRef.current = next;
-      } catch (err) {
-        setPreferencesState(lastSavedRef.current);
-        setSaveError((err as Error).message);
-      }
-    },
-    [persistence],
-  );
 
   const exportPrefs = useCallback(() => serialize(preferences), [preferences]);
   const importPrefs = useCallback(

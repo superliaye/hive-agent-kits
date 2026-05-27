@@ -51,3 +51,9 @@ export {
 export type { ImportResult, PreferencesFile } from "./serialize.ts";
 export { resolveMode, resolveReduceMotion, resolveTokens } from "./resolve.ts";
 export { getSystemMode, watchSystemMode } from "./system.ts";
+export { createPreferencesController } from "./preferences.ts";
+export type { PreferencesController, PreferencesSnapshot } from "./preferences.ts";
+export { usePreferences } from "./usePreferences.ts";
+export type { UsePreferencesReturn } from "./usePreferences.ts";
+export { createCachingPersistence } from "./caching-persistence.ts";
+export type { CacheStorage, CachingPersistence } from "./caching-persistence.ts";
