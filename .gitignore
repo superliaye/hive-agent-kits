@@ -18,3 +18,5 @@ shell/staging/
 shell/ui-dist/
 shell/release/
 shell/build-resources/
+# /build-feature-workflow loop scratch
+.build-feature-workflow/
