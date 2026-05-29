@@ -100,8 +100,25 @@ function readToken(): string {
   return readFileSync(TOKEN_PATH, "utf8").trim();
 }
 
+// In dev, Vite may not be serving yet when the window loads (the launchers
+// stagger only ~1-2s before Electron). A failed loadURL would reject and exit
+// the app; retry until Vite responds, letting the final attempt throw so a
+// genuine failure is still surfaced.
+async function loadDevUrl(win: BrowserWindow, attempts = 30): Promise<void> {
+  for (let i = 0; i < attempts - 1; i++) {
+    try {
+      await win.loadURL(UI_DEV_URL);
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  await win.loadURL(UI_DEV_URL);
+}
+
 async function createWindow(): Promise<void> {
   const token = readToken();
+  const devMode = process.env.HIVE_UI_MODE === "dev" || process.env.NODE_ENV === "development";
   const win = new BrowserWindow({
     width: 1100,
     height: 720,
@@ -120,6 +137,9 @@ async function createWindow(): Promise<void> {
       process.platform === "win32"
         ? { color: "#0d1117", symbolColor: "#e6edf3", height: 32 }
         : undefined,
+    // Start hidden and show explicitly after load (below): avoids an empty
+    // flash and, in dev, lets us show without stealing focus.
+    show: false,
     backgroundColor: "#0d1117",
     webPreferences: {
       preload: join(__dirname, "preload.js"),
@@ -131,13 +151,17 @@ async function createWindow(): Promise<void> {
   win.webContents.on("did-fail-load", (_e, code, desc, url) => {
     console.error(`[shell] did-fail-load: ${code} ${desc} ${url}`);
   });
-  if (process.env.HIVE_UI_MODE === "dev" || process.env.NODE_ENV === "development") {
-    await win.loadURL(UI_DEV_URL);
+  if (devMode) {
+    await loadDevUrl(win);
   } else if (existsSync(UI_DIST_INDEX)) {
     await win.loadFile(UI_DIST_INDEX);
   } else {
-    await win.loadURL(UI_DEV_URL);
+    await loadDevUrl(win);
   }
+  // Dev launches shouldn't pull focus from whatever you're working on;
+  // a production double-click should focus normally.
+  if (devMode) win.showInactive();
+  else win.show();
 }
 
 // Renderer → main bridge for `shell.openExternal`. The preload exposes this

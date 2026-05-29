@@ -1,14 +1,18 @@
-// Dev orchestrator: opens three visible terminals, one per stack piece.
-// Each terminal owns its piece's lifecycle — close the window to stop it.
-// No background processes, no hidden state.
+// Dev orchestrator: prepares deps, tears down any prior stack, opens one
+// terminal per stack piece (minimized on Windows so they don't steal focus),
+// then verifies health and prints a STATUS block. Each terminal owns its
+// piece's lifecycle — close the window to stop it.
 //
-// Windows: cmd.exe windows opened via `start "title" cmd /k …`
+//   bun run dev:full                  full GUI stack (default)
+//   bun run dev:full -- --daemon-only  daemon API only, no Vite/Electron
+//
+// Windows: cmd.exe windows opened via `start "title" /min cmd /k …`
 // macOS:   Terminal.app via osascript
 // Linux:   x-terminal-emulator / gnome-terminal / xterm (first one found)
 
-import { spawn, type SpawnOptions } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 type Job = {
@@ -19,6 +23,9 @@ type Job = {
 };
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
+const DAEMON_PORT = 3117;
+const VITE_PORT = 5173;
+const daemonOnly = process.argv.includes("--daemon-only");
 
 const jobs: Job[] = [
   {
@@ -85,7 +92,8 @@ function spawnTerminal(job: Job): void {
     // it as a script — no quoting/chaining gotchas. /k keeps the window open
     // after the script exits.
     const bat = writeBat(job, fullCwd);
-    spawn("cmd", ["/c", "start", `"${job.title}"`, "cmd", "/k", bat], opts);
+    // /min: land in the taskbar without stealing focus.
+    spawn("cmd", ["/c", "start", `"${job.title}"`, "/min", "cmd", "/k", bat], opts);
     return;
   }
   if (isMac) {
@@ -113,18 +121,167 @@ function spawnTerminal(job: Job): void {
   );
 }
 
-console.log("Starting Hive dev stack — three windows will open:\n");
-for (let i = 0; i < jobs.length; i++) {
-  const job = jobs[i]!;
-  const where = job.cwd ? ` (in ${job.cwd}/)` : "";
-  console.log(`  ${i + 1}. ${job.title}: ${job.cmd}${where}`);
-  spawnTerminal(job);
-  // Stagger so the daemon and Vite are up before Electron probes them.
-  if (i < jobs.length - 1) {
-    await new Promise((r) => setTimeout(r, 1200));
+// Install deps before launching. `bun install` is near-instant when the
+// lockfile is already satisfied, so this is cheap on a warm repo and the only
+// thing that makes a freshly cloned or pulled (dependency-drifted) repo
+// actually boot — without it the daemon and Vite start but silently fail to
+// bind their ports. Daemon-only needs the root package alone.
+function installAll(): void {
+  const targets: Array<[string, string]> = [["root", REPO_ROOT]];
+  if (!daemonOnly) {
+    targets.push(["ui", resolve(REPO_ROOT, "ui")], ["shell", resolve(REPO_ROOT, "shell")]);
+  }
+  for (const [label, dir] of targets) {
+    console.log(`→ bun install (${label})`);
+    const r = spawnSync("bun", ["install"], { cwd: dir, stdio: "inherit", shell: isWin });
+    if (r.status !== 0) {
+      console.error(`bun install failed in ${label} (exit ${r.status})`);
+      process.exit(1);
+    }
   }
 }
 
-console.log("\nClose a window to stop that piece. Daemon writes to ~/.hive/.");
-console.log("Token: cat ~/.hive/.token (Electron reads it automatically)");
-console.log(`(Launcher scripts staged at ${stageDir})`);
+// Fully tear down any prior Hive stack before relaunching, so repeated starts
+// restart cleanly instead of piling up orphaned windows. Just freeing the
+// ports would leave the empty cmd /k windows and the Electron behind.
+function stopPriorStack(): void {
+  if (isWin) {
+    // Kill the titled cmd host windows (taskkill /T cascades to their bun +
+    // Electron children), sweep any Electron orphaned from an already-closed
+    // window (scoped to this repo's binary so other Electron apps are spared),
+    // then clear the ports as a backstop.
+    const electronDir = resolve(REPO_ROOT, "shell", "node_modules");
+    const cmd = [
+      `Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | Where-Object { $_.CommandLine -match 'hive-dev-|hive-shell-launch\\.bat' } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }`,
+      `Get-CimInstance Win32_Process -Filter "Name='electron.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${electronDir}', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
+      `Get-NetTCPConnection -State Listen -LocalPort ${DAEMON_PORT},${VITE_PORT} -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`,
+    ].join("; ");
+    spawnSync("powershell", ["-NoProfile", "-Command", cmd], { stdio: "ignore" });
+    return;
+  }
+  // mac/linux: a launcher can't reliably close terminal windows, but it can
+  // free the ports by killing whatever bun is bound to them.
+  for (const port of [DAEMON_PORT, VITE_PORT]) {
+    const found = spawnSync("lsof", ["-ti", `tcp:${port}`], { encoding: "utf8" });
+    for (const pid of (found.stdout ?? "").split("\n").map((s) => s.trim()).filter(Boolean)) {
+      spawnSync("kill", ["-9", pid], { stdio: "ignore" });
+    }
+  }
+}
+
+async function waitFor(timeoutMs: number, check: () => Promise<boolean>): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      if (await check()) return true;
+    } catch {
+      // not up yet — retry until the deadline
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return false;
+}
+
+async function daemonHealthy(): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/ready`);
+    return res.ok && ((await res.json()) as { status?: string }).status === "ok";
+  } catch {
+    return false;
+  }
+}
+
+function electronStatus(): "running" | "not detected" | "unknown" {
+  try {
+    if (isWin) {
+      const r = spawnSync("tasklist", ["/FI", "IMAGENAME eq electron.exe", "/NH"], {
+        encoding: "utf8",
+      });
+      return (r.stdout ?? "").toLowerCase().includes("electron.exe") ? "running" : "not detected";
+    }
+    const r = spawnSync("pgrep", ["-x", isMac ? "Electron" : "electron"], { encoding: "utf8" });
+    return (r.stdout ?? "").trim().length > 0 ? "running" : "not detected";
+  } catch {
+    return "unknown";
+  }
+}
+
+type Health = {
+  daemon: boolean;
+  vite: boolean;
+  agents: string[];
+  electron: "running" | "not detected" | "unknown";
+};
+
+async function verify(): Promise<Health> {
+  const daemon = await waitFor(30_000, async () => {
+    const res = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/ready`);
+    return res.ok && ((await res.json()) as { status?: string }).status === "ok";
+  });
+
+  const vite = daemonOnly
+    ? false
+    : await waitFor(15_000, async () => (await fetch(`http://127.0.0.1:${VITE_PORT}/`)).ok);
+
+  let agents: string[] = [];
+  if (daemon) {
+    try {
+      const token = readFileSync(join(homedir(), ".hive", ".token"), "utf8").trim();
+      const res = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/agents`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) agents = ((await res.json()) as Array<{ agentId: string }>).map((a) => a.agentId);
+    } catch {
+      // leave agents empty — reported as a failure below
+    }
+  }
+
+  return { daemon, vite, agents, electron: daemonOnly ? "unknown" : electronStatus() };
+}
+
+function printStatus(h: Health): void {
+  // Electron is informational here (this is the human launcher — you can see
+  // the window). The agent launcher, dev.ps1, gates PASS on the window instead.
+  const pass = daemonOnly
+    ? h.daemon && h.agents.length > 0
+    : h.daemon && h.vite && h.agents.length > 0;
+  console.log(`\n=== Hive ${daemonOnly ? "daemon" : "dev stack"} ===`);
+  console.log(`  daemon    :${DAEMON_PORT} /api/ready → ${h.daemon ? "ok" : "unreachable"}`);
+  console.log(`  agents    ${h.agents.length ? h.agents.join(", ") : "(none)"}`);
+  if (!daemonOnly) {
+    console.log(`  vite      :${VITE_PORT} → ${h.vite ? "ok" : "unreachable"}`);
+    console.log(`  electron  ${h.electron}${h.electron === "running" ? " (window should be visible)" : ""}`);
+  }
+  console.log(`  STATUS: ${pass ? "PASS" : "FAIL"}`);
+  if (!pass) process.exitCode = 1;
+}
+
+// Daemon-only: reuse a healthy daemon if one is already up, so testing the API
+// doesn't restart (and disturb) a running GUI stack.
+const reuse = daemonOnly && (await daemonHealthy());
+if (reuse) {
+  console.log(`Daemon already healthy on :${DAEMON_PORT} — reusing (no restart).`);
+} else {
+  console.log(`Preparing Hive ${daemonOnly ? "daemon" : "dev stack"}...\n`);
+  installAll();
+  stopPriorStack();
+
+  const activeJobs = daemonOnly ? jobs.slice(0, 1) : jobs;
+  console.log(`\nStarting Hive ${daemonOnly ? "daemon" : "dev stack"}...\n`);
+  for (let i = 0; i < activeJobs.length; i++) {
+    const job = activeJobs[i]!;
+    const where = job.cwd ? ` (in ${job.cwd}/)` : "";
+    console.log(`  ${i + 1}. ${job.title}: ${job.cmd}${where}`);
+    spawnTerminal(job);
+    // Stagger so the daemon and Vite are up before Electron probes them.
+    if (i < activeJobs.length - 1) {
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+  }
+
+  console.log("\nClose a window to stop that piece. Daemon writes to ~/.hive/.");
+  console.log(`(Launcher scripts staged at ${stageDir})`);
+}
+
+console.log("\nVerifying (up to ~30s for first boot)...");
+printStatus(await verify());

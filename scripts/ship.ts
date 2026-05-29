@@ -14,7 +14,7 @@
 // Run via: `bun run ship`.
 
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -104,6 +104,25 @@ run(
   join(REPO_ROOT, "shell"),
 );
 
-console.log("\n=== Done ===");
-console.log(`App folder: ${releaseDir}`);
-console.log(`Run: double-click Hive${EXE} inside Hive-${ELECTRON_PLATFORM}-x64/`);
+console.log("\n=== Verifying build ===");
+const appDir = join(releaseDir, `Hive-${ELECTRON_PLATFORM}-x64`);
+// The three artifacts that make the folder actually runnable: the Electron
+// launcher, the bundled self-contained daemon (in Resources/), and the bundled
+// capabilities the daemon loads. Missing any means a broken ship.
+const artifacts: Array<[string, string]> = [
+  [`Hive${EXE}`, join(appDir, `Hive${EXE}`)],
+  [`resources/hive-daemon${EXE}`, join(appDir, "resources", `hive-daemon${EXE}`)],
+  ["resources/bundled", join(appDir, "resources", "bundled")],
+];
+let ok = true;
+for (const [label, p] of artifacts) {
+  const st = existsSync(p) ? statSync(p) : null;
+  ok = ok && st !== null;
+  const info = !st ? "missing" : st.isDirectory() ? "dir" : `${(st.size / 1e6).toFixed(1)}MB`;
+  console.log(`  ${st ? "✓" : "✗"} ${label}  (${info})`);
+}
+
+console.log(`\nApp folder: ${appDir}`);
+console.log(`Run: double-click Hive${EXE} inside it.`);
+console.log(`STATUS: ${ok ? "PASS" : "FAIL"}`);
+if (!ok) process.exitCode = 1;

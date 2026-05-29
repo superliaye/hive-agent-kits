@@ -49,23 +49,10 @@ Write an ADR only when all three are true: hard to reverse, surprising without c
 
 ## Running the app
 
-Two intended workflows. Agent: **do not** invoke either of these from the Bash tool — see the `run-app` skill at [.claude/skills/run-app/SKILL.md](.claude/skills/run-app/SKILL.md) for the PowerShell-tool path, common failures (`ELECTRON_RUN_AS_NODE`, port orphans, the `&&`-chain bug), and verification snippets.
+- **Dev (run the app):** `pwsh -NoProfile -File scripts/dev.ps1` via the **PowerShell tool** — not the Bash tool, not `bun run`. `-DaemonOnly` for the API alone.
+- **Ship (build only):** `bun run ship` — any shell.
 
-### Debug (interactive, HMR)
-
-```
-bun run dev:full
-```
-
-Opens three visible terminals — daemon (`bun --watch`), Vite (UI HMR), Electron (loaded from Vite). Close any window to stop that piece. Daemon writes to `~/.hive/`. To stop everything, close all three windows.
-
-### Ship (production .msi / .dmg / .AppImage)
-
-```
-bun run ship
-```
-
-Builds UI, compiles daemon to a single binary, runs `electron-builder`. Installer output goes to `shell/release/`. After install, the user double-clicks the Hive icon — Electron spawns the bundled daemon as a hidden child, no terminal involved.
+Why these invocations, failure modes, and internals: the **`run-app` skill** ([.claude/skills/run-app/SKILL.md](.claude/skills/run-app/SKILL.md)) and the script headers.
 
 ## Git conventions
 
