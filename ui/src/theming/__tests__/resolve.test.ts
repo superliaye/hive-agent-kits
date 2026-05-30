@@ -112,3 +112,45 @@ describe("resolveReduceMotion", () => {
     expect(resolveReduceMotion({ ...DEFAULTS, reduceMotion: "system" }, false)).toBe("off");
   });
 });
+
+// Catalog completeness — a shipped preset missing any color token would
+// leave a hole in :root. Assert every named theme resolves the full set.
+describe("resolveTokens — every shipped theme resolves a complete token map", () => {
+  // The 19 TokenName keys (types.ts). resolveTokens layers the named
+  // palette (14 colors + font-ui/font-code via the helper) and always adds
+  // font-size-ui, font-size-code, sidebar-opacity.
+  const ALL_TOKENS = [
+    "color-bg-base",
+    "color-bg-surface",
+    "color-bg-elevated",
+    "color-bg-hover",
+    "color-fg-default",
+    "color-fg-muted",
+    "color-fg-on-accent",
+    "color-accent",
+    "color-accent-hover",
+    "color-border-default",
+    "color-border-strong",
+    "color-danger",
+    "color-warning",
+    "color-success",
+    "font-ui",
+    "font-code",
+    "font-size-ui",
+    "font-size-code",
+    "sidebar-opacity",
+  ] as const;
+
+  for (const theme of LIGHT_THEMES) {
+    test(`light "${theme.id}" resolves all ${ALL_TOKENS.length} tokens`, () => {
+      const tokens = resolveTokens({ themeId: theme.id }, "light");
+      for (const key of ALL_TOKENS) expect(tokens[key]).toBeTruthy();
+    });
+  }
+  for (const theme of DARK_THEMES) {
+    test(`dark "${theme.id}" resolves all ${ALL_TOKENS.length} tokens`, () => {
+      const tokens = resolveTokens({ themeId: theme.id }, "dark");
+      for (const key of ALL_TOKENS) expect(tokens[key]).toBeTruthy();
+    });
+  }
+});
