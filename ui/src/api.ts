@@ -177,6 +177,9 @@ declare global {
         bg: string;
         fg: string;
       }) => Promise<void>;
+      /** Read the OS accent color (`#rrggbb`), or null when unavailable.
+       * Only present in Electron (preload bridge); absent in browser-tab mode. */
+      getSystemAccent?: () => Promise<string | null>;
     };
   }
 }

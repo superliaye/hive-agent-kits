@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode, useEffect, useMemo } from "react";
+import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import { resolveApiConfig } from "./api.ts";
@@ -31,8 +31,17 @@ function Root(): JSX.Element {
   // flashes. The cache is paint-only — load() resolves the canonical
   // value asynchronously and overwrites it.
   const bootstrap = useMemo(() => persistence.getCached() ?? undefined, [persistence]);
+  // OS accent color, read once at boot from the host (Electron only). The
+  // theming module stays portable — it receives this as a generic prop and
+  // never knows it came from the OS.
+  const [systemAccent, setSystemAccent] = useState<string | null>(null);
+  useEffect(() => {
+    const fn = window.__hive?.getSystemAccent;
+    if (!fn) return;
+    void fn().then((c) => setSystemAccent(c));
+  }, []);
   return (
-    <ThemeProvider persistence={persistence} bootstrap={bootstrap}>
+    <ThemeProvider persistence={persistence} bootstrap={bootstrap} systemAccent={systemAccent}>
       <ChromeBridge />
       <QueryClientProvider client={queryClient}>
         <App apiConfig={apiConfig} />

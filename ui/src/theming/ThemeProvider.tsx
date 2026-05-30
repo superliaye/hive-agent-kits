@@ -15,7 +15,7 @@ import { type ReactNode, createContext, useCallback, useEffect, useMemo, useRef,
 import { resolveMode, resolveReduceMotion, resolveTokens } from "./resolve.ts";
 import { importPreferences as deserialize, exportPreferences as serialize } from "./serialize.ts";
 import { getSystemMode, watchSystemMode } from "./system.ts";
-import type { Persistence, Preferences, ResolvedMode, ResolvedTheme } from "./types.ts";
+import type { Persistence, Preferences, ResolvedMode, ResolvedTheme, ThemeConfig } from "./types.ts";
 import { usePreferences } from "./usePreferences.ts";
 
 export type ThemeContextValue = {
@@ -39,6 +39,10 @@ export type ThemeProviderProps = {
   persistence: Persistence;
   /** Preferences for the first paint before persistence resolves. */
   bootstrap?: Preferences;
+  /** External accent applied when `prefs.useSystemAccent` is true and this is
+   * non-null (e.g. the OS accent). Host-injected so the module stays portable —
+   * it never knows the value came from the OS. */
+  systemAccent?: string | null;
   children: ReactNode;
 };
 
@@ -54,6 +58,7 @@ const DEFAULT_BOOTSTRAP: Preferences = {
 export function ThemeProvider({
   persistence,
   bootstrap,
+  systemAccent,
   children,
 }: ThemeProviderProps): JSX.Element {
   const { preferences, setPreferences, ready, saveError } = usePreferences(
@@ -66,14 +71,21 @@ export function ThemeProvider({
 
   const resolved = useMemo<ResolvedTheme>(() => {
     const resolvedMode = resolveMode(preferences, systemMode);
-    const config = resolvedMode === "dark" ? preferences.dark : preferences.light;
+    const baseConfig = resolvedMode === "dark" ? preferences.dark : preferences.light;
+    // Effective accent: the OS accent wins when the user opted in and it's
+    // available. Reuses resolveTokens' existing config.accent override path —
+    // no change to resolveTokens itself.
+    const config: ThemeConfig =
+      preferences.useSystemAccent && systemAccent
+        ? { ...baseConfig, accent: systemAccent }
+        : baseConfig;
     return {
       resolvedMode,
       fromSystem: preferences.mode === "system",
       config,
       tokens: resolveTokens(config, resolvedMode),
     };
-  }, [preferences, systemMode]);
+  }, [preferences, systemMode, systemAccent]);
 
   // Apply resolved tokens to :root imperatively — the whole point of
   // the CSS-variable architecture. Track applied keys so unmount + theme

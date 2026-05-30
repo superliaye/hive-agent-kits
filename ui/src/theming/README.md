@@ -27,6 +27,8 @@ const { resolved, preferences, setPreferences,
         exportPreferences, importPreferences, ready, saveError } = useTheme();
 ```
 
+`systemAccent?` — optional `ThemeProvider` prop; when `prefs.useSystemAccent` is true and this is non-null, it replaces the active mode's accent token. Host-injected (the module never reads the OS itself).
+
 Tokens defined: see `types.ts` → `TokenName`. CSS defaults: `tokens.css`. Base palettes: `presets.ts` (Light + Dark).
 
 ## Preferences shape
@@ -38,6 +40,7 @@ type Preferences = {
   dark: ThemeConfig;
   reduceMotion: "system" | "on" | "off";
   pointerCursors: boolean;
+  useSystemAccent: boolean;   // app-wide; overrides the active mode's accent
 };
 
 type ThemeConfig = {

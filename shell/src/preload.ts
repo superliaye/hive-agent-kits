@@ -28,4 +28,7 @@ contextBridge.exposeInMainWorld("__hive", {
    * match the active theme. Renderer calls this whenever theme resolves. */
   setChromeTheme: (payload: { mode: "light" | "dark"; bg: string; fg: string }): Promise<void> =>
     ipcRenderer.invoke("hive:setChromeTheme", payload),
+  /** Read the OS accent color as `#rrggbb`, or null when unavailable. Backs
+   * the "Use system accent" appearance toggle. */
+  getSystemAccent: (): Promise<string | null> => ipcRenderer.invoke("hive:getSystemAccent"),
 });

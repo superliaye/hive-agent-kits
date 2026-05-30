@@ -11,7 +11,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BrowserWindow, app, ipcMain, nativeTheme, shell } from "electron";
+import { BrowserWindow, app, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
 import { z } from "zod";
 
 // Renderer→main IPC contracts. AGENTS.md requires Zod at external
@@ -24,6 +24,14 @@ const ChromeThemePayloadSchema = z
     fg: z.string().min(1).max(64),
   })
   .strict();
+
+// No renderer payload to validate here — instead we validate the handler's
+// *output* shape so a normalization regression surfaces in dev rather than as
+// a malformed CSS color downstream in the renderer.
+const SystemAccentResponseSchema = z
+  .string()
+  .regex(/^#[0-9a-f]{6}$/i)
+  .nullable();
 
 const isWin = process.platform === "win32";
 const PORT = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : 3117;
@@ -196,6 +204,22 @@ ipcMain.handle("hive:setChromeTheme", (event, payload: unknown) => {
   } catch {
     // No-op
   }
+});
+
+// Renderer → main: read the OS accent color for the "Use system accent"
+// appearance toggle. getAccentColor() returns 8-hex RGBA without '#' on
+// Win/macOS, "" when unavailable, and can throw on Linux — normalize to
+// #rrggbb (drop the alpha) or null.
+ipcMain.handle("hive:getSystemAccent", (): string | null => {
+  let normalized: string | null;
+  try {
+    const raw = systemPreferences.getAccentColor();
+    normalized = raw && raw.length >= 6 ? `#${raw.slice(0, 6)}` : null;
+  } catch {
+    normalized = null;
+  }
+  const parsed = SystemAccentResponseSchema.safeParse(normalized);
+  return parsed.success ? parsed.data : null;
 });
 
 ipcMain.handle("hive:openExternal", async (_event, url: unknown) => {
