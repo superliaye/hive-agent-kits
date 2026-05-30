@@ -168,6 +168,12 @@ pre,
   overflow: auto;
   padding: 16px 24px 80px;
 }
+/* Centred content column — the scroll container stays full-bleed so the
+ * scrollbar hugs the window edge; only the content is capped (US-21). */
+.settings-detail-inner {
+  max-width: 720px;
+  margin-inline: auto;
+}
 .settings-detail-header {
   margin-bottom: 16px;
 }
@@ -211,8 +217,7 @@ pre,
   letter-spacing: 0.5px;
 }
 /* Appearance card titles use real heading weight, not overline-caps. */
-.settings-card h3.settings-card-title,
-.appearance-details > summary {
+.settings-card h3.settings-card-title {
   font-size: 15px;
   font-weight: 600;
   color: var(--color-fg-default);
@@ -942,36 +947,15 @@ pre.config {
   display: inline-block;
 }
 /* Inline section heading inside the per-mode card. */
+/* Inline sub-section heading. The top border is the divider the removed
+ * <details> used to draw — keeps the now-longer card scannable (brief §4). */
 .appearance-subhead {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-fg-default);
   margin: 14px 0 4px;
-}
-.appearance-details {
-  margin-top: 14px;
   border-top: 1px solid var(--color-border-default);
-  padding-top: 10px;
-}
-.appearance-details > summary {
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-  padding: 4px 0;
-}
-.appearance-details > summary::-webkit-details-marker {
-  display: none;
-}
-.appearance-details > summary::before {
-  content: "›";
-  display: inline-block;
-  width: 14px;
-  font-weight: 700;
-  color: var(--color-fg-muted);
-  transition: transform 120ms ease;
-}
-.appearance-details[open] > summary::before {
-  transform: rotate(90deg);
+  padding-top: 12px;
 }
 .appearance-slider-control {
   flex: 1;
@@ -1000,126 +984,133 @@ pre.config {
   margin-top: 0;
 }
 
-/* Theme gallery — clickable cards with structured mini-mock previews.
- * Cap at 4 columns so 8 dark themes always wrap as 4×2 (or 4×1 on
- * narrow widths) — avoids the orphaned-row look of auto-fill. */
-.theme-gallery {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
+/* Theme dropdown — accessible custom listbox (trigger + popover). A native
+ * <select> can't render a per-row colour swatch in Chromium (US-6), so this
+ * is custom. Capped narrower than the 720px column so it doesn't stretch. */
+.theme-dropdown {
+  position: relative;
+  max-width: 420px;
   margin: 10px 0 8px;
 }
-@media (min-width: 700px) {
-  .theme-gallery {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-.theme-gallery-item {
-  background: var(--color-bg-base);
-  border: 1px solid var(--color-border-default);
-  border-radius: 8px;
-  padding: 10px;
-  cursor: pointer;
-  font: inherit;
-  color: var(--color-fg-default);
-  text-align: left;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  position: relative;
-  transition: background 120ms ease, border-color 120ms ease;
-}
-.theme-gallery-item:hover {
-  border-color: var(--color-border-strong);
-}
-.theme-gallery-item.active {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-base));
-}
-
-/* Structured theme preview — app-shaped mock: sidebar (bg-surface)
- * along the left, content area (bg-base) on the right, a prominent
- * accent bar at top-right, two text lines in fg + fg-muted, and a
- * status-dot row at the bottom. Surface differences (Solarized cream
- * vs Catppuccin lavender vs Dim blue) read at-a-glance instead of
- * compressing into a generic dark/light rectangle. */
-.theme-preview {
-  height: 80px;
-  border-radius: 6px;
-  overflow: hidden;
-  position: relative;
-  border-style: solid;
-  border-width: 1px;
-}
-.theme-preview-sidebar {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 22px;
-  border-right-style: solid;
-  border-right-width: 1px;
-}
-.theme-preview-accent {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  height: 6px;
-  width: 36px;
-  border-radius: 3px;
-}
-.theme-preview-line {
-  position: absolute;
-  height: 4px;
-  border-radius: 2px;
-  left: 32px;
-}
-.theme-preview-line--primary {
-  top: 28px;
-  width: 56%;
-}
-.theme-preview-line--muted {
-  top: 40px;
-  width: 38%;
-}
-.theme-preview-dots {
-  position: absolute;
-  bottom: 8px;
-  left: 32px;
-  display: flex;
-  gap: 5px;
-}
-.theme-preview-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  display: block;
-  /* Ring helps Light themes where a near-black accent on white card bg
-   * fades into the surface and looks defective. The ring is derived
-   * from --color-fg-default which is visible on every theme by design. */
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-fg-default) 35%, transparent);
-}
-.theme-gallery-name {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-/* Check glyph as a corner badge — separates the "selected" signal from
- * the swatch's preview dots which already live near the card bottom. */
-.theme-gallery-check {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--color-accent);
-  color: var(--color-fg-on-accent);
+.theme-dropdown-trigger {
   display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 11px;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  color: var(--color-fg-default);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+.theme-dropdown-trigger:hover {
+  border-color: var(--color-fg-muted);
+}
+.theme-dropdown-trigger[aria-expanded="true"] {
+  border-color: var(--color-accent);
+}
+.theme-dropdown-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* CSS-drawn chevron (no icon dependency); rotates 180° when open. */
+.theme-dropdown-caret {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  flex-shrink: 0;
+  border-right: 1.5px solid var(--color-fg-muted);
+  border-bottom: 1.5px solid var(--color-fg-muted);
+  transform: rotate(45deg);
+  transition: transform 120ms ease;
+}
+.theme-dropdown-trigger[aria-expanded="true"] .theme-dropdown-caret {
+  transform: rotate(225deg);
+}
+.theme-dropdown-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  /* The only new shadow — a flat app still needs a floating menu to lift off
+   * the content beneath. Scoped here, not an app-wide elevation scale. */
+  box-shadow: 0 8px 24px -10px color-mix(in srgb, #000 45%, transparent);
+  outline: none;
+}
+/* Entrance gated by both the OS preference and the app's reduce-motion
+ * attribute (tokens.css also flattens it when data-reduce-motion="on"). */
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="on"]) .theme-dropdown-list {
+    animation: theme-dropdown-in 140ms ease-out;
+  }
+}
+@keyframes theme-dropdown-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-fg-default);
+}
+.theme-option.active {
+  background: var(--color-bg-hover);
+  /* Accent left edge marks the keyboard active descendant — border-strong
+   * fails the 3:1 bar, accent passes (brief §6/§9). */
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+.theme-option-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.theme-option.selected .theme-option-name {
+  font-weight: 500;
+}
+/* Non-colour selection cue — keeps selection legible without relying on hue. */
+.theme-option-check {
+  margin-left: auto;
+  color: var(--color-accent);
+  font-size: 12px;
   font-weight: 700;
-  z-index: 1;
+}
+/* Two-band swatch (base 62% + accent 38%). Ring derives from fg-default
+ * (≥12:1 vs surface) so near-white light swatches don't vanish on the
+ * popover — border-strong (1.54:1) would. */
+.theme-swatch {
+  flex-shrink: 0;
+  width: 22px;
+  height: 16px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-fg-default) 30%, transparent);
 }
 .appearance-sub-btn {
   padding: 4px 10px;
@@ -1252,4 +1243,34 @@ pre.config {
   gap: 8px;
   margin-top: 10px;
   flex-wrap: wrap;
+}
+
+/* Disabled control rows — dim the label + input(s) but keep the explanatory
+ * hint at full contrast so the *reason* stays readable (brief §5.3). */
+.appearance-row--control-disabled > label,
+.appearance-row--control-disabled .appearance-row-label,
+.appearance-row--control-disabled .appearance-row-control input {
+  opacity: 0.5;
+}
+.appearance-row--control-disabled .appearance-row-control input {
+  cursor: not-allowed;
+}
+.appearance-hint {
+  font-size: 11px;
+  color: var(--color-fg-muted);
+  opacity: 1;
+}
+
+/* Keyboard focus ring — accent, not a border shift: border-strong measures
+ * 1.54:1 (light) / 2.09:1 (dark) vs surface, below the 3:1 bar; accent passes.
+ * :focus-visible only, so pointer users never see it (the app had no ring). */
+.theme-dropdown-trigger:focus-visible,
+.appearance-mode-btn:focus-visible,
+.appearance-sub-btn:focus-visible,
+.appearance-reset-link:focus-visible,
+.appearance-row-control input[type="checkbox"]:focus-visible,
+.appearance-row-control .reset:focus-visible,
+.button.ghost:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }

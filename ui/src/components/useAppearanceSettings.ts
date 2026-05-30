@@ -55,6 +55,10 @@ export type UseAppearanceSettingsReturn = {
   hasOverrides: boolean;
   resolved: ResolvedTheme;
   saveError: string | null;
+  /** True when the host exposes an OS accent (Electron). Gates the toggle. */
+  systemAccentAvailable: boolean;
+  /** Mirrors prefs.useSystemAccent — the app-wide system-accent opt-in. */
+  useSystemAccentEnabled: boolean;
   // Transient UI state (import errors, "Copied!" feedback)
   importError: string | null;
   copyStatus: string | null;
@@ -84,6 +88,10 @@ export function useAppearanceSettings(): UseAppearanceSettingsReturn {
   const themes = namedThemesFor(editingMode);
   const currentTheme = findNamedTheme(editingMode, editingConfig.themeId);
   const palette = currentTheme.palette;
+  // OS accent is host-injected; the toggle is only meaningful when the
+  // Electron bridge is present (web/dev mode disables it).
+  const systemAccentAvailable =
+    typeof window !== "undefined" && typeof window.__hive?.getSystemAccent === "function";
 
   const patchPrefs = useCallback(
     (patch: Partial<Preferences>): void => {
@@ -169,6 +177,8 @@ export function useAppearanceSettings(): UseAppearanceSettingsReturn {
     hasOverrides: hasOverrides(editingConfig),
     resolved: theme.resolved,
     saveError: theme.saveError,
+    systemAccentAvailable,
+    useSystemAccentEnabled: prefs.useSystemAccent,
     importError,
     copyStatus,
     fileInputRef,

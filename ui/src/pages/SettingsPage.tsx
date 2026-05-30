@@ -55,20 +55,22 @@ export function SettingsPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Eleme
         </ul>
       </nav>
       <div className="settings-detail">
-        <header className="settings-detail-header">
-          <h1>{activeSection.label}</h1>
-          <p className="meta">{activeSection.description}</p>
-        </header>
-        {active === "appearance" && <AppearanceSettings />}
-        {active === "secrets" && <SecretsSettings apiConfig={apiConfig} />}
-        {active === "other" && (
-          <div className="section">
-            <p className="empty">
-              Configurable via <code>~/.hive/config.yaml</code> in v1; UI editor lands in v1.1 per
-              ADR-0006.
-            </p>
-          </div>
-        )}
+        <div className="settings-detail-inner">
+          <header className="settings-detail-header">
+            <h1>{activeSection.label}</h1>
+            <p className="meta">{activeSection.description}</p>
+          </header>
+          {active === "appearance" && <AppearanceSettings />}
+          {active === "secrets" && <SecretsSettings apiConfig={apiConfig} />}
+          {active === "other" && (
+            <div className="section">
+              <p className="empty">
+                Configurable via <code>~/.hive/config.yaml</code> in v1; UI editor lands in v1.1 per
+                ADR-0006.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

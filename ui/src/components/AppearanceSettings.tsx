@@ -3,6 +3,7 @@
 // and toggles. Share group (Export to file / Copy theme / Import) sits
 // below.
 
+import { useEffect, useId, useRef, useState } from "react";
 import {
   DEFAULT_CONTRAST,
   DEFAULT_FONT_CODE_SIZE,
@@ -25,6 +26,8 @@ export function AppearanceSettings(): JSX.Element {
     hasOverrides,
     resolved,
     saveError,
+    systemAccentAvailable,
+    useSystemAccentEnabled,
     importError,
     copyStatus,
     fileInputRef,
@@ -42,6 +45,11 @@ export function AppearanceSettings(): JSX.Element {
     { id: "dark", label: "Dark" },
     { id: "system", label: "System" },
   ];
+
+  // When system accent is on (and available), the per-mode accent is
+  // overridden app-wide — lock the Accent inputs so the override is legible
+  // and "I edited accent but nothing changed" can't happen.
+  const accentLockedBySystem = systemAccentAvailable && useSystemAccentEnabled;
 
   return (
     <>
@@ -96,7 +104,7 @@ export function AppearanceSettings(): JSX.Element {
           )}
         </div>
 
-        <ThemeGallery
+        <ThemeDropdown
           themes={themes}
           activeId={currentTheme.id}
           onPick={(id) => patchConfig({ themeId: id })}
@@ -109,6 +117,17 @@ export function AppearanceSettings(): JSX.Element {
           value={editingConfig.accent ?? ""}
           fallback={palette.tokens["color-accent"] ?? "#000000"}
           onChange={(v) => patchConfig({ accent: v })}
+          disabled={accentLockedBySystem}
+          note="Using your system accent — turn off to edit"
+        />
+        <ToggleRow
+          label="Use system accent"
+          description="Match your OS accent color"
+          checked={useSystemAccentEnabled}
+          onChange={(v) => patchPrefs({ useSystemAccent: v })}
+          disabled={!systemAccentAvailable}
+          hint={systemAccentAvailable ? undefined : "Available only in the desktop app"}
+          dataTestId="theme-system-accent"
         />
         <ColorOverride
           label="Background"
@@ -123,46 +142,46 @@ export function AppearanceSettings(): JSX.Element {
           onChange={(v) => patchConfig({ foreground: v })}
         />
 
-        <details className="appearance-details" data-testid="typography-disclosure">
-          <summary>Typography &amp; density</summary>
+        <h4 className="appearance-subhead">Typography</h4>
 
-          <FontInput
-            label="UI font"
-            value={editingConfig.fontUi ?? ""}
-            fallback={palette.tokens["font-ui"] ?? ""}
-            suggestions={FONT_SUGGESTIONS.ui}
-            onChange={(v) => patchConfig({ fontUi: v })}
-          />
-          <FontInput
-            label="Code font"
-            value={editingConfig.fontCode ?? ""}
-            fallback={palette.tokens["font-code"] ?? ""}
-            suggestions={FONT_SUGGESTIONS.code}
-            onChange={(v) => patchConfig({ fontCode: v })}
-          />
+        <FontInput
+          label="UI font"
+          value={editingConfig.fontUi ?? ""}
+          fallback={palette.tokens["font-ui"] ?? ""}
+          suggestions={FONT_SUGGESTIONS.ui}
+          onChange={(v) => patchConfig({ fontUi: v })}
+        />
+        <FontInput
+          label="Code font"
+          value={editingConfig.fontCode ?? ""}
+          fallback={palette.tokens["font-code"] ?? ""}
+          suggestions={FONT_SUGGESTIONS.code}
+          onChange={(v) => patchConfig({ fontCode: v })}
+        />
 
-          <SizeInput
-            label="UI font size"
-            value={editingConfig.fontUiSize ?? DEFAULT_FONT_UI_SIZE}
-            onChange={(v) => patchConfig({ fontUiSize: v })}
-          />
-          <SizeInput
-            label="Code font size"
-            value={editingConfig.fontCodeSize ?? DEFAULT_FONT_CODE_SIZE}
-            onChange={(v) => patchConfig({ fontCodeSize: v })}
-          />
+        <SizeInput
+          label="UI font size"
+          value={editingConfig.fontUiSize ?? DEFAULT_FONT_UI_SIZE}
+          onChange={(v) => patchConfig({ fontUiSize: v })}
+        />
+        <SizeInput
+          label="Code font size"
+          value={editingConfig.fontCodeSize ?? DEFAULT_FONT_CODE_SIZE}
+          onChange={(v) => patchConfig({ fontCodeSize: v })}
+        />
 
-          <ContrastSlider
-            value={editingConfig.contrast ?? DEFAULT_CONTRAST}
-            onChange={(v) => patchConfig({ contrast: v })}
-          />
+        <h4 className="appearance-subhead">Surface</h4>
 
-          <ToggleRow
-            label="Translucent sidebar"
-            checked={editingConfig.translucentSidebar ?? false}
-            onChange={(v) => patchConfig({ translucentSidebar: v })}
-          />
-        </details>
+        <ContrastSlider
+          value={editingConfig.contrast ?? DEFAULT_CONTRAST}
+          onChange={(v) => patchConfig({ contrast: v })}
+        />
+
+        <ToggleRow
+          label="Translucent sidebar"
+          checked={editingConfig.translucentSidebar ?? false}
+          onChange={(v) => patchConfig({ translucentSidebar: v })}
+        />
       </div>
 
       <div className="section">
@@ -253,16 +272,20 @@ function ColorOverride({
   value,
   fallback,
   onChange,
+  disabled = false,
+  note,
 }: {
   label: string;
   value: string;
   fallback: string;
   onChange: (next: string | undefined) => void;
+  disabled?: boolean;
+  note?: string;
 }): JSX.Element {
   const effective = value || fallback;
   const slug = label.toLowerCase().replace(/\s+/g, "-");
   return (
-    <div className="appearance-row">
+    <div className={`appearance-row${disabled ? " appearance-row--control-disabled" : ""}`}>
       <label htmlFor={`color-${slug}-text`}>{label}</label>
       <div className="appearance-row-control">
         <input
@@ -271,6 +294,7 @@ function ColorOverride({
           value={normalizeForColorInput(effective)}
           onChange={(e) => onChange(e.target.value)}
           aria-label={`${label} color picker`}
+          disabled={disabled}
         />
         <input
           id={`color-${slug}-text`}
@@ -279,8 +303,9 @@ function ColorOverride({
           value={value}
           onChange={(e) => onChange(e.target.value || undefined)}
           aria-label={`${label} color value`}
+          disabled={disabled}
         />
-        {value !== "" && (
+        {!disabled && value !== "" && (
           <button
             type="button"
             className="reset"
@@ -290,6 +315,7 @@ function ColorOverride({
             Reset
           </button>
         )}
+        {disabled && note && <span className="appearance-hint">{note}</span>}
       </div>
     </div>
   );
@@ -418,15 +444,22 @@ function ToggleRow({
   description,
   checked,
   onChange,
+  disabled = false,
+  hint,
+  dataTestId,
 }: {
   label: string;
   description?: string;
   checked: boolean;
   onChange: (next: boolean) => void;
+  disabled?: boolean;
+  /** Full-contrast explanatory text shown beside a disabled control. */
+  hint?: string;
+  dataTestId?: string;
 }): JSX.Element {
   const slug = label.toLowerCase().replace(/\s+/g, "-");
   return (
-    <div className="appearance-row">
+    <div className={`appearance-row${disabled ? " appearance-row--control-disabled" : ""}`}>
       <div className="appearance-row-label">
         <label htmlFor={`toggle-${slug}`}>{label}</label>
         {description && <span className="meta">{description}</span>}
@@ -437,7 +470,10 @@ function ToggleRow({
           type="checkbox"
           checked={checked}
           onChange={(e) => onChange(e.target.checked)}
+          disabled={disabled}
+          data-testid={dataTestId}
         />
+        {hint && <span className="appearance-hint">{hint}</span>}
       </div>
     </div>
   );
@@ -478,7 +514,29 @@ function TriStateRow({
   );
 }
 
-function ThemeGallery({
+// Two-band swatch — base (62%) + accent (38%) of THIS theme's palette, the
+// two most recognizable tokens. Inline-styled because each row shows a
+// different theme; the ring (CSS) derives from the live fg-default so a
+// near-white light swatch stays visible on the popover. aria-hidden — the
+// theme name is the accessible label, so color is never the only signal.
+function ThemeSwatch({ tokens }: { tokens: Record<string, string> }): JSX.Element {
+  const bg = tokens["color-bg-base"] ?? "#000";
+  const accent = tokens["color-accent"] ?? "#888";
+  return (
+    <span
+      className="theme-swatch"
+      aria-hidden="true"
+      style={{ background: `linear-gradient(90deg, ${bg} 0 62%, ${accent} 62% 100%)` }}
+    />
+  );
+}
+
+// Accessible Select-Only Combobox (WAI-ARIA): a button trigger + a listbox
+// popover. Focus stays on the trigger until open, then moves to the <ul> so
+// arrow keys land there; options never take DOM focus — aria-activedescendant
+// tracks the active row. A native <select> can't render a per-row swatch in
+// Chromium (US-6), which is why this is custom.
+function ThemeDropdown({
   themes,
   activeId,
   onPick,
@@ -487,72 +545,154 @@ function ThemeGallery({
   activeId: string;
   onPick: (id: string) => void;
 }): JSX.Element {
-  return (
-    <div className="theme-gallery" data-testid="theme-gallery">
-      {themes.map((t) => {
-        const isActive = t.id === activeId;
-        return (
-          <button
-            type="button"
-            key={t.id}
-            className={`theme-gallery-item${isActive ? " active" : ""}`}
-            onClick={() => onPick(t.id)}
-            data-testid={`theme-gallery-${t.id}`}
-            aria-pressed={isActive}
-            aria-label={`Use ${t.name}`}
-          >
-            {isActive && (
-              <span className="theme-gallery-check" aria-hidden="true">
-                ✓
-              </span>
-            )}
-            <ThemePreview tokens={t.palette.tokens} />
-            <div className="theme-gallery-name">{t.name}</div>
-          </button>
-        );
-      })}
-    </div>
+  const [open, setOpen] = useState(false);
+  const selectedIndex = Math.max(
+    0,
+    themes.findIndex((t) => t.id === activeId),
   );
-}
+  const [activeIndex, setActiveIndex] = useState(selectedIndex);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const baseId = useId();
+  const listId = `${baseId}-listbox`;
+  const optionId = (i: number): string => `${baseId}-option-${i}`;
+  const current = themes[selectedIndex];
 
-function ThemePreview({ tokens }: { tokens: Record<string, string> }): JSX.Element {
-  // App-shaped mock: sidebar (bg-surface) + content area (bg-base) +
-  // prominent accent bar + two text lines + a row of status dots.
-  // Uses 8 semantic tokens so subtle palette differences (Solarized's
-  // cream surface, Catppuccin's lavender tint, Dim's blue cast) read
-  // at a glance instead of melting into a generic dark/light rectangle.
-  const bgBase = tokens["color-bg-base"] ?? "#000";
-  const bgSurface = tokens["color-bg-surface"] ?? "#111";
-  const fg = tokens["color-fg-default"] ?? "#fff";
-  const fgMuted = tokens["color-fg-muted"] ?? "#888";
-  const accent = tokens["color-accent"] ?? "#4a8eff";
-  const border = tokens["color-border-default"] ?? "#33333355";
-  const success = tokens["color-success"] ?? "#56d364";
-  const danger = tokens["color-danger"] ?? "#ff6b6b";
+  function openList(): void {
+    setActiveIndex(selectedIndex);
+    setOpen(true);
+  }
+  function commit(i: number): void {
+    onPick(themes[i].id);
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  // Move focus into the listbox on open so the keyboard map applies.
+  useEffect(() => {
+    if (open) listRef.current?.focus();
+  }, [open]);
+
+  // Close on a pointer press outside the control.
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: PointerEvent): void {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [open]);
+
+  // Keep the active option scrolled into view as it moves.
+  useEffect(() => {
+    if (!open) return;
+    document
+      .getElementById(`${baseId}-option-${activeIndex}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [open, activeIndex, baseId]);
+
+  function onTriggerKeyDown(e: React.KeyboardEvent): void {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      openList();
+    }
+  }
+
+  function onListKeyDown(e: React.KeyboardEvent): void {
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setActiveIndex((i) => Math.min(themes.length - 1, i + 1));
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setActiveIndex((i) => Math.max(0, i - 1));
+        break;
+      case "Home":
+        e.preventDefault();
+        setActiveIndex(0);
+        break;
+      case "End":
+        e.preventDefault();
+        setActiveIndex(themes.length - 1);
+        break;
+      case "Enter":
+      case " ":
+        e.preventDefault();
+        commit(activeIndex);
+        break;
+      case "Escape":
+        e.preventDefault();
+        setOpen(false);
+        triggerRef.current?.focus();
+        break;
+      case "Tab":
+        // Don't trap — let focus move on naturally.
+        setOpen(false);
+        break;
+      default:
+        break;
+    }
+  }
+
   return (
-    <div
-      className="theme-preview"
-      style={{ background: bgBase, borderColor: border }}
-      aria-hidden="true"
-    >
-      <div
-        className="theme-preview-sidebar"
-        style={{ background: bgSurface, borderRightColor: border }}
-      />
-      <div className="theme-preview-accent" style={{ background: accent }} />
-      <div
-        className="theme-preview-line theme-preview-line--primary"
-        style={{ background: fg }}
-      />
-      <div
-        className="theme-preview-line theme-preview-line--muted"
-        style={{ background: fgMuted }}
-      />
-      <div className="theme-preview-dots">
-        <span className="theme-preview-dot" style={{ background: accent }} />
-        <span className="theme-preview-dot" style={{ background: success }} />
-        <span className="theme-preview-dot" style={{ background: danger }} />
-      </div>
+    <div className="theme-dropdown" ref={wrapRef}>
+      <button
+        type="button"
+        ref={triggerRef}
+        className="theme-dropdown-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-label="Theme"
+        data-testid="theme-dropdown"
+        onClick={() => (open ? setOpen(false) : openList())}
+        onKeyDown={onTriggerKeyDown}
+      >
+        <ThemeSwatch tokens={current.palette.tokens} />
+        <span className="theme-dropdown-name">{current.name}</span>
+        <span className="theme-dropdown-caret" aria-hidden="true" />
+      </button>
+      {open && (
+        <ul
+          ref={listRef}
+          className="theme-dropdown-list"
+          role="listbox"
+          id={listId}
+          aria-label="Theme"
+          tabIndex={-1}
+          aria-activedescendant={optionId(activeIndex)}
+          onKeyDown={onListKeyDown}
+        >
+          {themes.map((t, i) => {
+            const isSelected = t.id === activeId;
+            const isActive = i === activeIndex;
+            const cls = `theme-option${isActive ? " active" : ""}${isSelected ? " selected" : ""}`;
+            return (
+              // biome-ignore lint/a11y/useKeyWithClickEvents: keys are handled at the listbox via aria-activedescendant; the option click is a pointer affordance
+              <li
+                key={t.id}
+                id={optionId(i)}
+                role="option"
+                aria-selected={isSelected}
+                data-testid={`theme-option-${t.id}`}
+                className={cls}
+                onClick={() => commit(i)}
+                onMouseEnter={() => setActiveIndex(i)}
+              >
+                <ThemeSwatch tokens={t.palette.tokens} />
+                <span className="theme-option-name">{t.name}</span>
+                {isSelected && (
+                  <span className="theme-option-check" aria-hidden="true">
+                    ✓
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
