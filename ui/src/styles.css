@@ -1269,6 +1269,7 @@ pre.config {
 .appearance-sub-btn:focus-visible,
 .appearance-reset-link:focus-visible,
 .appearance-row-control input[type="checkbox"]:focus-visible,
+.appearance-row-control input[type="range"]:focus-visible,
 .appearance-row-control .reset:focus-visible,
 .button.ghost:focus-visible {
   outline: 2px solid var(--color-accent);
