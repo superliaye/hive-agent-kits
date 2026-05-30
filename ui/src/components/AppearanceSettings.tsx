@@ -628,7 +628,11 @@ function ThemeDropdown({
         triggerRef.current?.focus();
         break;
       case "Tab":
-        // Don't trap — let focus move on naturally.
+        // Refocus the trigger before unmounting the list, then let the default
+        // Tab advance from there. Closing the focused <ul> first would drop
+        // focus to <body> instead of moving on. No preventDefault — same
+        // refocus pattern as Esc/commit.
+        triggerRef.current?.focus();
         setOpen(false);
         break;
       default:
