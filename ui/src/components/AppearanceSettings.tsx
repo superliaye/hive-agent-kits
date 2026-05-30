@@ -659,11 +659,11 @@ function ThemeDropdown({
         <span className="theme-dropdown-caret" aria-hidden="true" />
       </button>
       {open && (
-        // biome-ignore lint/a11y/useSemanticElements: spec-mandated W3C-APG Select-Only Combobox listbox; no native element renders per-row swatches (design-brief 5.1)
-        // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: listbox is the APG combobox popup role; intentional (design-brief 5.1)
         <ul
           ref={listRef}
           className="theme-dropdown-list"
+          // biome-ignore lint/a11y/useSemanticElements: spec-mandated W3C-APG Select-Only Combobox listbox; no native element renders per-row swatches (design-brief 5.1)
+          // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: listbox is the APG combobox popup role; intentional (design-brief 5.1)
           role="listbox"
           id={listId}
           aria-label="Theme"
@@ -676,13 +676,13 @@ function ThemeDropdown({
             const isActive = i === activeIndex;
             const cls = `theme-option${isActive ? " active" : ""}${isSelected ? " selected" : ""}`;
             return (
-              // biome-ignore lint/a11y/useSemanticElements: option is the APG combobox row role; intentional (design-brief 5.1)
-              // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: option is the APG combobox row role; intentional (design-brief 5.1)
               // biome-ignore lint/a11y/useFocusableInteractive: options are tracked via aria-activedescendant on the listbox, intentionally not individually focusable (design-brief 5.1)
               // biome-ignore lint/a11y/useKeyWithClickEvents: keys are handled at the listbox via aria-activedescendant; the option click is a pointer affordance
               <li
                 key={t.id}
                 id={optionId(i)}
+                // biome-ignore lint/a11y/useSemanticElements: option is the APG combobox row role; intentional (design-brief 5.1)
+                // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: option is the APG combobox row role; intentional (design-brief 5.1)
                 role="option"
                 aria-selected={isSelected}
                 data-testid={`theme-option-${t.id}`}
