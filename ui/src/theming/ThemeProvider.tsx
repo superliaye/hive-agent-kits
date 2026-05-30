@@ -12,10 +12,10 @@
 // Everything else is delegated.
 
 import { type ReactNode, createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { resolveMode, resolveReduceMotion, resolveTokens } from "./resolve.ts";
+import { resolveEffectiveConfig, resolveMode, resolveReduceMotion, resolveTokens } from "./resolve.ts";
 import { importPreferences as deserialize, exportPreferences as serialize } from "./serialize.ts";
 import { getSystemMode, watchSystemMode } from "./system.ts";
-import type { Persistence, Preferences, ResolvedMode, ResolvedTheme, ThemeConfig } from "./types.ts";
+import type { Persistence, Preferences, ResolvedMode, ResolvedTheme } from "./types.ts";
 import { usePreferences } from "./usePreferences.ts";
 
 export type ThemeContextValue = {
@@ -72,13 +72,7 @@ export function ThemeProvider({
   const resolved = useMemo<ResolvedTheme>(() => {
     const resolvedMode = resolveMode(preferences, systemMode);
     const baseConfig = resolvedMode === "dark" ? preferences.dark : preferences.light;
-    // Effective accent: the OS accent wins when the user opted in and it's
-    // available. Reuses resolveTokens' existing config.accent override path —
-    // no change to resolveTokens itself.
-    const config: ThemeConfig =
-      preferences.useSystemAccent && systemAccent
-        ? { ...baseConfig, accent: systemAccent }
-        : baseConfig;
+    const config = resolveEffectiveConfig(preferences, baseConfig, systemAccent);
     return {
       resolvedMode,
       fromSystem: preferences.mode === "system",

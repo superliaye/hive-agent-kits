@@ -80,6 +80,23 @@ export function resolveReduceMotion(prefs: Preferences, systemPrefersReduced: bo
   return systemPrefersReduced ? "on" : "off";
 }
 
+/**
+ * Apply the system-accent override to a mode's config. When the user opted
+ * in (`useSystemAccent`) and an external accent is available, it wins over
+ * the mode's own accent — flowing through `resolveTokens`' existing
+ * `config.accent` path, so `resolveTokens` itself is unchanged. Otherwise
+ * the base config is returned untouched.
+ */
+export function resolveEffectiveConfig(
+  prefs: Preferences,
+  baseConfig: ThemeConfig,
+  systemAccent: string | null | undefined,
+): ThemeConfig {
+  return prefs.useSystemAccent && systemAccent
+    ? { ...baseConfig, accent: systemAccent }
+    : baseConfig;
+}
+
 // Keep this alongside resolveTokens so the small "config helpers" stay
 // in one place rather than scattered across the theming module.
 export type { Mode, Preferences, ResolvedMode, ThemeConfig, TokenMap };
