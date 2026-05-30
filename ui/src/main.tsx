@@ -38,7 +38,9 @@ function Root(): JSX.Element {
   useEffect(() => {
     const fn = window.__hive?.getSystemAccent;
     if (!fn) return;
-    void fn().then((c) => setSystemAccent(c));
+    void fn()
+      .then((c) => setSystemAccent(c))
+      .catch(() => setSystemAccent(null));
   }, []);
   return (
     <ThemeProvider persistence={persistence} bootstrap={bootstrap} systemAccent={systemAccent}>
