@@ -8,6 +8,7 @@ const DEFAULTS: Preferences = {
   dark: {},
   reduceMotion: "system",
   pointerCursors: false,
+  useSystemAccent: false,
 };
 
 function memStorage(): CacheStorage & { peek(): string | null } {

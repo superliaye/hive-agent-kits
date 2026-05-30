@@ -51,6 +51,7 @@ export const AppearanceConfigSchema = z
     dark: ThemeConfigSchema,
     reduceMotion: z.enum(["system", "on", "off"]),
     pointerCursors: z.boolean(),
+    useSystemAccent: z.boolean(),
   })
   .strict();
 
@@ -85,6 +86,7 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
     dark: {},
     reduceMotion: "system",
     pointerCursors: false,
+    useSystemAccent: false,
   },
   daemon: {
     httpPort: 3117,

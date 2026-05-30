@@ -89,6 +89,7 @@ describe("server routes — appearance (via Config)", () => {
       },
       reduceMotion: "on",
       pointerCursors: true,
+      useSystemAccent: false,
     };
     const put = await server.app.fetch(
       authed("/api/appearance", { method: "PUT", body: JSON.stringify(prefs) }),

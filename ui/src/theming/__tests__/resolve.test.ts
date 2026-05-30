@@ -12,6 +12,7 @@ const DEFAULTS: Preferences = {
   dark: {},
   reduceMotion: "system",
   pointerCursors: false,
+  useSystemAccent: false,
 };
 
 describe("resolveMode", () => {

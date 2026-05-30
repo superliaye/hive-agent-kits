@@ -14,6 +14,7 @@ const DEFAULTS: Preferences = {
   dark: {},
   reduceMotion: "system",
   pointerCursors: false,
+  useSystemAccent: false,
 };
 
 function deferred<T = void>(): {

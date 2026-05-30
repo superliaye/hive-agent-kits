@@ -48,6 +48,7 @@ const DEFAULT_BOOTSTRAP: Preferences = {
   dark: {},
   reduceMotion: "system",
   pointerCursors: false,
+  useSystemAccent: false,
 };
 
 export function ThemeProvider({

@@ -86,6 +86,8 @@ export type Preferences = {
   dark: ThemeConfig;
   reduceMotion: ReduceMotion;
   pointerCursors: boolean;
+  /** Match the OS accent color app-wide (overrides each mode's accent). */
+  useSystemAccent: boolean;
 };
 
 /**

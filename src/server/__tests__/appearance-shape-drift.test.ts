@@ -54,6 +54,7 @@ describe("Appearance shape — UI ↔ daemon drift", () => {
       },
       reduceMotion: "on",
       pointerCursors: true,
+      useSystemAccent: true,
     };
     // If the UI added a field the server doesn't allow, .strict() rejects.
     // If the server demanded a field the UI didn't supply, the parse fails.
@@ -70,6 +71,7 @@ describe("Appearance shape — UI ↔ daemon drift", () => {
       dark: {},
       reduceMotion: "system",
       pointerCursors: false,
+      useSystemAccent: false,
     };
     const asUi: Preferences = sample;
     expect(asUi.mode).toBe("system");

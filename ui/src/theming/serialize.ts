@@ -79,6 +79,9 @@ export function importPreferences(text: string): ImportResult {
   if (p.pointerCursors !== undefined && typeof p.pointerCursors !== "boolean") {
     return { ok: false, error: "preferences.pointerCursors must be a boolean" };
   }
+  if (p.useSystemAccent !== undefined && typeof p.useSystemAccent !== "boolean") {
+    return { ok: false, error: "preferences.useSystemAccent must be a boolean" };
+  }
 
   // After the guards above, TS narrows p.reduceMotion to the literal
   // union and p.pointerCursors to boolean | undefined. No casts needed.
@@ -90,6 +93,7 @@ export function importPreferences(text: string): ImportResult {
       dark: dark.config,
       reduceMotion: p.reduceMotion ?? "system",
       pointerCursors: p.pointerCursors ?? false,
+      useSystemAccent: p.useSystemAccent ?? false,
     },
   };
 }
