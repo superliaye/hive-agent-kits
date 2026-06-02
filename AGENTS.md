@@ -22,15 +22,15 @@ A portable personal AI system. Capabilities carry an origin tag: Personal travel
 
 ### Audit vs trace awareness
 
-Two distinct stores, two distinct purposes — don't conflate them.
+Two distinct stores; don't conflate them.
 
-**Audit** = what users and agents did. Tool calls, permission decisions, secret accesses, harness edits, Run completions. SQLite-backed, retained, queryable. Uses a subscribe pattern: modules emit typed events as side effects; the Audit module subscribes and persists. Audit is never directly called — there is no `audit.record(...)` API. When you write code that does something user-visible (mutates state, makes a decision, invokes a capability), think about whether the relevant event is being emitted from the module's internal write path. Never put sensitive values in event payloads — refs, not values.
+**Audit** = what users and agents did: tool calls, permission decisions, secret accesses, harness edits, Run completions. SQLite-backed, retained, queryable. Subscribe pattern — modules emit typed events as side effects; the Audit module subscribes and persists. Never called directly (no `audit.record(...)` API). When your code does something user-visible (mutates state, makes a decision, invokes a capability), check the relevant event is emitted from the module's internal write path. Refs, not values — never put sensitive values in payloads.
 
-**Trace** = system diagnostics. Parse errors, watcher events, daemon startup chatter, performance counters. JSONL via Pino at `~/.hive/logs/daemon.log`. *No* subscribe pattern — modules import the `log()` singleton from `src/lib/log.ts` and write at the call site with full context: `log().warn({ module, path, err }, "skipped malformed manifest")`. `console.log`/`console.warn`/`console.error` in non-test source code is wrong; use the trace logger.
+**Trace** = system diagnostics: parse errors, watcher events, daemon startup chatter, perf counters. JSONL via Pino at `~/.hive/logs/daemon.log`. *No* subscribe pattern — import the `log()` singleton from `src/lib/log.ts` and write at the call site with full context: `log().warn({ module, path, err }, "skipped malformed manifest")`. `console.log`/`.warn`/`.error` in non-test source is wrong; use the trace logger.
 
-The line: was a user or agent the proximate cause of this event? If yes → audit. If no (the system observed something during normal operation) → trace.
+Decision: was a user or agent the proximate cause? Yes → audit. No (system observed it during normal operation) → trace.
 
-See [ADR-0004](docs/adr/0004-audit-log-design.md) for the full design — "Audit vs trace" section, event types, transaction semantics, redaction backstop, retention.
+See [ADR-0004](docs/adr/0004-audit-log-design.md) for the full design: event types, transaction semantics, redaction backstop, retention.
 
 ### Style
 
@@ -38,6 +38,27 @@ See [ADR-0004](docs/adr/0004-audit-log-design.md) for the full design — "Audit
 - Zod at every external boundary (HTTP body, MCP responses, manifests, audit payloads).
 - Terse comments. Default to no comment; write one only when the *why* is non-obvious. Don't explain what the code does — names should.
 - No emojis. No excessive praise. Direct and objective.
+
+### Architecture defaults
+
+Apply without asking when writing or reviewing daemon code; deviations need a stated reason. Guiding rule: spend complexity on **seams and contracts** (the expensive-to-reverse lines); keep the boxes thin.
+
+**Effect-TS is the default substrate** for all daemon source (`src/`).
+
+- **Typed error channel.** Errors are values in `E`. No `throw` of untyped errors, no stringly-typed handling. Effect gives the channel, not the meaning — own the *semantic* error taxonomy at your ports (e.g. the gateway's `GatewayErrorCode`); edges map into it.
+- **DI via `Layer`/`Context`.** No hidden globals, no wide constructor-threading.
+- **Discharge DI at the module boundary.** A module's public service (`Context.Tag`) exposes a clean interface and provides its own dependencies when building its `Layer`. Never leak `Requirements` (`R`) to the composition root for deps a module can satisfy itself.
+- **Plain async only at I/O edges.** Thin interop adapters at true external boundaries (Hono, Drizzle, pi-ai, filesystem, Electron) wrap with `Effect.tryPromise` / `Stream.fromAsyncIterable` and return Effect/Stream inward. Domain and application code is never plain async.
+- **Adopt incrementally.** Default for new code; migrate existing modules one at a time, never big-bang. (A large plain-async test suite remains — don't break it in one sweep.)
+
+**Deep, hexagonal, modular — not academic DDD.**
+
+- **Ports-and-adapters with deep modules.** Narrow, *consumer-owned* ports shaped to the consumer's need; the providing module / Config / external system is the adapter. Configuration is infrastructure behind a port — not a wide dependency, not a global.
+- **Modular monolith, functional core.** Vertical slices under `src/<module>/`; hexagonal layers are *roles* (domain / application / adapter / infrastructure), not folders. A data record plus its module's factory verbs is a healthy functional core.
+- **Skip tactical-DDD ceremony.** No aggregates-with-methods, no four-folder layering for its own sake, no abstraction for a single forever-adapter. Add a value object / domain service only where it earns its place.
+- **Keep strategic DDD.** Ubiquitous language (`CONTEXT.md`), bounded contexts, the typed relationships between them. Spend modeling effort on **Core** subdomains; build **Supporting** plainly; buy/wrap **Generic** ones.
+
+LLM transport stays on pi-ai wrapped in Effect at the adapter; `@effect/ai` is deferred. See [ADR-0010](docs/adr/0010-llm-transport-pi-ai-retained.md).
 
 ### Vocabulary discipline
 
@@ -53,12 +74,6 @@ Write an ADR only when all three are true: hard to reverse, surprising without c
 - **Ship (build only):** `bun run ship` — any shell.
 
 Why these invocations, failure modes, and internals: the **`run-app` skill** ([.claude/skills/run-app/SKILL.md](.claude/skills/run-app/SKILL.md)) and the script headers.
-
-## Git conventions
-
-- One-line subject preferred. No emojis.
-- Never `--no-verify`, `--no-edit`, `--no-gpg-sign`. If a hook fails, fix the underlying issue.
-- Confirm before destructive ops (`reset --hard`, `push --force`, branch delete) — even in auto mode.
 
 ## Where decisions live
 
