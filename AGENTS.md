@@ -6,7 +6,6 @@ Repo conventions for AI coding agents working in this repo.
 
 1. [CONTEXT.md](CONTEXT.md) — domain vocabulary. Every term used in design discussion is defined there. **Use these terms exactly.** Don't substitute "AI assistant", "service", "boundary", etc.
 2. [docs/adr/](docs/adr/) — architectural decisions, numbered chronologically. Read the highest-numbered ones first.
-3. Subtree `AGENTS.md` (e.g., `src/runs/AGENTS.md`) when working in that subtree, if it exists.
 
 ## What Hive is
 
