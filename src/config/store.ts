@@ -15,7 +15,7 @@ export function createConfigStore<S extends Record<string, unknown>>(
   initial: S,
   schema: ZodType<S>,
   persistence?: ConfigPersistence,
-): Config<S> & { dispose(): void } {
+): Config<S> & { dispose(): void; snapshot(): S } {
   let current: S = schema.parse(initial);
   const events = new TypedEmitter<ConfigEvents<S>>();
 
@@ -145,7 +145,13 @@ export function createConfigStore<S extends Record<string, unknown>>(
     fileWatcherDispose?.();
   }
 
-  return { get, set, setPath, watch, dispose, events };
+  // Whole-`S` snapshot of the current validated state. Used by ConfigLive to
+  // keep its SubscriptionRef (the reactive state cell) in lockstep.
+  function snapshot(): S {
+    return current;
+  }
+
+  return { get, set, setPath, watch, dispose, events, snapshot };
 }
 
 // Deep-merge `value` into `current` at the path described by `parts`.

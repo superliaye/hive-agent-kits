@@ -1,10 +1,12 @@
 // Public API for the Config module. See docs/adr/0006-configuration-module-design.md.
+//
+// Implementation is Effect-native (`ConfigLive`, ADR-0011 Phase 3a): a reactive
+// store whose state cell is a SubscriptionRef, owned by a ManagedRuntime. This
+// factory is a thin proxy preserving the legacy `Config<S>` surface for
+// unmigrated consumers (the server, the audit subscriber).
 
-import type { ZodType } from "zod";
-import { ConfigPersistence } from "./persistence.ts";
-import { createConfigStore } from "./store.ts";
+import { configRuntime } from "./effect/config-live.ts";
 import type { Config, CreateConfigOptions } from "./types.ts";
-import { deepMerge } from "./utils.ts";
 
 export type { Config, ConfigChange, ConfigEvents, CreateConfigOptions } from "./types.ts";
 export {
@@ -13,27 +15,20 @@ export {
   type AppConfig,
 } from "./schema.ts";
 
-// Factory. For `mode: "memory"`, the store is volatile (good for tests).
-// For `mode: "file"`, the YAML file at `path` is the source of truth; it is
-// created with `defaults` if missing, and external edits hot-reload through
-// a file watcher.
+// For `mode: "memory"`, the store is volatile (good for tests). For
+// `mode: "file"`, the YAML file at `path` is the source of truth; it is created
+// with `defaults` if missing, and external edits hot-reload through a file
+// watcher. `dispose()` tears down the ManagedRuntime (closing that watcher).
 export function createConfig<S extends Record<string, unknown>>(
   opts: CreateConfigOptions<S>,
 ): Config<S> & { dispose(): void } {
-  if (opts.mode === "memory") {
-    return createConfigStore(opts.initial, opts.schema);
-  }
-  const persistence = new ConfigPersistence(opts.path);
-  const initial = loadOrSeed(persistence, opts.defaults, opts.schema);
-  return createConfigStore(initial, opts.schema, persistence);
-}
-
-function loadOrSeed<S>(persistence: ConfigPersistence, defaults: S, schema: ZodType<S>): S {
-  if (!persistence.exists()) {
-    persistence.write(defaults);
-    return defaults;
-  }
-  const raw = persistence.read();
-  const merged = deepMerge(defaults, raw);
-  return schema.parse(merged);
+  const { svc, dispose } = configRuntime(opts);
+  return {
+    get: svc.get,
+    set: svc.set,
+    setPath: svc.setPath,
+    watch: svc.watch,
+    events: svc.events,
+    dispose,
+  };
 }
