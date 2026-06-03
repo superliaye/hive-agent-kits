@@ -43,9 +43,14 @@ export function createGateway(): ModelGateway {
   return {
     // Effect-native internally (typed `E`); bridged back to the AsyncIterable
     // contract here. A typed `GatewayFailure` (resolve failure or a thrown
-    // adapter) surfaces as a terminal in-band `error` event, preserving the
-    // legacy stream's shape for consumers not yet migrated.
-    complete: (input) => streamToAsyncIterable(completeStream(registry, input), toErrorEvent),
+    // adapter) surfaces as a terminal `error` event followed by `done(error)`,
+    // honoring the GatewayEvent contract (ADR-0005: an `error` is always
+    // followed by `done`) for consumers not yet migrated.
+    complete: (input) =>
+      streamToAsyncIterable(completeStream(registry, input), (failure) => [
+        toErrorEvent(failure),
+        { type: "done", finishReason: "error" },
+      ]),
     completeStream: (input) => completeStream(registry, input),
     registerAdapter: registry.registerAdapter,
     events: registry.events,

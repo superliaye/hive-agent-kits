@@ -128,6 +128,7 @@ Specific shape opinions:
 - **`server_tool` family** for Anthropic's `server_tool_use` (web_search, code_execution, mcp_tool) and OpenAI's `file_search_call / web_search_call / code_interpreter_call / image_generation_call / mcp_call.*`. Different lifecycle from client tools (provider runs them; no args round-trip). Even if Hive v1 doesn't enable them, the union must accommodate them — additive later forces consumer code changes.
 - **`pause` finishReason** for Anthropic's `pause_turn` (long-running server tools — model says "call me back").
 - **Usage is emitted exactly once**, right before `done`. Per-chunk `usage_partial` is a v1.1 addition. Reasoning tokens are their own bucket (`reasoningTokens?`); some providers bill them differently from completion tokens.
+- **`error` is always followed by `done`.** Every stream terminates with exactly one `done`, and an `error` event is immediately followed by `done(finishReason: "error")` — adapters never end on a bare `error`. This single terminal guarantee lets consumers finalize on `done.finishReason` alone (the Run executor relies on it; an out-of-band adapter *throw*, by contrast, is surfaced as a typed `GatewayFailure`, not an `error` event).
 - **`cacheReadTokens` / `cacheWriteTokens`** explicit token counts. pi-ai's `cacheRead`/`cacheWrite` reads ambiguously (event count? token count?). Be explicit.
 
 ## Error taxonomy
