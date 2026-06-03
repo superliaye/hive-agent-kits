@@ -12,7 +12,7 @@
 
 ## Status — where a fresh session starts (updated 2026-06-03)
 
-**Branch `spike/effect-runs-gateway`, suite 495 pass / 0 fail.** Phases 0–3b are committed; **Phase 4 is next.** Read this section + the API map below, then build Phase 4 **manually** (see the tooling caveat).
+**Branch `spike/effect-runs-gateway`, suite 495 pass / 0 fail.** Phases 0–3b are committed; **Phase 4 is in progress** (§4.0 resolved — see below). Read this section + the API map below. Phase 4 is being driven issue-by-issue through `/loop-full-swe` (see the tooling note).
 
 | Phase | Status | Commits |
 | --- | --- | --- |
@@ -32,7 +32,7 @@
 
 **Gating decision for Phase 4: RESOLVED** — [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md) keeps `TypedEmitter` as the event bus (no `PubSub` swap). Audit (§4.2) and the SSE relay are unblocked; Phase 4 proceeds to the composition root (§4.1).
 
-**Tooling caveat — `/loop-build` cannot build in this harness.** The `Workflow` args (`startFrom`/`stopAfter`/`resolutions`/`feature`) never reach `loop-swe.js` (`args` arrives empty), so it always re-plans, can't skip to build, and `resumeFromRunId` can't inject resolutions to clear a gate. It **plans** well (and its review caught real issues), but **build Phase 4 by hand.** Full bug report: `%TEMP%\handoff-loop-build-issues.md`.
+**Tooling note — the loop engine now receives `args`.** Earlier sessions saw `args` arrive empty at `loop-swe.js`; that is fixed — it normalizes a string-or-object `args` at `loop-swe.js:35`, so `/loop-full-swe` runs with `feature` + `resolutions` and the self-digest re-runs with injected gate answers. Known remaining limitation: on a `resumeFromRunId` *after* a build phase has already committed, a freshly-injected resolution is **not** re-applied to the committed files (the cache treats that phase as done) — apply such directed post-commit edits by hand.
 
 **Open housekeeping:** add `.loop-swe/` to `.gitignore`; pre-existing latent `tsc` errors in `src/config/store.ts:88,161` and `store.test.ts:173` (present on HEAD; bun's runtime never enforced them — separate cleanup).
 
@@ -281,6 +281,8 @@ Built manually (loop couldn't drive its own build — see Status caveat). All ke
 ### 4.2 — Audit (last)
 
 Subscriber + SQLite writer; nearly pure I/O edge. Migrate **only after 4.0**; its writes wrap with `Effect.tryPromise`. (Note the audit `ts` is now wall-clock-anchored — `b567214`.)
+
+**Block-on-failure gap to fix here (from the §4.0 / [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md) review).** The audited **Secrets** (`src/secrets/store.ts:102,111,129,136`) and **Runs** (`src/runs/executor.ts:110,190,237,264`) emits use `void events.emit(...)` (fire-and-forget) while wired to Audit, so an audit-persist failure on `secret.write` / `run.started` silently does **not** fail the originating op — and `secrets set()` commits its side effect *before* the discarded emit (audit-first ordering broken). Both predate this branch and violate ADR-0004's block-on-failure invariant. Fix as part of this step: (1) `await` the audited Secrets/Runs emits; (2) add a project-wide, **non-suppressible** no-floating-promises lint (e.g. Biome `noFloatingPromises`) with inline suppression of the rule prohibited, so a `void`-ed audited emit cannot recur. ADR-0004 stays intact; ADR-0012 *Known gap* records this.
 
 ### 4.3 — Delete the proxies
 
