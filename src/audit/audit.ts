@@ -76,10 +76,15 @@ export function createAudit(opts: CreateAuditOptions): Audit {
   };
 }
 
-// Microseconds since epoch. `performance.now()` has sub-millisecond
-// resolution; `performance.timeOrigin` anchors it to wall-clock time.
+// Microseconds since epoch, anchored to the wall clock. `Date.now()` is the
+// NTP-corrected wall time (millisecond resolution); ×1000 expresses it in the
+// microsecond unit the audit log records. Ordering *within* a millisecond is
+// handled by the monotonic `seq` counter, so we deliberately avoid
+// `performance.now()`, whose monotonic clock drifts from wall time over a
+// long-running process (a forensic-accuracy bug, and the cause of a full-suite
+// timestamp-assertion flake).
 function microsecondsNow(): number {
-  return Math.floor((performance.timeOrigin + performance.now()) * 1000);
+  return Date.now() * 1000;
 }
 
 function persist(db: AuditDb, source: ModuleSource, seq: number, output: NormalizerOutput): void {
