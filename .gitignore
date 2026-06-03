@@ -20,3 +20,6 @@ shell/release/
 shell/build-resources/
 # /build-feature-workflow loop scratch
 .build-feature-workflow/
+
+# loop-full-swe transient state (plans/round artifacts)
+.loop-swe/
