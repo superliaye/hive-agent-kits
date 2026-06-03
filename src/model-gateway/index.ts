@@ -2,9 +2,11 @@
 //
 // See docs/adr/0005-model-gateway-design.md.
 
+import type { Stream } from "effect";
 import { streamToAsyncIterable } from "../lib/effect-interop.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
 import { completeStream } from "./effect/complete.ts";
+import type { GatewayFailure } from "./effect/failure.ts";
 import { toErrorEvent } from "./effect/failure.ts";
 import { GatewayError, isRetryable } from "./errors.ts";
 import { createGatewayRegistry } from "./registry.ts";
@@ -18,8 +20,14 @@ import type {
 export type ModelGateway = {
   // Stream a completion. Resolves the adapter by `input.model`'s provider
   // prefix, then forwards. Per-completion events (deltas, tool calls, etc.)
-  // arrive on this stream — not on `events`.
+  // arrive on this stream — not on `events`. Legacy AsyncIterable contract:
+  // a typed failure surfaces as a terminal in-band `error` event.
   complete(input: CompletionInput): AsyncIterable<GatewayEvent>;
+
+  // Effect-native completion: the typed gateway Stream. A resolve miss or a
+  // thrown adapter is a `GatewayFailure` in the Stream's `E` channel. This is
+  // the migrated consumer-facing surface (the Run executor's completion port).
+  completeStream(input: CompletionInput): Stream.Stream<GatewayEvent, GatewayFailure>;
 
   // Register an adapter. Returns a disposer that unregisters the adapter
   // and emits `adapter.unregistered`.
@@ -38,6 +46,7 @@ export function createGateway(): ModelGateway {
     // adapter) surfaces as a terminal in-band `error` event, preserving the
     // legacy stream's shape for consumers not yet migrated.
     complete: (input) => streamToAsyncIterable(completeStream(registry, input), toErrorEvent),
+    completeStream: (input) => completeStream(registry, input),
     registerAdapter: registry.registerAdapter,
     events: registry.events,
   };

@@ -3,9 +3,9 @@
 // Inputs (injected at module construction):
 //   - threads   : the Threads store (read history, append messages)
 //   - runs      : the Runs store    (record lifecycle)
-//   - catalog   : the Agent Catalog (resolve agent_id → model + system prompt)
-//   - gateway   : the ModelGateway  (the actual `complete()` call)
-//   - secrets   : the Secrets module (resolve provider → AuthInput)
+//   - catalog   : agent lookup port (resolve agent_id → model + system prompt)
+//   - gateway   : the completion port (the typed `completeStream()` call)
+//   - secrets   : the auth-resolution port (provider → AuthInput)
 //
 // One verb: `startRun({ threadId, userMessage })` returns an
 // AsyncIterable<RunEvent>. The lifecycle:
@@ -15,13 +15,16 @@
 //   2. Append the user message to the Thread (so the history written to
 //      disk matches what we send to the model).
 //   3. Insert a `running` Run row, emit `run.started`.
-//   4. Stream `gateway.complete(...)`. Re-emit each GatewayEvent wrapped
-//      in `model.event`. Accumulate the assistant content from text +
-//      thinking + tool_use deltas.
+//   4. Drain `gateway.completeStream(...)` (the typed gateway Stream). Re-emit
+//      each GatewayEvent wrapped in `model.event`. Accumulate the assistant
+//      content from text + thinking + tool_use deltas. A typed
+//      `GatewayFailure` (resolve miss or thrown adapter) arrives in-band as a
+//      terminal failure item carrying its real GatewayErrorCode.
 //   5. On `done`:
 //      - finishReason=cancelled  → emit `run.cancelled`, mark Run row.
 //      - finishReason=error      → emit `run.failed` with the classified
-//                                  error from the preceding `error` event.
+//                                  error (in-band `error` event OR typed
+//                                  GatewayFailure).
 //      - otherwise               → append assistant message to Thread,
 //                                  emit `run.completed`, mark Run row.
 //
@@ -33,10 +36,7 @@
 // with tool_use blocks lands in the Thread; future Part 7 handles dispatch
 // + re-running with tool_results.
 
-import type { Catalog } from "../catalog/index.ts";
-import { log } from "../lib/log.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
-import type { ModelGateway } from "../model-gateway/index.ts";
 import type {
   CompletionInput,
   ContentBlock,
@@ -45,11 +45,16 @@ import type {
   GatewayEvent,
   Message,
 } from "../model-gateway/types.ts";
-import type { Secrets } from "../secrets/index.ts";
-import type { Threads } from "../threads/index.ts";
 import type { ThreadMessage } from "../threads/types.ts";
 import { MODEL_FALLBACK } from "./defaults.ts";
-import type { RunsStore } from "./store.ts";
+import { drainCompletion } from "./effect/consume.ts";
+import type {
+  CatalogPort,
+  CompletionPort,
+  RunsStorePort,
+  SecretsPort,
+  ThreadsPort,
+} from "./effect/ports.ts";
 import type { Run, RunEvent, RunModuleEvents } from "./types.ts";
 
 export type StartRunInput = {
@@ -81,11 +86,11 @@ export type RunExecutor = {
 };
 
 export type CreateRunExecutorDeps = {
-  threads: Threads;
-  runs: RunsStore;
-  catalog: Catalog;
-  gateway: ModelGateway;
-  secrets: Secrets;
+  threads: ThreadsPort;
+  runs: RunsStorePort;
+  catalog: CatalogPort;
+  gateway: CompletionPort;
+  secrets: SecretsPort;
   now?: () => number;
 };
 
@@ -197,13 +202,22 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         signal: controller.signal,
       };
 
-      // Stream + accumulate.
+      // Stream + accumulate. The completion port hands back the typed gateway
+      // Stream; a thrown adapter/resolve failure arrives in-band as a typed
+      // `GatewayFailure` (kind: "failure") carrying its real GatewayErrorCode —
+      // there is no out-of-band throw path to reconcile.
       const accumulator = new AssistantAccumulator();
       let latestError: { code: GatewayErrorCode; message: string } | null = null;
       let finishReason: FinishReason | null = null;
 
       try {
-        for await (const ev of gateway.complete(completionInput)) {
+        for await (const item of drainCompletion(gateway.completeStream(completionInput))) {
+          if (item.kind === "failure") {
+            latestError = { code: item.failure.code, message: item.failure.message };
+            finishReason = "error";
+            continue;
+          }
+          const ev = item.event;
           accumulator.consume(ev);
           if (ev.type === "error") {
             latestError = { code: ev.code, message: ev.message };
@@ -213,13 +227,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
           }
           yield { type: "model.event", runId: run.id, event: ev };
         }
-      } catch (err) {
-        log().warn(
-          { module: "runs/executor", runId: run.id, err },
-          "gateway.complete threw out of band",
-        );
-        latestError = { code: "unknown", message: (err as Error).message };
-        finishReason = "error";
       } finally {
         inflight.delete(run.id);
       }
