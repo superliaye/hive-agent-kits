@@ -2,7 +2,10 @@
 //
 // See docs/adr/0005-model-gateway-design.md.
 
+import { streamToAsyncIterable } from "../lib/effect-interop.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
+import { completeStream } from "./effect/complete.ts";
+import { toErrorEvent } from "./effect/failure.ts";
 import { GatewayError, isRetryable } from "./errors.ts";
 import { createGatewayRegistry } from "./registry.ts";
 import type {
@@ -30,7 +33,11 @@ export type ModelGateway = {
 export function createGateway(): ModelGateway {
   const registry = createGatewayRegistry();
   return {
-    complete: (input) => registry.resolve(input.model).complete(input),
+    // Effect-native internally (typed `E`); bridged back to the AsyncIterable
+    // contract here. A typed `GatewayFailure` (resolve failure or a thrown
+    // adapter) surfaces as a terminal in-band `error` event, preserving the
+    // legacy stream's shape for consumers not yet migrated.
+    complete: (input) => streamToAsyncIterable(completeStream(registry, input), toErrorEvent),
     registerAdapter: registry.registerAdapter,
     events: registry.events,
   };
