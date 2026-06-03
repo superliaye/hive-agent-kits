@@ -11,17 +11,22 @@ import type { Hono } from "hono";
 import { type Audit, createAudit } from "../audit/index.ts";
 import { wireSubscriptions } from "../audit/subscriptions.ts";
 import { type Registry, createRegistry } from "../capabilities/index.ts";
-import { Catalog as CatalogTag, CatalogLive } from "../catalog/effect/catalog-live.ts";
+import { CatalogLive, Catalog as CatalogTag } from "../catalog/effect/catalog-live.ts";
 import type { Catalog } from "../catalog/index.ts";
-import { Config as ConfigTag, ConfigLive } from "../config/effect/config-live.ts";
-import { APP_CONFIG_DEFAULTS, type AppConfig, AppConfigSchema, type Config } from "../config/index.ts";
+import { ConfigLive, Config as ConfigTag } from "../config/effect/config-live.ts";
+import {
+  APP_CONFIG_DEFAULTS,
+  type AppConfig,
+  AppConfigSchema,
+  type Config,
+} from "../config/index.ts";
 import { HiveDb, HiveDbLive } from "../db/effect/hive-db-live.ts";
 import { createLogger, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { createPiAiAdapter } from "../model-gateway/adapters/pi-ai.ts";
 import { type ModelGateway, createGateway } from "../model-gateway/index.ts";
 import { type RunExecutor, createRunExecutor, createRunsStore } from "../runs/index.ts";
-import { Secrets as SecretsTag, SecretsLive } from "../secrets/effect/secrets-live.ts";
+import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
 import type { Secrets } from "../secrets/index.ts";
 import { type Threads, createThreads } from "../threads/index.ts";
 import { buildRoutes } from "./routes.ts";
@@ -99,7 +104,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // their `.events` emitters) every consumer below shares.
   const hiveDb = runtime.runSync(HiveDb);
   const config: Config<AppConfig> = runtime.runSync(ConfigTag);
-  const catalog: Catalog = runtime.runSync(CatalogTag);
+  const catalogSvc = runtime.runSync(CatalogTag);
+  // Project to the legacy `Catalog` shape with a no-op `dispose` — `runtime.dispose()`
+  // owns catalog teardown now, same pattern as the Secrets projection below.
+  // (Otherwise the handle keeps a live `dispose()`: an independent teardown the
+  // single root runtime should own.)
+  const catalog: Catalog = { ...catalogSvc, dispose: () => {} };
   const secretsSvc = runtime.runSync(SecretsTag);
   // The resolved SecretsSvc is the legacy `Secrets` surface minus `dispose()`
   // (the runtime owns teardown now). Project the legacy shape so the routes +
