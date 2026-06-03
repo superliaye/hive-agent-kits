@@ -30,7 +30,7 @@
 - Typed `E` (`Data.TaggedError`) **only for genuine failures**; absence / normal branches stay `undefined` or domain events (Secrets `getAuth` stays `undefined`; a Run's `run.failed` stays an event — confirmed taste calls, not oversights).
 - **Generic services:** a nominal `Context.Service` tag can't carry a type parameter. Config keeps the tag non-generic (`{dispose}`) and returns the typed `ConfigSvc<S>` via a **closure holder**, not through the tag (`src/config/effect/config-live.ts`).
 
-**Gating decision for Phase 4:** the **`TypedEmitter` → Effect `PubSub` question needs its own ADR before Audit or the event bus is touched.** Decide it first (see Phase 4).
+**Gating decision for Phase 4: RESOLVED** — [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md) keeps `TypedEmitter` as the event bus (no `PubSub` swap). Audit (§4.2) and the SSE relay are unblocked; Phase 4 proceeds to the composition root (§4.1).
 
 **Tooling caveat — `/loop-build` cannot build in this harness.** The `Workflow` args (`startFrom`/`stopAfter`/`resolutions`/`feature`) never reach `loop-swe.js` (`args` arrives empty), so it always re-plans, can't skip to build, and `resumeFromRunId` can't inject resolutions to clear a gate. It **plans** well (and its review caught real issues), but **build Phase 4 by hand.** Full bug report: `%TEMP%\handoff-loop-build-issues.md`.
 
@@ -270,9 +270,9 @@ Built manually (loop couldn't drive its own build — see Status caveat). All ke
 
 **Start here: settle the gating decision before writing code.**
 
-### 4.0 — `TypedEmitter` → Effect `PubSub`/`Stream`? (decide first; write an ADR)
+### 4.0 — `TypedEmitter` → Effect `PubSub`/`Stream`? ✅ RESOLVED → [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md)
 
-Every module exposes a `TypedEmitter<XEvents>`, and Audit subscribes to all of them (`src/audit/subscriptions.ts`, ADR-0004 subscribe pattern). Whether to replace `TypedEmitter` with Effect `PubSub`/`Stream` is **one cross-cutting decision** that touches Audit + every emitter — **do not migrate it piecemeal.** It is the architecturally weightiest call left and deserves a design discussion + its own ADR. Inputs the decision needs: the audit payload contract `{key, previous, current, source}` must survive (Phase 3a proved `SubscriptionRef.changes` *cannot* carry it); the `block-on-failure` emit semantics in `TypedEmitter` (audit failure fails the originating op, ADR-0004) must be preserved or consciously changed; back-pressure/replay needs. **Recommendation: write the ADR, likely keep `TypedEmitter` as the typed event bus for now (it already does the job) and only adopt `PubSub` if a concrete need appears.** Until decided, leave the bus alone.
+**Decision: keep `TypedEmitter`; do not migrate the bus to `PubSub`/`Stream`; do not migrate it piecemeal.** The bus already serves two consumers with opposite failure semantics by listener convention — Audit (block-on-failure, ADR-0004) and the `/api/events` SSE relay (drop-on-failure, `src/server/routes.ts:491-502`) — which a standard `PubSub` does not give for free. The `{key, previous, current, source}` audit contract keeps flowing through `Config.events` unchanged (Phase 3a proved `SubscriptionRef.changes` can't carry it). No consumer needs bounded buffering or replay today. Revisit trigger (ADR-0012): a consumer that genuinely needs back-pressure, replay, or Effect-native interruption through emit. Until then, leave the bus alone — Audit (§4.2) migrates its internals only, still consuming `TypedEmitter` via `wireSubscriptions`.
 
 ### 4.1 — Server as the Layer composition root
 
