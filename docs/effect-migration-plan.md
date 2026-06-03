@@ -27,6 +27,8 @@ These were verified against this repo's own `node_modules/effect@4.0.0-beta.75` 
 | Stream error handler | **`Stream.catch`** | **not** `Stream.catchAll` (renamed) |
 | Async-iterable interop | `Stream.fromAsyncIterable`, `Stream.toAsyncIterable` (+ `…With`) | present |
 | Run at edge | `Effect.runPromiseExit`, `Effect.tryPromise`, `Effect.gen` | present |
+| Collect a stream | `Stream.runCollect` returns a **plain `Array`** | **not** a `Chunk` — `Chunk.toReadonlyArray` throws on it (Phase 1 finding) |
+| Extract a failure (tests) | `Effect.flip` then `Effect.runPromise` | `Cause.failureOption` is **absent**; flip swaps `E`↔`A` cleanly |
 | Runtime | `ManagedRuntime.make` | present |
 | Layer | `Layer.effect`, `Layer.succeed`, `Layer.provide`, `Layer.mergeAll` | **`Layer.scoped` is ABSENT** — Phase 2's scoped `HiveDbLive` must find the v4 scoped-resource mechanism (likely `Layer.effect` over `Effect.acquireRelease` in a `Scope`); confirm before relying on it. |
 

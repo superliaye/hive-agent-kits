@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { Effect, Exit } from "effect";
+import { GatewayFailure } from "../effect/failure.ts";
 import { GatewayError } from "../errors.ts";
 import { createGatewayRegistry } from "../registry.ts";
 import type { GatewayAdapter } from "../types.ts";
@@ -51,6 +53,29 @@ describe("registry", () => {
     r.registerAdapter(a);
     r.registerAdapter(b);
     expect(r.resolve("x/m")).toBe(b);
+  });
+
+  test("resolveEffect succeeds with the adapter for a registered provider", async () => {
+    const r = createGatewayRegistry();
+    r.registerAdapter(stub);
+    const exit = await Effect.runPromiseExit(r.resolveEffect("fake/x"));
+    expect(Exit.isSuccess(exit)).toBe(true);
+    if (Exit.isSuccess(exit)) expect(exit.value).toBe(stub);
+  });
+
+  test("resolveEffect fails with typed GatewayFailure(model_not_found) for unknown provider", async () => {
+    const r = createGatewayRegistry();
+    r.registerAdapter(stub);
+    const failure = await Effect.runPromise(Effect.flip(r.resolveEffect("unknown/m")));
+    expect(failure).toBeInstanceOf(GatewayFailure);
+    expect(failure.code).toBe("model_not_found");
+  });
+
+  test("resolveEffect fails with GatewayFailure(invalid_request) for malformed model", async () => {
+    const r = createGatewayRegistry();
+    r.registerAdapter(stub);
+    const failure = await Effect.runPromise(Effect.flip(r.resolveEffect("no-slash")));
+    expect(failure.code).toBe("invalid_request");
   });
 
   test("disposer unregisters the adapter and emits adapter.unregistered", async () => {
