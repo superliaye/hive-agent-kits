@@ -46,11 +46,15 @@ export class AgentLookup extends Context.Service<AgentLookup, CatalogPort>()("ru
 // Threads: the three verbs the executor uses.
 export type ThreadsPort = {
   get(threadId: string): { agentId: string } | undefined;
-  append(input: { threadId: string; role: "user" | "assistant"; content: ContentBlock[] }): ThreadMessage;
+  append(input: {
+    threadId: string;
+    role: "user" | "assistant";
+    content: ContentBlock[];
+  }): ThreadMessage;
   getCompletionMessages(threadId: string): Message[];
 };
-export class ThreadsPortTag extends Context.Service<ThreadsPortTag, ThreadsPort>()(
-  "runs/ThreadsPort",
+export class ThreadHistory extends Context.Service<ThreadHistory, ThreadsPort>()(
+  "runs/ThreadHistory",
 ) {}
 
 // Runs store: the lifecycle verbs the executor records through.
@@ -62,6 +66,6 @@ export type RunsStorePort = {
   get(runId: string): Run | undefined;
   listByThread(threadId: string): Run[];
 };
-export class RunsStorePortTag extends Context.Service<RunsStorePortTag, RunsStorePort>()(
-  "runs/RunsStorePort",
+export class RunLifecycle extends Context.Service<RunLifecycle, RunsStorePort>()(
+  "runs/RunLifecycle",
 ) {}

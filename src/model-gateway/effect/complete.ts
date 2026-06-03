@@ -5,12 +5,18 @@
 // I/O edges" (ADR-0010, ADR-0011).
 
 import { Effect, Stream } from "effect";
+import { log } from "../../lib/log.ts";
 import { GatewayError } from "../errors.ts";
 import type { GatewayRegistry } from "../registry.ts";
 import type { CompletionInput, GatewayEvent } from "../types.ts";
 import { GatewayFailure } from "./failure.ts";
 
+// `toFailure` is the `onError` of `Stream.fromAsyncIterable`, so it runs only
+// when an adapter THROWS instead of emitting an in-band `error` event — an
+// adapter-contract anomaly. Trace it here (the throw site has the precise
+// signal); the run-level consequence is already an audit-visible `run.failed`.
 function toFailure(cause: unknown): GatewayFailure {
+  log().warn({ module: "model-gateway", err: cause }, "adapter threw out of band");
   if (cause instanceof GatewayFailure) return cause;
   if (cause instanceof GatewayError) {
     return new GatewayFailure({ code: cause.code, message: cause.message });

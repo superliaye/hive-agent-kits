@@ -238,7 +238,11 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         yield { type: "run.cancelled", runId: run.id, ts: now() };
         return;
       }
-      if (finishReason === "error" || (latestError && !finishReason)) {
+      // Per ADR-0005 an `error` event is always followed by `done(finishReason:
+      // "error")`, and a typed gateway failure sets `finishReason` above — so an
+      // error always lands here with `finishReason === "error"` carrying the
+      // real code. (A bare `error` with no `done` is contract-forbidden.)
+      if (finishReason === "error") {
         const code = latestError?.code ?? "unknown";
         const message = latestError?.message ?? "gateway emitted no error message";
         yield emitFailed(run.id, code, message);

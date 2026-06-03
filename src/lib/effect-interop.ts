@@ -7,13 +7,14 @@ import { Stream } from "effect";
 
 /**
  * Drain a fully-provided Effect Stream into an AsyncIterable, mapping a typed
- * failure in `E` into a terminal element instead of a thrown error. `onError`
- * turns the failure into an in-band terminal value (e.g. the gateway's `error`
- * event), so a migrated module's Stream keeps the legacy stream's contract.
+ * failure in `E` into one or more terminal in-band elements instead of a thrown
+ * error. `onError` returns the terminal sequence (e.g. the gateway maps a
+ * failure to an `error` event followed by a `done` event), so a migrated
+ * module's Stream keeps the legacy stream's contract.
  */
 export function streamToAsyncIterable<A, E>(
   stream: Stream.Stream<A, E>,
-  onError: (error: E) => A,
+  onError: (error: E) => readonly A[],
 ): AsyncIterable<A> {
-  return Stream.toAsyncIterable(stream.pipe(Stream.catch((e) => Stream.make(onError(e)))));
+  return Stream.toAsyncIterable(stream.pipe(Stream.catch((e) => Stream.fromIterable(onError(e)))));
 }
