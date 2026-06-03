@@ -290,6 +290,104 @@ describe("RunExecutor — model resolution", () => {
   });
 });
 
+// ─── typed gateway failures (Phase 2 Item 4) ─────────────────────────────────
+
+// Wire an executor with an explicit gateway + provider so we can exercise the
+// typed `GatewayFailure` paths (thrown adapter, resolve miss) that the legacy
+// out-of-band catch used to collapse to "unknown".
+function setupWithGateway(opts: {
+  gateway: ModelGateway;
+  provider: string;
+  model: string;
+}): { executor: RunExecutor; threadId: string } {
+  const db = openHiveDb(":memory:");
+  const threadsStore = createThreadsStore(db);
+  const runsStore = createRunsStore(db);
+  const secrets = createSecrets({ mode: "memory" });
+  secrets.setApiKey(opts.provider, "sk-test");
+  const catalog = makeCatalogStub([
+    makeAgent({ agentId: "test-agent", config: { model: opts.model } }),
+  ]);
+  const executor = createRunExecutor({
+    threads: threadsStore,
+    runs: runsStore,
+    catalog,
+    gateway: opts.gateway,
+    secrets,
+  });
+  const threadId = threadsStore.create({ agentId: "test-agent" }).id;
+  return { executor, threadId };
+}
+
+describe("RunExecutor — typed gateway failures", () => {
+  test("adapter stream that THROWS mid-iteration → run.failed with the GatewayFailure code", async () => {
+    const gw = createGateway();
+    gw.registerAdapter({
+      providers: ["anthropic"],
+      complete() {
+        let sent = false;
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              next() {
+                if (!sent) {
+                  sent = true;
+                  return Promise.resolve({
+                    value: { type: "text_start", blockIndex: 0 } satisfies GatewayEvent,
+                    done: false,
+                  });
+                }
+                return Promise.reject(new Error("kaboom"));
+              },
+            };
+          },
+        };
+      },
+    });
+    const { executor, threadId } = setupWithGateway({
+      gateway: gw,
+      provider: "anthropic",
+      model: "anthropic/claude-haiku-4-5",
+    });
+    const events = await collect(
+      executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }),
+    );
+    const failed = events.find((e) => e.type === "run.failed");
+    expect(failed).toBeDefined();
+    if (failed?.type === "run.failed") {
+      // A truly-unknown throw maps to "unknown" — but it is the typed
+      // GatewayFailure.code, surfaced in-band, not the deleted catch's blanket.
+      expect(failed.error.code).toBe("unknown");
+      expect(failed.error.message).toContain("kaboom");
+    }
+    // The pre-failure model.event still made it through.
+    expect(events.some((e) => e.type === "model.event")).toBe(true);
+  });
+
+  test("resolve miss (provider has a secret but no adapter) → run.failed(model_not_found), not unknown", async () => {
+    const gw = createGateway();
+    // Register an adapter for "anthropic" only; the run targets "vertex".
+    gw.registerAdapter(
+      makeFakeAdapter(["anthropic"], {
+        "anthropic/x": [{ type: "done", finishReason: "stop" }],
+      }),
+    );
+    const { executor, threadId } = setupWithGateway({
+      gateway: gw,
+      provider: "vertex",
+      model: "vertex/gemini",
+    });
+    const events = await collect(
+      executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }),
+    );
+    const failed = events.find((e) => e.type === "run.failed");
+    expect(failed).toBeDefined();
+    if (failed?.type === "run.failed") {
+      expect(failed.error.code).toBe("model_not_found");
+    }
+  });
+});
+
 // ─── concurrency + cancellation ─────────────────────────────────────────────
 
 describe("RunExecutor — concurrency + cancellation", () => {
