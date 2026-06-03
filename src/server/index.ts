@@ -6,25 +6,23 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { Layer, ManagedRuntime } from "effect";
 import type { Hono } from "hono";
 import { type Audit, createAudit } from "../audit/index.ts";
 import { wireSubscriptions } from "../audit/subscriptions.ts";
 import { type Registry, createRegistry } from "../capabilities/index.ts";
-import { type Catalog, createCatalog } from "../catalog/index.ts";
-import {
-  APP_CONFIG_DEFAULTS,
-  type AppConfig,
-  AppConfigSchema,
-  type Config,
-  createConfig,
-} from "../config/index.ts";
-import { openHiveDb } from "../db/hive-db.ts";
+import { Catalog as CatalogTag, CatalogLive } from "../catalog/effect/catalog-live.ts";
+import type { Catalog } from "../catalog/index.ts";
+import { Config as ConfigTag, ConfigLive } from "../config/effect/config-live.ts";
+import { APP_CONFIG_DEFAULTS, type AppConfig, AppConfigSchema, type Config } from "../config/index.ts";
+import { HiveDb, HiveDbLive } from "../db/effect/hive-db-live.ts";
 import { createLogger, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { createPiAiAdapter } from "../model-gateway/adapters/pi-ai.ts";
 import { type ModelGateway, createGateway } from "../model-gateway/index.ts";
 import { type RunExecutor, createRunExecutor, createRunsStore } from "../runs/index.ts";
-import { type Secrets, createSecrets } from "../secrets/index.ts";
+import { Secrets as SecretsTag, SecretsLive } from "../secrets/effect/secrets-live.ts";
+import type { Secrets } from "../secrets/index.ts";
 import { type Threads, createThreads } from "../threads/index.ts";
 import { buildRoutes } from "./routes.ts";
 
@@ -69,30 +67,59 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       ? createAudit({ mode: "memory" })
       : createAudit({ mode: "file", path: files.auditDb() });
 
-  const config: Config<AppConfig> & { dispose(): void } =
+  // The four migrated modules compose into ONE root Layer owned by a single
+  // ManagedRuntime (ADR-0011). The `mode`-driven adapter choice stays here at
+  // the composition root, feeding each Live constructor — root configuration,
+  // not a leaked requirement.
+  const dbPath = opts.mode === "memory" ? ":memory:" : files.hiveDb();
+  const configOpts =
     opts.mode === "memory"
-      ? createConfig({
-          mode: "memory",
-          initial: APP_CONFIG_DEFAULTS,
-          schema: AppConfigSchema,
-        })
-      : createConfig({
+      ? ({ mode: "memory", initial: APP_CONFIG_DEFAULTS, schema: AppConfigSchema } as const)
+      : ({
           mode: "file",
           path: files.config(),
           defaults: APP_CONFIG_DEFAULTS,
           schema: AppConfigSchema,
-        });
+        } as const);
+  const secretsOpts =
+    opts.mode === "memory"
+      ? ({ mode: "memory" } as const)
+      : ({ mode: "file", path: files.secrets() } as const);
+
+  const rootLayer = Layer.mergeAll(
+    HiveDbLive(dbPath),
+    SecretsLive(secretsOpts),
+    ConfigLive(configOpts),
+    CatalogLive(),
+  );
+  const runtime = ManagedRuntime.make(rootLayer);
+
+  // The Live acquires are all synchronous, so `runSync` resolves the cached
+  // service instances off the one runtime — the same live objects (including
+  // their `.events` emitters) every consumer below shares.
+  const hiveDb = runtime.runSync(HiveDb);
+  const config: Config<AppConfig> = runtime.runSync(ConfigTag);
+  const catalog: Catalog = runtime.runSync(CatalogTag);
+  const secretsSvc = runtime.runSync(SecretsTag);
+  // The resolved SecretsSvc is the legacy `Secrets` surface minus `dispose()`
+  // (the runtime owns teardown now). Project the legacy shape so the routes +
+  // handles type unchanged, with a no-op `dispose` (runtime.dispose() is the
+  // real teardown).
+  const secrets: Secrets = {
+    events: secretsSvc.events,
+    getAuth: (provider) => secretsSvc.getAuth(provider),
+    setApiKey: (provider, apiKey) => secretsSvc.setApiKey(provider, apiKey),
+    startOAuthLogin: (provider, callbacks) => secretsSvc.startOAuthLogin(provider, callbacks),
+    remove: (provider) => secretsSvc.remove(provider),
+    list: () => secretsSvc.list(),
+    status: (provider) => secretsSvc.status(provider),
+    dispose: () => {},
+  };
 
   const registry = createRegistry({ watch: opts.mode === "file" });
-  const catalog = createCatalog();
   const gateway = createGateway();
-  const secrets =
-    opts.mode === "memory"
-      ? createSecrets({ mode: "memory" })
-      : createSecrets({ mode: "file", path: files.secrets() });
-  // Shared hot-state SQLite (`~/.hive/hive.db` in file mode, `:memory:` in
-  // memory mode). Threads + Runs both consume this handle.
-  const hiveDb = openHiveDb(opts.mode === "memory" ? ":memory:" : files.hiveDb());
+  // Threads + Runs consume the single Layer-owned `hive.db` handle (the
+  // `"shared"` mode is exactly this). No second connection.
   const threads = createThreads({ mode: "shared", db: hiveDb });
   const runsStore = createRunsStore(hiveDb);
   // Boot-time stale-Run recovery: any Run still `running` from a previous
@@ -154,8 +181,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     async dispose() {
       dispose();
       registry.dispose();
-      catalog.dispose();
-      config.dispose();
+      // ONE teardown: releases Config (watcher + ref scope), Secrets (no-op),
+      // Catalog (file watchers), and HiveDb ($client.close) — each exactly once
+      // via Layer memoization. This also closes the previously-leaked hive.db
+      // handle.
+      await runtime.dispose();
     },
   };
 }
