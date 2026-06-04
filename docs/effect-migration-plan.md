@@ -12,7 +12,7 @@
 
 ## Status — where a fresh session starts (updated 2026-06-04)
 
-**Branch `spike/effect-runs-gateway`, suite 519 pass / 0 fail.** Phases 0–4 are committed. Every daemon module is now Effect-native: §4.0–§4.2 (event-bus [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md); composition-root §4.1a/b; the §4.2 block-on-failure fix + non-suppressible no-floating-promises guard + Effect-native Audit), §4.3 (production proxies collapsed onto the single root runtime), and §4.x (`ThreadsLive` — the last module, built over the shared root `HiveDb`). Read this section + the API map below. Phase 4 was driven issue-by-issue through `/loop-full-swe` (see the tooling note).
+**Branch `spike/effect-runs-gateway`, suite 519 pass / 0 fail.** Phases 0–4 are committed. Every daemon module is now Effect-native: §4.0–§4.2 (event-bus [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md); composition-root §4.1a/b; the §4.2 block-on-failure fix + non-suppressible no-floating-promises guard + Effect-native Audit), §4.3 (**all legacy `createX()` proxies deleted** — their test suites migrated onto the `XLive` layers, so production *and* tests are proxy-free), and §4.x (`ThreadsLive` — the last module, built over the shared root `HiveDb`). The one deliberate plain-async holdout is the **Run executor's `startRun` streaming + cancellation** — a genuine I/O edge (pi-ai `Stream` in, SSE out); migrating it is tied to Part 7, not uniformity (see the Phase 2 deviation note). Read this section + the API map below. Phase 4 was driven issue-by-issue through `/loop-full-swe` (see the tooling note).
 
 | Phase | Status | Commits |
 | --- | --- | --- |
@@ -250,8 +250,8 @@ After 1.4, evaluate honestly: did the typed `E` channel remove real complexity, 
 - Out-of-band adapter throws are trace-logged at the gateway seam (`complete.ts` `toFailure`).
 
 **Deviations from the original plan (intentional):**
-- **`AbortController` cancellation was NOT migrated** to Effect interruption — kept as-is; `startRun` still returns `AsyncIterable<RunEvent>` (Run failures stay *events*, not `E`). Effect-native `startRun`/interruption is deferred.
-- **`ThreadsLive` was NOT built** — Threads is pure sync CRUD with no error-channel win; the executor only needs the narrow `ThreadHistory` port, which it has. (Re-confirmed and deferred again in Phase 3b.)
+- **`AbortController` cancellation + async-generator `startRun` stay plain-async — a conscious keep, not a gap.** The executor sits *between two I/O edges* (pi-ai's gateway `Stream` in, the SSE writer out), exactly where AGENTS.md's *"plain async only at I/O edges"* applies: `startRun` returns `AsyncIterable<RunEvent>` and cancellation uses `AbortController` (the right primitive for pi-ai's `AbortSignal`). An Effect `Stream` would convert *back* to an AsyncIterable at the SSE edge and Effect interruption would bridge to an `AbortController` at the pi-ai edge — ceremony with real regression risk and no behavioral gain. Revisit **only when Part 7 (tool dispatch / re-run with tool_results) or Run supervision** provides a concrete consumer that needs Effect composition (timeouts, retries, supervised re-runs) — let that drive the design, not uniformity. (Run failures stay *events*, not `E`, regardless.)
+- **`ThreadsLive` was deferred here** (pure sync CRUD, no error-channel win; the executor only needs the narrow `ThreadHistory` port) and **later built in §4.x** for composition-root uniformity, borrowing the shared root `HiveDb` connection — no second handle.
 
 ---
 
