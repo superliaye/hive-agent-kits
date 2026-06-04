@@ -102,6 +102,10 @@ export function ConfigLive(opts: CreateConfigOptions<AppConfig>): Layer.Layer<Co
 // Build the Config service and a ManagedRuntime that owns its disposal (uniform
 // with Secrets/HiveDb). The generic ConfigSvc<S> is preserved via the closure
 // holder rather than retrieved through the non-generic ConfigResource tag.
+//
+// Test-only accessor: production resolves Config off the single root runtime
+// (ConfigLive, fixed to AppConfig). The returned `dispose()` is fire-and-forget
+// (rejection routed to the trace log) — do not assume awaitable disposal.
 export function configRuntime<S extends Record<string, unknown>>(
   opts: CreateConfigOptions<S>,
 ): { svc: ConfigSvc<S>; dispose: () => void } {

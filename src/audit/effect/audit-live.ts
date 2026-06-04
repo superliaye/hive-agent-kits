@@ -119,6 +119,8 @@ function buildSvc(db: AuditDb): AuditSvc {
 
   return {
     attach,
+    // Sync read under a Promise façade: runQuery is synchronous (bun:sqlite),
+    // but the legacy surface declares query(): Promise<AuditEvent[]>.
     query: (filter) => Promise.resolve(runQuery(db, filter)),
     subscriptions: () => [...subscribed],
   };
