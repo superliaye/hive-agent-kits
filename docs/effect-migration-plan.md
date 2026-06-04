@@ -12,7 +12,7 @@
 
 ## Status — where a fresh session starts (updated 2026-06-04)
 
-**Branch `spike/effect-runs-gateway`, suite 516 pass / 0 fail.** Phases 0–3b are committed; **Phase 4 is in progress** — §4.0–§4.2 are done (event-bus [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md); composition-root §4.1a/b; the §4.2 block-on-failure fix + non-suppressible no-floating-promises guard + Effect-native Audit), **§4.3 (delete the legacy proxies) is next**. Read this section + the API map below. Phase 4 is being driven issue-by-issue through `/loop-full-swe` (see the tooling note).
+**Branch `spike/effect-runs-gateway`, suite 519 pass / 0 fail.** Phases 0–4 are committed. Every daemon module is now Effect-native: §4.0–§4.2 (event-bus [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md); composition-root §4.1a/b; the §4.2 block-on-failure fix + non-suppressible no-floating-promises guard + Effect-native Audit), §4.3 (production proxies collapsed onto the single root runtime), and §4.x (`ThreadsLive` — the last module, built over the shared root `HiveDb`). Read this section + the API map below. Phase 4 was driven issue-by-issue through `/loop-full-swe` (see the tooling note).
 
 | Phase | Status | Commits |
 | --- | --- | --- |
@@ -22,7 +22,7 @@
 | audit `ts` wall-clock flake fix | ✅ done | `b567214` |
 | 3a — Secrets + Config | ✅ done | Secrets commit, then `cc50b9f` (Config) |
 | 3b — Catalog (ThreadsLive deferred) | ✅ done | `ebb6a7b` |
-| **4 — composition root + cross-cutting** | in progress — §4.0–4.2 done, §4.3 next | ADR-0012; 4.1a/b composition root; 4.2-A1/A2/B/C |
+| **4 — composition root + cross-cutting** | ✅ done — all modules Effect-native | ADR-0012; 4.1a/b composition root; 4.2-A1/A2/B/C; 4.x ThreadsLive |
 
 **Pattern to mirror for any remaining module** — `src/<m>/effect/{errors,<m>-live}.ts` + a `ManagedRuntime` proxy in `src/<m>/index.ts`. Reference impls: `src/db/effect/hive-db-live.ts`, `src/secrets/effect/`, `src/config/effect/`, `src/catalog/effect/`.
 - Tag + layer: `class X extends Context.Service<X, XSvc>()("<m>/X") {}`; `XLive(opts) = Layer.effect(X, Effect.acquireRelease(Effect.sync(() => buildSvc(...)), (svc) => Effect.sync(() => svc.dispose?.())))`.
@@ -262,7 +262,7 @@ Built manually (loop couldn't drive its own build — see Status caveat). All ke
 - **Secrets** (`src/secrets/effect/`) — `SecretsLive`; typed `E`: `SecretsNoCredentials` (on `requireAuth`) + `SecretsRefreshTarget`. **Decision (operator):** absence *is* a typed error on the Effect surface; `getAuth`/the `SecretsResolver` port return `undefined` for absence (not a typed error). The four audited store verbs (`get`/`set`/`refresh`/`remove`) are async + block-on-failure (4.2-A1): each awaits its audit emit so a persist failure fails the originating op, with the mutating verbs emitting before they commit. `getAuth` therefore returns `Promise<AuthInput | undefined>` and the executor awaits it; an audit-persist failure surfaces as an Effect defect, not a typed `E`. OAuth `onRefresh` stays plain-async at the pi-ai edge, awaiting the async store refresh mid-call.
 - **Config** (`src/config/effect/`) — reactive `ConfigLive`. **Decisions (C1/C2/C3):** `SubscriptionRef<S>` is the state cell (`.changes` exposed for Phase 4, **not** consumed yet); `watch()` + audit stay on the **`TypedEmitter`** (the only path carrying `{key,previous,current,source}` — `SubscriptionRef.changes` can't, so it can *not* be the audit source); `writeQueue` + deep-equals kept; tag non-generic, `S` via closure.
 - **Catalog** (`src/catalog/effect/`) — `CatalogLive`; typed `E`: `requireAgent` → `CatalogAgentNotFound`. Legacy mutation verbs still throw `AgentNotFoundError` (`server/routes.ts` narrows on it). **Scope calls:** the file watcher (shared `createTieredManifestStore`) was **not** Stream-ified (out of scope); parse errors stay collected-as-data + trace-logged (skips, not failures).
-- **ThreadsLive** — deferred (pure sync CRUD, no win; see Phase 2).
+- **ThreadsLive** — deferred here (pure sync CRUD, no error-channel win; see Phase 2), then built in §4.x for uniformity over the shared root `HiveDb`.
 
 ---
 
@@ -299,7 +299,16 @@ Production is fully migrated: `createServer()` resolves every migrated service (
 - **`createCatalog()` — DELETED.** Its last consumer was a single audit-subscriptions test, migrated to `CatalogLive` + a `ManagedRuntime`; `src/catalog/index.ts` is now a pure re-export barrel. (`src/catalog/catalog.ts`'s `createCatalog`/`buildCatalog` is the real factory `CatalogLive` builds on — not a proxy, not deleted.)
 - **`createSecrets()` / `createConfig()` / `createAudit()` — RETAINED**, each with an in-code `Retained (§4.3)` note. Each is depended on by a whole plain-async legacy-surface suite (`secrets/__tests__/index.test.ts`; `config/__tests__/{store,persistence}.test.ts`; `audit/__tests__/{audit,subscriptions}.test.ts`). Force-migrating those suites to the `XLive` layers is a larger, separate effort; per this plan's allowance the proxies stay until then.
 
-**End-state, honestly:** the *production* end-state is reached — no proxy on any production path; `src/` has no plain-async outside the I/O-edge adapters and these three test-only proxies. The literal "no proxy remains" is **deferred** to a future test-migration pass. **Do not migrate** the trace logger — `src/lib/log.ts` stays a call-site singleton by existing design (AGENTS.md). Optionally build `ThreadsLive` (§4.x) if uniformity is wanted.
+**End-state, honestly:** the *production* end-state is reached — no proxy on any production path; `src/` has no plain-async outside the I/O-edge adapters and these three test-only proxies. The literal "no proxy remains" is **deferred** to a future test-migration pass. **Do not migrate** the trace logger — `src/lib/log.ts` stays a call-site singleton by existing design (AGENTS.md). `ThreadsLive` (§4.x) was built for uniformity — the last module brought onto the root runtime.
+
+### 4.x — ThreadsLive (done — Phase 4 complete)
+
+`ThreadsLive` (`src/threads/effect/threads-live.ts`) is the final module brought onto the root runtime. It is the deliberate odd-one-out: it owns **no** sqlite handle. Unlike the other Lives it does not `acquireRelease` a connection — it **depends on** the root `HiveDb` tag, yields that shared handle from context, and builds the `ThreadsStore` over it. So its layer type is `Layer.Layer<Threads, never, HiveDb>` — the `HiveDb` requirement is a genuine shared root resource, discharged at the root, not a leaked `R`.
+
+- **One connection, proven.** The root binds `const dataLayer = HiveDbLive(dbPath)` **once** and uses that same layer *value* both in `Layer.mergeAll` (HiveDb stays exposed for the unmigrated Runs path) and on the Threads branch via `ThreadsLive().pipe(Layer.provide(dataLayer))`. Because it is one value, `ManagedRuntime` memoizes it: exactly one `hive.db` connection shared by Threads + Runs; `runtime.dispose()` closes it once. `threads-live.test.ts` proves this — a thread created via `Threads` is visible through a store over the SAME resolved `HiveDb` handle, and after `dispose()` that handle is closed.
+- **Combinator (D2, with API-map correction).** Chosen: bound `dataLayer` value + plain `Layer.provide`. `Layer.provideMerge` **does** exist in `effect@4.0.0-beta.75` (`node_modules/effect/dist/Layer.d.ts`) — an earlier note that it was absent was stale; `provideMerge` would just re-add `HiveDb` to the union (redundant here, since `dataLayer` already exposes it). The bound-value + plain `provide` is the minimal one-connection form.
+- **No typed `E` (D1).** Threads is pure synchronous CRUD with no port-level precondition a consumer narrows on, so `ThreadsSvc = ThreadsStore` verbatim — no Effect-returning verbs. (Contrast Catalog, which earned `requireAgent`/`CatalogAgentNotFound` because the executor narrows on a missing agent.) The one throw (`ThreadNotFoundError`, inside the `append` transaction) surfaces unchanged.
+- **Legacy `createThreads()` — DELETED.** Its only consumer was `createServer()`, now wired through `ThreadsLive`; every test uses `createThreadsStore` directly. `src/threads/index.ts` is now a re-export barrel (keeps the `Threads` type alias, `ThreadNotFoundError`, and the row/input types), mirroring the §4.3 catalog barrel.
 
 ---
 
