@@ -184,7 +184,10 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       }
 
       // Append the user message FIRST so on-disk history matches what we
-      // send to the model.
+      // send to the model. Threads is not an audited source, so this write sits
+      // deliberately OUTSIDE the Run's audit-first window (run.started, below):
+      // if Threads ever becomes audited it needs its own audit-first treatment,
+      // and note a block-on-failure on run.started leaves this message appended.
       threads.append({ threadId, role: "user", content: userMessage });
 
       // Insert the Run row, emit run.started. Pre-generate the id so the audit
