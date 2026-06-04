@@ -44,7 +44,9 @@ import type {
 export type CreateAuditOptions = { mode: "file"; path: string } | { mode: "memory" };
 
 // The service VALUE is the legacy Audit surface byte-for-byte (attach/query/
-// subscriptions), plus the underlying handle so `release` can close it.
+// subscriptions) — nothing more. The DB handle is captured in AuditLive's
+// acquire/release closure, NOT published here: a raw drizzle handle has no place
+// on the service contract (ADR-0011 clean-interface); only `release` needs it.
 export type AuditSvc = {
   attach<TEventMap extends Record<string, unknown>>(
     source: ModuleSource,
@@ -53,7 +55,6 @@ export type AuditSvc = {
   ): () => void;
   query(filter: AuditQueryFilter): Promise<AuditEvent[]>;
   subscriptions(): readonly ModuleSource[];
-  readonly db: AuditDb;
 };
 
 export class Audit extends Context.Service<Audit, AuditSvc>()("audit/Audit") {}
@@ -64,10 +65,15 @@ export function AuditLive(opts: CreateAuditOptions): Layer.Layer<Audit> {
     Audit,
     Effect.acquireRelease(
       // DB open is SYNCHRONOUS (bun:sqlite Database ctor + drizzle); mirror HiveDbLive.
-      Effect.sync(() => buildSvc(openAuditDb(path))),
+      // Keep the handle next to the svc so `release` can close it without
+      // publishing it on the service value.
+      Effect.sync(() => {
+        const db = openAuditDb(path);
+        return { svc: buildSvc(db), db };
+      }),
       // Close the handle no one closed pre-4.2 (4.1b left audit close to this slice).
-      (svc) => Effect.sync(() => svc.db.$client.close()),
-    ),
+      ({ db }) => Effect.sync(() => db.$client.close()),
+    ).pipe(Effect.map(({ svc }) => svc)),
   );
 }
 
@@ -115,7 +121,6 @@ function buildSvc(db: AuditDb): AuditSvc {
     attach,
     query: (filter) => Promise.resolve(runQuery(db, filter)),
     subscriptions: () => [...subscribed],
-    db,
   };
 }
 

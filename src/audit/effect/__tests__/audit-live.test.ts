@@ -61,14 +61,15 @@ describe("AuditLive", () => {
     const path = tmpDbPath();
     const runtime = ManagedRuntime.make(AuditLive({ mode: "file", path }));
     const svc = runtime.runSync(Audit);
-    // Sanity: open handle accepts a trivial statement.
-    svc.db.$client.exec("SELECT 1");
+    // Sanity: the service works while the handle is open.
+    expect(await svc.query({})).toEqual([]);
 
     await runtime.dispose();
 
-    // The close ran (the thing that did NOT happen pre-4.2): the old handle
-    // throws, but the on-disk file is intact — a fresh open succeeds.
-    expect(() => svc.db.$client.exec("SELECT 1")).toThrow();
+    // The close ran (the thing that did NOT happen pre-4.2): the service's query
+    // now hits a closed handle and throws, but the on-disk file is intact — a
+    // fresh open succeeds.
+    expect(() => svc.query({})).toThrow();
     const fresh = new Database(path);
     expect(() => fresh.exec("SELECT 1")).not.toThrow();
     fresh.close();
