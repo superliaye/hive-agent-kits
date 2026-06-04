@@ -128,15 +128,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     status: (provider) => secretsSvc.status(provider),
     dispose: () => {},
   };
-  const auditSvc = runtime.runSync(AuditTag);
-  // The resolved AuditSvc IS the legacy `Audit` surface plus the internal `db`
-  // handle (close path). Project the three legacy fields so the handle type
-  // stays exact and the db handle doesn't leak onto ServerHandles.
-  const audit: Audit = {
-    attach: auditSvc.attach,
-    query: auditSvc.query,
-    subscriptions: auditSvc.subscriptions,
-  };
+  // AuditSvc is exactly the legacy `Audit` surface (attach/query/subscriptions);
+  // the DB handle is closed by the layer's release, not exposed on the value.
+  const audit: Audit = runtime.runSync(AuditTag);
 
   const registry = createRegistry({ watch: opts.mode === "file" });
   const gateway = createGateway();
