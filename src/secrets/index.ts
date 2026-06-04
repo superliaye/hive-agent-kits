@@ -27,10 +27,10 @@ import {
 import type { ConfiguredProvider, SecretEntry, SecretEvents } from "./types.ts";
 
 export type Secrets = {
-  getAuth(provider: string): AuthInput | undefined;
-  setApiKey(provider: string, apiKey: string): void;
+  getAuth(provider: string): Promise<AuthInput | undefined>;
+  setApiKey(provider: string, apiKey: string): Promise<void>;
   startOAuthLogin(provider: string, callbacks: OAuthLoginCallbacks): Promise<SecretEntry>;
-  remove(provider: string): void;
+  remove(provider: string): Promise<void>;
   list(): ConfiguredProvider[];
   status(provider: string): ConfiguredProvider["status"];
   events: TypedEmitter<SecretEvents>;

@@ -76,17 +76,17 @@ type Harness = {
   threadId: string;
 };
 
-function setup(opts: {
+async function setup(opts: {
   fixtures: Record<string, GatewayEvent[]>;
   agents?: Agent[];
   withApiKey?: boolean;
   agentId?: string;
-}): Harness {
+}): Promise<Harness> {
   const db = openHiveDb(":memory:");
   const threadsStore = createThreadsStore(db);
   const runsStore = createRunsStore(db);
   const secrets = createSecrets({ mode: "memory" });
-  if (opts.withApiKey ?? true) secrets.setApiKey("anthropic", "sk-test");
+  if (opts.withApiKey ?? true) await secrets.setApiKey("anthropic", "sk-test");
   const agents = opts.agents ?? [makeAgent({ agentId: opts.agentId ?? "test-agent" })];
   const catalog = makeCatalogStub(agents);
   const gateway = makeFakeGateway(opts.fixtures);
@@ -105,7 +105,7 @@ function setup(opts: {
 
 describe("RunExecutor — happy path", () => {
   test("text-only Run emits started, model events, completed; persists assistant message", async () => {
-    const { threads, executor, threadId } = setup({
+    const { threads, executor, threadId } = await setup({
       fixtures: {
         "anthropic/claude-haiku-4-5": [
           { type: "text_start", blockIndex: 0 },
@@ -145,7 +145,7 @@ describe("RunExecutor — happy path", () => {
   });
 
   test("tool_use turn stops at done(tool_use); tool_use block lands in assistant message", async () => {
-    const { threads, executor, threadId } = setup({
+    const { threads, executor, threadId } = await setup({
       fixtures: {
         "anthropic/claude-haiku-4-5": [
           { type: "tool_use_start", blockIndex: 0, id: "tu_1", name: "search" },
@@ -169,7 +169,7 @@ describe("RunExecutor — happy path", () => {
   });
 
   test("emits model.event for every GatewayEvent", async () => {
-    const { executor, threadId } = setup({
+    const { executor, threadId } = await setup({
       fixtures: {
         "anthropic/claude-haiku-4-5": [
           { type: "text_start", blockIndex: 0 },
@@ -191,7 +191,7 @@ describe("RunExecutor — happy path", () => {
 
 describe("RunExecutor — failure paths", () => {
   test("missing agent → run.failed(agent_not_found), no messages appended", async () => {
-    const { threads, executor, threadId } = setup({
+    const { threads, executor, threadId } = await setup({
       fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
       agents: [], // catalog empty
     });
@@ -208,7 +208,7 @@ describe("RunExecutor — failure paths", () => {
   });
 
   test("missing secret → run.failed(no_credentials)", async () => {
-    const { executor, threadId } = setup({
+    const { executor, threadId } = await setup({
       fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
       withApiKey: false,
     });
@@ -223,7 +223,7 @@ describe("RunExecutor — failure paths", () => {
   });
 
   test("gateway emits error → run.failed with the classified code", async () => {
-    const { executor, threadId } = setup({
+    const { executor, threadId } = await setup({
       fixtures: {
         "anthropic/claude-haiku-4-5": [
           { type: "error", code: "rate_limited", message: "429", retryable: true },
@@ -242,8 +242,8 @@ describe("RunExecutor — failure paths", () => {
     }
   });
 
-  test("missing thread → startRun throws synchronously (caller bug, not a Run failure)", () => {
-    const { executor } = setup({
+  test("missing thread → startRun throws synchronously (caller bug, not a Run failure)", async () => {
+    const { executor } = await setup({
       fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
     });
     expect(() =>
@@ -256,7 +256,7 @@ describe("RunExecutor — failure paths", () => {
 
 describe("RunExecutor — model resolution", () => {
   test("modelOverride wins over harness config", async () => {
-    const { executor, threadId } = setup({
+    const { executor, threadId } = await setup({
       fixtures: {
         "anthropic/claude-opus-4-7": [{ type: "done", finishReason: "stop" }],
       },
@@ -276,7 +276,7 @@ describe("RunExecutor — model resolution", () => {
   });
 
   test("falls back to MODEL_FALLBACK when harness config has no model", async () => {
-    const { executor, threadId } = setup({
+    const { executor, threadId } = await setup({
       fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
       agents: [makeAgent({ config: {} })],
     });
@@ -295,16 +295,16 @@ describe("RunExecutor — model resolution", () => {
 // Wire an executor with an explicit gateway + provider so we can exercise the
 // typed `GatewayFailure` paths (thrown adapter, resolve miss) that the legacy
 // out-of-band catch used to collapse to "unknown".
-function setupWithGateway(opts: {
+async function setupWithGateway(opts: {
   gateway: ModelGateway;
   provider: string;
   model: string;
-}): { executor: RunExecutor; threadId: string } {
+}): Promise<{ executor: RunExecutor; threadId: string }> {
   const db = openHiveDb(":memory:");
   const threadsStore = createThreadsStore(db);
   const runsStore = createRunsStore(db);
   const secrets = createSecrets({ mode: "memory" });
-  secrets.setApiKey(opts.provider, "sk-test");
+  await secrets.setApiKey(opts.provider, "sk-test");
   const catalog = makeCatalogStub([
     makeAgent({ agentId: "test-agent", config: { model: opts.model } }),
   ]);
@@ -344,7 +344,7 @@ describe("RunExecutor — typed gateway failures", () => {
         };
       },
     });
-    const { executor, threadId } = setupWithGateway({
+    const { executor, threadId } = await setupWithGateway({
       gateway: gw,
       provider: "anthropic",
       model: "anthropic/claude-haiku-4-5",
@@ -372,7 +372,7 @@ describe("RunExecutor — typed gateway failures", () => {
         "anthropic/x": [{ type: "done", finishReason: "stop" }],
       }),
     );
-    const { executor, threadId } = setupWithGateway({
+    const { executor, threadId } = await setupWithGateway({
       gateway: gw,
       provider: "vertex",
       model: "vertex/gemini",
@@ -392,7 +392,7 @@ describe("RunExecutor — typed gateway failures", () => {
 
 describe("RunExecutor — concurrency + cancellation", () => {
   test("concurrent startRun on same Thread throws synchronously", async () => {
-    const { executor, threadId } = setup({
+    const { executor, threadId } = await setup({
       fixtures: {
         "anthropic/claude-haiku-4-5": (() => {
           const evs: GatewayEvent[] = [];

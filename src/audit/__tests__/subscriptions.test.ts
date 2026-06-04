@@ -17,6 +17,7 @@ import { createRegistry } from "../../capabilities/index.ts";
 import type { Capability } from "../../capabilities/types.ts";
 import { createCatalog } from "../../catalog/index.ts";
 import type { Agent } from "../../catalog/types.ts";
+import { createSecrets } from "../../secrets/index.ts";
 import { wireSubscriptions } from "../subscriptions.ts";
 
 const fakeAdapter: GatewayAdapter = {
@@ -157,6 +158,48 @@ describe("wireSubscriptions", () => {
 
     dispose();
     catalog.dispose();
+  });
+
+  // Secrets is user/agent-driven, so its mutating verbs ARE audited. The
+  // verbs are async + block-on-failure (4.2-A1): a write produces a row, and
+  // a persist failure must fail the originating op (ADR-0004 Verify item 4,
+  // no silent-degrade).
+  test("setApiKey produces a secret.write audit row", async () => {
+    const audit = createAudit({ mode: "memory" });
+    const secrets = createSecrets({ mode: "memory" });
+    const dispose = wireSubscriptions(audit, { secrets });
+
+    await secrets.setApiKey("openai", "sk-test");
+
+    const rows = await audit.query({ source: "secrets" });
+    expect(rows.length).toBe(1);
+    expect(rows[0]?.event_type).toBe("secret.write");
+    expect(rows[0]?.payload).toMatchObject({ provider: "openai", kind: "apiKey", op: "create" });
+    // Never the secret value itself (ADR-0004 redaction).
+    expect(JSON.stringify(rows[0])).not.toContain("sk-test");
+
+    dispose();
+    secrets.dispose();
+  });
+
+  test("a failing audit subscriber fails the originating setApiKey (no silent-degrade)", async () => {
+    const audit = createAudit({ mode: "memory" });
+    const secrets = createSecrets({ mode: "memory" });
+    const dispose = wireSubscriptions(audit, { secrets });
+
+    // Simulate a persist failure on the audited write path: a subscriber on the
+    // same emitter throws. Because setApiKey now awaits the emit (4.2-A1),
+    // the throw propagates and the write rejects — it is NOT silently swallowed.
+    secrets.events.on("secret.write", () => {
+      throw new Error("audit persist failed");
+    });
+
+    await expect(secrets.setApiKey("openai", "sk-test")).rejects.toThrow(/audit persist failed/);
+    // Side effect not committed: the provider was never stored (emit-before-commit).
+    expect(secrets.status("openai")).toBe("missing");
+
+    dispose();
+    secrets.dispose();
   });
 
   test("disposer detaches; later changes don't reach audit", async () => {

@@ -4,11 +4,14 @@
 // the in-memory store (reading persistence at build in file mode). The legacy
 // `createSecrets()` (index.ts) is a thin ManagedRuntime proxy over this service.
 //
-// The store is synchronous, so most verbs stay sync on the service; the typed
-// `E` channel (errors.ts) covers the genuine failures — `requireAuth` (no
-// credentials) and `refresh` (bad target). The OAuth `onRefresh` callback stays
-// plain-async at the pi-ai boundary (ADR-0010): pi-ai calls it mid-completion
-// and it must persist synchronously via the store.
+// The audited store verbs (get/set/refresh/remove) are async + block-on-failure
+// (4.2-A1): each awaits its event emit so an audit-persist failure fails the
+// originating op, with mutating verbs emitting BEFORE committing. The typed
+// `E` channel (errors.ts) covers the genuine domain failures — `requireAuth`
+// (no credentials) and `refresh` (bad target); an audit-persist failure surfaces
+// as an Effect defect (die), not a typed `E`. The OAuth `onRefresh` callback
+// stays plain-async at the pi-ai boundary (ADR-0010): pi-ai calls it
+// mid-completion and it now awaits the async store refresh.
 
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 import { Context, Effect, Layer } from "effect";
@@ -32,10 +35,10 @@ export type CreateSecretsOptions =
   | { mode: "file"; path: string };
 
 export type SecretsSvc = {
-  getAuth(provider: string): AuthInput | undefined;
-  setApiKey(provider: string, apiKey: string): void;
+  getAuth(provider: string): Promise<AuthInput | undefined>;
+  setApiKey(provider: string, apiKey: string): Promise<void>;
   startOAuthLogin(provider: string, callbacks: OAuthLoginCallbacks): Promise<SecretEntry>;
-  remove(provider: string): void;
+  remove(provider: string): Promise<void>;
   list(): ConfiguredProvider[];
   status(provider: string): ConfiguredProvider["status"];
   events: TypedEmitter<SecretEvents>;
@@ -58,8 +61,8 @@ function openStore(opts: CreateSecretsOptions): SecretsStore {
 }
 
 function buildSvc(store: SecretsStore): SecretsSvc {
-  const getAuth = (provider: string): AuthInput | undefined => {
-    const entry = store.get(provider);
+  const getAuth = async (provider: string): Promise<AuthInput | undefined> => {
+    const entry = await store.get(provider);
     if (!entry) return undefined;
     if (entry.kind === "apiKey") return { kind: "apiKey", apiKey: entry.apiKey };
     return {
@@ -70,7 +73,7 @@ function buildSvc(store: SecretsStore): SecretsSvc {
         expires: entry.credentials.expires,
       },
       onRefresh: async (newCreds) => {
-        store.refresh(provider, {
+        await store.refresh(provider, {
           access: newCreds.access,
           refresh: newCreds.refresh,
           expires: newCreds.expires,
@@ -90,13 +93,18 @@ function buildSvc(store: SecretsStore): SecretsSvc {
     startOAuthLogin: async (provider, callbacks) => {
       const credentials = await loginOAuth(provider, callbacks);
       const entry: SecretEntry = { kind: "oauth", credentials, addedAt: Date.now() };
-      store.set(provider, entry);
+      await store.set(provider, entry);
       return entry;
     },
-    requireAuth: (provider) => {
-      const auth = getAuth(provider);
-      return auth ? Effect.succeed(auth) : Effect.fail(new SecretsNoCredentials({ provider }));
-    },
+    requireAuth: (provider) =>
+      Effect.flatMap(
+        // getAuth awaits the `secret.read` emit; an audit-persist failure on
+        // the read rejects this promise and surfaces as an Effect defect
+        // (block-on-failure on reads too, 4.2-A1 / ADR-0004).
+        Effect.promise(() => getAuth(provider)),
+        (auth) =>
+          auth ? Effect.succeed(auth) : Effect.fail(new SecretsNoCredentials({ provider })),
+      ),
     refresh: (provider, credentials) =>
       Effect.suspend(() => {
         // `snapshot()` reads without emitting a `secret.read` (that belongs to
@@ -107,7 +115,11 @@ function buildSvc(store: SecretsStore): SecretsSvc {
         if (existing.kind !== "oauth") {
           return Effect.fail(new SecretsRefreshTarget({ provider, reason: "not-oauth" }));
         }
-        return Effect.sync(() => store.refresh(provider, credentials));
+        // `store.refresh` is async now; an audit-persist failure rejects it.
+        // Effect.promise (not Effect.sync — async; not tryPromise — the only
+        // rejection is the loud audit-persist defect we intend to surface as a
+        // die, keeping the typed `E` SecretsRefreshTarget-only). 4.2-A1, Q2.
+        return Effect.promise(() => store.refresh(provider, credentials));
       }),
   };
 }
