@@ -250,6 +250,25 @@ describe("RunExecutor — failure paths", () => {
       executor.startRun({ threadId: "missing", userMessage: [{ type: "text", text: "hi" }] }),
     ).toThrow(/thread not found/);
   });
+
+  // ADR-0004 §Verification item 4 (no silent-degrade) — a failing audit
+  // subscriber on run.started fails the originating Run op AND leaves no Run row
+  // (audit-first: the emit precedes runs.create, so when it throws the create
+  // never runs). Mirrors the A1 Secrets test.
+  test("throwing run.started subscriber → drain rejects, no Run row committed", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
+    });
+    executor.events.on("run.started", () => {
+      throw new Error("audit persist failed");
+    });
+    await expect(
+      collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] })),
+    ).rejects.toThrow(/audit persist failed/);
+    // Audit-first: the Run row was never created (the emit rejected before
+    // runs.create), so no committed Run lacks its audit row.
+    expect(executor.listByThread(threadId)).toHaveLength(0);
+  });
 });
 
 // ─── model resolution ──────────────────────────────────────────────────────
