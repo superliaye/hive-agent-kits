@@ -19,6 +19,10 @@ export type { Config, ConfigChange, ConfigEvents, CreateConfigOptions } from "./
 // `mode: "file"`, the YAML file at `path` is the source of truth; it is created
 // with `defaults` if missing, and external edits hot-reload through a file
 // watcher. `dispose()` tears down the ManagedRuntime (closing that watcher).
+//
+// Retained (§4.3): production resolves `Config` off the root runtime; this proxy
+// stays for the plain-async legacy-surface suites (`config/__tests__/store.test.ts`,
+// `persistence.test.ts`). Delete it only when those migrate to `ConfigLive`.
 export function createConfig<S extends Record<string, unknown>>(
   opts: CreateConfigOptions<S>,
 ): Config<S> & { dispose(): void } {

@@ -8,10 +8,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { ManagedRuntime } from "effect";
 import { z } from "zod";
 import { createRegistry } from "../../capabilities/index.ts";
 import type { Capability } from "../../capabilities/types.ts";
-import { createCatalog } from "../../catalog/index.ts";
+import { CatalogLive, Catalog as CatalogTag } from "../../catalog/effect/catalog-live.ts";
 import type { Agent } from "../../catalog/types.ts";
 import { createConfig } from "../../config/index.ts";
 import { createGateway } from "../../model-gateway/index.ts";
@@ -144,20 +145,23 @@ describe("wireSubscriptions", () => {
       hasFork: false,
       path: "/fake/bundled/agents/root/HARNESS.md",
     };
-    const catalog = createCatalog({
-      scanner: () => ({ agents: [fakeAgent], errors: [] }),
-      logErrors: false,
-    });
-    const dispose = wireSubscriptions(audit, { catalog });
+    const catalogRuntime = ManagedRuntime.make(
+      CatalogLive({ scanner: () => ({ agents: [fakeAgent], errors: [] }), logErrors: false }),
+    );
+    try {
+      const catalog = catalogRuntime.runSync(CatalogTag);
+      const dispose = wireSubscriptions(audit, { catalog });
 
-    await catalog.start();
+      await catalog.start();
 
-    // Scan-time agent.created should NOT appear in audit.
-    const rows = await audit.query({ source: "catalog" });
-    expect(rows.length).toBe(0);
+      // Scan-time agent.created should NOT appear in audit.
+      const rows = await audit.query({ source: "catalog" });
+      expect(rows.length).toBe(0);
 
-    dispose();
-    catalog.dispose();
+      dispose();
+    } finally {
+      await catalogRuntime.dispose();
+    }
   });
 
   // Secrets is user/agent-driven, so its mutating verbs ARE audited. The

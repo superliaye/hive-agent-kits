@@ -39,6 +39,9 @@ export type Secrets = {
   dispose(): void;
 };
 
+// Retained (§4.3): production resolves `Secrets` off the root runtime; this proxy
+// stays for the plain-async legacy-surface suites (`secrets/__tests__/index.test.ts`,
+// the runs executor tests). Delete it only when those migrate to `SecretsLive`.
 export function createSecrets(opts: CreateSecretsOptions): Secrets {
   const runtime = ManagedRuntime.make(SecretsLive(opts));
   // The layer's acquire is synchronous (in-memory store + sync persistence

@@ -292,11 +292,14 @@ Subscriber + SQLite writer; nearly pure I/O edge. **Migrated (4.2-C):** `AuditLi
 
 The *external-edit* config reload (`src/config/store.ts`, `source:"external"`) is a **conscious exemption**, not a block-on-failure fix — its `fs.watch` callback can't `await` and the external edit is already committed (no op to block), so it de-floats with an explicit `.catch` + loud trace-log (`log().error`, handled-not-suppressed). The gateway/registry adapter emits and the legacy-proxy `dispose()` calls (Secrets/Catalog/Config) likewise de-float to trace `.catch`, not audit — they are not audited sources. ADR-0004 stays intact; ADR-0012 *Known gap* records the now-shipped guard.
 
-### 4.3 — Delete the proxies
+### 4.3 — Delete the proxies (done — partial, by design)
 
-When a module's last legacy consumer is migrated (via 4.1), remove its `createX()` proxy and the legacy surface. **Migration is done when no proxy remains and `src/` has no plain-async outside I/O-edge adapters.** Optionally build `ThreadsLive` here if uniformity is wanted at that point.
+Production is fully migrated: `createServer()` resolves every migrated service (`Config`/`Secrets`/`Catalog`/`Audit` + `HiveDb`) off the single root `ManagedRuntime` (§4.1b); no production code calls a `createX()` proxy. The proxies' only remaining consumers are the modules' plain-async **legacy-surface test suites**, which this plan explicitly permits keeping a proxy for.
 
-**Do not migrate** the trace logger — `src/lib/log.ts` stays a call-site singleton by existing design (AGENTS.md).
+- **`createCatalog()` — DELETED.** Its last consumer was a single audit-subscriptions test, migrated to `CatalogLive` + a `ManagedRuntime`; `src/catalog/index.ts` is now a pure re-export barrel. (`src/catalog/catalog.ts`'s `createCatalog`/`buildCatalog` is the real factory `CatalogLive` builds on — not a proxy, not deleted.)
+- **`createSecrets()` / `createConfig()` / `createAudit()` — RETAINED**, each with an in-code `Retained (§4.3)` note. Each is depended on by a whole plain-async legacy-surface suite (`secrets/__tests__/index.test.ts`; `config/__tests__/{store,persistence}.test.ts`; `audit/__tests__/{audit,subscriptions}.test.ts`). Force-migrating those suites to the `XLive` layers is a larger, separate effort; per this plan's allowance the proxies stay until then.
+
+**End-state, honestly:** the *production* end-state is reached — no proxy on any production path; `src/` has no plain-async outside the I/O-edge adapters and these three test-only proxies. The literal "no proxy remains" is **deferred** to a future test-migration pass. **Do not migrate** the trace logger — `src/lib/log.ts` stays a call-site singleton by existing design (AGENTS.md). Optionally build `ThreadsLive` (§4.x) if uniformity is wanted.
 
 ---
 
