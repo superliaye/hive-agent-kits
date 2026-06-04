@@ -19,7 +19,10 @@ export const Source = z
       .string()
       .min(1)
       .max(512)
-      .regex(/^(?:https?:\/\/)?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/, "must be a repo-style url (host/owner/repo)"),
+      .regex(
+        /^(?:https?:\/\/)?[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/,
+        "must be a repo-style url (host/owner/repo)",
+      ),
     ref: z.string().min(1).max(128),
     fetchedAt: z.string().min(1).max(64),
   })

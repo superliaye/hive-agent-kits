@@ -9,9 +9,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { APP_CONFIG_DEFAULTS } from "../../config/schema.ts";
 import type { AppearanceConfig } from "../../config/schema.ts";
-import { type ServerHandles, createServer } from "../index.ts";
+import { APP_CONFIG_DEFAULTS } from "../../config/schema.ts";
+import { createServer, type ServerHandles } from "../index.ts";
 
 const TOKEN = "test-token";
 

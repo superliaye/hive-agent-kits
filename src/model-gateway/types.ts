@@ -56,11 +56,7 @@ export type AuthInput =
        * downstream of a successful refresh leaves the on-disk state
        * inconsistent with what the model just accepted.
        */
-      onRefresh: (newCreds: {
-        access: string;
-        refresh: string;
-        expires: number;
-      }) => Promise<void>;
+      onRefresh: (newCreds: { access: string; refresh: string; expires: number }) => Promise<void>;
     };
 
 export type ThinkingEffort = "off" | "low" | "medium" | "high";

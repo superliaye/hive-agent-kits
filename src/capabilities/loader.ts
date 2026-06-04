@@ -7,19 +7,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
-import type {
-  CapabilityKind,
-  CapabilityLayer,
-  Origin,
-} from "../lib/capability-types.ts";
+import type { CapabilityKind, CapabilityLayer, Origin } from "../lib/capability-types.ts";
 import { bundled, runtime } from "../lib/paths.ts";
 import { McpManifest, SkillManifest, SnippetManifest } from "./schemas.ts";
-import type {
-  Capability,
-  McpCapability,
-  SkillCapability,
-  SnippetCapability,
-} from "./types.ts";
+import type { Capability, McpCapability, SkillCapability, SnippetCapability } from "./types.ts";
 
 export type LoaderError = {
   path: string;
@@ -58,9 +49,7 @@ function listSubdirs(root: string): string[] {
 }
 
 function formatIssues(issues: Array<{ path: (string | number)[]; message: string }>): string {
-  return issues
-    .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
-    .join("; ");
+  return issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
 }
 
 type ScanCtx = {

@@ -10,7 +10,7 @@
 // macOS:   Terminal.app via osascript
 // Linux:   x-terminal-emulator / gnome-terminal / xterm (first one found)
 
-import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
+import { type SpawnOptions, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -116,9 +116,7 @@ function spawnTerminal(job: Job): void {
       // try next
     }
   }
-  console.error(
-    `No terminal emulator found. Run manually in three terminals:\n  ${job.cmd}`,
-  );
+  console.error(`No terminal emulator found. Run manually in three terminals:\n  ${job.cmd}`);
 }
 
 // Install deps before launching. `bun install` is near-instant when the
@@ -163,7 +161,10 @@ function stopPriorStack(): void {
   // free the ports by killing whatever bun is bound to them.
   for (const port of [DAEMON_PORT, VITE_PORT]) {
     const found = spawnSync("lsof", ["-ti", `tcp:${port}`], { encoding: "utf8" });
-    for (const pid of (found.stdout ?? "").split("\n").map((s) => s.trim()).filter(Boolean)) {
+    for (const pid of (found.stdout ?? "")
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean)) {
       spawnSync("kill", ["-9", pid], { stdio: "ignore" });
     }
   }
@@ -250,7 +251,9 @@ function printStatus(h: Health): void {
   console.log(`  agents    ${h.agents.length ? h.agents.join(", ") : "(none)"}`);
   if (!daemonOnly) {
     console.log(`  vite      :${VITE_PORT} → ${h.vite ? "ok" : "unreachable"}`);
-    console.log(`  electron  ${h.electron}${h.electron === "running" ? " (window should be visible)" : ""}`);
+    console.log(
+      `  electron  ${h.electron}${h.electron === "running" ? " (window should be visible)" : ""}`,
+    );
   }
   console.log(`  STATUS: ${pass ? "PASS" : "FAIL"}`);
   if (!pass) process.exitCode = 1;
@@ -268,8 +271,7 @@ if (reuse) {
 
   const activeJobs = daemonOnly ? jobs.slice(0, 1) : jobs;
   console.log(`\nStarting Hive ${daemonOnly ? "daemon" : "dev stack"}...\n`);
-  for (let i = 0; i < activeJobs.length; i++) {
-    const job = activeJobs[i]!;
+  for (const [i, job] of activeJobs.entries()) {
     const where = job.cwd ? ` (in ${job.cwd}/)` : "";
     console.log(`  ${i + 1}. ${job.title}: ${job.cmd}${where}`);
     spawnTerminal(job);

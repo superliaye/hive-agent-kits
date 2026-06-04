@@ -115,9 +115,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     const catalog = createCatalog({ logErrors: false });
     await catalog.start();
 
-    await catalog.updateBindings("root", [
-      { kind: "tool", name: "ask_user", action: "bind" },
-    ]);
+    await catalog.updateBindings("root", [{ kind: "tool", name: "ask_user", action: "bind" }]);
     const result = await catalog.updateBindings("root", [
       { kind: "tool", name: "save_artifact", action: "bind" },
     ]);
@@ -152,18 +150,14 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     writeBundledHarness("root", "alpha");
     const catalog = createCatalog({ logErrors: false });
     await catalog.start();
-    await expect(catalog.updateBindings("root", [])).rejects.toThrow(
-      /at least one patch/,
-    );
+    await expect(catalog.updateBindings("root", [])).rejects.toThrow(/at least one patch/);
   });
 
   test("resetToBundled deletes the fork and re-resolves to bundled", async () => {
     writeBundledHarness("root", "alpha");
     const catalog = createCatalog({ logErrors: false });
     await catalog.start();
-    await catalog.updateBindings("root", [
-      { kind: "skill", name: "alpha", action: "unbind" },
-    ]);
+    await catalog.updateBindings("root", [{ kind: "skill", name: "alpha", action: "unbind" }]);
 
     const runtimePath = join(runtimeRoot, "agents", "root", "HARNESS.md");
     expect(existsSync(runtimePath)).toBe(true);
@@ -213,9 +207,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     const catalog = createCatalog({ logErrors: false });
     await catalog.start();
     await expect(
-      catalog.updateBindings("nonexistent", [
-        { kind: "skill", name: "x", action: "bind" },
-      ]),
+      catalog.updateBindings("nonexistent", [{ kind: "skill", name: "x", action: "bind" }]),
     ).rejects.toBeInstanceOf(AgentNotFoundError);
   });
 });

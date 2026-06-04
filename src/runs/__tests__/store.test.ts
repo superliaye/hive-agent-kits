@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { openHiveDb } from "../../db/hive-db.ts";
 import { createThreadsStore } from "../../threads/store.ts";
-import { type RunsStore, createRunsStore } from "../store.ts";
+import { createRunsStore, type RunsStore } from "../store.ts";
 
 let runs: RunsStore;
 let nowCounter: number;

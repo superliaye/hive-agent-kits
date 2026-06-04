@@ -11,7 +11,7 @@
 // The genuine failure — a missing agent — becomes the typed `E` below.
 
 import { Context, Effect, Layer } from "effect";
-import { type CreateCatalogOptions, createCatalog as buildCatalog } from "../catalog.ts";
+import { createCatalog as buildCatalog, type CreateCatalogOptions } from "../catalog.ts";
 import type { Agent, Catalog as CatalogSurface } from "../types.ts";
 import { CatalogAgentNotFound } from "./errors.ts";
 

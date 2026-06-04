@@ -33,7 +33,7 @@ const PATTERNS: readonly RedactPattern[] = [
   {
     name: "url-password",
     regex:
-      /(\b(?:postgres|postgresql|mysql|mongodb|redis|amqp|smtp|http|https|ftp|ssh):\/\/[^:\/@\s]+:)[^@\/\s]+@/g,
+      /(\b(?:postgres|postgresql|mysql|mongodb|redis|amqp|smtp|http|https|ftp|ssh):\/\/[^:/@\s]+:)[^@/\s]+@/g,
     replacer: (_match, prefix) => `${prefix}[REDACTED:url-password]@`,
   },
 ];

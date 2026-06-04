@@ -19,7 +19,7 @@ import type { TypedEmitter } from "../../lib/typed-emitter.ts";
 import type { AuthInput } from "../../model-gateway/types.ts";
 import { loginOAuth } from "../oauth.ts";
 import { SecretsPersistence } from "../persistence.ts";
-import { type SecretsStore, createSecretsStore } from "../store.ts";
+import { createSecretsStore, type SecretsStore } from "../store.ts";
 import {
   type ConfiguredProvider,
   type OAuthCredentials,

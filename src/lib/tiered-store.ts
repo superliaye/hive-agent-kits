@@ -10,7 +10,7 @@
 // a `scan` function that already returns resolved items (after running any
 // shadowing or collision rules) and a `key`/`same` pair for diffing.
 
-import { watch, type FSWatcher } from "node:fs";
+import { type FSWatcher, watch } from "node:fs";
 
 export type LoaderError = { path: string; message: string };
 
@@ -60,9 +60,7 @@ export type CreateStoreOptions<T> = {
 
 const RESCAN_DEBOUNCE_MS = 250;
 
-export function createTieredManifestStore<T>(
-  opts: CreateStoreOptions<T>,
-): TieredManifestStore<T> {
+export function createTieredManifestStore<T>(opts: CreateStoreOptions<T>): TieredManifestStore<T> {
   let items = new Map<string, T>();
   const watchers: FSWatcher[] = [];
   let started = false;

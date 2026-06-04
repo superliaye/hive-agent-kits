@@ -57,8 +57,6 @@ export function createGateway(): ModelGateway {
   };
 }
 
-export { GatewayError, isRetryable };
-
 export type {
   AuthInput,
   CompletionInput,
@@ -73,3 +71,4 @@ export type {
   ThinkingEffort,
   ToolDef,
 } from "./types.ts";
+export { GatewayError, isRetryable };

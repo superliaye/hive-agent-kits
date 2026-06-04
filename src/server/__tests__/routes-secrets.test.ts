@@ -21,7 +21,7 @@ import {
   registerOAuthProvider,
   unregisterOAuthProvider,
 } from "@earendil-works/pi-ai/oauth";
-import { type ServerHandles, createServer } from "../index.ts";
+import { createServer, type ServerHandles } from "../index.ts";
 
 const TOKEN = "test-token";
 

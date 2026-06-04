@@ -11,10 +11,10 @@
  *     1.4 GB gstack-as-full-repo trap from the migration)
  */
 
+import { describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
 import {
   classify,
   looksLikeProjectRoot,
@@ -151,9 +151,9 @@ describe("transformFrontmatter", () => {
       dropped,
     );
     expect(dropped["preamble-tier"]?.count).toBe(1);
-    expect(dropped["triggers"]?.count).toBe(1);
-    expect(dropped["unknown_field"]?.count).toBe(1);
-    expect(dropped["unknown_field"]?.reason).toContain("unknown");
+    expect(dropped.triggers?.count).toBe(1);
+    expect(dropped.unknown_field?.count).toBe(1);
+    expect(dropped.unknown_field?.reason).toContain("unknown");
   });
 });
 

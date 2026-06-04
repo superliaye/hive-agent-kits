@@ -8,12 +8,12 @@
 import { configRuntime } from "./effect/config-live.ts";
 import type { Config, CreateConfigOptions } from "./types.ts";
 
-export type { Config, ConfigChange, ConfigEvents, CreateConfigOptions } from "./types.ts";
 export {
   APP_CONFIG_DEFAULTS,
-  AppConfigSchema,
   type AppConfig,
+  AppConfigSchema,
 } from "./schema.ts";
+export type { Config, ConfigChange, ConfigEvents, CreateConfigOptions } from "./types.ts";
 
 // For `mode: "memory"`, the store is volatile (good for tests). For
 // `mode: "file"`, the YAML file at `path` is the source of truth; it is created

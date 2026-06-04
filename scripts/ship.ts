@@ -29,11 +29,7 @@ const COMPILE_TARGET =
       : "bun-linux-x64";
 
 const ELECTRON_PLATFORM =
-  process.platform === "win32"
-    ? "win32"
-    : process.platform === "darwin"
-      ? "darwin"
-      : "linux";
+  process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux";
 
 function run(cmd: string, args: string[], cwd: string): void {
   console.log(`\n→ ${cmd} ${args.join(" ")}  [cwd=${cwd}]`);

@@ -44,10 +44,7 @@ export function createLogger(opts: { mode: LogMode; level?: pino.Level }): Logge
       try {
         const logPath = `${files.logsDir()}/daemon.log`;
         mkdirSync(files.logsDir(), { recursive: true });
-        return pino(
-          { level },
-          pino.destination({ dest: logPath, sync: false, mkdir: true }),
-        );
+        return pino({ level }, pino.destination({ dest: logPath, sync: false, mkdir: true }));
       } catch {
         // Fall back to stdout JSONL if the runtime dir isn't writable.
         return pino({ level });
