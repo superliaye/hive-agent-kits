@@ -28,6 +28,10 @@ export type Audit = {
 
 export type { CreateAuditOptions } from "./effect/audit-live.ts";
 
+// Retained (§4.3): production resolves `Audit` off the root runtime; this proxy
+// stays for the plain-async legacy-surface suites (`audit/__tests__/audit.test.ts`,
+// `subscriptions.test.ts`). The migrated lifecycle is covered by
+// `audit/effect/__tests__/audit-live.test.ts`. Delete it only when those migrate.
 export function createAudit(opts: CreateAuditOptions): Audit {
   const runtime = ManagedRuntime.make(AuditLive(opts));
   // acquire is synchronous (bun:sqlite open), so runSync resolves the service.
