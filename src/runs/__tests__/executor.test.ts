@@ -1,11 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { ManagedRuntime } from "effect";
 import type { Agent, Catalog } from "../../catalog/index.ts";
 import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
 import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
 import type { GatewayEvent } from "../../model-gateway/types.ts";
-import { createSecrets, type Secrets } from "../../secrets/index.ts";
+import {
+  SecretsLive,
+  type SecretsSvc,
+  Secrets as SecretsTag,
+} from "../../secrets/effect/secrets-live.ts";
 import type { Threads } from "../../threads/index.ts";
 import { createThreadsStore } from "../../threads/store.ts";
 import { createRunExecutor, type RunExecutor } from "../executor.ts";
@@ -66,12 +71,24 @@ async function collect(stream: AsyncIterable<RunEvent>): Promise<RunEvent[]> {
   return out;
 }
 
+// One ManagedRuntime per resolved Secrets service; disposed in afterEach.
+const secretsRuntimes: Array<{ dispose(): Promise<void> }> = [];
+function makeSecrets(): SecretsSvc {
+  const runtime = ManagedRuntime.make(SecretsLive({ mode: "memory" }));
+  secretsRuntimes.push(runtime);
+  return runtime.runSync(SecretsTag);
+}
+
+afterEach(async () => {
+  for (const rt of secretsRuntimes.splice(0)) await rt.dispose();
+});
+
 // ─── test harness ───────────────────────────────────────────────────────────
 
 type Harness = {
   db: HiveDb;
   threads: Threads;
-  secrets: Secrets;
+  secrets: SecretsSvc;
   executor: RunExecutor;
   threadId: string;
 };
@@ -85,7 +102,7 @@ async function setup(opts: {
   const db = openHiveDb(":memory:");
   const threadsStore = createThreadsStore(db);
   const runsStore = createRunsStore(db);
-  const secrets = createSecrets({ mode: "memory" });
+  const secrets = makeSecrets();
   if (opts.withApiKey ?? true) await secrets.setApiKey("anthropic", "sk-test");
   const agents = opts.agents ?? [makeAgent({ agentId: opts.agentId ?? "test-agent" })];
   const catalog = makeCatalogStub(agents);
@@ -391,7 +408,7 @@ async function setupWithGateway(opts: {
   const db = openHiveDb(":memory:");
   const threadsStore = createThreadsStore(db);
   const runsStore = createRunsStore(db);
-  const secrets = createSecrets({ mode: "memory" });
+  const secrets = makeSecrets();
   await secrets.setApiKey(opts.provider, "sk-test");
   const catalog = makeCatalogStub([
     makeAgent({ agentId: "test-agent", config: { model: opts.model } }),

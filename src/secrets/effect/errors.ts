@@ -1,6 +1,6 @@
 // Typed errors for the Secrets `E` channel (ADR-0011, Phase 3a). Narrow by
-// `_tag`. The legacy `createSecrets()` surface keeps its sync/throw contract;
-// these are for the Effect-native `SecretsLive` verbs.
+// `_tag`. The legacy `Secrets` surface (getAuth/setApiKey/...) keeps its
+// promise contract; these are for the Effect-native `SecretsLive` verbs.
 
 import { Data } from "effect";
 

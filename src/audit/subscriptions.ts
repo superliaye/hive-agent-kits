@@ -9,10 +9,10 @@ import type { Registry } from "../capabilities/index.ts";
 import type { Catalog } from "../catalog/index.ts";
 import type { CatalogEvents } from "../catalog/types.ts";
 import type { Config, ConfigEvents } from "../config/types.ts";
+import type { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { ModelGateway } from "../model-gateway/index.ts";
 import type { RunExecutor } from "../runs/index.ts";
 import type { RunModuleEvents } from "../runs/types.ts";
-import type { Secrets } from "../secrets/index.ts";
 import type { SecretEvents } from "../secrets/types.ts";
 import type { Audit } from "./audit.ts";
 import type { Normalizer } from "./types.ts";
@@ -22,7 +22,9 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   gateway?: ModelGateway;
   registry?: Registry;
   catalog?: Catalog;
-  secrets?: Secrets;
+  // Consumer-owned port: only the event stream is read here (audit attaches to
+  // it). Satisfied by SecretsSvc and the server's legacy `Secrets` projection.
+  secrets?: { events: TypedEmitter<SecretEvents> };
   runs?: RunExecutor;
   // Future:
   //   permission?: { events: TypedEmitter<PermissionEvents> }

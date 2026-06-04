@@ -7,7 +7,7 @@
  * log, not audit — verified here by asserting their absence.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { ManagedRuntime } from "effect";
 import { z } from "zod";
 import { createRegistry } from "../../capabilities/index.ts";
@@ -17,9 +17,25 @@ import type { Agent } from "../../catalog/types.ts";
 import { createConfig } from "../../config/index.ts";
 import { createGateway } from "../../model-gateway/index.ts";
 import type { GatewayAdapter } from "../../model-gateway/types.ts";
-import { createSecrets } from "../../secrets/index.ts";
+import {
+  SecretsLive,
+  type SecretsSvc,
+  Secrets as SecretsTag,
+} from "../../secrets/effect/secrets-live.ts";
 import { createAudit } from "../audit.ts";
 import { wireSubscriptions } from "../subscriptions.ts";
+
+// Runtimes resolved across this file's tests; disposed in afterEach.
+const runtimes: Array<{ dispose(): Promise<void> }> = [];
+function makeSecrets(): SecretsSvc {
+  const runtime = ManagedRuntime.make(SecretsLive({ mode: "memory" }));
+  runtimes.push(runtime);
+  return runtime.runSync(SecretsTag);
+}
+
+afterEach(async () => {
+  for (const rt of runtimes.splice(0)) await rt.dispose();
+});
 
 const fakeAdapter: GatewayAdapter = {
   providers: ["fake"],
@@ -170,7 +186,7 @@ describe("wireSubscriptions", () => {
   // no silent-degrade).
   test("setApiKey produces a secret.write audit row", async () => {
     const audit = createAudit({ mode: "memory" });
-    const secrets = createSecrets({ mode: "memory" });
+    const secrets = makeSecrets();
     const dispose = wireSubscriptions(audit, { secrets });
 
     await secrets.setApiKey("openai", "sk-test");
@@ -183,12 +199,11 @@ describe("wireSubscriptions", () => {
     expect(JSON.stringify(rows[0])).not.toContain("sk-test");
 
     dispose();
-    secrets.dispose();
   });
 
   test("a failing audit subscriber fails the originating setApiKey (no silent-degrade)", async () => {
     const audit = createAudit({ mode: "memory" });
-    const secrets = createSecrets({ mode: "memory" });
+    const secrets = makeSecrets();
     const dispose = wireSubscriptions(audit, { secrets });
 
     // Simulate a persist failure on the audited write path: a subscriber on the
@@ -203,7 +218,6 @@ describe("wireSubscriptions", () => {
     expect(secrets.status("openai")).toBe("missing");
 
     dispose();
-    secrets.dispose();
   });
 
   test("disposer detaches; later changes don't reach audit", async () => {
