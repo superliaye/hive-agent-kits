@@ -29,9 +29,10 @@ export type CompletionPort = {
 };
 export class Completion extends Context.Service<Completion, CompletionPort>()("runs/Completion") {}
 
-// Secrets: provider → AuthInput only.
+// Secrets: provider → AuthInput only. Async because `getAuth` awaits the
+// audited `secret.read` emit (block-on-failure on reads, 4.2-A1).
 export type SecretsPort = {
-  getAuth(provider: string): AuthInput | undefined;
+  getAuth(provider: string): Promise<AuthInput | undefined>;
 };
 export class SecretsResolver extends Context.Service<SecretsResolver, SecretsPort>()(
   "runs/SecretsResolver",

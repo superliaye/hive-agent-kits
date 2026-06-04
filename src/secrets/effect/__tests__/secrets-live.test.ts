@@ -28,7 +28,7 @@ describe("SecretsLive — effect surface", () => {
     const failure = await Effect.runPromise(Effect.flip(svc.requireAuth("anthropic")));
     expect(failure).toBeInstanceOf(SecretsNoCredentials);
     expect(failure.provider).toBe("anthropic");
-    expect(svc.getAuth("anthropic")).toBeUndefined();
+    expect(await svc.getAuth("anthropic")).toBeUndefined();
     rt.dispose();
   });
 
@@ -65,7 +65,7 @@ describe("SecretsLive — effect surface", () => {
     await Effect.runPromise(
       svc.refresh("anthropic", { access: "new", refresh: "r2", expires: FUTURE }),
     );
-    const auth = svc.getAuth("anthropic");
+    const auth = await svc.getAuth("anthropic");
     expect(auth?.kind).toBe("oauth");
     if (auth?.kind === "oauth") expect(auth.credentials.access).toBe("new");
     rt.dispose();
@@ -73,12 +73,12 @@ describe("SecretsLive — effect surface", () => {
 
   test("the OAuth onRefresh callback persists new credentials mid-call", async () => {
     const { svc, rt } = svcWith(oauthSeed);
-    const auth = svc.getAuth("anthropic");
+    const auth = await svc.getAuth("anthropic");
     expect(auth?.kind).toBe("oauth");
     if (auth?.kind === "oauth") {
       await auth.onRefresh({ access: "refreshed", refresh: "r2", expires: FUTURE });
     }
-    const after = svc.getAuth("anthropic");
+    const after = await svc.getAuth("anthropic");
     expect(after?.kind).toBe("oauth");
     if (after?.kind === "oauth") expect(after.credentials.access).toBe("refreshed");
     rt.dispose();

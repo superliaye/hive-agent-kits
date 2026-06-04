@@ -168,7 +168,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const provider = model.slice(0, slash);
 
       // Auth lookup.
-      const auth = secrets.getAuth(provider);
+      const auth = await secrets.getAuth(provider);
       if (!auth) {
         const run = runs.create({ threadId, agentId, model });
         yield emitFailed(

@@ -89,7 +89,7 @@ describe("server routes — threads + runs", () => {
 
     server = await createServer({ mode: "memory", token: TOKEN });
     // Seed an apiKey so the executor doesn't bail with `no_credentials`.
-    server.secrets.setApiKey("anthropic", "sk-test");
+    await server.secrets.setApiKey("anthropic", "sk-test");
   });
 
   afterEach(async () => {
@@ -252,7 +252,7 @@ describe("server routes — threads + runs", () => {
   });
 
   test("POST /runs surfaces no_credentials via run.failed when secrets missing", async () => {
-    server.secrets.remove("anthropic");
+    await server.secrets.remove("anthropic");
     const create = await server.app.fetch(authed("/api/threads", jsonBody({ agentId: "root" })));
     const { id: threadId } = (await create.json()) as { id: string };
 

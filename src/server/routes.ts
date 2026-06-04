@@ -384,16 +384,16 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: "invalid body", issues: zodIssues(parsed.error) }, 400);
     }
-    deps.secrets.setApiKey(provider, parsed.data.apiKey);
+    await deps.secrets.setApiKey(provider, parsed.data.apiKey);
     return c.body(null, 204);
   });
 
-  app.delete("/api/secrets/:provider", (c) => {
+  app.delete("/api/secrets/:provider", async (c) => {
     const provider = c.req.param("provider");
     if (deps.secrets.status(provider) === "missing") {
       return c.json({ error: "provider not configured" }, 404);
     }
-    deps.secrets.remove(provider);
+    await deps.secrets.remove(provider);
     return c.body(null, 204);
   });
 

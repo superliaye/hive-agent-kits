@@ -22,28 +22,35 @@ export type SecretsStore = {
    * Returns the raw entry — callers needing an `AuthInput` (e.g. the
    * ModelGateway) should use `index.ts:getAuth(provider)` instead, which
    * handles the OAuth `onRefresh` callback binding.
+   *
+   * Async + block-on-failure: the read emit is awaited so a failed audit of
+   * a read fails the read (ADR-0004 uniform no-silent-degrade, 4.2-A1).
    */
-  get(provider: string): SecretEntry | undefined;
+  get(provider: string): Promise<SecretEntry | undefined>;
 
   /**
    * Store a new entry or replace an existing one. Emits `secret.write`
    * with `op: "create" | "update"`. Persists to disk in file mode.
+   *
+   * Audit-first: the emit is awaited BEFORE the map/disk mutation, so a
+   * failed audit blocks the write and leaves the store unmutated (ADR-0004).
    */
-  set(provider: string, entry: SecretEntry): void;
+  set(provider: string, entry: SecretEntry): Promise<void>;
 
   /**
    * Replace the credentials of an OAuth entry. Preserves `addedAt`, bumps
-   * `refreshedAt` to now. Emits `secret.refresh`. Persists. Throws if the
+   * `refreshedAt` to now. Emits `secret.refresh`. Persists. Rejects if the
    * entry doesn't exist or isn't OAuth — refreshing a missing/apiKey entry
-   * is a caller bug.
+   * is a caller bug. Audit-first: emit precedes the mutation.
    */
-  refresh(provider: string, newCredentials: OAuthCredentials): void;
+  refresh(provider: string, newCredentials: OAuthCredentials): Promise<void>;
 
   /**
    * Delete an entry. Emits `secret.remove`. Persists. No-op if absent
    * (idempotent — a remove on a missing provider isn't worth surfacing).
+   * Audit-first: emit precedes the deletion.
    */
-  remove(provider: string): void;
+  remove(provider: string): Promise<void>;
 
   /**
    * List every stored provider with its status. For Settings UI.
@@ -96,22 +103,22 @@ export function createSecretsStore(
   return {
     events,
 
-    get(provider) {
+    async get(provider) {
       const entry = map.get(provider);
       if (entry) {
-        void events.emit("secret.read", { provider, kind: entry.kind });
+        await events.emit("secret.read", { provider, kind: entry.kind });
       }
       return entry;
     },
 
-    set(provider, entry) {
+    async set(provider, entry) {
       const op = map.has(provider) ? "update" : "create";
+      await events.emit("secret.write", { provider, kind: entry.kind, op });
       map.set(provider, entry);
       flush();
-      void events.emit("secret.write", { provider, kind: entry.kind, op });
     },
 
-    refresh(provider, newCredentials) {
+    async refresh(provider, newCredentials) {
       const existing = map.get(provider);
       if (!existing) {
         throw new Error(`secrets: cannot refresh missing provider "${provider}"`);
@@ -119,6 +126,7 @@ export function createSecretsStore(
       if (existing.kind !== "oauth") {
         throw new Error(`secrets: cannot refresh non-oauth provider "${provider}"`);
       }
+      await events.emit("secret.refresh", { provider });
       map.set(provider, {
         kind: "oauth",
         credentials: newCredentials,
@@ -126,14 +134,13 @@ export function createSecretsStore(
         refreshedAt: now(),
       });
       flush();
-      void events.emit("secret.refresh", { provider });
     },
 
-    remove(provider) {
+    async remove(provider) {
       if (!map.has(provider)) return;
+      await events.emit("secret.remove", { provider });
       map.delete(provider);
       flush();
-      void events.emit("secret.remove", { provider });
     },
 
     list() {
