@@ -10,23 +10,21 @@
 //   - `startOAuthLogin(provider, callbacks)`: drives a pi-ai login flow.
 //   - `set` / `remove` / `list` for direct CRUD by the Settings UI.
 //
-// Implementation is Effect-native (`SecretsLive`, ADR-0011 Phase 3a); this
-// factory is a thin `ManagedRuntime` proxy preserving the legacy surface for
-// unmigrated consumers. The Effect-native typed-error verbs (`requireAuth`,
-// `refresh`) are on the `Secrets` service, not this proxy.
+// Implementation is Effect-native (`SecretsLive`, ADR-0011 Phase 3a); consumers
+// resolve the `Secrets` service off the root `ManagedRuntime` (`createServer()`).
+// This barrel re-exports the legacy `Secrets` surface type (which `server/`
+// projects the resolved `SecretsSvc` onto) plus the module's types. The legacy
+// `createSecrets()` proxy was deleted in §4.3 — its test suites now build the
+// service via `SecretsLive` + a `ManagedRuntime`.
 
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
-import { ManagedRuntime } from "effect";
-import { log } from "../lib/log.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { AuthInput } from "../model-gateway/types.ts";
-import {
-  type CreateSecretsOptions,
-  SecretsLive,
-  Secrets as SecretsTag,
-} from "./effect/secrets-live.ts";
 import type { ConfiguredProvider, SecretEntry, SecretEvents } from "./types.ts";
 
+// The legacy `Secrets` surface: `SecretsSvc` minus the Effect-native typed-error
+// verbs (`requireAuth`, `refresh`), plus a `dispose()`. `server/` projects the
+// root-runtime-resolved `SecretsSvc` onto this shape; `routes.ts` types on it.
 export type Secrets = {
   getAuth(provider: string): Promise<AuthInput | undefined>;
   setApiKey(provider: string, apiKey: string): Promise<void>;
@@ -35,35 +33,8 @@ export type Secrets = {
   list(): ConfiguredProvider[];
   status(provider: string): ConfiguredProvider["status"];
   events: TypedEmitter<SecretEvents>;
-  /** Tear down the underlying ManagedRuntime. Additive; the server doesn't call it today. */
   dispose(): void;
 };
-
-// Retained (§4.3): production resolves `Secrets` off the root runtime; this proxy
-// stays for the plain-async legacy-surface suites (`secrets/__tests__/index.test.ts`,
-// the runs executor tests). Delete it only when those migrate to `SecretsLive`.
-export function createSecrets(opts: CreateSecretsOptions): Secrets {
-  const runtime = ManagedRuntime.make(SecretsLive(opts));
-  // The layer's acquire is synchronous (in-memory store + sync persistence
-  // read), so the service resolves synchronously — the legacy surface stays sync.
-  const svc = runtime.runSync(SecretsTag);
-  return {
-    events: svc.events,
-    getAuth: (provider) => svc.getAuth(provider),
-    setApiKey: (provider, apiKey) => svc.setApiKey(provider, apiKey),
-    startOAuthLogin: (provider, callbacks) => svc.startOAuthLogin(provider, callbacks),
-    remove: (provider) => svc.remove(provider),
-    list: () => svc.list(),
-    status: (provider) => svc.status(provider),
-    dispose: () => {
-      runtime
-        .dispose()
-        .catch((err) =>
-          log().warn({ module: "secrets", err: String(err) }, "runtime dispose failed"),
-        );
-    },
-  };
-}
 
 export type { CreateSecretsOptions } from "./effect/secrets-live.ts";
 export type { ConfiguredProvider, SecretEntry, SecretEvents, SecretsFile } from "./types.ts";

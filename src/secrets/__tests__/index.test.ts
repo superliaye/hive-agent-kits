@@ -2,19 +2,38 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSecrets } from "../index.ts";
+import { ManagedRuntime } from "effect";
+import {
+  type CreateSecretsOptions,
+  SecretsLive,
+  type SecretsSvc,
+  Secrets as SecretsTag,
+} from "../effect/secrets-live.ts";
 import { SECRETS_FILE_VERSION, type SecretsFile } from "../types.ts";
 
 const FUTURE_EXPIRES = 9_000_000_000_000;
 
+// One ManagedRuntime per resolved service; disposed in afterEach. Mirrors the
+// former createSecrets() proxy (ManagedRuntime.make(SecretsLive) + runSync).
+const runtimes: Array<{ dispose(): Promise<void> }> = [];
+function makeSecrets(opts: CreateSecretsOptions): SecretsSvc {
+  const runtime = ManagedRuntime.make(SecretsLive(opts));
+  runtimes.push(runtime);
+  return runtime.runSync(SecretsTag);
+}
+
+afterEach(async () => {
+  for (const rt of runtimes.splice(0)) await rt.dispose();
+});
+
 describe("createSecrets — memory mode", () => {
   test("getAuth on missing provider returns undefined", async () => {
-    const s = createSecrets({ mode: "memory" });
+    const s = makeSecrets({ mode: "memory" });
     expect(await s.getAuth("anthropic")).toBeUndefined();
   });
 
   test("setApiKey then getAuth returns AuthInput with kind=apiKey", async () => {
-    const s = createSecrets({ mode: "memory" });
+    const s = makeSecrets({ mode: "memory" });
     await s.setApiKey("openai", "sk-test");
     const auth = await s.getAuth("openai");
     expect(auth?.kind).toBe("apiKey");
@@ -24,7 +43,7 @@ describe("createSecrets — memory mode", () => {
   });
 
   test("setApiKey replaces an existing OAuth entry for the same provider", async () => {
-    const s = createSecrets({
+    const s = makeSecrets({
       mode: "memory",
       initial: {
         version: SECRETS_FILE_VERSION,
@@ -52,7 +71,7 @@ describe("createSecrets — memory mode", () => {
         },
       },
     };
-    const s = createSecrets({ mode: "memory", initial });
+    const s = makeSecrets({ mode: "memory", initial });
     const auth = await s.getAuth("anthropic");
     expect(auth?.kind).toBe("oauth");
     if (auth?.kind !== "oauth") return;
@@ -75,14 +94,14 @@ describe("createSecrets — memory mode", () => {
   });
 
   test("status() reports configured providers", async () => {
-    const s = createSecrets({ mode: "memory" });
+    const s = makeSecrets({ mode: "memory" });
     await s.setApiKey("openai", "sk");
     expect(s.status("openai")).toBe("ok");
     expect(s.status("anthropic")).toBe("missing");
   });
 
   test("remove clears the entry", async () => {
-    const s = createSecrets({ mode: "memory" });
+    const s = makeSecrets({ mode: "memory" });
     await s.setApiKey("openai", "sk");
     await s.remove("openai");
     expect(await s.getAuth("openai")).toBeUndefined();
@@ -90,14 +109,14 @@ describe("createSecrets — memory mode", () => {
   });
 
   test("list returns alphabetized configured providers", async () => {
-    const s = createSecrets({ mode: "memory" });
+    const s = makeSecrets({ mode: "memory" });
     await s.setApiKey("openai", "sk");
     await s.setApiKey("anthropic", "sk-ant");
     expect(s.list().map((p) => p.provider)).toEqual(["anthropic", "openai"]);
   });
 
   test("startOAuthLogin throws on unknown provider", async () => {
-    const s = createSecrets({ mode: "memory" });
+    const s = makeSecrets({ mode: "memory" });
     await expect(
       s.startOAuthLogin("not-a-real-provider-zzz", {
         onAuth: () => {},
@@ -121,10 +140,10 @@ describe("createSecrets — file mode", () => {
   });
 
   test("file mode persists writes across new instances", async () => {
-    const a = createSecrets({ mode: "file", path });
+    const a = makeSecrets({ mode: "file", path });
     await a.setApiKey("openai", "sk-persist");
 
-    const b = createSecrets({ mode: "file", path });
+    const b = makeSecrets({ mode: "file", path });
     const auth = await b.getAuth("openai");
     expect(auth?.kind).toBe("apiKey");
     if (auth?.kind === "apiKey") {
@@ -133,7 +152,7 @@ describe("createSecrets — file mode", () => {
   });
 
   test("OAuth onRefresh writes through to disk", async () => {
-    const a = createSecrets({ mode: "file", path });
+    const a = makeSecrets({ mode: "file", path });
     // Seed an OAuth entry by reaching through the file directly is heavy;
     // instead seed via memory-mode-shaped initial via the underlying file.
     // Cleanest: write the file ourselves, then load via createSecrets.
@@ -153,7 +172,7 @@ describe("createSecrets — file mode", () => {
     const { writeFileSync } = await import("node:fs");
     writeFileSync(path, JSON.stringify(initialFile), "utf8");
 
-    const b = createSecrets({ mode: "file", path });
+    const b = makeSecrets({ mode: "file", path });
     const auth = await b.getAuth("anthropic");
     expect(auth?.kind).toBe("oauth");
     if (auth?.kind !== "oauth") return;
@@ -161,7 +180,7 @@ describe("createSecrets — file mode", () => {
     await auth.onRefresh({ access: "acc-2", refresh: "ref-2", expires: FUTURE_EXPIRES + 1 });
 
     // Reload from disk; refreshed credentials should be present.
-    const c = createSecrets({ mode: "file", path });
+    const c = makeSecrets({ mode: "file", path });
     const reloaded = await c.getAuth("anthropic");
     if (reloaded?.kind === "oauth") {
       expect(reloaded.credentials.access).toBe("acc-2");

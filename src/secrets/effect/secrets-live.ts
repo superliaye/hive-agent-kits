@@ -1,8 +1,9 @@
 // Effect-native Secrets module (ADR-0011, Phase 3a).
 //
 // `Secrets` is the Context.Service tag; `SecretsLive(opts)` a layer that owns
-// the in-memory store (reading persistence at build in file mode). The legacy
-// `createSecrets()` (index.ts) is a thin ManagedRuntime proxy over this service.
+// the in-memory store (reading persistence at build in file mode). Consumers
+// resolve this service off a `ManagedRuntime` (the root one in production, a
+// per-test one in the suites).
 //
 // The audited store verbs (get/set/refresh/remove) are async + block-on-failure
 // (4.2-A1): each awaits its event emit so an audit-persist failure fails the
