@@ -8,7 +8,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname } from "node:path";
 import { Layer, ManagedRuntime } from "effect";
 import type { Hono } from "hono";
-import { type Audit, createAudit } from "../audit/index.ts";
+import { AuditLive, Audit as AuditTag } from "../audit/effect/audit-live.ts";
+import type { Audit } from "../audit/index.ts";
 import { wireSubscriptions } from "../audit/subscriptions.ts";
 import { createRegistry, type Registry } from "../capabilities/index.ts";
 import { CatalogLive, Catalog as CatalogTag } from "../catalog/effect/catalog-live.ts";
@@ -67,12 +68,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   }
   // Install the trace logger before any other module emits a log line.
   setLogger(createLogger({ mode: opts.mode === "memory" ? "silent" : "file" }));
-  const audit =
-    opts.mode === "memory"
-      ? createAudit({ mode: "memory" })
-      : createAudit({ mode: "file", path: files.auditDb() });
 
-  // The four migrated modules compose into ONE root Layer owned by a single
+  // The five migrated modules compose into ONE root Layer owned by a single
   // ManagedRuntime (ADR-0011). The `mode`-driven adapter choice stays here at
   // the composition root, feeding each Live constructor — root configuration,
   // not a leaked requirement.
@@ -90,12 +87,18 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     opts.mode === "memory"
       ? ({ mode: "memory" } as const)
       : ({ mode: "file", path: files.secrets() } as const);
+  // Audit keeps its OWN sqlite file (~/.hive/audit.db); never routed onto hive.db.
+  const auditOpts =
+    opts.mode === "memory"
+      ? ({ mode: "memory" } as const)
+      : ({ mode: "file", path: files.auditDb() } as const);
 
   const rootLayer = Layer.mergeAll(
     HiveDbLive(dbPath),
     SecretsLive(secretsOpts),
     ConfigLive(configOpts),
     CatalogLive(),
+    AuditLive(auditOpts),
   );
   const runtime = ManagedRuntime.make(rootLayer);
 
@@ -124,6 +127,15 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     list: () => secretsSvc.list(),
     status: (provider) => secretsSvc.status(provider),
     dispose: () => {},
+  };
+  const auditSvc = runtime.runSync(AuditTag);
+  // The resolved AuditSvc IS the legacy `Audit` surface plus the internal `db`
+  // handle (close path). Project the three legacy fields so the handle type
+  // stays exact and the db handle doesn't leak onto ServerHandles.
+  const audit: Audit = {
+    attach: auditSvc.attach,
+    query: auditSvc.query,
+    subscriptions: auditSvc.subscriptions,
   };
 
   const registry = createRegistry({ watch: opts.mode === "file" });
@@ -192,9 +204,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       dispose();
       registry.dispose();
       // ONE teardown: releases Config (watcher + ref scope), Secrets (no-op),
-      // Catalog (file watchers), and HiveDb ($client.close) — each exactly once
-      // via Layer memoization. This also closes the previously-leaked hive.db
-      // handle.
+      // Catalog (file watchers), Audit ($client.close), and HiveDb
+      // ($client.close) — each exactly once via Layer memoization. This also
+      // closes the previously-leaked hive.db and audit.db handles.
       await runtime.dispose();
     },
   };
