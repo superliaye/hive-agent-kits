@@ -88,7 +88,7 @@ export function createConfigStore<S extends Record<string, unknown>>(
       await events.emit("change", {
         key: top,
         previous: previousTop,
-        current: proposedTop,
+        current: proposed[top],
         source: "set",
       });
     };
@@ -166,8 +166,8 @@ export function createConfigStore<S extends Record<string, unknown>>(
 // `parts` is the path tail after the top-level key. Empty `parts` = full
 // replacement. Objects along the path are cloned (no mutation of inputs).
 function mergeByPath(current: unknown, parts: string[], value: unknown): unknown {
-  if (parts.length === 0) return value;
   const [head, ...rest] = parts;
+  if (head === undefined) return value; // empty path tail = full replacement
   const base =
     current && typeof current === "object" && !Array.isArray(current)
       ? { ...(current as Record<string, unknown>) }
