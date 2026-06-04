@@ -1,10 +1,8 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "organizeImports": {
-    "enabled": true
-  },
+  "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "files": {
-    "ignore": ["node_modules", "dist", "data", "bun.lock"]
+    "includes": ["src/**", "scripts/**"]
   },
   "formatter": {
     "enabled": true,
@@ -14,6 +12,7 @@
   },
   "linter": {
     "enabled": true,
+    "domains": { "types": "all" },
     "rules": {
       "recommended": true,
       "suspicious": {
@@ -21,6 +20,9 @@
       },
       "style": {
         "useImportType": "off"
+      },
+      "nursery": {
+        "noFloatingPromises": "error"
       }
     }
   }
