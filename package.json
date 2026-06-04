@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
+    "prepare": "git config core.hooksPath .githooks",
     "test": "bun test",
     "check": "biome check",
     "check:no-float": "bun run scripts/check-no-floating-suppressions.ts",
