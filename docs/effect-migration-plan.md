@@ -10,9 +10,9 @@
 
 ---
 
-## Status — where a fresh session starts (updated 2026-06-03)
+## Status — where a fresh session starts (updated 2026-06-04)
 
-**Branch `spike/effect-runs-gateway`, suite 495 pass / 0 fail.** Phases 0–3b are committed; **Phase 4 is in progress** (§4.0 resolved — see below). Read this section + the API map below. Phase 4 is being driven issue-by-issue through `/loop-full-swe` (see the tooling note).
+**Branch `spike/effect-runs-gateway`, suite 516 pass / 0 fail.** Phases 0–3b are committed; **Phase 4 is in progress** — §4.0–§4.2 are done (event-bus [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md); composition-root §4.1a/b; the §4.2 block-on-failure fix + non-suppressible no-floating-promises guard + Effect-native Audit), **§4.3 (delete the legacy proxies) is next**. Read this section + the API map below. Phase 4 is being driven issue-by-issue through `/loop-full-swe` (see the tooling note).
 
 | Phase | Status | Commits |
 | --- | --- | --- |
@@ -22,7 +22,7 @@
 | audit `ts` wall-clock flake fix | ✅ done | `b567214` |
 | 3a — Secrets + Config | ✅ done | Secrets commit, then `cc50b9f` (Config) |
 | 3b — Catalog (ThreadsLive deferred) | ✅ done | `ebb6a7b` |
-| **4 — composition root + cross-cutting** | **NEXT** | — |
+| **4 — composition root + cross-cutting** | in progress — §4.0–4.2 done, §4.3 next | ADR-0012; 4.1a/b composition root; 4.2-A1/A2/B/C |
 
 **Pattern to mirror for any remaining module** — `src/<m>/effect/{errors,<m>-live}.ts` + a `ManagedRuntime` proxy in `src/<m>/index.ts`. Reference impls: `src/db/effect/hive-db-live.ts`, `src/secrets/effect/`, `src/config/effect/`, `src/catalog/effect/`.
 - Tag + layer: `class X extends Context.Service<X, XSvc>()("<m>/X") {}`; `XLive(opts) = Layer.effect(X, Effect.acquireRelease(Effect.sync(() => buildSvc(...)), (svc) => Effect.sync(() => svc.dispose?.())))`.
@@ -280,7 +280,7 @@ Built manually (loop couldn't drive its own build — see Status caveat). All ke
 
 ### 4.2 — Audit (last)
 
-Subscriber + SQLite writer; nearly pure I/O edge. Migrate **only after 4.0**; its writes wrap with `Effect.tryPromise`. (Note the audit `ts` is now wall-clock-anchored — `b567214`.)
+Subscriber + SQLite writer; nearly pure I/O edge. **Migrated (4.2-C):** `AuditLive` is an Effect-native `Context.Service` + scoped `Layer` (`src/audit/effect/audit-live.ts`) behind the unchanged `createAudit()` `ManagedRuntime` proxy; `createServer()` resolves `Audit` off the single root runtime, so the audit DB handle (which nothing closed pre-4.2) now closes on `runtime.dispose()`. The persist path stays **synchronous** — `Effect.sync`/`Effect.try`, **not** `Effect.tryPromise` (bun:sqlite is sync, and the per-event listener stays a direct sync `persist` call so a throw stays on `emit`'s stack — block-on-failure). No new typed `E` (a normalizer/persist throw must bubble as its original value); `AuditSvc` is the clean legacy surface (`attach`/`query`/`subscriptions`), the DB handle captured in the layer closure. Redaction backstop, microsecond wall-clock `ts` (`b567214`), and monotonic `seq` preserved verbatim.
 
 **Block-on-failure gap (closed — 4.2-A1 / A2 / B done).** The audited **Secrets** and **Runs** emits previously used `void events.emit(...)` while wired to Audit, so an audit-persist failure silently did **not** fail the originating op, and the side effect committed *before* the discarded emit (audit-first ordering broken) — a violation of ADR-0004's block-on-failure invariant. Closed in three slices:
 
