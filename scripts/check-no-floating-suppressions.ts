@@ -5,7 +5,8 @@
  * Biome's nursery/noFloatingPromises treats `void p` as VALID — the canonical
  * "deliberately ignore this promise" escape hatch. So Biome alone cannot enforce
  * the operator's directive ("forbid `void someAsync()`"). This script is the
- * teeth: it walks src/**\/*.ts off the TS type-checker and fails on either
+ * teeth: it walks the src/ + scripts/ *.ts off the TS type-checker (each file
+ * read once, from the loaded SourceFile) and fails on either
  *
  *   (a) a noFloatingPromises rule-suppression comment, or
  *   (b) a `void <promise>` expression (operand type is thenable).
@@ -15,13 +16,26 @@
  * sources.gateway` discards in audit/subscriptions.ts).
  */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as ts from "typescript";
 
 export type Violation = { file: string; line: number; kind: "void-promise" | "rule-suppression" };
 
 const SRC_ROOT = resolve(import.meta.dir, "..", "src");
+const SCRIPTS_ROOT = resolve(import.meta.dir);
+const SCAN_ROOTS = [SRC_ROOT, SCRIPTS_ROOT];
+
+/** True for a non-declaration source file under one of the scan roots. */
+function inScope(sf: ts.SourceFile): boolean {
+  if (sf.isDeclarationFile) return false;
+  return (
+    sf.fileName.includes("/src/") ||
+    sf.fileName.includes("\\src\\") ||
+    sf.fileName.includes("/scripts/") ||
+    sf.fileName.includes("\\scripts\\")
+  );
+}
 
 /** A symbol's type is thenable iff it has a callable `then` member. */
 export function isThenable(checker: ts.TypeChecker, type: ts.Type): boolean {
@@ -35,10 +49,12 @@ export function isThenable(checker: ts.TypeChecker, type: ts.Type): boolean {
 /**
  * Lines carrying a `biome-ignore` comment that suppresses noFloatingPromises.
  * Matches the v2 rule path specifically — other suppressions (noExplicitAny,
- * noAssignInExpressions) must NOT match.
+ * noAssignInExpressions) must NOT match. The directive must lead the line (after
+ * a `//`, `/*`, or `*` comment marker) so prose mentions of the rule path inside
+ * the gate's own source/tests — now in scope — don't self-trip.
  */
 export function findRuleSuppressions(text: string): number[] {
-  const re = /biome-ignore\s+lint\/nursery\/noFloatingPromises/;
+  const re = /^\s*(?:\/\/|\/\*|\*)\s*biome-ignore\s+lint\/nursery\/noFloatingPromises/;
   const lines: number[] = [];
   text.split(/\r?\n/).forEach((line, i) => {
     if (re.test(line)) lines.push(i + 1);
@@ -46,13 +62,17 @@ export function findRuleSuppressions(text: string): number[] {
   return lines;
 }
 
-/** Every `void <promise>` expression across the Program's src source files. */
-export function findVoidPromises(program: ts.Program): Violation[] {
+/**
+ * Both violation kinds across the Program's in-scope source files, reading each
+ * file once from its already-loaded `SourceFile.text` (no second disk read):
+ *   - `void <promise>` expressions (walked off the type-checker), and
+ *   - `biome-ignore lint/nursery/noFloatingPromises` suppressions.
+ */
+export function scanProgram(program: ts.Program): Violation[] {
   const checker = program.getTypeChecker();
   const out: Violation[] = [];
   for (const sf of program.getSourceFiles()) {
-    if (sf.isDeclarationFile) continue;
-    if (!sf.fileName.includes("/src/") && !sf.fileName.includes("\\src\\")) continue;
+    if (!inScope(sf)) continue;
     const visit = (node: ts.Node): void => {
       if (ts.isVoidExpression(node)) {
         const type = checker.getTypeAtLocation(node.expression);
@@ -64,6 +84,9 @@ export function findVoidPromises(program: ts.Program): Violation[] {
       ts.forEachChild(node, visit);
     };
     visit(sf);
+    for (const line of findRuleSuppressions(sf.text)) {
+      out.push({ file: sf.fileName, line, kind: "rule-suppression" });
+    }
   }
   return out;
 }
@@ -93,17 +116,10 @@ export function buildProgram(roots: string[]): ts.Program {
   });
 }
 
-export function scanSrc(srcRoot = SRC_ROOT): Violation[] {
-  const files = collectTsFiles(srcRoot);
-  const program = buildProgram(files);
-  const violations = findVoidPromises(program);
-  for (const file of files) {
-    const text = readFileSync(file, "utf8");
-    for (const line of findRuleSuppressions(text)) {
-      violations.push({ file, line, kind: "rule-suppression" });
-    }
-  }
-  return violations;
+export function scanSrc(roots: string | string[] = SCAN_ROOTS): Violation[] {
+  const dirs = Array.isArray(roots) ? roots : [roots];
+  const files = dirs.flatMap(collectTsFiles);
+  return scanProgram(buildProgram(files));
 }
 
 if (import.meta.main) {
