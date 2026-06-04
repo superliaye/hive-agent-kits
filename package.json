@@ -6,6 +6,7 @@
   "scripts": {
     "test": "bun test",
     "check": "biome check",
+    "check:no-float": "bun run scripts/check-no-floating-suppressions.ts",
     "format": "biome format --write",
     "start": "bun run src/server/start.ts",
     "dev": "bun --watch src/server/start.ts",
