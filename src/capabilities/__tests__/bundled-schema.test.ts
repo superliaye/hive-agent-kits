@@ -11,12 +11,12 @@
  *   6. Harness bindings that reference Capabilities not in the bundled set
  */
 
+import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
 import { parse } from "yaml";
-import { HarnessManifest, SkillManifest, SnippetManifest } from "../schemas.ts";
 import { bundledRoot } from "../../lib/paths.ts";
+import { HarnessManifest, SkillManifest, SnippetManifest } from "../schemas.ts";
 
 const BUNDLED_ROOT = bundledRoot();
 

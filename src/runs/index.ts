@@ -9,9 +9,9 @@
 // process is flipped to `failed(daemon_restart)`. The Run executor itself
 // only ever produces `running` rows it eventually finalizes.
 
-export { createRunExecutor } from "./executor.ts";
-export type { CreateRunExecutorDeps, RunExecutor, StartRunInput } from "./executor.ts";
-export { createRunsStore } from "./store.ts";
-export type { RunsStore } from "./store.ts";
 export { MODEL_FALLBACK } from "./defaults.ts";
+export type { CreateRunExecutorDeps, RunExecutor, StartRunInput } from "./executor.ts";
+export { createRunExecutor } from "./executor.ts";
+export type { RunsStore } from "./store.ts";
+export { createRunsStore } from "./store.ts";
 export type { Run, RunEvent, RunModuleEvents, RunStatus } from "./types.ts";

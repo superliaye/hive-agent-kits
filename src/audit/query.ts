@@ -1,7 +1,7 @@
 // Audit query implementation. Sync over Bun's sqlite; wrapped as Promise
 // at the public boundary for future-proofing toward async backends.
 
-import { type SQL, and, desc, eq, gte, lte } from "drizzle-orm";
+import { and, desc, eq, gte, lte, type SQL } from "drizzle-orm";
 import type { AuditDb } from "./db.ts";
 import { auditEvents } from "./schema.ts";
 import type { AuditEvent, AuditQueryFilter, ModuleSource } from "./types.ts";

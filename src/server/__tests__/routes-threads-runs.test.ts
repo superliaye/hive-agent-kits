@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
 import type { GatewayEvent } from "../../model-gateway/types.ts";
-import { type ServerHandles, createServer } from "../index.ts";
+import { createServer, type ServerHandles } from "../index.ts";
 
 const TOKEN = "test-token";
 

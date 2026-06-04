@@ -5,7 +5,7 @@
 // in-memory SQLite — same schema, same semantics, lost on process exit.
 
 import { type HiveDb, openHiveDb } from "../db/hive-db.ts";
-import { ThreadNotFoundError, type ThreadsStore, createThreadsStore } from "./store.ts";
+import { createThreadsStore, ThreadNotFoundError, type ThreadsStore } from "./store.ts";
 
 export type Threads = ThreadsStore;
 
@@ -36,6 +36,6 @@ export function createThreads(opts: CreateThreadsOptions): Threads {
   }
 }
 
-export { ThreadNotFoundError };
-export type { Thread, ThreadMessage, ThreadWithMessages } from "./types.ts";
 export type { AppendMessageInput, CreateThreadInput } from "./store.ts";
+export type { Thread, ThreadMessage, ThreadWithMessages } from "./types.ts";
+export { ThreadNotFoundError };

@@ -76,11 +76,11 @@ const PHASE_1_SKILLS = new Set([
 const DROPPED_KNOWN: Record<string, string> = {
   "preamble-tier": "gstack-internal preamble control",
   triggers: "voice/speech aliases for Claude Code matcher; Hive matches by description",
-  "added_in": "my-agent-kits internal kit version",
-  "marketplace_source": "Claude Code plugin marketplace pointer",
-  "marketplace_name": "Claude Code plugin marketplace pointer",
-  "plugin_name": "Claude Code plugin marketplace pointer",
-  "applyTo": "CLAUDE.md glob; superseded by Hive tag-based selection",
+  added_in: "my-agent-kits internal kit version",
+  marketplace_source: "Claude Code plugin marketplace pointer",
+  marketplace_name: "Claude Code plugin marketplace pointer",
+  plugin_name: "Claude Code plugin marketplace pointer",
+  applyTo: "CLAUDE.md glob; superseded by Hive tag-based selection",
 };
 
 const KEPT_KEYS = new Set([
@@ -112,9 +112,7 @@ export function transformFrontmatter(
   if (typeof raw.title === "string") transformed.title = raw.title;
   if (typeof raw.description === "string" || raw.description != null) {
     transformed.description =
-      typeof raw.description === "string"
-        ? raw.description.trim()
-        : String(raw.description).trim();
+      typeof raw.description === "string" ? raw.description.trim() : String(raw.description).trim();
   }
 
   if (Array.isArray(raw["allowed-tools"])) {

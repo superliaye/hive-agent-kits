@@ -4,7 +4,7 @@
 
 import { and, asc, eq } from "drizzle-orm";
 import type { HiveDb } from "../db/hive-db.ts";
-import type { FinishReason, GatewayErrorCode } from "../model-gateway/types.ts";
+import type { FinishReason } from "../model-gateway/types.ts";
 import { type RunStatus, runs } from "./schema.ts";
 import type { Run } from "./types.ts";
 

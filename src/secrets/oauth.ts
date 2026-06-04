@@ -8,7 +8,7 @@
 // translation is pi-ai-API-specific. The Secrets module deals only with
 // credential storage + initial login.
 
-import { type OAuthLoginCallbacks, getOAuthProvider } from "@earendil-works/pi-ai/oauth";
+import { getOAuthProvider, type OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 import { type OAuthCredentials, OAuthCredentialsSchema } from "./types.ts";
 
 /**

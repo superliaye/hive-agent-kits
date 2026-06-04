@@ -19,9 +19,7 @@ export function drainCompletion(
 ): AsyncIterable<CompletionItem> {
   const tagged: Stream.Stream<CompletionItem, never> = stream.pipe(
     Stream.map((event): CompletionItem => ({ kind: "event", event })),
-    Stream.catch((failure) =>
-      Stream.succeed<CompletionItem>({ kind: "failure", failure }),
-    ),
+    Stream.catch((failure) => Stream.succeed<CompletionItem>({ kind: "failure", failure })),
   );
   return Stream.toAsyncIterable(tagged);
 }

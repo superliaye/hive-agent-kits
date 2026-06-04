@@ -32,8 +32,8 @@ export function createCatalog(opts?: CreateCatalogOptions): Catalog {
   };
 }
 
-export { AgentNotFoundError } from "./catalog.ts";
 export type { CreateCatalogOptions } from "./catalog.ts";
-export { scanAll } from "./loader.ts";
+export { AgentNotFoundError } from "./catalog.ts";
 export type { LoaderError, LoaderResult } from "./loader.ts";
+export { scanAll } from "./loader.ts";
 export type { Agent, BindingKind, BindingPatch, Catalog, CatalogEvents } from "./types.ts";

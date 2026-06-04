@@ -1,14 +1,14 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import type { Agent, Catalog } from "../../catalog/index.ts";
 import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
-import { type ModelGateway, createGateway } from "../../model-gateway/index.ts";
+import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
 import type { GatewayEvent } from "../../model-gateway/types.ts";
-import { type Secrets, createSecrets } from "../../secrets/index.ts";
+import { createSecrets, type Secrets } from "../../secrets/index.ts";
 import type { Threads } from "../../threads/index.ts";
 import { createThreadsStore } from "../../threads/store.ts";
-import { type RunExecutor, createRunExecutor } from "../executor.ts";
+import { createRunExecutor, type RunExecutor } from "../executor.ts";
 import { createRunsStore } from "../store.ts";
 import type { RunEvent } from "../types.ts";
 

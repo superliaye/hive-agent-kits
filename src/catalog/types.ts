@@ -4,9 +4,9 @@
 // and are stored as HARNESS.md files. Bundled HARNESS.md ships in the repo;
 // runtime forks live in the OS app-storage dir and shadow the bundled copy.
 
+import type { HarnessManifest } from "../capabilities/schemas.ts";
 import type { AgentBackend, CapabilityLayer } from "../lib/capability-types.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
-import type { HarnessManifest } from "../capabilities/schemas.ts";
 
 // The four binding slots a HarnessManifest carries. Singular kind values
 // map to plural field names internally (`skill` -> `bindings.skills`, etc.).

@@ -37,7 +37,7 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from "@earendil-works/pi-ai";
-import { Type, getModels, streamSimple } from "@earendil-works/pi-ai";
+import { getModels, streamSimple, Type } from "@earendil-works/pi-ai";
 import { getOAuthApiKey } from "@earendil-works/pi-ai/oauth";
 import type {
   CompletionInput,

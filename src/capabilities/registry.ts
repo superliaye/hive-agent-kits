@@ -19,9 +19,7 @@ export class RegistryCollisionError extends Error {
       .map(
         (group) =>
           `${group[0]?.kind}:${group[0]?.name} (` +
-          group
-            .map((c) => `${c.origin}${c.workplaceId ? `/${c.workplaceId}` : ""}`)
-            .join(" vs ") +
+          group.map((c) => `${c.origin}${c.workplaceId ? `/${c.workplaceId}` : ""}`).join(" vs ") +
           ")",
       )
       .join("; ");
@@ -130,7 +128,11 @@ export function createRegistry(opts: CreateRegistryOptions = {}): Registry {
     key: (c) => key(c.kind, c.name),
     same: sameResolution,
     onLoaderError: logErrors
-      ? (e) => log().warn({ module: "capabilities", path: e.path, err: e.message }, "skipped malformed manifest")
+      ? (e) =>
+          log().warn(
+            { module: "capabilities", path: e.path, err: e.message },
+            "skipped malformed manifest",
+          )
       : undefined,
     onRescanError: logErrors
       ? (err) => log().warn({ module: "capabilities", err: err.message }, "hot-reload error")

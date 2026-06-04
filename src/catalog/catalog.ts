@@ -78,7 +78,11 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
     key: (a) => a.agentId,
     same: sameAgent,
     onLoaderError: logErrors
-      ? (e) => log().warn({ module: "catalog", path: e.path, err: e.message }, "skipped malformed manifest")
+      ? (e) =>
+          log().warn(
+            { module: "catalog", path: e.path, err: e.message },
+            "skipped malformed manifest",
+          )
       : undefined,
     onRescanError: logErrors
       ? (err) => log().warn({ module: "catalog", err: err.message }, "hot-reload error")

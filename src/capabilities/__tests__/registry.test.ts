@@ -12,13 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LoaderResult } from "../loader.ts";
@@ -138,10 +132,7 @@ describe("createRegistry — synthetic scanner", () => {
       registered.push(e);
     });
 
-    snapshot = [
-      bundledSkill("a", { path: "/fake/different/path/SKILL.md" }),
-      bundledSkill("c"),
-    ];
+    snapshot = [bundledSkill("a", { path: "/fake/different/path/SKILL.md" }), bundledSkill("c")];
     await registry.rescan();
 
     expect(changed.map((e) => e.name)).toEqual(["a"]);
@@ -187,11 +178,7 @@ describe("createRegistry — real filesystem", () => {
     await registry.start();
 
     const all = registry.list({ kind: "skill" });
-    expect(all.map((c) => c.name).sort()).toEqual([
-      "only-bundled",
-      "only-runtime",
-      "shared",
-    ]);
+    expect(all.map((c) => c.name).sort()).toEqual(["only-bundled", "only-runtime", "shared"]);
     expect(registry.get("skill", "shared")?.description).toBe("from runtime");
     expect(registry.get("skill", "shared")?.layer).toBe("runtime");
     expect(registry.get("skill", "shared")?.shadows).toHaveLength(1);

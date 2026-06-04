@@ -9,13 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type ServerHandles } from "../index.ts";
@@ -120,7 +114,10 @@ describe("server routes", () => {
   test("GET /api/agents returns summaries", async () => {
     const res = await server.app.fetch(authed("/api/agents"));
     expect(res.status).toBe(200);
-    const body = (await res.json()) as Array<{ agentId: string; bindingCounts: { skills: number } }>;
+    const body = (await res.json()) as Array<{
+      agentId: string;
+      bindingCounts: { skills: number };
+    }>;
     expect(body).toHaveLength(1);
     expect(body[0]?.agentId).toBe("root");
     expect(body[0]?.bindingCounts.skills).toBe(1);
@@ -150,7 +147,11 @@ describe("server routes", () => {
       }),
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { layer: string; hasFork: boolean; bindings: { skills: string[] } };
+    const body = (await res.json()) as {
+      layer: string;
+      hasFork: boolean;
+      bindings: { skills: string[] };
+    };
     expect(body.layer).toBe("runtime");
     expect(body.hasFork).toBe(true);
     expect(body.bindings.skills).toEqual([]);
@@ -185,9 +186,7 @@ describe("server routes", () => {
     const forkPath = join(runtimeRoot, "agents", "root", "HARNESS.md");
     expect(existsSync(forkPath)).toBe(true);
 
-    const res = await server.app.fetch(
-      authed("/api/agents/root/reset", { method: "POST" }),
-    );
+    const res = await server.app.fetch(authed("/api/agents/root/reset", { method: "POST" }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { layer: string; hasFork: boolean };
     expect(body.layer).toBe("bundled");
@@ -268,10 +267,7 @@ body
   test("PATCH applies a batch of patches in one shot", async () => {
     // Seed an extra skill to remove + a snippet to bind.
     mkdirSync(join(bundledRoot, "personal", "skills", "beta"), { recursive: true });
-    writeFileSync(
-      join(bundledRoot, "personal", "skills", "beta", "SKILL.md"),
-      skill("beta"),
-    );
+    writeFileSync(join(bundledRoot, "personal", "skills", "beta", "SKILL.md"), skill("beta"));
     // Reboot the server so the new skill is in the registry.
     await server.dispose();
     server = await createServer({ mode: "memory", token: TOKEN });
@@ -372,16 +368,12 @@ body
   });
 
   test("GET /api/audit rejects unknown query keys", async () => {
-    const res = await server.app.fetch(
-      authed("/api/audit?bogus=true"),
-    );
+    const res = await server.app.fetch(authed("/api/audit?bogus=true"));
     expect(res.status).toBe(400);
   });
 
   test("GET /api/audit rejects invalid source enum", async () => {
-    const res = await server.app.fetch(
-      authed("/api/audit?source=not-a-source"),
-    );
+    const res = await server.app.fetch(authed("/api/audit?source=not-a-source"));
     expect(res.status).toBe(400);
   });
 

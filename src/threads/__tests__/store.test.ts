@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { openHiveDb } from "../../db/hive-db.ts";
-import { ThreadNotFoundError, type ThreadsStore, createThreadsStore } from "../store.ts";
+import { createThreadsStore, ThreadNotFoundError, type ThreadsStore } from "../store.ts";
 
 let store: ThreadsStore;
 let nowCounter: number;

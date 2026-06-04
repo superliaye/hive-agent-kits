@@ -35,9 +35,7 @@ function listSubdirs(root: string): string[] {
 }
 
 function formatIssues(issues: Array<{ path: (string | number)[]; message: string }>): string {
-  return issues
-    .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
-    .join("; ");
+  return issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ");
 }
 
 function loadAgent(

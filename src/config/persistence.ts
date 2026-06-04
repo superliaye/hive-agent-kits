@@ -2,14 +2,14 @@
 // Per ADR-0006. Storage format is YAML for human editability.
 
 import {
-  type FSWatcher,
   existsSync,
+  type FSWatcher,
+  mkdirSync,
   readFileSync,
   renameSync,
   watch,
   writeFileSync,
 } from "node:fs";
-import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { parse, stringify } from "yaml";
 

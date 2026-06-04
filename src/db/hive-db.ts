@@ -12,10 +12,10 @@
 
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
-import { ensureRunsSchema } from "../runs/schema.ts";
 import * as runsSchema from "../runs/schema.ts";
-import { ensureThreadsSchema } from "../threads/schema.ts";
+import { ensureRunsSchema } from "../runs/schema.ts";
 import * as threadsSchema from "../threads/schema.ts";
+import { ensureThreadsSchema } from "../threads/schema.ts";
 
 const combinedSchema = {
   ...threadsSchema,
