@@ -170,7 +170,9 @@ describe("Config store (memory mode)", () => {
 
     test("no-op when the value is unchanged", async () => {
       const seen: number[] = [];
-      config.events.on("change", () => seen.push(1));
+      config.events.on("change", () => {
+        seen.push(1);
+      });
       await config.setPath("audit.retention.days", 90);
       expect(seen.length).toBe(0);
     });

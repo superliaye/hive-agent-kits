@@ -18,6 +18,8 @@ shell/staging/
 shell/ui-dist/
 shell/release/
 shell/build-resources/
+# Vite dependency pre-bundle cache
+ui/.vite/
 # /build-feature-workflow loop scratch
 .build-feature-workflow/
 

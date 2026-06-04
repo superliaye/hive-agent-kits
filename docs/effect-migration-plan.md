@@ -34,7 +34,7 @@
 
 **Tooling note — the loop engine now receives `args`.** Earlier sessions saw `args` arrive empty at `loop-swe.js`; that is fixed — it normalizes a string-or-object `args` at `loop-swe.js:35`, so `/loop-full-swe` runs with `feature` + `resolutions` and the self-digest re-runs with injected gate answers. Known remaining limitation: on a `resumeFromRunId` *after* a build phase has already committed, a freshly-injected resolution is **not** re-applied to the committed files (the cache treats that phase as done) — apply such directed post-commit edits by hand.
 
-**Open housekeeping:** pre-existing latent `tsc` errors in `src/config/store.ts:88,175` and `store.test.ts:173` (present on HEAD; bun's runtime never enforced them — separate cleanup).
+**Housekeeping:** the daemon `tsc --noEmit` is now clean on `src/` (the formerly-latent `config/store.ts` generic-typing errors are fixed); the non-suppressible no-floating-promises gate + precommit hook keep `biome check` green repo-wide.
 
 ---
 
