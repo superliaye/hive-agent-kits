@@ -14,7 +14,7 @@ import { createRegistry } from "../../capabilities/index.ts";
 import type { Capability } from "../../capabilities/types.ts";
 import { CatalogLive, Catalog as CatalogTag } from "../../catalog/effect/catalog-live.ts";
 import type { Agent } from "../../catalog/types.ts";
-import { createConfig } from "../../config/index.ts";
+import { configRuntime } from "../../config/effect/config-live.ts";
 import { createGateway } from "../../model-gateway/index.ts";
 import type { GatewayAdapter } from "../../model-gateway/types.ts";
 import {
@@ -53,7 +53,7 @@ describe("wireSubscriptions", () => {
   test("config.set produces a config.change audit row", async () => {
     const audit = makeAudit();
     const schema = z.object({ theme: z.string() });
-    const config = createConfig({
+    const { svc: config, dispose: disposeConfig } = configRuntime({
       mode: "memory",
       initial: { theme: "light" },
       schema,
@@ -73,7 +73,7 @@ describe("wireSubscriptions", () => {
     });
 
     dispose();
-    config.dispose();
+    disposeConfig();
   });
 
   // Privacy redaction: the audit subscriber must strip color hex out of
@@ -87,7 +87,7 @@ describe("wireSubscriptions", () => {
         dark: z.object({ accent: z.string().optional() }).optional(),
       }),
     });
-    const config = createConfig({
+    const { svc: config, dispose: disposeConfig } = configRuntime({
       mode: "memory",
       initial: { appearance: { mode: "system" } },
       schema,
@@ -109,7 +109,7 @@ describe("wireSubscriptions", () => {
     expect(JSON.stringify(rows[0])).not.toContain("deadbeef");
 
     dispose();
-    config.dispose();
+    disposeConfig();
   });
 
   test("gateway adapter registration is NOT audited (trace, not audit)", async () => {
@@ -228,7 +228,7 @@ describe("wireSubscriptions", () => {
   test("disposer detaches; later changes don't reach audit", async () => {
     const audit = makeAudit();
     const schema = z.object({ count: z.number() });
-    const config = createConfig({
+    const { svc: config, dispose: disposeConfig } = configRuntime({
       mode: "memory",
       initial: { count: 0 },
       schema,
@@ -244,6 +244,6 @@ describe("wireSubscriptions", () => {
     expect(rows[0]?.payload).toMatchObject({ current: 1 });
     // Was: the second set("count", 2) — confirms the disposer detached.
 
-    config.dispose();
+    disposeConfig();
   });
 });

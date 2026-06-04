@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Effect, Stream } from "effect";
 import { z } from "zod";
-import { createConfig } from "../../index.ts";
 import { configRuntime } from "../config-live.ts";
 
 const schema = z.object({ count: z.number(), label: z.string() });
@@ -10,14 +9,14 @@ const initial: S = { count: 0, label: "a" };
 
 describe("ConfigLive", () => {
   test("set() updates a subsequent get() and fires an active watch listener", async () => {
-    const cfg = createConfig({ mode: "memory", initial, schema });
+    const { svc: cfg, dispose } = configRuntime({ mode: "memory", initial, schema });
     const seen: number[] = [];
     const off = cfg.watch("count", (v) => seen.push(v)); // initial fire: 0
     await cfg.set("count", 5);
     expect(cfg.get("count")).toBe(5);
     expect(seen).toEqual([0, 5]);
     off();
-    cfg.dispose();
+    dispose();
   });
 
   test("changes stream is the reactive state cell — reflects updates", async () => {

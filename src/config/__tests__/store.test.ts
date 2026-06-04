@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { createConfig } from "../index.ts";
-import type { Config } from "../types.ts";
+import { type ConfigSvc, configRuntime } from "../effect/config-live.ts";
 
 const TestSchema = z.object({
   audit: z.object({
@@ -23,10 +22,19 @@ const TEST_DEFAULTS: TestConfig = {
 };
 
 describe("Config store (memory mode)", () => {
-  let config: Config<TestConfig> & { dispose(): void };
+  let config: ConfigSvc<TestConfig>;
+  let dispose: () => void;
 
   beforeEach(() => {
-    config = createConfig({ mode: "memory", initial: TEST_DEFAULTS, schema: TestSchema });
+    ({ svc: config, dispose } = configRuntime({
+      mode: "memory",
+      initial: TEST_DEFAULTS,
+      schema: TestSchema,
+    }));
+  });
+
+  afterEach(() => {
+    dispose();
   });
 
   test("get returns the current value", () => {

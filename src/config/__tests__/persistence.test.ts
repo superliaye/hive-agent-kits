@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "yaml";
 import { z } from "zod";
-import { createConfig } from "../index.ts";
+import { configRuntime } from "../effect/config-live.ts";
 import { ConfigPersistence } from "../persistence.ts";
 
 const Schema = z.object({
@@ -72,38 +72,58 @@ describe("Config store (file mode)", () => {
   });
 
   test("seeds defaults to disk when file is missing", () => {
-    const config = createConfig({ mode: "file", path, defaults: DEFAULTS, schema: Schema });
+    const { svc: config, dispose } = configRuntime({
+      mode: "file",
+      path,
+      defaults: DEFAULTS,
+      schema: Schema,
+    });
     expect(existsSync(path)).toBe(true);
     expect(config.get("ui").theme).toBe("dark");
-    config.dispose();
+    dispose();
   });
 
   test("loads existing file and overrides defaults", () => {
     writeFileSync(path, stringify({ ui: { theme: "light" } }), "utf-8");
-    const config = createConfig({ mode: "file", path, defaults: DEFAULTS, schema: Schema });
+    const { svc: config, dispose } = configRuntime({
+      mode: "file",
+      path,
+      defaults: DEFAULTS,
+      schema: Schema,
+    });
     expect(config.get("ui").theme).toBe("light");
     // Missing keys filled from defaults
     expect(config.get("audit").retention.days).toBe(90);
-    config.dispose();
+    dispose();
   });
 
   test("set persists to disk", async () => {
-    const config = createConfig({ mode: "file", path, defaults: DEFAULTS, schema: Schema });
+    const { svc: config, dispose } = configRuntime({
+      mode: "file",
+      path,
+      defaults: DEFAULTS,
+      schema: Schema,
+    });
     await config.set("ui", { theme: "light" });
 
     const onDisk = readFileSync(path, "utf-8");
     expect(onDisk).toContain("light");
-    config.dispose();
+    dispose();
   });
 
   test("external edit triggers change event with source: external", async () => {
-    const config = createConfig({ mode: "file", path, defaults: DEFAULTS, schema: Schema });
+    const { svc: config, dispose } = configRuntime({
+      mode: "file",
+      path,
+      defaults: DEFAULTS,
+      schema: Schema,
+    });
 
     const seen: Array<{ theme: string }> = [];
     config.watch("ui", (v) => seen.push(v));
     seen.length = 0; // drop initial fire
 
-    // Wait past the self-write suppression window from createConfig's seed.
+    // Wait past the self-write suppression window from the file-mode seed.
     await Bun.sleep(300);
 
     // Simulate an external editor saving the file
@@ -115,11 +135,16 @@ describe("Config store (file mode)", () => {
     expect(seen[seen.length - 1]?.theme).toBe("light");
     expect(config.get("ui").theme).toBe("light");
 
-    config.dispose();
+    dispose();
   });
 
   test("invalid external edit is rejected; current state preserved", async () => {
-    const config = createConfig({ mode: "file", path, defaults: DEFAULTS, schema: Schema });
+    const { svc: config, dispose } = configRuntime({
+      mode: "file",
+      path,
+      defaults: DEFAULTS,
+      schema: Schema,
+    });
     await Bun.sleep(300);
 
     writeFileSync(
@@ -132,7 +157,7 @@ describe("Config store (file mode)", () => {
 
     // Original value retained — invalid edits don't corrupt in-memory state
     expect(config.get("audit").retention.autoRotate).toBe(false);
-    config.dispose();
+    dispose();
   });
 });
 
