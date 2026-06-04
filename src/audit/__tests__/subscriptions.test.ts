@@ -9,15 +9,15 @@
 
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { createAudit } from "../audit.ts";
-import { createConfig } from "../../config/index.ts";
-import { createGateway } from "../../model-gateway/index.ts";
-import type { GatewayAdapter } from "../../model-gateway/types.ts";
 import { createRegistry } from "../../capabilities/index.ts";
 import type { Capability } from "../../capabilities/types.ts";
 import { createCatalog } from "../../catalog/index.ts";
 import type { Agent } from "../../catalog/types.ts";
+import { createConfig } from "../../config/index.ts";
+import { createGateway } from "../../model-gateway/index.ts";
+import type { GatewayAdapter } from "../../model-gateway/types.ts";
 import { createSecrets } from "../../secrets/index.ts";
+import { createAudit } from "../audit.ts";
 import { wireSubscriptions } from "../subscriptions.ts";
 
 const fakeAdapter: GatewayAdapter = {
