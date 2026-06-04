@@ -19,8 +19,8 @@ import * as ts from "typescript";
 import {
   buildProgram,
   findRuleSuppressions,
-  findVoidPromises,
   isThenable,
+  scanProgram,
   scanSrc,
 } from "../check-no-floating-suppressions.ts";
 
@@ -85,9 +85,17 @@ describe("findRuleSuppressions", () => {
     ].join("\n");
     expect(findRuleSuppressions(text)).toEqual([]);
   });
+
+  test("does NOT match the rule path embedded in prose or a string literal", () => {
+    const text = [
+      " *   - `biome-ignore lint/nursery/noFloatingPromises` suppressions.",
+      '    const text = "// biome-ignore lint/nursery/noFloatingPromises: x";',
+    ].join("\n");
+    expect(findRuleSuppressions(text)).toEqual([]);
+  });
 });
 
-describe("findVoidPromises", () => {
+describe("scanProgram", () => {
   test("flags `void <promise>` but not `void <non-promise>`", () => {
     const dir = join(tmpdir(), `hive-float-vp-${Date.now()}`, "src");
     mkdirSync(dir, { recursive: true });
@@ -97,7 +105,7 @@ describe("findVoidPromises", () => {
       ["async function p() {}", "const n = 1;", "void p();", "void n;"].join("\n"),
     );
     const program = buildProgram([path]);
-    const hits = findVoidPromises(program);
+    const hits = scanProgram(program);
     expect(hits.length).toBe(1);
     expect(hits[0]?.line).toBe(3);
     rmSync(join(tmpdir(), `hive-float-vp-${Date.now()}`), { recursive: true, force: true });
