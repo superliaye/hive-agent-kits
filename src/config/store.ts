@@ -129,10 +129,18 @@ export function createConfigStore<S extends Record<string, unknown>>(
       if (changes.length === 0) return;
 
       current = validated;
-      // Fire-and-forget: file-watcher callbacks can't await. Listener errors
-      // surface to the unhandled-rejection handler (Pino in production).
+      // Fire-and-forget: file-watcher callbacks can't await, and the external
+      // edit is already committed to disk. Route listener errors to the loud
+      // trace channel instead of leaving the promise to float.
       for (const change of changes) {
-        void events.emit("change", change);
+        events
+          .emit("change", change)
+          .catch((err) =>
+            log().error(
+              { module: "config", err: String(err) },
+              "external-edit config.change emit failed",
+            ),
+          );
       }
     } catch (err) {
       // Bad external edit — keep current in-memory state. Trace channel

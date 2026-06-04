@@ -17,6 +17,7 @@
 
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 import { ManagedRuntime } from "effect";
+import { log } from "../lib/log.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { AuthInput } from "../model-gateway/types.ts";
 import {
@@ -52,7 +53,11 @@ export function createSecrets(opts: CreateSecretsOptions): Secrets {
     list: () => svc.list(),
     status: (provider) => svc.status(provider),
     dispose: () => {
-      void runtime.dispose();
+      runtime
+        .dispose()
+        .catch((err) =>
+          log().warn({ module: "secrets", err: String(err) }, "runtime dispose failed"),
+        );
     },
   };
 }

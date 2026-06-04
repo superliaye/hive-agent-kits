@@ -6,6 +6,7 @@
 // without reaching into module internals.
 
 import { Effect } from "effect";
+import { log } from "../lib/log.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import { GatewayFailure } from "./effect/failure.ts";
 import { GatewayError } from "./errors.ts";
@@ -28,14 +29,25 @@ export function createGatewayRegistry(): GatewayRegistry {
     for (const provider of adapter.providers) {
       adapters.set(provider, adapter);
     }
-    void events.emit("adapter.registered", { providers: adapter.providers });
+    events
+      .emit("adapter.registered", { providers: adapter.providers })
+      .catch((err) =>
+        log().warn({ module: "model-gateway", err: String(err) }, "adapter.registered emit failed"),
+      );
     return () => {
       for (const provider of adapter.providers) {
         if (adapters.get(provider) === adapter) {
           adapters.delete(provider);
         }
       }
-      void events.emit("adapter.unregistered", { providers: adapter.providers });
+      events
+        .emit("adapter.unregistered", { providers: adapter.providers })
+        .catch((err) =>
+          log().warn(
+            { module: "model-gateway", err: String(err) },
+            "adapter.unregistered emit failed",
+          ),
+        );
     };
   }
 

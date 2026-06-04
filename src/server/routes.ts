@@ -415,17 +415,22 @@ export function buildRoutes(deps: RoutesDeps): Hono {
         await deps.secrets.startOAuthLogin(provider, {
           onAuth: (info) => {
             // pi-ai's onAuth is synchronous; fire-and-forget the SSE write.
-            // Order is preserved by the underlying stream.
-            void stream.writeSSE({
-              event: "auth",
-              data: JSON.stringify({
-                url: info.url,
-                ...(info.instructions !== undefined && { instructions: info.instructions }),
-              }),
-            });
+            // Order is preserved by the underlying stream. Drop on failure
+            // (dead client) — the catch keeps the promise from floating.
+            stream
+              .writeSSE({
+                event: "auth",
+                data: JSON.stringify({
+                  url: info.url,
+                  ...(info.instructions !== undefined && { instructions: info.instructions }),
+                }),
+              })
+              .catch(() => {});
           },
           onProgress: (message) => {
-            void stream.writeSSE({ event: "progress", data: JSON.stringify({ message }) });
+            stream
+              .writeSSE({ event: "progress", data: JSON.stringify({ message }) })
+              .catch(() => {});
           },
           // v1 doesn't support interactive prompts over HTTP. If pi-ai's
           // provider needs one (manual code input, multi-step selection),
