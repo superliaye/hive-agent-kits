@@ -29,7 +29,8 @@ import { createGateway, type ModelGateway } from "../model-gateway/index.ts";
 import { createRunExecutor, createRunsStore, type RunExecutor } from "../runs/index.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
 import type { Secrets } from "../secrets/index.ts";
-import { createThreads, type Threads } from "../threads/index.ts";
+import { ThreadsLive, Threads as ThreadsTag } from "../threads/effect/threads-live.ts";
+import type { Threads } from "../threads/index.ts";
 import { buildRoutes } from "./routes.ts";
 
 export type ServerMode = "file" | "memory";
@@ -69,10 +70,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // Install the trace logger before any other module emits a log line.
   setLogger(createLogger({ mode: opts.mode === "memory" ? "silent" : "file" }));
 
-  // The five migrated modules compose into ONE root Layer owned by a single
+  // The six migrated modules compose into ONE root Layer owned by a single
   // ManagedRuntime (ADR-0011). The `mode`-driven adapter choice stays here at
   // the composition root, feeding each Live constructor — root configuration,
-  // not a leaked requirement.
+  // not a leaked requirement. Threads is built over the SAME `dataLayer` value
+  // (HiveDb), which stays exposed for the unmigrated Runs path; binding it once
+  // means ManagedRuntime memoizes ONE hive.db connection shared by both.
   const dbPath = opts.mode === "memory" ? ":memory:" : files.hiveDb();
   const configOpts =
     opts.mode === "memory"
@@ -93,12 +96,14 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       ? ({ mode: "memory" } as const)
       : ({ mode: "file", path: files.auditDb() } as const);
 
+  const dataLayer = HiveDbLive(dbPath);
   const rootLayer = Layer.mergeAll(
-    HiveDbLive(dbPath),
+    dataLayer,
     SecretsLive(secretsOpts),
     ConfigLive(configOpts),
     CatalogLive(),
     AuditLive(auditOpts),
+    ThreadsLive().pipe(Layer.provide(dataLayer)),
   );
   const runtime = ManagedRuntime.make(rootLayer);
 
@@ -134,9 +139,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
 
   const registry = createRegistry({ watch: opts.mode === "file" });
   const gateway = createGateway();
-  // Threads + Runs consume the single Layer-owned `hive.db` handle (the
-  // `"shared"` mode is exactly this). No second connection.
-  const threads = createThreads({ mode: "shared", db: hiveDb });
+  // Threads + Runs consume the single Layer-owned `hive.db` handle. Threads
+  // resolves off the root runtime (built over `dataLayer`); Runs still wraps the
+  // raw `hiveDb` handle (unmigrated). Same connection, no second handle.
+  const threads = runtime.runSync(ThreadsTag);
   const runsStore = createRunsStore(hiveDb);
   // Boot-time stale-Run recovery: any Run still `running` from a previous
   // process is flipped to `failed(daemon_restart)`. Per ADR for Part 3.
