@@ -16,6 +16,7 @@
 
 import { Context, Effect, Layer, ManagedRuntime, type Stream, SubscriptionRef } from "effect";
 import type { ZodType } from "zod";
+import { log } from "../../lib/log.ts";
 import { ConfigPersistence } from "../persistence.ts";
 import type { AppConfig } from "../schema.ts";
 import { createConfigStore } from "../store.ts";
@@ -126,7 +127,11 @@ export function configRuntime<S extends Record<string, unknown>>(
   return {
     svc: holder.svc,
     dispose: () => {
-      void runtime.dispose();
+      runtime
+        .dispose()
+        .catch((err) =>
+          log().warn({ module: "config", err: String(err) }, "runtime dispose failed"),
+        );
     },
   };
 }

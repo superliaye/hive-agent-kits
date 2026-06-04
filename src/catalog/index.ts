@@ -6,6 +6,7 @@
 // verb (`requireAgent`) is on the `Catalog` service, not this proxy.
 
 import { ManagedRuntime } from "effect";
+import { log } from "../lib/log.ts";
 import type { CreateCatalogOptions } from "./catalog.ts";
 import { CatalogLive, Catalog as CatalogTag } from "./effect/catalog-live.ts";
 import type { Catalog } from "./types.ts";
@@ -22,7 +23,11 @@ export function createCatalog(opts?: CreateCatalogOptions): Catalog {
     rescan: svc.rescan,
     events: svc.events,
     dispose: () => {
-      void runtime.dispose();
+      runtime
+        .dispose()
+        .catch((err) =>
+          log().warn({ module: "catalog", err: String(err) }, "runtime dispose failed"),
+        );
     },
   };
 }
