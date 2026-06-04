@@ -101,13 +101,17 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   const inflight = new Map<string, { threadId: string; controller: AbortController }>();
   const threadsWithRun = new Set<string>();
 
-  function emitFailed(
+  async function emitFailed(
     runId: string,
     code: NonNullable<Run["errorCode"]>,
     message: string,
-  ): RunEvent {
+  ): Promise<RunEvent> {
+    // Audit-first: the emit (audit row) must precede the hive.db Run mutation,
+    // and a persist failure must fail the originating op (ADR-0004 §Failure
+    // semantics). TypedEmitter.emit is async, so a throwing audit listener only
+    // surfaces via `await`.
+    await events.emit("run.failed", { runId, code, message });
     runs.fail({ runId, code, message });
-    void events.emit("run.failed", { runId, code, message });
     return { type: "run.failed", runId, error: { code, message }, ts: now() };
   }
 
@@ -144,7 +148,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
           agentId,
           model: modelOverride ?? MODEL_FALLBACK,
         });
-        yield emitFailed(run.id, "agent_not_found", `unknown agent: ${agentId}`);
+        yield await emitFailed(run.id, "agent_not_found", `unknown agent: ${agentId}`);
         return;
       }
 
@@ -158,7 +162,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const slash = model.indexOf("/");
       if (slash < 1) {
         const run = runs.create({ threadId, agentId, model });
-        yield emitFailed(
+        yield await emitFailed(
           run.id,
           "invalid_request",
           `agent ${agentId} has malformed model: ${JSON.stringify(model)}`,
@@ -171,7 +175,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const auth = await secrets.getAuth(provider);
       if (!auth) {
         const run = runs.create({ threadId, agentId, model });
-        yield emitFailed(
+        yield await emitFailed(
           run.id,
           "no_credentials",
           `no secret stored for provider "${provider}" — add it in Settings`,
@@ -183,11 +187,16 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // send to the model.
       threads.append({ threadId, role: "user", content: userMessage });
 
-      // Insert the Run row, emit run.started.
-      const run = runs.create({ threadId, agentId, model });
+      // Insert the Run row, emit run.started. Pre-generate the id so the audit
+      // emit precedes runs.create (audit-first): the run.id is normally produced
+      // BY the insert, so awaiting the emit afterward would commit the Run row
+      // before its audit row — the silent gap ADR-0004 forbids. CreateRunInput.id
+      // is optional; passing it keeps the store unchanged.
+      const runId = crypto.randomUUID();
+      await events.emit("run.started", { runId, threadId, agentId, model });
+      const run = runs.create({ id: runId, threadId, agentId, model });
       const controller = new AbortController();
       inflight.set(run.id, { threadId, controller });
-      void events.emit("run.started", { runId: run.id, threadId, agentId, model });
       yield { type: "run.started", runId: run.id, threadId, agentId, model, ts: now() };
 
       // Build CompletionInput. Re-read history (which now includes the
@@ -233,8 +242,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
       // Decide how to finalize.
       if (finishReason === "cancelled") {
+        await events.emit("run.cancelled", { runId: run.id });
         runs.cancel(run.id);
-        void events.emit("run.cancelled", { runId: run.id });
         yield { type: "run.cancelled", runId: run.id, ts: now() };
         return;
       }
@@ -245,11 +254,11 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       if (finishReason === "error") {
         const code = latestError?.code ?? "unknown";
         const message = latestError?.message ?? "gateway emitted no error message";
-        yield emitFailed(run.id, code, message);
+        yield await emitFailed(run.id, code, message);
         return;
       }
       if (!finishReason) {
-        yield emitFailed(run.id, "unknown", "gateway stream ended without a `done` event");
+        yield await emitFailed(run.id, "unknown", "gateway stream ended without a `done` event");
         return;
       }
 
@@ -260,8 +269,11 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         role: "assistant",
         content: assistantContent,
       });
+      // Audit-first relative to the Run-lifecycle mutation (runs.complete). The
+      // separate Threads write above is the Threads module's concern and must
+      // precede the yield regardless (finalMessage is yielded).
+      await events.emit("run.completed", { runId: run.id, finishReason });
       runs.complete({ runId: run.id, finishReason });
-      void events.emit("run.completed", { runId: run.id, finishReason });
       yield { type: "run.completed", runId: run.id, finishReason, finalMessage, ts: now() };
     } finally {
       threadsWithRun.delete(threadId);
