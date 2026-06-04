@@ -269,6 +269,75 @@ describe("RunExecutor — failure paths", () => {
     // runs.create), so no committed Run lacks its audit row.
     expect(executor.listByThread(threadId)).toHaveLength(0);
   });
+
+  // ADR-0004 §Verification item 4 across the rest of the lifecycle (not just
+  // the run.started entry transition). Each test pins the audit-first ordering
+  // for one terminal emit: a throwing subscriber must reject the drain AND
+  // leave the Run row un-mutated (still `running`) — proving the emit precedes
+  // the runs.complete / runs.cancel / runs.fail mutation. A future refactor that
+  // reverts to `void events.emit(...)` or moves the mutation before the emit on
+  // any of these paths now fails a test.
+  test("throwing run.completed subscriber → drain rejects, Run row stays running", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
+    });
+    let capturedRunId: string | undefined;
+    executor.events.on("run.completed", ({ runId }) => {
+      capturedRunId = runId;
+      throw new Error("audit persist failed");
+    });
+    await expect(
+      collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] })),
+    ).rejects.toThrow(/audit persist failed/);
+    // Audit-first: the emit precedes runs.complete, so the row is still running.
+    expect(capturedRunId).toBeDefined();
+    if (capturedRunId) expect(executor.getRun(capturedRunId)?.status).toBe("running");
+  });
+
+  test("throwing run.cancelled subscriber → drain rejects, Run row stays running", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "cancelled" }] },
+    });
+    let capturedRunId: string | undefined;
+    executor.events.on("run.cancelled", ({ runId }) => {
+      capturedRunId = runId;
+      throw new Error("audit persist failed");
+    });
+    await expect(
+      collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] })),
+    ).rejects.toThrow(/audit persist failed/);
+    // Audit-first: the emit precedes runs.cancel, so the row is still running.
+    expect(capturedRunId).toBeDefined();
+    if (capturedRunId) expect(executor.getRun(capturedRunId)?.status).toBe("running");
+  });
+
+  // run.failed differs: the gateway-error path runs runs.create BEFORE
+  // emitFailed, so a Run row exists in `running` when the emit throws. Per the
+  // plan's Tests §caveat that is the acceptable over-record (ADR-0004:172-174) —
+  // this test asserts block-on-failure + that the row stays `running` (the emit
+  // precedes runs.fail), NOT row-absence.
+  test("throwing run.failed subscriber → drain rejects, Run row stays running (not failed)", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: {
+        "anthropic/claude-haiku-4-5": [
+          { type: "error", code: "rate_limited", message: "429", retryable: true },
+          { type: "done", finishReason: "error" },
+        ],
+      },
+    });
+    let capturedRunId: string | undefined;
+    executor.events.on("run.failed", ({ runId }) => {
+      capturedRunId = runId;
+      throw new Error("audit persist failed");
+    });
+    await expect(
+      collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] })),
+    ).rejects.toThrow(/audit persist failed/);
+    // Audit-first: the emit precedes runs.fail, so the over-recorded row is
+    // still running (never transitioned to failed).
+    expect(capturedRunId).toBeDefined();
+    if (capturedRunId) expect(executor.getRun(capturedRunId)?.status).toBe("running");
+  });
 });
 
 // ─── model resolution ──────────────────────────────────────────────────────
