@@ -1,0 +1,3 @@
+# The no-floating-promises gate reports AST line numbers; pin it to LF so the
+# scanner sees stable line endings on Windows checkouts (core.autocrlf=true).
+scripts/check-no-floating-suppressions.ts text eol=lf

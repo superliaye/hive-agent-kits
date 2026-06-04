@@ -34,7 +34,7 @@
 
 **Tooling note — the loop engine now receives `args`.** Earlier sessions saw `args` arrive empty at `loop-swe.js`; that is fixed — it normalizes a string-or-object `args` at `loop-swe.js:35`, so `/loop-full-swe` runs with `feature` + `resolutions` and the self-digest re-runs with injected gate answers. Known remaining limitation: on a `resumeFromRunId` *after* a build phase has already committed, a freshly-injected resolution is **not** re-applied to the committed files (the cache treats that phase as done) — apply such directed post-commit edits by hand.
 
-**Open housekeeping:** add `.loop-swe/` to `.gitignore`; pre-existing latent `tsc` errors in `src/config/store.ts:88,161` and `store.test.ts:173` (present on HEAD; bun's runtime never enforced them — separate cleanup).
+**Open housekeeping:** pre-existing latent `tsc` errors in `src/config/store.ts:88,175` and `store.test.ts:173` (present on HEAD; bun's runtime never enforced them — separate cleanup).
 
 ---
 
@@ -282,9 +282,15 @@ Built manually (loop couldn't drive its own build — see Status caveat). All ke
 
 Subscriber + SQLite writer; nearly pure I/O edge. Migrate **only after 4.0**; its writes wrap with `Effect.tryPromise`. (Note the audit `ts` is now wall-clock-anchored — `b567214`.)
 
-**Block-on-failure gap to fix here (from the §4.0 / [ADR-0012](adr/0012-event-bus-typed-emitter-vs-effect-pubsub.md) review).** The audited **Secrets** (`src/secrets/store.ts:102,111,129,136`) and **Runs** (`src/runs/executor.ts:110,190,237,264`) emits use `void events.emit(...)` (fire-and-forget) while wired to Audit, so an audit-persist failure on `secret.write` / `run.started` silently does **not** fail the originating op — and `secrets set()` commits its side effect *before* the discarded emit (audit-first ordering broken). Both predate this branch and violate ADR-0004's block-on-failure invariant. Fix as part of this step: (1) `await` the audited Secrets/Runs emits; (2) add a project-wide, **non-suppressible** no-floating-promises lint (Biome 2.x `noFloatingPromises` — not in 1.9.4) with inline suppression of the rule prohibited, so a `void`-ed audited emit cannot recur. ADR-0004 stays intact; ADR-0012 *Known gap* records this.
+**Block-on-failure gap (closed — 4.2-A1 / A2 / B done).** The audited **Secrets** and **Runs** emits previously used `void events.emit(...)` while wired to Audit, so an audit-persist failure silently did **not** fail the originating op, and the side effect committed *before* the discarded emit (audit-first ordering broken) — a violation of ADR-0004's block-on-failure invariant. Closed in three slices:
 
-A **third** audited fire-and-forget site the original gap list omitted: the *external-edit* config reload (`src/config/store.ts:135`, `source:"external"`). Handled as a **conscious exemption**, not a block-on-failure fix — its `fs.watch` callback can't `await` and the external edit is already committed (no op to block), so 4.2-B de-floats it with an explicit `.catch` + loud trace-log (best-effort, handled-not-suppressed). ADR-0012 *Known gap* records the ADR-0004 narrowing for external-observation events.
+- **4.2-A1 / A2** — the audited Secrets (`src/secrets/store.ts`) and Runs (`src/runs/executor.ts`) emits are now `await`-ed, emit-before-commit, so a persist failure fails the originating op. Regression tests attach a throwing audit subscriber and assert the op fails leaving no committed mutation.
+- **4.2-B** — a project-wide, **non-suppressible** no-floating-promises guard so a `void`-ed audited emit cannot recur, split across two mechanisms because neither alone covers the directive:
+  - **Biome 2.4.16** `linter.rules.nursery.noFloatingPromises: "error"` **plus `linter.domains.types: "all"`** (the rule no-ops without the domain). Type-aware; stops future *bare* floats. Biome treats `void p` as valid, so it cannot forbid the `void <promise>` form on its own.
+  - **`scripts/check-no-floating-suppressions.ts`** (raw TS compiler API) is the enforcer for what Biome won't: it exits 1 on any `void <promise>` expression or any `biome-ignore lint/nursery/noFloatingPromises` suppression. Run via `bun run check:no-float`.
+  - Both are **scoped to `src/` + `scripts/`** (`biome.json` `files.includes`; the script walks `src/**`) so the type scanner stays off the `shell/`/`ui/`/`bundled/` broken-import corpus. `.gitattributes` pins the script (and any committed fixture) to `eol=lf` so the AST scanner sees stable line endings on Windows checkouts.
+
+The *external-edit* config reload (`src/config/store.ts`, `source:"external"`) is a **conscious exemption**, not a block-on-failure fix — its `fs.watch` callback can't `await` and the external edit is already committed (no op to block), so it de-floats with an explicit `.catch` + loud trace-log (`log().error`, handled-not-suppressed). The gateway/registry adapter emits and the legacy-proxy `dispose()` calls (Secrets/Catalog/Config) likewise de-float to trace `.catch`, not audit — they are not audited sources. ADR-0004 stays intact; ADR-0012 *Known gap* records the now-shipped guard.
 
 ### 4.3 — Delete the proxies
 
