@@ -96,6 +96,8 @@ type Secrets = {
 
 The single `getAuth` verb hides the kind-specific resolution from callers: an apiKey provider returns `{kind: "apiKey", apiKey}`, an OAuth provider returns `{kind: "oauth", credentials, onRefresh}` with the `onRefresh` callback already bound to the store's atomic-write path. Adapters never see the persistence layer directly.
 
+> Superseded by 4.2-A1 (read block-on-failure): `getAuth`, `setApiKey`, and `remove` are now async (`Promise<…>`). The audited read/write/refresh/remove verbs await their audit emit so a persist failure fails the originating op (ADR-0004); `getAuth` still returns entry-or-`undefined`, now wrapped in a Promise.
+
 ## OAuth login: wrap pi-ai's primitives
 
 `@earendil-works/pi-ai/oauth` exports `getOAuthProvider(id)` which returns an `OAuthProviderInterface` with `login(callbacks)`, `refreshToken(credentials)`, `getApiKey(credentials)`. pi-ai already knows Anthropic's OAuth flow, OpenAI Codex's flow, GitHub Copilot's flow.
