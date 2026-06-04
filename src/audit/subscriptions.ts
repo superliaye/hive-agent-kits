@@ -14,7 +14,7 @@ import type { ModelGateway } from "../model-gateway/index.ts";
 import type { RunExecutor } from "../runs/index.ts";
 import type { RunModuleEvents } from "../runs/types.ts";
 import type { SecretEvents } from "../secrets/types.ts";
-import type { Audit } from "./audit.ts";
+import type { AuditSvc } from "./effect/audit-live.ts";
 import type { Normalizer } from "./types.ts";
 
 export type AuditSources<S extends Record<string, unknown> = Record<string, unknown>> = {
@@ -102,7 +102,7 @@ const secretsNormalizer: Normalizer<SecretEvents> = {
 // Attaches every present source's event stream to the audit log.
 // Returns a disposer that detaches all listeners.
 export function wireSubscriptions<S extends Record<string, unknown> = Record<string, unknown>>(
-  audit: Audit,
+  audit: AuditSvc,
   sources: AuditSources<S> = {},
 ): () => void {
   const disposers: Array<() => void> = [];

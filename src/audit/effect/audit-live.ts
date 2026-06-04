@@ -2,8 +2,8 @@
 // before §4.3 deletes the proxies). See docs/adr/0004-audit-log-design.md.
 //
 // `Audit` is the Context.Service tag; `AuditLive(opts)` a layer that owns the
-// audit SQLite handle. The legacy `createAudit()` (audit.ts) is a thin
-// ManagedRuntime proxy over this service.
+// audit SQLite handle. Consumers resolve this service off a `ManagedRuntime`
+// (the root one in production, a per-test one in the suites).
 //
 // Sync, not async (the load-bearing honesty point). `openAuditDb` (Database
 // ctor + drizzle), `persist` (.run()), and `runQuery` (.all()) are all sync
@@ -77,8 +77,8 @@ export function AuditLive(opts: CreateAuditOptions): Layer.Layer<Audit> {
   );
 }
 
-// Per-instance closure — identical to createAudit()'s body, the four PRESERVED
-// invariants live here.
+// Per-instance closure — the four PRESERVED invariants (block-on-failure, sync
+// persist, dedupe, seq tiebreaker) live here.
 function buildSvc(db: AuditDb): AuditSvc {
   const subscribed: ModuleSource[] = [];
   // In-memory monotonic counter — tiebreaker when two emits land in the same

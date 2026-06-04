@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { ManagedRuntime } from "effect";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
-import { createAudit } from "../audit.ts";
-import type { Audit, Normalizer } from "../index.ts";
+import { Audit, AuditLive, type AuditSvc } from "../effect/audit-live.ts";
+import type { Normalizer } from "../index.ts";
 
 type TestEvents = {
   "thing.happened": { id: string };
@@ -25,12 +26,18 @@ const baseNormalizer: Normalizer<TestEvents> = {
 };
 
 describe("audit module", () => {
-  let audit: Audit;
+  let audit: AuditSvc;
   let emitter: TypedEmitter<TestEvents>;
+  let runtime: ManagedRuntime.ManagedRuntime<Audit, never>;
 
   beforeEach(() => {
-    audit = createAudit({ mode: "memory" });
+    runtime = ManagedRuntime.make(AuditLive({ mode: "memory" }));
+    audit = runtime.runSync(Audit);
     emitter = new TypedEmitter<TestEvents>();
+  });
+
+  afterEach(async () => {
+    await runtime.dispose();
   });
 
   test("persists an emitted event", async () => {

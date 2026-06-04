@@ -22,7 +22,7 @@ import {
   type SecretsSvc,
   Secrets as SecretsTag,
 } from "../../secrets/effect/secrets-live.ts";
-import { createAudit } from "../audit.ts";
+import { AuditLive, type AuditSvc, Audit as AuditTag } from "../effect/audit-live.ts";
 import { wireSubscriptions } from "../subscriptions.ts";
 
 // Runtimes resolved across this file's tests; disposed in afterEach.
@@ -31,6 +31,11 @@ function makeSecrets(): SecretsSvc {
   const runtime = ManagedRuntime.make(SecretsLive({ mode: "memory" }));
   runtimes.push(runtime);
   return runtime.runSync(SecretsTag);
+}
+function makeAudit(): AuditSvc {
+  const runtime = ManagedRuntime.make(AuditLive({ mode: "memory" }));
+  runtimes.push(runtime);
+  return runtime.runSync(AuditTag);
 }
 
 afterEach(async () => {
@@ -46,7 +51,7 @@ const fakeAdapter: GatewayAdapter = {
 
 describe("wireSubscriptions", () => {
   test("config.set produces a config.change audit row", async () => {
-    const audit = createAudit({ mode: "memory" });
+    const audit = makeAudit();
     const schema = z.object({ theme: z.string() });
     const config = createConfig({
       mode: "memory",
@@ -75,7 +80,7 @@ describe("wireSubscriptions", () => {
   // `appearance` change payloads (mode-picker is fine, accent / overrides
   // are personal taste). Documented in audit/subscriptions.ts.
   test("appearance config.change records only the mode, never color hex", async () => {
-    const audit = createAudit({ mode: "memory" });
+    const audit = makeAudit();
     const schema = z.object({
       appearance: z.object({
         mode: z.enum(["light", "dark", "system"]),
@@ -108,7 +113,7 @@ describe("wireSubscriptions", () => {
   });
 
   test("gateway adapter registration is NOT audited (trace, not audit)", async () => {
-    const audit = createAudit({ mode: "memory" });
+    const audit = makeAudit();
     const gateway = createGateway();
     const dispose = wireSubscriptions(audit, { gateway });
 
@@ -121,7 +126,7 @@ describe("wireSubscriptions", () => {
   });
 
   test("registry.start() is NOT audited; scan-time events are trace-only", async () => {
-    const audit = createAudit({ mode: "memory" });
+    const audit = makeAudit();
     const fakeCap: Capability = {
       kind: "skill",
       name: "foo",
@@ -149,7 +154,7 @@ describe("wireSubscriptions", () => {
   });
 
   test("catalog.start() (scan) is NOT audited; only user/agent actions are", async () => {
-    const audit = createAudit({ mode: "memory" });
+    const audit = makeAudit();
     const fakeAgent: Agent = {
       agentId: "root",
       backend: "native",
@@ -185,7 +190,7 @@ describe("wireSubscriptions", () => {
   // a persist failure must fail the originating op (ADR-0004 Verify item 4,
   // no silent-degrade).
   test("setApiKey produces a secret.write audit row", async () => {
-    const audit = createAudit({ mode: "memory" });
+    const audit = makeAudit();
     const secrets = makeSecrets();
     const dispose = wireSubscriptions(audit, { secrets });
 
@@ -202,7 +207,7 @@ describe("wireSubscriptions", () => {
   });
 
   test("a failing audit subscriber fails the originating setApiKey (no silent-degrade)", async () => {
-    const audit = createAudit({ mode: "memory" });
+    const audit = makeAudit();
     const secrets = makeSecrets();
     const dispose = wireSubscriptions(audit, { secrets });
 
@@ -221,7 +226,7 @@ describe("wireSubscriptions", () => {
   });
 
   test("disposer detaches; later changes don't reach audit", async () => {
-    const audit = createAudit({ mode: "memory" });
+    const audit = makeAudit();
     const schema = z.object({ count: z.number() });
     const config = createConfig({
       mode: "memory",
