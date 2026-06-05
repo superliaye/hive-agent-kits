@@ -146,6 +146,18 @@ function toConfiguredProviderWire(p: ConfiguredProvider): ConfiguredProviderWire
 
 export function buildRoutes(deps: RoutesDeps): Hono {
   const app = new Hono();
+
+  // Single-flight guard for interactive OAuth logins. pi-ai's callback-server
+  // providers each bind a *fixed* loopback port (openai-codex :1455,
+  // anthropic :53692), so two concurrent logins can't both bind it — the
+  // second silently fails to receive its callback and dies confusingly.
+  // `oauthInFlight` is the in-flight provider id (for the rejection message);
+  // `oauthOwner` is a per-request token so a stale login's cleanup can't free a
+  // newer login's slot. Both cleared when the login settles or its SSE request
+  // is aborted (UI cancel / navigation).
+  let oauthInFlight: string | null = null;
+  let oauthOwner: symbol | null = null;
+
   // Daemon listens on 127.0.0.1; CORS allowlist covers the two legitimate
   // callers: Electron renderer (file:// → Origin header "null") and the Vite
   // dev server. The bearer token is the real auth gate; this is defense in
@@ -410,7 +422,31 @@ export function buildRoutes(deps: RoutesDeps): Hono {
   //   - `error`    — { message }              login failed
   app.post("/api/secrets/:provider/oauth/login", async (c) => {
     const provider = c.req.param("provider");
+    // `usesCallbackServer` providers fail by losing the browser callback (busy
+    // port), not by needing a prompt — so onPrompt being hit means something
+    // else; give an actionable message instead of "prompt not supported".
+    const usesCallbackServer =
+      getOAuthProviders().find((p) => p.id === provider)?.usesCallbackServer ?? false;
     return streamSSE(c, async (stream) => {
+      if (oauthInFlight) {
+        const msg = `a sign-in for "${oauthInFlight}" is already in progress — finish it in your browser or cancel it, then try again`;
+        await stream.writeSSE({ event: "error", data: JSON.stringify({ message: msg }) });
+        return;
+      }
+      const owner = Symbol("oauth-login");
+      oauthInFlight = provider;
+      oauthOwner = owner;
+      const release = () => {
+        if (oauthOwner === owner) {
+          oauthInFlight = null;
+          oauthOwner = null;
+        }
+      };
+      // Free the slot if the client disconnects (UI cancel / navigation). The
+      // dangling pi-ai callback server can't be torn down until the next daemon
+      // restart, but releasing the slot lets the user retry (and get the clear
+      // "port busy" message above rather than a silent block).
+      stream.onAbort(release);
       try {
         await deps.secrets.startOAuthLogin(provider, {
           onAuth: (info) => {
@@ -432,18 +468,21 @@ export function buildRoutes(deps: RoutesDeps): Hono {
               .writeSSE({ event: "progress", data: JSON.stringify({ message }) })
               .catch(() => {});
           },
-          // v1 doesn't support interactive prompts over HTTP. If pi-ai's
-          // provider needs one (manual code input, multi-step selection),
-          // surface a clear error and bail. Settings UI can guide the
-          // user to a CLI-based login flow as a fallback in a later part.
+          // v1 supports only the loopback callback-server flow over HTTP.
+          // onPrompt/onSelect are genuine interactive steps a provider may
+          // demand mid-flow (e.g. GitHub Copilot's enterprise-URL prompt);
+          // surface a clear error and bail when one is hit.
+          //
+          // Deliberately NO onManualCodeInput: pi-ai's callback-server
+          // providers (anthropic, openai-codex) *race* a supplied
+          // onManualCodeInput against the browser callback, so a rejecting
+          // stub cancels the wait and tears down the loopback server on
+          // :1455 before the user finishes authenticating. Omitting it lets
+          // the loopback server receive the redirect and win normally.
           onPrompt: async () => {
-            const msg =
-              "interactive prompt not yet supported over HTTP; OAuth provider requires manual input";
-            await stream.writeSSE({ event: "error", data: JSON.stringify({ message: msg }) });
-            throw new Error(msg);
-          },
-          onManualCodeInput: async () => {
-            const msg = "manual code input not yet supported over HTTP";
+            const msg = usesCallbackServer
+              ? "couldn't complete the browser sign-in — the callback port may be in use by another sign-in or the Codex CLI. Restart Hive and try again."
+              : "interactive prompt not yet supported over HTTP; OAuth provider requires manual input";
             await stream.writeSSE({ event: "error", data: JSON.stringify({ message: msg }) });
             throw new Error(msg);
           },
@@ -462,6 +501,8 @@ export function buildRoutes(deps: RoutesDeps): Hono {
           event: "error",
           data: JSON.stringify({ message: (err as Error).message }),
         });
+      } finally {
+        release();
       }
     });
   });

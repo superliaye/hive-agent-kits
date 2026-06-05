@@ -188,6 +188,112 @@ describe("server routes — secrets", () => {
     }
   });
 
+  test("OAuth login: callback-server provider completes without manual-code abort (ChatGPT/Anthropic regression)", async () => {
+    // pi-ai's anthropic/openai-codex providers race a supplied onManualCodeInput
+    // against their loopback callback server: a rejecting manual stub cancels the
+    // wait and aborts the login, tearing down the loopback before the browser
+    // callback lands. Hive must therefore NOT pass onManualCodeInput. This stub
+    // mirrors that race and fails the login if it receives one.
+    const credentials: OAuthCredentials = {
+      access: "acc-cb",
+      refresh: "ref-cb",
+      expires: 9_000_000_000_000,
+    };
+    const stubProvider: OAuthProviderInterface = {
+      id: "stub-callback-server",
+      name: "Stub Callback Server",
+      usesCallbackServer: true,
+      async login(callbacks) {
+        callbacks.onAuth({ url: "https://example.test/auth" });
+        if (callbacks.onManualCodeInput) {
+          await callbacks.onManualCodeInput();
+        }
+        return credentials;
+      },
+      async refreshToken(c) {
+        return c;
+      },
+      getApiKey() {
+        return "sk-cb";
+      },
+    };
+    registerOAuthProvider(stubProvider);
+    try {
+      const res = await server.app.fetch(
+        authed("/api/secrets/stub-callback-server/oauth/login", { method: "POST" }),
+      );
+      const events = await readSSE(res);
+      const names = events.map((e) => e.event);
+      expect(names).toContain("auth");
+      expect(names).not.toContain("error");
+      expect(names[names.length - 1]).toBe("done");
+    } finally {
+      unregisterOAuthProvider("stub-callback-server");
+    }
+  });
+
+  test("OAuth login is single-flight: a concurrent login is refused while one is active", async () => {
+    // Callback-server providers bind a fixed loopback port, so only one login
+    // can run at a time. A gated stub stays "in flight" so we can fire a second
+    // request and assert it's refused clearly instead of starting a doomed
+    // second server.
+    let releaseGate!: () => void;
+    const gate = new Promise<void>((r) => {
+      releaseGate = r;
+    });
+    let signalStarted!: () => void;
+    const started = new Promise<void>((r) => {
+      signalStarted = r;
+    });
+    const credentials: OAuthCredentials = {
+      access: "acc-sf",
+      refresh: "ref-sf",
+      expires: 9_000_000_000_000,
+    };
+    const stubProvider: OAuthProviderInterface = {
+      id: "stub-blocking",
+      name: "Stub Blocking",
+      usesCallbackServer: true,
+      async login(callbacks) {
+        callbacks.onAuth({ url: "https://example.test/auth" });
+        signalStarted();
+        await gate;
+        return credentials;
+      },
+      async refreshToken(c) {
+        return c;
+      },
+      getApiKey() {
+        return "sk-sf";
+      },
+    };
+    registerOAuthProvider(stubProvider);
+    try {
+      const resA = await server.app.fetch(
+        authed("/api/secrets/stub-blocking/oauth/login", { method: "POST" }),
+      );
+      const aEvents = readSSE(resA); // begin consuming → runs the gated login
+      await started; // login A now owns the single-flight slot
+
+      const resB = await server.app.fetch(
+        authed("/api/secrets/stub-blocking/oauth/login", { method: "POST" }),
+      );
+      const bEvents = await readSSE(resB);
+      const bErr = bEvents.find((e) => e.event === "error");
+      expect(bErr).toBeDefined();
+      expect((bErr?.data as { message: string }).message.toLowerCase()).toContain(
+        "already in progress",
+      );
+
+      releaseGate();
+      const aResolved = await aEvents;
+      expect(aResolved.map((e) => e.event).at(-1)).toBe("done");
+    } finally {
+      releaseGate();
+      unregisterOAuthProvider("stub-blocking");
+    }
+  });
+
   test("OAuth login error: unknown provider emits error event", async () => {
     const res = await server.app.fetch(
       authed("/api/secrets/never-registered-zzz/oauth/login", { method: "POST" }),

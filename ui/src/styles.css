@@ -540,6 +540,10 @@ pre.config {
 }
 
 .oauth-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin-top: 10px;
   padding: 10px 14px;
   background: color-mix(in srgb, var(--color-warning) 15%, var(--color-bg-surface));
@@ -548,6 +552,9 @@ pre.config {
   font-size: 13px;
   line-height: 1.4;
   color: var(--color-fg-default);
+}
+.oauth-status .button {
+  flex-shrink: 0;
 }
 .oauth-status-success {
   background: color-mix(in srgb, var(--color-success) 15%, var(--color-bg-surface));

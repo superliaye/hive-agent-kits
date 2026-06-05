@@ -10,7 +10,7 @@
 //      providers (OpenAI direct, Mistral, Bedrock) that don't have an OAuth
 //      flow yet.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type ApiConfig,
   type ConfiguredProvider,
@@ -36,6 +36,9 @@ export function SecretsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.El
   const [oauthProviders, setOauthProviders] = useState<OAuthProvider[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [login, setLogin] = useState<LoginState>({ kind: "idle" });
+  // Aborts the active login's SSE stream when the user cancels. Only one login
+  // runs at a time (the daemon enforces single-flight; the UI mirrors it).
+  const loginAbort = useRef<AbortController | null>(null);
 
   // Plain apiKey form state.
   const [apiKeyProvider, setApiKeyProvider] = useState("");
@@ -62,40 +65,58 @@ export function SecretsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.El
   }, [refresh]);
 
   async function startOAuth(providerId: string): Promise<void> {
+    const controller = new AbortController();
+    loginAbort.current = controller;
     setLogin({ kind: "starting", provider: providerId });
     try {
-      await api.startOAuthLogin(apiConfig, providerId, (eventName, data) => {
-        if (eventName === "auth") {
-          const payload = data as { url: string; instructions?: string };
-          setLogin({
-            kind: "awaiting",
-            provider: providerId,
-            authUrl: payload.url,
-            ...(payload.instructions !== undefined && {
-              authInstructions: payload.instructions,
-            }),
-          });
-          // Open the URL in the user's default external browser. Fails
-          // silently in plain browser-tab mode (pop-up blocker, etc.) —
-          // the URL is also displayed inline for the user to click.
-          void openUrl(payload.url).catch(() => {});
-        } else if (eventName === "done") {
-          setLogin({ kind: "done", provider: providerId });
-        } else if (eventName === "error") {
-          const payload = data as { message: string };
-          setLogin({
-            kind: "error",
-            provider: providerId,
-            message: payload.message,
-          });
-        }
-      });
+      await api.startOAuthLogin(
+        apiConfig,
+        providerId,
+        (eventName, data) => {
+          if (eventName === "auth") {
+            const payload = data as { url: string; instructions?: string };
+            setLogin({
+              kind: "awaiting",
+              provider: providerId,
+              authUrl: payload.url,
+              ...(payload.instructions !== undefined && {
+                authInstructions: payload.instructions,
+              }),
+            });
+            // Open the URL in the user's default external browser. Fails
+            // silently in plain browser-tab mode (pop-up blocker, etc.) —
+            // the URL is also displayed inline for the user to click.
+            void openUrl(payload.url).catch(() => {});
+          } else if (eventName === "done") {
+            setLogin({ kind: "done", provider: providerId });
+          } else if (eventName === "error") {
+            const payload = data as { message: string };
+            setLogin({
+              kind: "error",
+              provider: providerId,
+              message: payload.message,
+            });
+          }
+        },
+        controller.signal,
+      );
       // After the SSE stream closes successfully, refresh the configured list.
       // (`done` already updated state; refresh pulls the actual row.)
       await refresh();
     } catch (err) {
-      setLogin({ kind: "error", provider: providerId, message: (err as Error).message });
+      // Abort is user-initiated (cancelOAuth already reset state) — not an error.
+      if (!controller.signal.aborted) {
+        setLogin({ kind: "error", provider: providerId, message: (err as Error).message });
+      }
+    } finally {
+      if (loginAbort.current === controller) loginAbort.current = null;
     }
+  }
+
+  function cancelOAuth(): void {
+    loginAbort.current?.abort();
+    loginAbort.current = null;
+    setLogin({ kind: "idle" });
   }
 
   async function submitApiKey(e: React.FormEvent): Promise<void> {
@@ -123,6 +144,8 @@ export function SecretsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.El
       setLoadError((err as Error).message);
     }
   }
+
+  const loginBusy = login.kind === "starting" || login.kind === "awaiting";
 
   return (
     <>
@@ -192,7 +215,6 @@ export function SecretsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.El
         ) : (
           <div className="oauth-providers" data-testid="oauth-providers">
             {oauthProviders.map((p) => {
-              const isActive = login.kind !== "idle" && login.provider === p.id;
               const configuredEntry = configured.find((c) => c.provider === p.id);
               return (
                 <div key={p.id} className="oauth-provider-row">
@@ -212,7 +234,7 @@ export function SecretsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.El
                       onClick={() => {
                         void startOAuth(p.id);
                       }}
-                      disabled={isActive && login.kind === "starting"}
+                      disabled={loginBusy}
                       data-testid={`oauth-login-${p.id}`}
                     >
                       {configuredEntry?.kind === "oauth" ? "Re-login" : `Log in with ${p.name}`}
@@ -226,21 +248,26 @@ export function SecretsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.El
 
         {login.kind === "starting" && (
           <div className="oauth-status" data-testid="oauth-status">
-            Starting login for <strong>{login.provider}</strong>…
+            <span>
+              Starting login for <strong>{login.provider}</strong>…
+            </span>
+            <button type="button" className="button ghost" onClick={cancelOAuth}>
+              Cancel
+            </button>
           </div>
         )}
         {login.kind === "awaiting" && (
           <div className="oauth-status" data-testid="oauth-status">
-            <div>
+            <span>
               <strong>{login.provider}:</strong>{" "}
-              {login.authInstructions ?? "complete the login in your browser, then come back."}
-            </div>
-            <div className="meta" style={{ marginTop: 4 }}>
-              If your browser didn't open automatically:{" "}
+              {login.authInstructions ?? "complete the login in your browser, then come back."}{" "}
               <a href={login.authUrl} target="_blank" rel="noopener noreferrer">
-                {login.authUrl}
+                Open the sign-in page
               </a>
-            </div>
+            </span>
+            <button type="button" className="button ghost" onClick={cancelOAuth}>
+              Cancel
+            </button>
           </div>
         )}
         {login.kind === "done" && (
