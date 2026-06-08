@@ -778,6 +778,14 @@ pre.config {
   align-items: center;
   gap: 8px;
 }
+/* Model + effort selects sit together as a left-aligned cluster; the parent's
+   space-between separates it from the Send/Cancel button on the right. */
+.composer-run-settings {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .composer-model-picker,
 .composer-effort-picker {
   padding: 6px 8px;
@@ -788,10 +796,10 @@ pre.config {
   font-size: 12px;
 }
 .composer-model-picker {
-  max-width: 50%;
+  max-width: 60%;
 }
 .composer-effort-picker {
-  max-width: 30%;
+  max-width: 40%;
 }
 .composer-model-picker:disabled,
 .composer-effort-picker:disabled {

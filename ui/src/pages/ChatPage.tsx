@@ -66,6 +66,12 @@ export function ChatPage({
     (effortDefault && selectedModelEfforts.includes(effortDefault) ? effortDefault : null) ??
     (selectedModelEfforts[0] ?? null);
 
+  // The composer hides the effort picker for a model whose only level is "off"
+  // (no real reasoning choice). Match that here so the send carries no
+  // effortOverride for such models — a bare "off" would be a meaningless no-op.
+  const hasRealEffort = selectedModelEfforts.some((eff) => eff !== "off");
+  const effortToSend: ThinkingEffort | null = hasRealEffort ? selectedEffort : null;
+
   const refreshThreads = useCallback(async (): Promise<void> => {
     try {
       const list = await api.listThreads(apiConfig);
@@ -180,7 +186,7 @@ export function ChatPage({
 
   async function onSend(text: string): Promise<void> {
     const content: ContentBlock[] = [{ type: "text", text }];
-    await thread.sendMessage(content, selectedModel ?? undefined, selectedEffort ?? undefined);
+    await thread.sendMessage(content, selectedModel ?? undefined, effortToSend ?? undefined);
   }
 
   const inFlight = thread.pending !== null;

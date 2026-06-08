@@ -62,9 +62,11 @@ export type OAuthProvider = {
   name: string;
 };
 
-// Thinking-effort levels, mirroring the daemon's ThinkingEffort
-// (src/model-gateway/types.ts). A model supports a subset; the composer's
-// effort dropdown shows the selected model's `efforts`.
+// Thinking-effort levels. Deliberate cross-package mirror of the daemon's
+// canonical `EFFORT_ORDER` / `ThinkingEffort` (src/model-gateway/types.ts):
+// the UI is a separate Vite bundle and does not import daemon source, so this
+// literal is kept in sync by hand. If `EFFORT_ORDER` is widened/narrowed there,
+// update this list to match.
 export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 const THINKING_EFFORTS: readonly ThinkingEffort[] = [

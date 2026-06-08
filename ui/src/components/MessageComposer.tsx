@@ -69,6 +69,11 @@ export function MessageComposer({
   // reflects reality and prompts the user to pick a runnable one.
   const selectionKnown = selectedModel !== null && models.some((m) => m.model === selectedModel);
 
+  // Render the effort picker only when the model exposes a real reasoning level.
+  // A model whose only supported level is "off" (a non-reasoning model) gets no
+  // picker — there is nothing to choose.
+  const hasRealEffort = efforts.some((eff) => eff !== "off");
+
   function onPick(value: string): void {
     if (value === ADD_MODELS) {
       onAddModels();
@@ -91,58 +96,55 @@ export function MessageComposer({
         data-testid="composer-input"
       />
       <div className="composer-actions">
-        <select
-          className="composer-model-picker"
-          value={selectedModel ?? ""}
-          onChange={(e) => onPick(e.target.value)}
-          disabled={inFlight}
-          data-testid="composer-model-picker"
-          aria-label="Model"
-        >
-          {selectedModel === null && (
-            <option value="" disabled>
-              {models.length === 0 ? "No models configured" : "Select a model…"}
-            </option>
-          )}
-          {selectedModel !== null && !selectionKnown && (
-            <option value={selectedModel} disabled>
-              {selectedModel} (unavailable)
-            </option>
-          )}
-          {models.map((m) => (
-            <option key={m.model} value={m.model}>
-              {m.label ?? m.model}
-            </option>
-          ))}
-          <option value={ADD_MODELS}>+ Add models in Settings…</option>
-        </select>
-        {efforts.length > 0 && (
+        <div className="composer-run-settings">
           <select
-            className="composer-effort-picker"
-            value={selectedEffort ?? ""}
-            onChange={(e) => {
-              // The option values are exactly `efforts` (all ThinkingEffort),
-              // so resolve the picked string back to its typed member rather
-              // than casting.
-              const picked = efforts.find((eff) => eff === e.target.value);
-              if (picked) onSelectEffort(picked);
-            }}
+            className="composer-model-picker"
+            value={selectedModel ?? ""}
+            onChange={(e) => onPick(e.target.value)}
             disabled={inFlight}
-            data-testid="composer-effort-picker"
-            aria-label="Thinking effort"
+            data-testid="composer-model-picker"
+            aria-label="Model"
           >
-            {selectedEffort === null && (
+            {selectedModel === null && (
               <option value="" disabled>
-                Thinking…
+                {models.length === 0 ? "No models configured" : "Select a model…"}
               </option>
             )}
-            {efforts.map((eff) => (
-              <option key={eff} value={eff}>
-                {EFFORT_LABEL[eff]}
+            {selectedModel !== null && !selectionKnown && (
+              <option value={selectedModel} disabled>
+                {selectedModel} (unavailable)
+              </option>
+            )}
+            {models.map((m) => (
+              <option key={m.model} value={m.model}>
+                {m.label ?? m.model}
               </option>
             ))}
+            <option value={ADD_MODELS}>+ Add models in Settings…</option>
           </select>
-        )}
+          {hasRealEffort && (
+            <select
+              className="composer-effort-picker"
+              value={selectedEffort ?? ""}
+              onChange={(e) => {
+                // The option values are exactly `efforts` (all ThinkingEffort),
+                // so resolve the picked string back to its typed member rather
+                // than casting.
+                const picked = efforts.find((eff) => eff === e.target.value);
+                if (picked) onSelectEffort(picked);
+              }}
+              disabled={inFlight}
+              data-testid="composer-effort-picker"
+              aria-label="Thinking effort"
+            >
+              {efforts.map((eff) => (
+                <option key={eff} value={eff}>
+                  {EFFORT_LABEL[eff]}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
         {inFlight ? (
           <button
             type="button"
