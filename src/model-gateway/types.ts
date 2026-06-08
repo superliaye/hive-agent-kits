@@ -59,11 +59,19 @@ export type AuthInput =
       onRefresh: (newCreds: { access: string; refresh: string; expires: number }) => Promise<void>;
     };
 
-// Mirrors pi-ai's `ModelThinkingLevel` ("off" | ThinkingLevel). The non-"off"
-// members are exactly pi-ai's `ThinkingLevel`, so the adapter maps effort →
-// reasoning without a cast. A model only supports a SUBSET of these (the keys
-// of its `thinkingLevelMap`); the catalog surfaces the per-model set.
-export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+// Canonical thinking-effort level order — the single source of truth for the
+// closed level set, ordered weakest→strongest. Every daemon-side mirror (the
+// agent-prefs and server Zod enums, the executor membership guard, the pi-ai
+// adapter's catalog ordering) imports this tuple, so widening or narrowing the
+// level set is a single edit here. Mirrors pi-ai's `ModelThinkingLevel`
+// ("off" | ThinkingLevel). The UI keeps a deliberate separate mirror across the
+// Vite bundle seam (ui/src/api.ts) with a pointer comment back here.
+export const EFFORT_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+
+// The non-"off" members are exactly pi-ai's `ThinkingLevel`, so the adapter maps
+// effort → reasoning without a cast. A model only supports a SUBSET of these
+// (the keys of its `thinkingLevelMap`); the catalog surfaces the per-model set.
+export type ThinkingEffort = (typeof EFFORT_ORDER)[number];
 
 export type CompletionInput = {
   model: string;

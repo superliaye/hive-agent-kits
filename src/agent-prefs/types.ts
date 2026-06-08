@@ -21,7 +21,7 @@
 // other. Zod-validated at the disk boundary (AGENTS.md).
 
 import { z } from "zod";
-import type { ThinkingEffort } from "../model-gateway/types.ts";
+import { EFFORT_ORDER, type ThinkingEffort } from "../model-gateway/types.ts";
 
 // "provider/model-id" — mirrors StartRunBody.modelOverride; the gateway
 // registry is the real validator, this is the boundary sanity-check.
@@ -30,10 +30,9 @@ export const ModelStringSchema = z
   .min(1)
   .regex(/^[^/]+\/.+$/, "must be 'provider/model-id'");
 
-// Thinking-effort levels, mirroring the gateway's ThinkingEffort. The
-// `satisfies` below pins this enum to that union so a widening on one side
-// can't silently drift from the other.
-export const EffortSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]);
+// Thinking-effort levels — the boundary validator, inferred from the canonical
+// `EFFORT_ORDER` tuple so this enum can never drift from `ThinkingEffort`.
+export const EffortSchema = z.enum(EFFORT_ORDER);
 export type Effort = z.infer<typeof EffortSchema>;
 // Compile-time guard: EffortSchema's members are exactly ThinkingEffort.
 const _effortMatches: ThinkingEffort = "off" satisfies Effort;

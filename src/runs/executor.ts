@@ -47,6 +47,7 @@ import type {
   Message,
   ThinkingEffort,
 } from "../model-gateway/types.ts";
+import { EFFORT_ORDER } from "../model-gateway/types.ts";
 import type { ThreadMessage } from "../threads/types.ts";
 import { MODEL_FALLBACK } from "./defaults.ts";
 import { drainCompletion } from "./effect/consume.ts";
@@ -109,17 +110,8 @@ export type CreateRunExecutorDeps = {
   now?: () => number;
 };
 
-const VALID_EFFORTS: readonly ThinkingEffort[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-];
-
 function isThinkingEffort(v: unknown): v is ThinkingEffort {
-  return typeof v === "string" && (VALID_EFFORTS as readonly string[]).includes(v);
+  return typeof v === "string" && (EFFORT_ORDER as readonly string[]).includes(v);
 }
 
 // Narrow an Agent's harness `config.thinkingEffort` (an `unknown` from the

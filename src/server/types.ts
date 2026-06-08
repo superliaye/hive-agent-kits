@@ -138,6 +138,7 @@ export type WireEvent = {
 // the lazy wrapper says "this schema parses `unknown` and outputs
 // ContentBlock" — true at runtime.
 import type { ContentBlock as DaemonContentBlock } from "../model-gateway/types.ts";
+import { EFFORT_ORDER } from "../model-gateway/types.ts";
 
 const ContentBlockSchema: z.ZodType<DaemonContentBlock> = z.lazy(
   () => ContentBlockUnion,
@@ -193,11 +194,12 @@ export const CreateThreadBody = z
   .strict();
 export type CreateThreadBody = z.infer<typeof CreateThreadBody>;
 
-// Thinking-effort levels accepted at the HTTP boundary. Mirrors the gateway's
-// ThinkingEffort union (src/model-gateway/types.ts) — the closed set of levels
-// any provider can express. The catalog's per-model `efforts` narrows which are
-// valid for a given model; this is the boundary sanity-check.
-export const EffortLevel = z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]);
+// Thinking-effort levels accepted at the HTTP boundary. Inferred from the
+// canonical `EFFORT_ORDER` tuple (src/model-gateway/types.ts) — the closed set
+// of levels any provider can express — so this boundary enum can't drift from
+// `ThinkingEffort`. The catalog's per-model `efforts` narrows which are valid
+// for a given model; this is the boundary sanity-check.
+export const EffortLevel = z.enum(EFFORT_ORDER);
 
 const ModelOverride = z
   .string()
