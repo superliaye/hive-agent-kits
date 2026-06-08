@@ -527,7 +527,13 @@ describe("RunExecutor — effort resolution", () => {
     expect(input?.thinking).toEqual({ effort: "xhigh" });
   });
 
-  test("effort 'off' resolves and is sent (distinct from unset)", async () => {
+  test("effort 'off' resolves and is sent — distinct from unset (disable-capable models)", async () => {
+    // For a model that can disable reasoning, "off" is a real, sent choice —
+    // not the same as omitting `thinking` entirely (which lets the provider
+    // pick its own default). This distinctness does NOT apply to the
+    // can't-disable subset: the catalog drops "off" from those models'
+    // `efforts` (thinkingLevelMap["off"] === null), so the composer never
+    // offers it and this path isn't reached with "off" for them.
     const input = await runEffortCase({ effortOverride: "off" });
     expect(input?.thinking).toEqual({ effort: "off" });
   });

@@ -125,8 +125,9 @@ describe("effortsFromThinkingLevelMap", () => {
     expect(effortsFromThinkingLevelMap(undefined)).toEqual(["off"]);
   });
 
-  test("null-valued levels are unsupported and dropped; off is always present", () => {
-    // pi-ai documents null as "level unsupported". off stays regardless.
+  test("null-valued levels are unsupported and dropped, including off:null (can't disable)", () => {
+    // pi-ai documents null as "level unsupported". off:null means the model
+    // always reasons, so "off" is a no-op and is dropped too.
     expect(
       effortsFromThinkingLevelMap({
         off: null,
@@ -135,7 +136,17 @@ describe("effortsFromThinkingLevelMap", () => {
         medium: null,
         high: "HIGH",
       }),
-    ).toEqual(["off", "low", "high"]);
+    ).toEqual(["low", "high"]);
+  });
+
+  test("off is offered when not explicitly null (model can disable reasoning)", () => {
+    // off absent → keep; off non-null → keep. Non-off levels still need a value.
+    expect(effortsFromThinkingLevelMap({ minimal: "MIN", high: "HIGH" })).toEqual([
+      "off",
+      "minimal",
+      "high",
+    ]);
+    expect(effortsFromThinkingLevelMap({ off: "OFF", low: "LOW" })).toEqual(["off", "low"]);
   });
 
   test("present non-null levels are returned in canonical order", () => {

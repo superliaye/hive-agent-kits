@@ -52,6 +52,7 @@ import type {
   ThinkingEffort,
   ToolDef,
 } from "../types.ts";
+import { EFFORT_ORDER } from "../types.ts";
 
 // Which Hive `provider/model` prefixes this adapter handles. Expanded as
 // pi-ai gains stable provider support; each entry must be a `KnownProvider`
@@ -286,32 +287,34 @@ export function translateThinking(t: CompletionInput["thinking"]):
   return out.reasoning || out.thinkingBudgets ? out : undefined;
 }
 
-// Canonical level order for the composer. "off" is always offered (a model can
-// always run without reasoning); the rest are offered only when the model's
-// `thinkingLevelMap` declares them supported.
-const EFFORT_ORDER: readonly ThinkingEffort[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-] as const;
-
 /**
  * Derive a model's supported thinking-effort levels from pi-ai's
- * `thinkingLevelMap`. A non-"off" level is supported when its key is present
- * AND its value is non-null — pi-ai documents `null` as "level unsupported"
- * (Model.thinkingLevelMap), and a missing key means "use provider default",
- * which we don't surface as a user-selectable level. "off" is always included.
- * A model with no map (most non-reasoning models) supports only "off".
+ * `thinkingLevelMap`, in canonical `EFFORT_ORDER`. A non-"off" level is
+ * supported when its key is present AND its value is non-null — pi-ai documents
+ * `null` as "level unsupported" (Model.thinkingLevelMap), and a missing key
+ * means "use provider default", which we don't surface as a user-selectable
+ * level.
+ *
+ * "off" follows the same null-means-unsupported rule: a model that declares
+ * `off: null` cannot disable reasoning (it always thinks), so offering "off"
+ * would be a no-op — it is dropped. "off" is offered for every other model
+ * (absent key or non-null value), so a model with no map (most non-reasoning
+ * models) supports only "off".
  *
  * Exported for tests.
  */
 export function effortsFromThinkingLevelMap(map: ThinkingLevelMap | undefined): ThinkingEffort[] {
   return EFFORT_ORDER.filter((level) => {
+    const v = map?.[level];
+    // null = explicitly unsupported (applies to every level, incl. "off": a
+    // model that declares off:null cannot disable reasoning).
+    if (v === null) return false;
+    // "off" is offered whenever it isn't explicitly null — a model can run
+    // without extra reasoning unless it declares it can't. Non-"off" levels
+    // need an explicit non-null value (a missing key is a provider default we
+    // don't surface).
     if (level === "off") return true;
-    return map?.[level] != null;
+    return v !== undefined;
   });
 }
 
