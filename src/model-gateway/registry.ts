@@ -100,6 +100,7 @@ export function createGatewayRegistry(): GatewayRegistry {
       modelId: m.id,
       model: `${provider}/${m.id}`,
       ...(m.label !== undefined ? { label: m.label } : {}),
+      efforts: m.efforts,
     }));
   }
 

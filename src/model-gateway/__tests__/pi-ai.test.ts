@@ -1,9 +1,11 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { AssistantMessage, AssistantMessageEvent, Usage } from "@earendil-works/pi-ai";
+import { getModels } from "@earendil-works/pi-ai";
 import type { getOAuthApiKey } from "@earendil-works/pi-ai/oauth";
 import {
   classifyError,
   createPiAiAdapter,
+  effortsFromThinkingLevelMap,
   resolveOAuthApiKey,
   translateMessages,
   translatePiAiStream,
@@ -113,6 +115,36 @@ describe("translateThinking", () => {
     expect(translateThinking({ effort: "xhigh", budgetTokens: 4096 })).toEqual({
       reasoning: "xhigh",
     });
+  });
+});
+
+// ─── effortsFromThinkingLevelMap ─────────────────────────────────────────────
+
+describe("effortsFromThinkingLevelMap", () => {
+  test("no map → only off (most non-reasoning models)", () => {
+    expect(effortsFromThinkingLevelMap(undefined)).toEqual(["off"]);
+  });
+
+  test("null-valued levels are unsupported and dropped; off is always present", () => {
+    // pi-ai documents null as "level unsupported". off stays regardless.
+    expect(
+      effortsFromThinkingLevelMap({
+        off: null,
+        minimal: null,
+        low: "LOW",
+        medium: null,
+        high: "HIGH",
+      }),
+    ).toEqual(["off", "low", "high"]);
+  });
+
+  test("present non-null levels are returned in canonical order", () => {
+    // Input order is intentionally scrambled; output must be canonical.
+    expect(effortsFromThinkingLevelMap({ xhigh: "xhigh", minimal: "low" })).toEqual([
+      "off",
+      "minimal",
+      "xhigh",
+    ]);
   });
 });
 
@@ -523,6 +555,28 @@ describe("pi-ai adapter — short-circuit paths", () => {
     expect(ids.length).toBeGreaterThan(0);
     const descending = [...ids].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
     expect(ids).toEqual(descending);
+  });
+
+  test("listModels reports each openai-codex model's real supported efforts", () => {
+    const listed = createPiAiAdapter().listModels?.("openai-codex") ?? [];
+    expect(listed.length).toBeGreaterThan(0);
+    // Read the truth from pi-ai's registry, don't hardcode — the adapter must
+    // surface exactly the levels each model declares (plus "off"), in canonical
+    // order. openai-codex models declare {"xhigh":..,"minimal":..} today, so
+    // their efforts must include those alongside "off".
+    for (const m of listed) {
+      const truth = getModels("openai-codex").find((g) => g.id === m.id);
+      expect(m.efforts).toEqual(effortsFromThinkingLevelMap(truth?.thinkingLevelMap));
+      // Always offered, and never a bare list (the helper always yields "off").
+      expect(m.efforts).toContain("off");
+    }
+    // The current codex catalog declares minimal + xhigh; assert the wiring
+    // actually carries non-trivial levels (not just "off").
+    const codex52 = listed.find((m) => m.id === "gpt-5.2");
+    if (codex52) {
+      expect(codex52.efforts).toContain("xhigh");
+      expect(codex52.efforts).toContain("minimal");
+    }
   });
 
   test("openai-codex model string passes the provider gate", async () => {

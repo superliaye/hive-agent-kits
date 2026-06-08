@@ -62,6 +62,11 @@ export type OAuthProvider = {
   name: string;
 };
 
+// Thinking-effort levels, mirroring the daemon's ThinkingEffort
+// (src/model-gateway/types.ts). A model supports a subset; the composer's
+// effort dropdown shows the selected model's `efforts`.
+export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
 // A model the daemon can route (configured + routable). `model` is the
 // "provider/modelId" string sent as a Run's modelOverride / agent pref.
 // Mirrors the daemon's AvailableModel wire shape (GET /api/models).
@@ -70,6 +75,8 @@ export type AvailableModel = {
   modelId: string;
   model: string;
   label?: string;
+  // Supported thinking-effort levels (always includes "off").
+  efforts: ThinkingEffort[];
 };
 
 // ─── Threads + Runs ────────────────────────────────────────────────────

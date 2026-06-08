@@ -174,8 +174,12 @@ export type GatewayAdapter = {
    * Enumerate the models this adapter can route for `provider` (one of its
    * `providers`). Optional — adapters that can't enumerate (e.g. test fakes)
    * omit it and contribute no catalog entries.
+   *
+   * `efforts` is the model's supported thinking-effort levels (a subset of
+   * `ThinkingEffort`), always including `"off"`. The composer shows only these
+   * for the selected model.
    */
-  listModels?(provider: string): Array<{ id: string; label?: string }>;
+  listModels?(provider: string): Array<{ id: string; label?: string; efforts: ThinkingEffort[] }>;
 };
 
 // A model the gateway can route, surfaced by the models-catalog endpoint.
@@ -185,6 +189,10 @@ export type AvailableModel = {
   modelId: string;
   model: string;
   label?: string;
+  // Supported thinking-effort levels for this model (a subset of
+  // ThinkingEffort, always including "off"). The composer's effort dropdown
+  // shows exactly these for the selected model.
+  efforts: ThinkingEffort[];
 };
 
 // Module-level event stream for adapter registration changes.

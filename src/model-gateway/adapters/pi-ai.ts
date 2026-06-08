@@ -34,6 +34,7 @@ import type {
   ThinkingBudgets,
   ThinkingContent,
   ThinkingLevel,
+  ThinkingLevelMap,
   ToolCall,
   ToolResultMessage,
   UserMessage,
@@ -48,6 +49,7 @@ import type {
   GatewayErrorCode,
   GatewayEvent,
   Message,
+  ThinkingEffort,
   ToolDef,
 } from "../types.ts";
 
@@ -284,6 +286,35 @@ export function translateThinking(t: CompletionInput["thinking"]):
   return out.reasoning || out.thinkingBudgets ? out : undefined;
 }
 
+// Canonical level order for the composer. "off" is always offered (a model can
+// always run without reasoning); the rest are offered only when the model's
+// `thinkingLevelMap` declares them supported.
+const EFFORT_ORDER: readonly ThinkingEffort[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+
+/**
+ * Derive a model's supported thinking-effort levels from pi-ai's
+ * `thinkingLevelMap`. A non-"off" level is supported when its key is present
+ * AND its value is non-null — pi-ai documents `null` as "level unsupported"
+ * (Model.thinkingLevelMap), and a missing key means "use provider default",
+ * which we don't surface as a user-selectable level. "off" is always included.
+ * A model with no map (most non-reasoning models) supports only "off".
+ *
+ * Exported for tests.
+ */
+export function effortsFromThinkingLevelMap(map: ThinkingLevelMap | undefined): ThinkingEffort[] {
+  return EFFORT_ORDER.filter((level) => {
+    if (level === "off") return true;
+    return map?.[level] != null;
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Event translation: pi-ai → Hive GatewayEvent
 // ─────────────────────────────────────────────────────────────────────────────
@@ -417,7 +448,7 @@ export function createPiAiAdapter(): GatewayAdapter {
       // Newest-first. pi-ai's Model carries no release date, so this is a
       // best-effort version-descending sort by id (numeric-aware, so 5.10 > 5.9).
       return getModels(provider)
-        .map((m) => ({ id: m.id }))
+        .map((m) => ({ id: m.id, efforts: effortsFromThinkingLevelMap(m.thinkingLevelMap) }))
         .sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
     },
   };
