@@ -1,8 +1,8 @@
-// Public API for the agent model-preferences module.
+// Public API for the agent preferences module.
 //
-// A small persisted store keyed by agentId holding the user's chosen model
-// default per Agent. It is the USER-preference tier in the executor's model
-// resolution: per-Run override → this → harness config.model → MODEL_FALLBACK
+// A small persisted store keyed by agentId holding the user's chosen model AND
+// thinking-effort defaults per Agent. Each is the USER-preference tier in the
+// executor's resolution: per-Run override → this → harness config → fallback
 // (the bundled HARNESS.md is never rewritten). Implementation is Effect-native
 // (`AgentModelPrefsLive`); consumers resolve the service off the root runtime.
 
@@ -12,7 +12,9 @@ export type {
 } from "./effect/agent-prefs-live.ts";
 export { AgentModelPrefs, AgentModelPrefsLive } from "./effect/agent-prefs-live.ts";
 export type {
-  AgentModelPref,
+  AgentPref,
   AgentPrefEvents,
-  ConfiguredAgentModelPref,
+  AgentPrefPatch,
+  ConfiguredAgentPref,
+  Effort,
 } from "./types.ts";

@@ -1,38 +1,46 @@
-// In-memory store + event emitter for the agent model-preferences module.
+// In-memory store + event emitter for the agent preferences module.
 //
-// Holds the per-agent model-default map; persistence (file mode) is injected
-// and called after every mutation. Mirrors the Secrets store shape.
+// Holds the per-agent model + effort defaults; persistence (file mode) is
+// injected and called after every mutation. Mirrors the Secrets store shape.
 
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { AgentPrefsPersistence } from "./persistence.ts";
 import {
   AGENT_PREFS_FILE_VERSION,
-  type AgentModelPref,
+  type AgentPref,
   type AgentPrefEvents,
+  type AgentPrefPatch,
   type AgentPrefsFile,
-  type ConfiguredAgentModelPref,
+  type ConfiguredAgentPref,
+  type Effort,
+  EffortSchema,
   ModelStringSchema,
 } from "./types.ts";
 
 export type AgentPrefsStore = {
   /**
    * The user's chosen model for an agent, or undefined. Pure synchronous read
-   * with NO audit emit — model-pref reads happen on every Run resolution, and
-   * the resolved model is already recorded by `run.started`. Keeping it sync
-   * lets the executor's hot path stay sync.
+   * with NO audit emit — pref reads happen on every Run resolution, and the
+   * resolved model/effort are already recorded by `run.started`. Keeping it
+   * sync lets the executor's hot path stay sync.
    */
-  get(agentId: string): string | undefined;
+  getModel(agentId: string): string | undefined;
+
+  /** The user's chosen thinking effort for an agent, or undefined. Sync read. */
+  getEffort(agentId: string): Effort | undefined;
 
   /**
-   * Set (create/replace) an agent's model default. Emits `agent_model_pref.set`.
-   * Persists in file mode. Audit-first: the emit is awaited BEFORE the map/disk
-   * mutation (ADR-0004). Rejects a malformed model string before any side
-   * effect.
+   * Merge a model/effort patch into an agent's preference. Omitting a field
+   * leaves the stored value unchanged (never clobbers the other). Emits
+   * `agent_pref.set` carrying the touched fields. Persists in file mode.
+   * Audit-first: the emit is awaited BEFORE the map/disk mutation (ADR-0004).
+   * Rejects a malformed model string or effort level before any side effect.
+   * A no-op patch (neither field present) is rejected as a caller bug.
    */
-  set(agentId: string, model: string): Promise<void>;
+  set(agentId: string, patch: AgentPrefPatch): Promise<void>;
 
   /** List every stored preference, stable order by agentId. */
-  list(): ConfiguredAgentModelPref[];
+  list(): ConfiguredAgentPref[];
 
   /** Snapshot of the underlying map (round-trip tests / migrations). */
   snapshot(): AgentPrefsFile;
@@ -45,7 +53,7 @@ export function createAgentPrefsStore(
   persist?: AgentPrefsPersistence,
   now: () => number = Date.now,
 ): AgentPrefsStore {
-  const map = new Map<string, AgentModelPref>(Object.entries(initial.prefs));
+  const map = new Map<string, AgentPref>(Object.entries(initial.prefs));
   const events = new TypedEmitter<AgentPrefEvents>();
 
   function snapshot(): AgentPrefsFile {
@@ -55,23 +63,58 @@ export function createAgentPrefsStore(
   return {
     events,
 
-    get(agentId) {
+    getModel(agentId) {
       return map.get(agentId)?.model;
     },
 
-    async set(agentId, model) {
-      // Reject malformed before any emit/mutation, so a bad value can never
-      // land in memory or on disk.
-      ModelStringSchema.parse(model);
-      await events.emit("agent_model_pref.set", { agentId, model });
-      map.set(agentId, { model, updatedAt: now() });
+    getEffort(agentId) {
+      return map.get(agentId)?.effort;
+    },
+
+    async set(agentId, patch) {
+      // Reject malformed/empty before any emit/mutation, so a bad value can
+      // never land in memory or on disk.
+      if (patch.model === undefined && patch.effort === undefined) {
+        throw new Error("agent-prefs: set requires at least one of { model, effort }");
+      }
+      if (patch.model !== undefined) ModelStringSchema.parse(patch.model);
+      if (patch.effort !== undefined) EffortSchema.parse(patch.effort);
+
+      const event: AgentPrefEvents["agent_pref.set"] = {
+        agentId,
+        ...(patch.model !== undefined && { model: patch.model }),
+        ...(patch.effort !== undefined && { effort: patch.effort }),
+      };
+      await events.emit("agent_pref.set", event);
+
+      // Merge: keep the prior value for any field the patch omits.
+      const prev = map.get(agentId);
+      const next: AgentPref = {
+        ...(patch.model !== undefined
+          ? { model: patch.model }
+          : prev?.model !== undefined
+            ? { model: prev.model }
+            : {}),
+        ...(patch.effort !== undefined
+          ? { effort: patch.effort }
+          : prev?.effort !== undefined
+            ? { effort: prev.effort }
+            : {}),
+        updatedAt: now(),
+      };
+      map.set(agentId, next);
       if (persist) persist.write(snapshot());
     },
 
     list() {
-      const out: ConfiguredAgentModelPref[] = [];
+      const out: ConfiguredAgentPref[] = [];
       for (const [agentId, pref] of map) {
-        out.push({ agentId, model: pref.model, updatedAt: pref.updatedAt });
+        out.push({
+          agentId,
+          ...(pref.model !== undefined && { model: pref.model }),
+          ...(pref.effort !== undefined && { effort: pref.effort }),
+          updatedAt: pref.updatedAt,
+        });
       }
       out.sort((a, b) => a.agentId.localeCompare(b.agentId));
       return out;

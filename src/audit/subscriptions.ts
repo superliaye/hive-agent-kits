@@ -103,13 +103,18 @@ const secretsNormalizer: Normalizer<SecretEvents> = {
   }),
 };
 
-// Agent model preferences: a user picking an Agent's default model is
-// user-driven state. agentId + model id are non-secret — safe in the payload.
+// Agent preferences: a user picking an Agent's default model or thinking
+// effort is user-driven state. agentId + model id + effort level are
+// non-secret — safe in the payload. The event carries only the fields the
+// write touched (merge semantics), so the payload reflects exactly those.
 const agentPrefsNormalizer: Normalizer<AgentPrefEvents> = {
-  "agent_model_pref.set": (event) => ({
-    event_type: "agent_model_pref.set",
+  "agent_pref.set": (event) => ({
+    event_type: "agent_pref.set",
     agent_id: event.agentId,
-    payload: { model: event.model },
+    payload: {
+      ...(event.model !== undefined && { model: event.model }),
+      ...(event.effort !== undefined && { effort: event.effort }),
+    },
   }),
 };
 

@@ -194,13 +194,13 @@ describe("server routes", () => {
     expect(existsSync(forkPath)).toBe(false);
   });
 
-  test("GET /api/agents/:id/model-pref returns null when unset", async () => {
+  test("GET /api/agents/:id/model-pref returns nulls when unset", async () => {
     const res = await server.app.fetch(authed("/api/agents/root/model-pref"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ model: null });
+    expect(await res.json()).toEqual({ model: null, effort: null });
   });
 
-  test("PUT then GET /api/agents/:id/model-pref round-trips the choice", async () => {
+  test("PUT then GET /api/agents/:id/model-pref round-trips the model choice", async () => {
     const put = await server.app.fetch(
       authed("/api/agents/root/model-pref", {
         method: "PUT",
@@ -209,10 +209,52 @@ describe("server routes", () => {
       }),
     );
     expect(put.status).toBe(200);
-    expect(await put.json()).toEqual({ model: "openai-codex/gpt-5.2" });
+    expect(await put.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: null });
 
     const get = await server.app.fetch(authed("/api/agents/root/model-pref"));
-    expect(await get.json()).toEqual({ model: "openai-codex/gpt-5.2" });
+    expect(await get.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: null });
+  });
+
+  test("PUT effort round-trips and is independent of model", async () => {
+    // Set a model first.
+    await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai-codex/gpt-5.2" }),
+      }),
+    );
+    // Now set effort only — model must be preserved (merge semantics).
+    const put = await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ effort: "high" }),
+      }),
+    );
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: "high" });
+
+    const get = await server.app.fetch(authed("/api/agents/root/model-pref"));
+    expect(await get.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: "high" });
+  });
+
+  test("PUT model only leaves a previously-set effort untouched", async () => {
+    await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ effort: "low" }),
+      }),
+    );
+    const put = await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "anthropic/claude-opus-4-7" }),
+      }),
+    );
+    expect(await put.json()).toEqual({ model: "anthropic/claude-opus-4-7", effort: "low" });
   });
 
   test("PUT /api/agents/:id/model-pref rejects a malformed model with 400", async () => {
@@ -224,6 +266,45 @@ describe("server routes", () => {
       }),
     );
     expect(res.status).toBe(400);
+  });
+
+  test("PUT /api/agents/:id/model-pref rejects an invalid effort level with 400", async () => {
+    const res = await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ effort: "ultra" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("PUT /api/agents/:id/model-pref rejects an empty body with 400", async () => {
+    const res = await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("setting an effort records an agent_pref.set audit row carrying the effort", async () => {
+    await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ effort: "high" }),
+      }),
+    );
+    const rows = await server.audit.query({ source: "agent-prefs" });
+    const row = rows.find((r) => r.event_type === "agent_pref.set");
+    expect(row).toBeDefined();
+    expect(row?.agent_id).toBe("root");
+    expect(row?.payload).toMatchObject({ effort: "high" });
+    // Effort-only write must NOT carry a model in the payload.
+    expect((row?.payload as Record<string, unknown>).model).toBeUndefined();
   });
 
   test("model-pref endpoints 404 for an unknown agent", async () => {

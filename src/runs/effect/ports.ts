@@ -17,6 +17,7 @@ import type {
   ContentBlock,
   GatewayEvent,
   Message,
+  ThinkingEffort,
 } from "../../model-gateway/types.ts";
 import type { ThreadMessage } from "../../threads/types.ts";
 import type { CompleteRunInput, CreateRunInput, FailRunInput } from "../store.ts";
@@ -44,11 +45,12 @@ export type CatalogPort = {
 };
 export class AgentLookup extends Context.Service<AgentLookup, CatalogPort>()("runs/AgentLookup") {}
 
-// Agent model preferences: the user's per-agent model default, read-only.
-// Synchronous (no audit on reads — the resolved model is recorded by
-// `run.started`), so it slots into the executor's sync resolution.
+// Agent preferences: the user's per-agent model + effort defaults, read-only.
+// Synchronous (no audit on reads — the resolved model/effort are recorded by
+// `run.started`), so they slot into the executor's sync resolution.
 export type AgentModelPrefsPort = {
-  get(agentId: string): string | undefined;
+  getModel(agentId: string): string | undefined;
+  getEffort(agentId: string): ThinkingEffort | undefined;
 };
 export class AgentModelPrefsLookup extends Context.Service<
   AgentModelPrefsLookup,

@@ -1,11 +1,11 @@
-// Effect-native agent model-preferences module (mirrors SecretsLive, ADR-0011).
+// Effect-native agent preferences module (mirrors SecretsLive, ADR-0011).
 //
 // `AgentModelPrefs` is the Context.Service tag; `AgentModelPrefsLive(opts)` a
 // layer owning the in-memory store (reading persistence at build in file mode).
-// `set` is async + audit-first (ADR-0004 4.2-A1); `get` is a pure synchronous
-// read. The store + sync persistence own no long-lived handle, so release is a
-// no-op — `Layer.effect` over `acquireRelease` keeps the pattern uniform with
-// the other Lives so the root runtime owns teardown.
+// `set` is async + audit-first (ADR-0004 4.2-A1); `getModel`/`getEffort` are
+// pure synchronous reads. The store + sync persistence own no long-lived
+// handle, so release is a no-op — `Layer.effect` over `acquireRelease` keeps
+// the pattern uniform with the other Lives so the root runtime owns teardown.
 
 import { Context, Effect, Layer } from "effect";
 import type { TypedEmitter } from "../../lib/typed-emitter.ts";
@@ -14,8 +14,10 @@ import { type AgentPrefsStore, createAgentPrefsStore } from "../store.ts";
 import {
   AGENT_PREFS_FILE_VERSION,
   type AgentPrefEvents,
+  type AgentPrefPatch,
   type AgentPrefsFile,
-  type ConfiguredAgentModelPref,
+  type ConfiguredAgentPref,
+  type Effort,
 } from "../types.ts";
 
 export type CreateAgentPrefsOptions =
@@ -23,9 +25,10 @@ export type CreateAgentPrefsOptions =
   | { mode: "file"; path: string };
 
 export type AgentModelPrefsSvc = {
-  get(agentId: string): string | undefined;
-  set(agentId: string, model: string): Promise<void>;
-  list(): ConfiguredAgentModelPref[];
+  getModel(agentId: string): string | undefined;
+  getEffort(agentId: string): Effort | undefined;
+  set(agentId: string, patch: AgentPrefPatch): Promise<void>;
+  list(): ConfiguredAgentPref[];
   events: TypedEmitter<AgentPrefEvents>;
 };
 
@@ -44,8 +47,9 @@ function openStore(opts: CreateAgentPrefsOptions): AgentPrefsStore {
 function buildSvc(store: AgentPrefsStore): AgentModelPrefsSvc {
   return {
     events: store.events,
-    get: (agentId) => store.get(agentId),
-    set: (agentId, model) => store.set(agentId, model),
+    getModel: (agentId) => store.getModel(agentId),
+    getEffort: (agentId) => store.getEffort(agentId),
+    set: (agentId, patch) => store.set(agentId, patch),
     list: () => store.list(),
   };
 }

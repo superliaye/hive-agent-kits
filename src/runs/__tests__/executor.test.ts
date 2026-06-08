@@ -5,7 +5,7 @@ import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
 import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
-import type { GatewayEvent } from "../../model-gateway/types.ts";
+import type { CompletionInput, GatewayEvent, ThinkingEffort } from "../../model-gateway/types.ts";
 import {
   SecretsLive,
   type SecretsSvc,
@@ -98,7 +98,10 @@ async function setup(opts: {
   agents?: Agent[];
   withApiKey?: boolean;
   agentId?: string;
-  prefs?: { get(agentId: string): string | undefined };
+  prefs?: {
+    getModel(agentId: string): string | undefined;
+    getEffort(agentId: string): ThinkingEffort | undefined;
+  };
 }): Promise<Harness> {
   const db = openHiveDb(":memory:");
   const threadsStore = createThreadsStore(db);
@@ -400,7 +403,7 @@ describe("RunExecutor — model resolution", () => {
     const { executor, threadId } = await setup({
       fixtures: { "anthropic/claude-opus-4-7": [{ type: "done", finishReason: "stop" }] },
       agents: [makeAgent({ config: { model: "anthropic/claude-haiku-4-5" } })],
-      prefs: { get: () => "anthropic/claude-opus-4-7" },
+      prefs: { getModel: () => "anthropic/claude-opus-4-7", getEffort: () => undefined },
     });
     const events = await collect(
       executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }),
@@ -415,7 +418,7 @@ describe("RunExecutor — model resolution", () => {
     const { executor, threadId } = await setup({
       fixtures: { "anthropic/claude-opus-4-7": [{ type: "done", finishReason: "stop" }] },
       agents: [makeAgent({ config: { model: "anthropic/claude-haiku-4-5" } })],
-      prefs: { get: () => "anthropic/claude-sonnet-4-6" },
+      prefs: { getModel: () => "anthropic/claude-sonnet-4-6", getEffort: () => undefined },
     });
     const events = await collect(
       executor.startRun({
@@ -428,6 +431,105 @@ describe("RunExecutor — model resolution", () => {
     if (started?.type === "run.started") {
       expect(started.model).toBe("anthropic/claude-opus-4-7");
     }
+  });
+});
+
+// ─── effort resolution ───────────────────────────────────────────────────────
+
+// An adapter that records the CompletionInput it was handed, so a test can
+// assert which `thinking` (if any) the executor sent. Mirrors makeFakeGateway
+// but captures input rather than scripting per-model fixtures.
+function makeCapturingGateway(): {
+  gateway: ModelGateway;
+  last: () => CompletionInput | undefined;
+} {
+  let captured: CompletionInput | undefined;
+  const gw = createGateway();
+  gw.registerAdapter({
+    providers: ["anthropic"],
+    async *complete(input: CompletionInput): AsyncIterable<GatewayEvent> {
+      captured = input;
+      yield { type: "done", finishReason: "stop" };
+    },
+  });
+  return { gateway: gw, last: () => captured };
+}
+
+async function runEffortCase(opts: {
+  agentConfig?: Record<string, unknown>;
+  prefs?: {
+    getModel(agentId: string): string | undefined;
+    getEffort(agentId: string): ThinkingEffort | undefined;
+  };
+  effortOverride?: ThinkingEffort;
+}): Promise<CompletionInput | undefined> {
+  const db = openHiveDb(":memory:");
+  const threadsStore = createThreadsStore(db);
+  const runsStore = createRunsStore(db);
+  const secrets = makeSecrets();
+  await secrets.setApiKey("anthropic", "sk-test");
+  const catalog = makeCatalogStub([
+    makeAgent({
+      agentId: "test-agent",
+      config: { model: "anthropic/claude-haiku-4-5", ...(opts.agentConfig ?? {}) },
+    }),
+  ]);
+  const { gateway, last } = makeCapturingGateway();
+  const executor = createRunExecutor({
+    threads: threadsStore,
+    runs: runsStore,
+    catalog,
+    gateway,
+    secrets,
+    ...(opts.prefs ? { prefs: opts.prefs } : {}),
+  });
+  const threadId = threadsStore.create({ agentId: "test-agent" }).id;
+  await collect(
+    executor.startRun({
+      threadId,
+      userMessage: [{ type: "text", text: "hi" }],
+      ...(opts.effortOverride !== undefined && { effortOverride: opts.effortOverride }),
+    }),
+  );
+  return last();
+}
+
+describe("RunExecutor — effort resolution", () => {
+  test("no override / pref / harness config → no `thinking` sent (provider default)", async () => {
+    const input = await runEffortCase({});
+    expect(input?.thinking).toBeUndefined();
+  });
+
+  test("harness config.thinkingEffort is used when nothing earlier resolves", async () => {
+    const input = await runEffortCase({ agentConfig: { thinkingEffort: "medium" } });
+    expect(input?.thinking).toEqual({ effort: "medium" });
+  });
+
+  test("an unrecognized harness config.thinkingEffort is ignored (no thinking sent)", async () => {
+    const input = await runEffortCase({ agentConfig: { thinkingEffort: "bogus" } });
+    expect(input?.thinking).toBeUndefined();
+  });
+
+  test("user per-agent effort default beats harness config.thinkingEffort", async () => {
+    const input = await runEffortCase({
+      agentConfig: { thinkingEffort: "low" },
+      prefs: { getModel: () => undefined, getEffort: () => "high" },
+    });
+    expect(input?.thinking).toEqual({ effort: "high" });
+  });
+
+  test("per-Run effortOverride beats the user per-agent default", async () => {
+    const input = await runEffortCase({
+      agentConfig: { thinkingEffort: "low" },
+      prefs: { getModel: () => undefined, getEffort: () => "high" },
+      effortOverride: "xhigh",
+    });
+    expect(input?.thinking).toEqual({ effort: "xhigh" });
+  });
+
+  test("effort 'off' resolves and is sent (distinct from unset)", async () => {
+    const input = await runEffortCase({ effortOverride: "off" });
+    expect(input?.thinking).toEqual({ effort: "off" });
   });
 });
 

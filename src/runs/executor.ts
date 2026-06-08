@@ -45,6 +45,7 @@ import type {
   GatewayErrorCode,
   GatewayEvent,
   Message,
+  ThinkingEffort,
 } from "../model-gateway/types.ts";
 import type { ThreadMessage } from "../threads/types.ts";
 import { MODEL_FALLBACK } from "./defaults.ts";
@@ -64,6 +65,12 @@ export type StartRunInput = {
   userMessage: ContentBlock[];
   /** Optional per-Run model override; falls back to Agent's harness config, then deployment default. */
   modelOverride?: string;
+  /**
+   * Optional per-Run thinking-effort override; falls back to the user's
+   * per-agent effort default, then the Agent's harness `config.thinkingEffort`,
+   * then the provider default (no `thinking` sent).
+   */
+  effortOverride?: ThinkingEffort;
 };
 
 export type RunExecutor = {
@@ -94,17 +101,41 @@ export type CreateRunExecutorDeps = {
   gateway: CompletionPort;
   secrets: SecretsPort;
   /**
-   * User's per-agent model default — the tier between per-Run override and the
-   * Agent's harness `config.model`. Optional: when absent the executor falls
-   * back to the prior three-tier resolution.
+   * User's per-agent model + effort defaults — the tier between per-Run
+   * override and the Agent's harness config. Optional: when absent the executor
+   * falls back to the prior resolution (harness/fallback only).
    */
   prefs?: AgentModelPrefsPort;
   now?: () => number;
 };
 
+const VALID_EFFORTS: readonly ThinkingEffort[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+];
+
+function isThinkingEffort(v: unknown): v is ThinkingEffort {
+  return typeof v === "string" && (VALID_EFFORTS as readonly string[]).includes(v);
+}
+
+// Narrow an Agent's harness `config.thinkingEffort` (an `unknown` from the
+// open config record) to a valid `ThinkingEffort`, or `undefined` if it's
+// absent / not a recognized level. Mirrors the `typeof config.model === string`
+// guard, but the effort is a closed enum so we validate membership too.
+function configuredEffort(raw: unknown): ThinkingEffort | undefined {
+  return isThinkingEffort(raw) ? raw : undefined;
+}
+
 export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   const { threads, runs, catalog, gateway, secrets } = deps;
-  const prefs: AgentModelPrefsPort = deps.prefs ?? { get: () => undefined };
+  const prefs: AgentModelPrefsPort = deps.prefs ?? {
+    getModel: () => undefined,
+    getEffort: () => undefined,
+  };
   const now = deps.now ?? Date.now;
   const events = new TypedEmitter<RunModuleEvents>();
   const inflight = new Map<string, { threadId: string; controller: AbortController }>();
@@ -144,7 +175,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   }
 
   async function* runIterator(input: StartRunInput, agentId: string): AsyncIterable<RunEvent> {
-    const { threadId, userMessage, modelOverride } = input;
+    const { threadId, userMessage, modelOverride, effortOverride } = input;
     // Outer try/finally guarantees the busy-thread reservation made
     // synchronously in `startRun` is released even if the iterator is
     // abandoned mid-iteration.
@@ -155,7 +186,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         const run = runs.create({
           threadId,
           agentId,
-          model: modelOverride ?? prefs.get(agentId) ?? MODEL_FALLBACK,
+          model: modelOverride ?? prefs.getModel(agentId) ?? MODEL_FALLBACK,
         });
         yield await emitFailed(run.id, "agent_not_found", `unknown agent: ${agentId}`);
         return;
@@ -165,8 +196,14 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // harness config.model > deployment default.
       const configuredModel =
         typeof agent.config.model === "string" ? agent.config.model : undefined;
-      const userDefault = prefs.get(agentId);
-      const model = modelOverride ?? userDefault ?? configuredModel ?? MODEL_FALLBACK;
+      const userModelDefault = prefs.getModel(agentId);
+      const model = modelOverride ?? userModelDefault ?? configuredModel ?? MODEL_FALLBACK;
+
+      // Effort resolution mirrors model: per-Run override > user's per-agent
+      // default > harness config.thinkingEffort (type-guarded) > undefined
+      // (let the provider default — no `thinking` block sent).
+      const effort: ThinkingEffort | undefined =
+        effortOverride ?? prefs.getEffort(agentId) ?? configuredEffort(agent.config.thinkingEffort);
 
       // Provider extraction (validated by the gateway's registry too; this
       // is just for the Secrets lookup).
@@ -221,6 +258,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         model,
         messages: history,
         ...(systemPrompt ? { system: systemPrompt } : {}),
+        // Only carry a `thinking` block when an effort actually resolved;
+        // omitting it lets each provider apply its own default.
+        ...(effort !== undefined ? { thinking: { effort } } : {}),
         auth,
         signal: controller.signal,
       };

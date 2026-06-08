@@ -193,36 +193,47 @@ export const CreateThreadBody = z
   .strict();
 export type CreateThreadBody = z.infer<typeof CreateThreadBody>;
 
+// Thinking-effort levels accepted at the HTTP boundary. Mirrors the gateway's
+// ThinkingEffort union (src/model-gateway/types.ts) — the closed set of levels
+// any provider can express. The catalog's per-model `efforts` narrows which are
+// valid for a given model; this is the boundary sanity-check.
+export const EffortLevel = z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]);
+
+const ModelOverride = z
+  .string()
+  .min(1)
+  // "provider/model" — gateway registry rejects malformed; just sanity-check.
+  .regex(/^[^/]+\/.+$/, "must be 'provider/model-id'");
+
 // POST /api/threads/:id/runs body. `userMessage` is the next user turn —
 // content blocks (typically a single text block, but tool_results land
-// here too for the upcoming Part 7 tool-execution loop). `modelOverride`
-// is the per-Run override; the executor walks: override → harness config
-// → deployment default.
+// here too for the upcoming Part 7 tool-execution loop). `modelOverride` /
+// `effortOverride` are the per-Run overrides; the executor walks each:
+// override → per-agent default → harness config → fallback.
 export const StartRunBody = z
   .object({
     userMessage: z.array(ContentBlockSchema).min(1),
-    modelOverride: z
-      .string()
-      .min(1)
-      // "provider/model" — gateway registry rejects malformed; just sanity-check.
-      .regex(/^[^/]+\/.+$/, "must be 'provider/model-id'")
-      .optional(),
+    modelOverride: ModelOverride.optional(),
+    effortOverride: EffortLevel.optional(),
   })
   .strict();
 export type StartRunBody = z.infer<typeof StartRunBody>;
 
-// PUT /api/agents/:id/model-pref body. Sets the user's sticky model default for
-// an Agent (the tier between per-Run override and harness config.model). Same
-// "provider/model-id" shape as StartRunBody.modelOverride. v1 has no "clear"
-// contract — the picker always sends a concrete model.
+// PUT /api/agents/:id/model-pref body. Sets the user's sticky model and/or
+// thinking-effort default for an Agent (the tier between per-Run override and
+// the harness config). Both fields optional and independent — omitting one
+// leaves the stored value unchanged (merge semantics). At least one must be
+// present (a no-op body is rejected). v1 has no "clear" contract — the picker
+// always sends a concrete value.
 export const SetAgentModelPrefBody = z
   .object({
-    model: z
-      .string()
-      .min(1)
-      .regex(/^[^/]+\/.+$/, "must be 'provider/model-id'"),
+    model: ModelOverride.optional(),
+    effort: EffortLevel.optional(),
   })
-  .strict();
+  .strict()
+  .refine((b) => b.model !== undefined || b.effort !== undefined, {
+    message: "at least one of { model, effort } is required",
+  });
 export type SetAgentModelPrefBody = z.infer<typeof SetAgentModelPrefBody>;
 
 // Wire shapes returned by GET endpoints.

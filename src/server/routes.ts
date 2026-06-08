@@ -228,12 +228,16 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     }
   });
 
-  // Per-agent model default (the user's sticky choice). `null` model means
-  // unset — the executor then falls back to the Agent's harness config.model.
+  // Per-agent model + effort defaults (the user's sticky choices). A `null`
+  // field means unset — the executor then falls back to the Agent's harness
+  // config (config.model / config.thinkingEffort).
   app.get("/api/agents/:id/model-pref", (c) => {
     const id = c.req.param("id");
     if (!deps.catalog.get(id)) return c.json({ error: "agent not found" }, 404);
-    return c.json({ model: deps.agentModelPrefs.get(id) ?? null });
+    return c.json({
+      model: deps.agentModelPrefs.getModel(id) ?? null,
+      effort: deps.agentModelPrefs.getEffort(id) ?? null,
+    });
   });
 
   app.put("/api/agents/:id/model-pref", async (c) => {
@@ -249,8 +253,15 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: "invalid body", issues: zodIssues(parsed.error) }, 400);
     }
-    await deps.agentModelPrefs.set(id, parsed.data.model);
-    return c.json({ model: parsed.data.model });
+    // Merge semantics: the store keeps any field the patch omits.
+    await deps.agentModelPrefs.set(id, {
+      ...(parsed.data.model !== undefined && { model: parsed.data.model }),
+      ...(parsed.data.effort !== undefined && { effort: parsed.data.effort }),
+    });
+    return c.json({
+      model: deps.agentModelPrefs.getModel(id) ?? null,
+      effort: deps.agentModelPrefs.getEffort(id) ?? null,
+    });
   });
 
   // Models the user can actually run: configured providers (have credentials)
@@ -362,6 +373,9 @@ export function buildRoutes(deps: RoutesDeps): Hono {
         userMessage: parsed.data.userMessage,
         ...(parsed.data.modelOverride !== undefined && {
           modelOverride: parsed.data.modelOverride,
+        }),
+        ...(parsed.data.effortOverride !== undefined && {
+          effortOverride: parsed.data.effortOverride,
         }),
       });
     } catch (err) {
