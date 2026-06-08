@@ -59,7 +59,11 @@ export type AuthInput =
       onRefresh: (newCreds: { access: string; refresh: string; expires: number }) => Promise<void>;
     };
 
-export type ThinkingEffort = "off" | "low" | "medium" | "high";
+// Mirrors pi-ai's `ModelThinkingLevel` ("off" | ThinkingLevel). The non-"off"
+// members are exactly pi-ai's `ThinkingLevel`, so the adapter maps effort →
+// reasoning without a cast. A model only supports a SUBSET of these (the keys
+// of its `thinkingLevelMap`); the catalog surfaces the per-model set.
+export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export type CompletionInput = {
   model: string;

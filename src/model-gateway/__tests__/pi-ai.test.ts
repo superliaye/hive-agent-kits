@@ -7,6 +7,7 @@ import {
   resolveOAuthApiKey,
   translateMessages,
   translatePiAiStream,
+  translateThinking,
 } from "../adapters/pi-ai.ts";
 import { createGateway } from "../index.ts";
 import type { GatewayEvent, Message } from "../types.ts";
@@ -77,6 +78,41 @@ describe("classifyError", () => {
     const { code, retryable } = classifyError(undefined);
     expect(code).toBe("unknown");
     expect(retryable).toBe(false);
+  });
+});
+
+// ─── translateThinking ──────────────────────────────────────────────────────
+
+describe("translateThinking", () => {
+  test("no thinking input → undefined", () => {
+    expect(translateThinking(undefined)).toBeUndefined();
+  });
+
+  test("effort 'off' → undefined (no reasoning level)", () => {
+    expect(translateThinking({ effort: "off" })).toBeUndefined();
+  });
+
+  test.each([
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+  ] as const)("effort %p maps to pi-ai reasoning level", (effort) => {
+    expect(translateThinking({ effort })).toEqual({ reasoning: effort });
+  });
+
+  test("budgetTokens for a budget-bearing level rides thinkingBudgets", () => {
+    expect(translateThinking({ effort: "high", budgetTokens: 4096 })).toEqual({
+      reasoning: "high",
+      thinkingBudgets: { high: 4096 },
+    });
+  });
+
+  test("xhigh carries no budget slot — budgetTokens is dropped", () => {
+    expect(translateThinking({ effort: "xhigh", budgetTokens: 4096 })).toEqual({
+      reasoning: "xhigh",
+    });
   });
 });
 

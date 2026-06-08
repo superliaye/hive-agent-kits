@@ -31,6 +31,7 @@ import type {
   Message as PiMessage,
   StopReason as PiStopReason,
   TextContent,
+  ThinkingBudgets,
   ThinkingContent,
   ThinkingLevel,
   ToolCall,
@@ -47,7 +48,6 @@ import type {
   GatewayErrorCode,
   GatewayEvent,
   Message,
-  ThinkingEffort,
   ToolDef,
 } from "../types.ts";
 
@@ -252,21 +252,33 @@ function translateTools(tools: ToolDef[] | undefined): Context["tools"] {
   }));
 }
 
-function translateThinking(t: CompletionInput["thinking"]):
+// Exported for tests: assert effort → reasoning mapping (incl. minimal/xhigh)
+// without booting pi-ai.
+export function translateThinking(t: CompletionInput["thinking"]):
   | {
       reasoning?: ThinkingLevel;
-      thinkingBudgets?: { low?: number; medium?: number; high?: number };
+      thinkingBudgets?: ThinkingBudgets;
     }
   | undefined {
   if (!t) return undefined;
   const out: {
     reasoning?: ThinkingLevel;
-    thinkingBudgets?: { low?: number; medium?: number; high?: number };
+    thinkingBudgets?: ThinkingBudgets;
   } = {};
+  // Hive's non-"off" `ThinkingEffort` members ARE pi-ai's `ThinkingLevel`
+  // (minimal|low|medium|high|xhigh) — `satisfies` proves it; no cast.
   if (t.effort && t.effort !== "off") {
-    out.reasoning = t.effort satisfies ThinkingEffort as ThinkingLevel;
+    const level: ThinkingLevel = t.effort;
+    out.reasoning = level;
   }
-  if (t.budgetTokens !== undefined && t.effort && t.effort !== "off") {
+  // budgetTokens only applies to the budget-bearing levels pi-ai's
+  // `ThinkingBudgets` declares (minimal|low|medium|high); `xhigh`/`off` carry
+  // no budget slot, so skip them.
+  if (
+    t.budgetTokens !== undefined &&
+    t.effort &&
+    (t.effort === "minimal" || t.effort === "low" || t.effort === "medium" || t.effort === "high")
+  ) {
     out.thinkingBudgets = { [t.effort]: t.budgetTokens };
   }
   return out.reasoning || out.thinkingBudgets ? out : undefined;
