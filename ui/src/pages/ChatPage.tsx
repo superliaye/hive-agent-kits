@@ -26,11 +26,23 @@ export function ChatPage({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showNewThread, setShowNewThread] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
-  // Models the user can run, and the model selected for the active agent. The
-  // selection seeds from the agent's saved pref (or its harness default) and,
-  // when changed, persists as that agent's sticky default.
+  // Model selection for the active agent.
+  //   models       — what the user can actually run (configured ∩ routable).
+  //   agentDefault — the agent's stored default (saved pref, else harness
+  //                  config.model); may not be a runnable model.
+  //   userPick     — an explicit in-session choice (null until the user picks).
+  // The effective selection (below) prefers the user's pick, then the agent
+  // default *if runnable*, else the latest available model — so a new
+  // conversation never starts on an unavailable model when runnable ones exist.
   const [models, setModels] = useState<AvailableModel[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
+  const [agentDefault, setAgentDefault] = useState<string | null>(null);
+  const [userPick, setUserPick] = useState<string | null>(null);
+
+  const selectedModel: string | null =
+    userPick ??
+    (agentDefault && models.some((m) => m.model === agentDefault)
+      ? agentDefault
+      : (models[0]?.model ?? agentDefault));
 
   const refreshThreads = useCallback(async (): Promise<void> => {
     try {
@@ -70,11 +82,12 @@ export function ChatPage({
     };
   }, [apiConfig]);
 
-  // Seed the picker for the active agent: its saved pref, else its harness
-  // config.model, else nothing (the picker then prompts for a choice).
+  // Load the active agent's stored default (saved pref, else harness
+  // config.model), and clear any prior in-session pick.
   useEffect(() => {
+    setUserPick(null);
     if (!agentId) {
-      setSelectedModel(null);
+      setAgentDefault(null);
       return;
     }
     let cancelled = false;
@@ -86,9 +99,9 @@ export function ChatPage({
         ]);
         if (cancelled) return;
         const harnessModel = typeof agent.config.model === "string" ? agent.config.model : null;
-        setSelectedModel(pref.model ?? harnessModel);
+        setAgentDefault(pref.model ?? harnessModel);
       } catch {
-        if (!cancelled) setSelectedModel(null);
+        if (!cancelled) setAgentDefault(null);
       }
     })();
     return () => {
@@ -97,7 +110,7 @@ export function ChatPage({
   }, [apiConfig, agentId]);
 
   async function onSelectModel(model: string): Promise<void> {
-    setSelectedModel(model);
+    setUserPick(model);
     if (!agentId) return;
     // Persist as the agent's sticky default. The in-flight message also carries
     // it as modelOverride, so the choice takes effect immediately.
