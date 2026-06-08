@@ -67,6 +67,21 @@ export type OAuthProvider = {
 // effort dropdown shows the selected model's `efforts`.
 export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
+const THINKING_EFFORTS: readonly ThinkingEffort[] = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+];
+
+// Narrow an `unknown` (e.g. an Agent's harness `config.thinkingEffort`) to a
+// ThinkingEffort, cast-free.
+export function isThinkingEffort(v: unknown): v is ThinkingEffort {
+  return typeof v === "string" && (THINKING_EFFORTS as readonly string[]).includes(v);
+}
+
 // A model the daemon can route (configured + routable). `model` is the
 // "provider/modelId" string sent as a Run's modelOverride / agent pref.
 // Mirrors the daemon's AvailableModel wire shape (GET /api/models).
@@ -387,18 +402,28 @@ export const api = {
   // ─── Models + per-agent model preference ─────────────────────────────
   // Models the user can actually run (configured providers ∩ routable).
   listModels: (cfg: ApiConfig) => call<AvailableModel[]>(cfg, "/api/models"),
-  // The agent's sticky model default; `model` is null when unset (executor
-  // then falls back to the harness config.model).
+  // The agent's sticky model + effort defaults; each is null when unset (the
+  // executor then falls back to the harness config.model / config.thinkingEffort).
   getAgentModelPref: (cfg: ApiConfig, agentId: string) =>
-    call<{ model: string | null }>(
+    call<{ model: string | null; effort: ThinkingEffort | null }>(
       cfg,
       `/api/agents/${encodeURIComponent(agentId)}/model-pref`,
     ),
-  setAgentModelPref: (cfg: ApiConfig, agentId: string, model: string) =>
-    call<{ model: string }>(cfg, `/api/agents/${encodeURIComponent(agentId)}/model-pref`, {
-      method: "PUT",
-      body: JSON.stringify({ model }),
-    }),
+  // Merge semantics: omit a field to leave its stored value unchanged. Pass at
+  // least one of { model, effort }.
+  setAgentModelPref: (
+    cfg: ApiConfig,
+    agentId: string,
+    patch: { model?: string; effort?: ThinkingEffort },
+  ) =>
+    call<{ model: string | null; effort: ThinkingEffort | null }>(
+      cfg,
+      `/api/agents/${encodeURIComponent(agentId)}/model-pref`,
+      {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      },
+    ),
 
   // ─── Threads ────────────────────────────────────────────────────────
   listThreads: (cfg: ApiConfig) => call<ThreadSummary[]>(cfg, "/api/threads"),
@@ -424,10 +449,15 @@ export const api = {
     threadId: string,
     userMessage: ContentBlock[],
     onEvent: (event: RunEventWire) => void,
-    options: { modelOverride?: string; signal?: AbortSignal } = {},
+    options: { modelOverride?: string; effortOverride?: ThinkingEffort; signal?: AbortSignal } = {},
   ) => {
-    const body: { userMessage: ContentBlock[]; modelOverride?: string } = { userMessage };
+    const body: {
+      userMessage: ContentBlock[];
+      modelOverride?: string;
+      effortOverride?: ThinkingEffort;
+    } = { userMessage };
     if (options.modelOverride) body.modelOverride = options.modelOverride;
+    if (options.effortOverride) body.effortOverride = options.effortOverride;
     return consumeSSE(
       cfg,
       `/api/threads/${encodeURIComponent(threadId)}/runs`,

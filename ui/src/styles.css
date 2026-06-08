@@ -778,8 +778,8 @@ pre.config {
   align-items: center;
   gap: 8px;
 }
-.composer-model-picker {
-  max-width: 60%;
+.composer-model-picker,
+.composer-effort-picker {
   padding: 6px 8px;
   border: 1px solid var(--color-border-default);
   border-radius: 4px;
@@ -787,7 +787,14 @@ pre.config {
   color: var(--color-fg-default);
   font-size: 12px;
 }
-.composer-model-picker:disabled {
+.composer-model-picker {
+  max-width: 50%;
+}
+.composer-effort-picker {
+  max-width: 30%;
+}
+.composer-model-picker:disabled,
+.composer-effort-picker:disabled {
   opacity: 0.6;
 }
 

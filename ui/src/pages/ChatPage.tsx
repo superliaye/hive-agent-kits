@@ -7,8 +7,10 @@ import {
   type ApiConfig,
   type AvailableModel,
   type ContentBlock,
+  type ThinkingEffort,
   type ThreadSummary,
   api,
+  isThinkingEffort,
 } from "../api.ts";
 import { MessageComposer } from "../components/MessageComposer.tsx";
 import { MessageList } from "../components/MessageList.tsx";
@@ -37,12 +39,32 @@ export function ChatPage({
   const [models, setModels] = useState<AvailableModel[]>([]);
   const [agentDefault, setAgentDefault] = useState<string | null>(null);
   const [userPick, setUserPick] = useState<string | null>(null);
+  // Effort selection mirrors the model: agent default (saved pref, else harness
+  // config.thinkingEffort) and an explicit in-session pick. The effective effort
+  // (below) is derived against the *selected model's* supported levels, so an
+  // incompatible stored effort is dropped when the model changes.
+  const [effortDefault, setEffortDefault] = useState<ThinkingEffort | null>(null);
+  const [effortPick, setEffortPick] = useState<ThinkingEffort | null>(null);
 
   const selectedModel: string | null =
     userPick ??
     (agentDefault && models.some((m) => m.model === agentDefault)
       ? agentDefault
       : (models[0]?.model ?? agentDefault));
+
+  // The supported effort levels for the currently-selected model (the picker's
+  // options). Empty when the selection isn't a known/runnable model.
+  const selectedModelEfforts: ThinkingEffort[] =
+    models.find((m) => m.model === selectedModel)?.efforts ?? [];
+
+  // Effective effort: the user's in-session pick if still valid for this model,
+  // else the agent default if valid, else the model's first supported level —
+  // so switching to a model that doesn't support the stored effort never leaves
+  // an invalid level selected. null only when the model exposes no efforts.
+  const selectedEffort: ThinkingEffort | null =
+    (effortPick && selectedModelEfforts.includes(effortPick) ? effortPick : null) ??
+    (effortDefault && selectedModelEfforts.includes(effortDefault) ? effortDefault : null) ??
+    (selectedModelEfforts[0] ?? null);
 
   const refreshThreads = useCallback(async (): Promise<void> => {
     try {
@@ -82,12 +104,14 @@ export function ChatPage({
     };
   }, [apiConfig]);
 
-  // Load the active agent's stored default (saved pref, else harness
-  // config.model), and clear any prior in-session pick.
+  // Load the active agent's stored defaults (saved pref, else harness config),
+  // for both model and effort, and clear any prior in-session picks.
   useEffect(() => {
     setUserPick(null);
+    setEffortPick(null);
     if (!agentId) {
       setAgentDefault(null);
+      setEffortDefault(null);
       return;
     }
     let cancelled = false;
@@ -100,8 +124,15 @@ export function ChatPage({
         if (cancelled) return;
         const harnessModel = typeof agent.config.model === "string" ? agent.config.model : null;
         setAgentDefault(pref.model ?? harnessModel);
+        const harnessEffort = isThinkingEffort(agent.config.thinkingEffort)
+          ? agent.config.thinkingEffort
+          : null;
+        setEffortDefault(pref.effort ?? harnessEffort);
       } catch {
-        if (!cancelled) setAgentDefault(null);
+        if (!cancelled) {
+          setAgentDefault(null);
+          setEffortDefault(null);
+        }
       }
     })();
     return () => {
@@ -115,7 +146,19 @@ export function ChatPage({
     // Persist as the agent's sticky default. The in-flight message also carries
     // it as modelOverride, so the choice takes effect immediately.
     try {
-      await api.setAgentModelPref(apiConfig, agentId, model);
+      await api.setAgentModelPref(apiConfig, agentId, { model });
+    } catch (err) {
+      setListError((err as Error).message);
+    }
+  }
+
+  async function onSelectEffort(effort: ThinkingEffort): Promise<void> {
+    setEffortPick(effort);
+    if (!agentId) return;
+    // Persist as the agent's sticky effort default (merge — leaves the model
+    // pref untouched). The next message also carries it as effortOverride.
+    try {
+      await api.setAgentModelPref(apiConfig, agentId, { effort });
     } catch (err) {
       setListError((err as Error).message);
     }
@@ -137,7 +180,7 @@ export function ChatPage({
 
   async function onSend(text: string): Promise<void> {
     const content: ContentBlock[] = [{ type: "text", text }];
-    await thread.sendMessage(content, selectedModel ?? undefined);
+    await thread.sendMessage(content, selectedModel ?? undefined, selectedEffort ?? undefined);
   }
 
   const inFlight = thread.pending !== null;
@@ -232,6 +275,9 @@ export function ChatPage({
               selectedModel={selectedModel}
               onSelectModel={(m) => void onSelectModel(m)}
               onAddModels={onNavigateToSecrets}
+              efforts={selectedModelEfforts}
+              selectedEffort={selectedEffort}
+              onSelectEffort={(e) => void onSelectEffort(e)}
             />
           </>
         )}
