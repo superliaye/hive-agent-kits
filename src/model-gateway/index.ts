@@ -11,6 +11,7 @@ import { toErrorEvent } from "./effect/failure.ts";
 import { GatewayError, isRetryable } from "./errors.ts";
 import { createGatewayRegistry } from "./registry.ts";
 import type {
+  AvailableModel,
   CompletionInput,
   GatewayAdapter,
   GatewayEvent,
@@ -33,6 +34,11 @@ export type ModelGateway = {
   // and emits `adapter.unregistered`.
   registerAdapter(adapter: GatewayAdapter): () => void;
 
+  // Models the gateway can currently route for `provider` (empty when the
+  // provider has no registered adapter). The models-catalog endpoint calls
+  // this per configured provider — pi-ai stays imported only in the adapter.
+  listModels(provider: string): AvailableModel[];
+
   // Module-level events: adapter registration changes. The audit subscriber
   // attaches here for deployment-level visibility of which adapters are live.
   events: TypedEmitter<GatewayModuleEvents>;
@@ -53,12 +59,14 @@ export function createGateway(): ModelGateway {
       ]),
     completeStream: (input) => completeStream(registry, input),
     registerAdapter: registry.registerAdapter,
+    listModels: (provider) => registry.listModels(provider),
     events: registry.events,
   };
 }
 
 export type {
   AuthInput,
+  AvailableModel,
   CompletionInput,
   ContentBlock,
   FinishReason,

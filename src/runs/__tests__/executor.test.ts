@@ -98,6 +98,7 @@ async function setup(opts: {
   agents?: Agent[];
   withApiKey?: boolean;
   agentId?: string;
+  prefs?: { get(agentId: string): string | undefined };
 }): Promise<Harness> {
   const db = openHiveDb(":memory:");
   const threadsStore = createThreadsStore(db);
@@ -113,6 +114,7 @@ async function setup(opts: {
     catalog,
     gateway,
     secrets,
+    ...(opts.prefs ? { prefs: opts.prefs } : {}),
   });
   const threadId = threadsStore.create({ agentId: opts.agentId ?? "test-agent" }).id;
   return { db, threads: threadsStore, secrets, executor, threadId };
@@ -391,6 +393,40 @@ describe("RunExecutor — model resolution", () => {
     const started = events[0];
     if (started?.type === "run.started") {
       expect(started.model).toBe("anthropic/claude-haiku-4-5");
+    }
+  });
+
+  test("user per-agent default beats harness config.model", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-opus-4-7": [{ type: "done", finishReason: "stop" }] },
+      agents: [makeAgent({ config: { model: "anthropic/claude-haiku-4-5" } })],
+      prefs: { get: () => "anthropic/claude-opus-4-7" },
+    });
+    const events = await collect(
+      executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }),
+    );
+    const started = events[0];
+    if (started?.type === "run.started") {
+      expect(started.model).toBe("anthropic/claude-opus-4-7");
+    }
+  });
+
+  test("modelOverride beats the user per-agent default", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-opus-4-7": [{ type: "done", finishReason: "stop" }] },
+      agents: [makeAgent({ config: { model: "anthropic/claude-haiku-4-5" } })],
+      prefs: { get: () => "anthropic/claude-sonnet-4-6" },
+    });
+    const events = await collect(
+      executor.startRun({
+        threadId,
+        userMessage: [{ type: "text", text: "hi" }],
+        modelOverride: "anthropic/claude-opus-4-7",
+      }),
+    );
+    const started = events[0];
+    if (started?.type === "run.started") {
+      expect(started.model).toBe("anthropic/claude-opus-4-7");
     }
   });
 });

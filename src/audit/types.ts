@@ -11,7 +11,8 @@ export type ModuleSource =
   | "lifecycle"
   | "backend"
   | "config"
-  | "gateway";
+  | "gateway"
+  | "agent-prefs";
 
 export type AuditEvent = {
   id: string;

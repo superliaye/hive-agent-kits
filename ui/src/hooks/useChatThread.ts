@@ -43,9 +43,10 @@ export type ChatThreadState = {
   /**
    * Send a user message. Returns when the SSE stream terminates (run
    * completed / failed / cancelled). Caller should not call again until
-   * the prior call resolves.
+   * the prior call resolves. `modelOverride` ("provider/model-id") runs this
+   * message on a specific model; omit to use the agent's resolved default.
    */
-  sendMessage: (content: ContentBlock[]) => Promise<void>;
+  sendMessage: (content: ContentBlock[], modelOverride?: string) => Promise<void>;
   /** Cancel the in-flight run, if any. */
   cancel: () => void;
   /** Re-fetch the thread (call after external mutations). */
@@ -95,7 +96,7 @@ export function useChatThread(apiConfig: ApiConfig, threadId: string | null): Ch
   }, [refresh]);
 
   const sendMessage = useCallback(
-    async (content: ContentBlock[]): Promise<void> => {
+    async (content: ContentBlock[], modelOverride?: string): Promise<void> => {
       if (!threadId) {
         throw new Error("sendMessage called with no active thread");
       }
@@ -135,7 +136,7 @@ export function useChatThread(apiConfig: ApiConfig, threadId: string | null): Ch
           (event: RunEventWire) => {
             applyRunEvent(event, setState, runIdRef);
           },
-          { signal: controller.signal },
+          { ...(modelOverride ? { modelOverride } : {}), signal: controller.signal },
         );
       } catch (err) {
         // AbortError fires on cancel — surface as cancelled error only if

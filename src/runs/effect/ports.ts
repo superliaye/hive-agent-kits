@@ -44,6 +44,17 @@ export type CatalogPort = {
 };
 export class AgentLookup extends Context.Service<AgentLookup, CatalogPort>()("runs/AgentLookup") {}
 
+// Agent model preferences: the user's per-agent model default, read-only.
+// Synchronous (no audit on reads — the resolved model is recorded by
+// `run.started`), so it slots into the executor's sync resolution.
+export type AgentModelPrefsPort = {
+  get(agentId: string): string | undefined;
+};
+export class AgentModelPrefsLookup extends Context.Service<
+  AgentModelPrefsLookup,
+  AgentModelPrefsPort
+>()("runs/AgentModelPrefsLookup") {}
+
 // Threads: the three verbs the executor uses.
 export type ThreadsPort = {
   get(threadId: string): { agentId: string } | undefined;

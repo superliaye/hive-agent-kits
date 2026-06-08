@@ -54,9 +54,15 @@ import type {
 // Which Hive `provider/model` prefixes this adapter handles. Expanded as
 // pi-ai gains stable provider support; each entry must be a `KnownProvider`
 // in pi-ai's registry (see node_modules/@earendil-works/pi-ai/dist/types.d.ts).
+//
+// `openai-codex` (ChatGPT Plus/Pro) is OAuth-only: its models carry the
+// `openai-codex-responses` api internally (pi-ai picks it from the resolved
+// Model), and the OAuth access token is used as the apiKey — both handled by
+// the generic OAuth path below, so allowlisting is all that's needed.
 const PI_AI_PROVIDERS = [
   "anthropic",
   "openai",
+  "openai-codex",
   "google",
   "google-vertex",
   "amazon-bedrock",
@@ -394,6 +400,14 @@ export function createPiAiAdapter(): GatewayAdapter {
   return {
     providers: PI_AI_PROVIDERS as unknown as string[],
     complete,
+    listModels: (provider) => {
+      if (!isPiProvider(provider)) return [];
+      // Newest-first. pi-ai's Model carries no release date, so this is a
+      // best-effort version-descending sort by id (numeric-aware, so 5.10 > 5.9).
+      return getModels(provider)
+        .map((m) => ({ id: m.id }))
+        .sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
+    },
   };
 }
 

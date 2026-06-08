@@ -24,6 +24,7 @@ export const ModuleSourceSchema = z.enum([
   "backend",
   "config",
   "gateway",
+  "agent-prefs",
 ]);
 
 // Query params for GET /api/audit. Hono passes everything as strings — coerce
@@ -209,6 +210,20 @@ export const StartRunBody = z
   })
   .strict();
 export type StartRunBody = z.infer<typeof StartRunBody>;
+
+// PUT /api/agents/:id/model-pref body. Sets the user's sticky model default for
+// an Agent (the tier between per-Run override and harness config.model). Same
+// "provider/model-id" shape as StartRunBody.modelOverride. v1 has no "clear"
+// contract — the picker always sends a concrete model.
+export const SetAgentModelPrefBody = z
+  .object({
+    model: z
+      .string()
+      .min(1)
+      .regex(/^[^/]+\/.+$/, "must be 'provider/model-id'"),
+  })
+  .strict();
+export type SetAgentModelPrefBody = z.infer<typeof SetAgentModelPrefBody>;
 
 // Wire shapes returned by GET endpoints.
 

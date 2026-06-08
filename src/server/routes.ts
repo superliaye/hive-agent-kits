@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { ZodError } from "zod";
+import type { AgentModelPrefsSvc } from "../agent-prefs/index.ts";
 import type { Audit } from "../audit/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Capability } from "../capabilities/types.ts";
@@ -13,6 +14,7 @@ import type { Agent, Catalog } from "../catalog/types.ts";
 import { type AppConfig, AppearanceConfigSchema } from "../config/schema.ts";
 import type { Config } from "../config/types.ts";
 import { CapabilityKind } from "../lib/capability-types.ts";
+import type { ModelGateway } from "../model-gateway/index.ts";
 import type { RunExecutor } from "../runs/index.ts";
 import type { Run } from "../runs/types.ts";
 import type { Secrets } from "../secrets/index.ts";
@@ -30,6 +32,7 @@ import {
   CreateThreadBody,
   type OAuthProviderWire,
   type RunWire,
+  SetAgentModelPrefBody,
   SetApiKeyBody,
   StartRunBody,
   type ThreadDetailWire,
@@ -44,6 +47,8 @@ export type RoutesDeps = {
   threads: Threads;
   runs: RunExecutor;
   secrets: Secrets;
+  gateway: ModelGateway;
+  agentModelPrefs: AgentModelPrefsSvc;
   config: Config<AppConfig>;
   token: string;
 };
@@ -221,6 +226,40 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       }
       throw err;
     }
+  });
+
+  // Per-agent model default (the user's sticky choice). `null` model means
+  // unset — the executor then falls back to the Agent's harness config.model.
+  app.get("/api/agents/:id/model-pref", (c) => {
+    const id = c.req.param("id");
+    if (!deps.catalog.get(id)) return c.json({ error: "agent not found" }, 404);
+    return c.json({ model: deps.agentModelPrefs.get(id) ?? null });
+  });
+
+  app.put("/api/agents/:id/model-pref", async (c) => {
+    const id = c.req.param("id");
+    if (!deps.catalog.get(id)) return c.json({ error: "agent not found" }, 404);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = SetAgentModelPrefBody.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid body", issues: zodIssues(parsed.error) }, 400);
+    }
+    await deps.agentModelPrefs.set(id, parsed.data.model);
+    return c.json({ model: parsed.data.model });
+  });
+
+  // Models the user can actually run: configured providers (have credentials)
+  // ∩ routable providers (the gateway has an adapter). The picker's data source.
+  // pi-ai stays imported only in its adapter — enumeration goes through the
+  // gateway seam (ADR-0005).
+  app.get("/api/models", (c) => {
+    const models = deps.secrets.list().flatMap((p) => deps.gateway.listModels(p.provider));
+    return c.json(models);
   });
 
   // Audit query — the durable answer to "what just happened" for any client

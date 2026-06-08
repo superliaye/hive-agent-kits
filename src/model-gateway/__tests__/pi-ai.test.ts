@@ -477,6 +477,37 @@ describe("pi-ai adapter — short-circuit paths", () => {
       expect(err.code).toBe("model_not_found");
     }
   });
+
+  test("openai-codex (ChatGPT) is a routable provider", () => {
+    expect(createPiAiAdapter().providers).toContain("openai-codex");
+  });
+
+  test("listModels returns newest-first (version-descending) order", () => {
+    const ids = (createPiAiAdapter().listModels?.("openai-codex") ?? []).map((m) => m.id);
+    expect(ids.length).toBeGreaterThan(0);
+    const descending = [...ids].sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    expect(ids).toEqual(descending);
+  });
+
+  test("openai-codex model string passes the provider gate", async () => {
+    const adapter = createPiAiAdapter();
+    const got: GatewayEvent[] = [];
+    for await (const ev of adapter.complete({
+      model: "openai-codex/does-not-exist-9999",
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      auth: { kind: "apiKey", apiKey: "x" },
+    })) {
+      got.push(ev);
+    }
+    const err = got.find((e) => e.type === "error");
+    expect(err).toBeDefined();
+    if (err?.type === "error") {
+      // Reaches model resolution for the codex provider rather than being
+      // rejected at the provider allowlist — proves routing is wired.
+      expect(err.message).not.toContain("does not handle provider");
+      expect(err.message).toContain("openai-codex");
+    }
+  });
 });
 
 // ─── resolveOAuthApiKey — OAuth → apiKey translation ───────────────────────
@@ -493,6 +524,18 @@ describe("resolveOAuthApiKey", () => {
     const onRefresh = mock(async (_: typeof creds) => {});
     const apiKey = await resolveOAuthApiKey("anthropic", creds, onRefresh, stub);
     expect(apiKey).toBe("sk-resolved-1");
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  test("resolves the openai-codex access token via the generic OAuth path", async () => {
+    const stub: typeof getOAuthApiKey = async (provider, credentialsMap) => {
+      expect(provider).toBe("openai-codex");
+      expect(credentialsMap["openai-codex"]?.access).toBe("acc-1");
+      return { newCredentials: creds, apiKey: "acc-1" };
+    };
+    const onRefresh = mock(async (_: typeof creds) => {});
+    const apiKey = await resolveOAuthApiKey("openai-codex", creds, onRefresh, stub);
+    expect(apiKey).toBe("acc-1");
     expect(onRefresh).not.toHaveBeenCalled();
   });
 

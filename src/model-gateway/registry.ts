@@ -10,7 +10,7 @@ import { log } from "../lib/log.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import { GatewayFailure } from "./effect/failure.ts";
 import { GatewayError } from "./errors.ts";
-import type { GatewayAdapter, GatewayModuleEvents } from "./types.ts";
+import type { AvailableModel, GatewayAdapter, GatewayModuleEvents } from "./types.ts";
 
 export type GatewayRegistry = {
   registerAdapter(adapter: GatewayAdapter): () => void;
@@ -18,6 +18,8 @@ export type GatewayRegistry = {
   resolve(model: string): GatewayAdapter;
   /** Effect resolution — failures land in the typed `E` channel. */
   resolveEffect(model: string): Effect.Effect<GatewayAdapter, GatewayFailure>;
+  /** Models the registered adapter for `provider` can route; [] if unroutable. */
+  listModels(provider: string): AvailableModel[];
   events: TypedEmitter<GatewayModuleEvents>;
 };
 
@@ -90,5 +92,16 @@ export function createGatewayRegistry(): GatewayRegistry {
     return "failure" in result ? Effect.fail(result.failure) : Effect.succeed(result.adapter);
   }
 
-  return { registerAdapter, resolve, resolveEffect, events };
+  function listModels(provider: string): AvailableModel[] {
+    const adapter = adapters.get(provider);
+    if (!adapter?.listModels) return [];
+    return adapter.listModels(provider).map((m) => ({
+      provider,
+      modelId: m.id,
+      model: `${provider}/${m.id}`,
+      ...(m.label !== undefined ? { label: m.label } : {}),
+    }));
+  }
+
+  return { registerAdapter, resolve, resolveEffect, listModels, events };
 }

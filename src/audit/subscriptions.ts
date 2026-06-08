@@ -5,6 +5,7 @@
 // parameter and a `case` here when they ship — reading this file gives
 // the full graph of who feeds the audit log.
 
+import type { AgentPrefEvents } from "../agent-prefs/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Catalog } from "../catalog/index.ts";
 import type { CatalogEvents } from "../catalog/types.ts";
@@ -26,6 +27,9 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   // it). Satisfied by SecretsSvc and the server's legacy `Secrets` projection.
   secrets?: { events: TypedEmitter<SecretEvents> };
   runs?: RunExecutor;
+  // Consumer-owned port: only the event stream is read here. Satisfied by the
+  // AgentModelPrefs service (its `.events`).
+  agentPrefs?: { events: TypedEmitter<AgentPrefEvents> };
   // Future:
   //   permission?: { events: TypedEmitter<PermissionEvents> }
   //   mcp?:        { events: TypedEmitter<McpLifecycleEvents> }
@@ -99,6 +103,16 @@ const secretsNormalizer: Normalizer<SecretEvents> = {
   }),
 };
 
+// Agent model preferences: a user picking an Agent's default model is
+// user-driven state. agentId + model id are non-secret — safe in the payload.
+const agentPrefsNormalizer: Normalizer<AgentPrefEvents> = {
+  "agent_model_pref.set": (event) => ({
+    event_type: "agent_model_pref.set",
+    agent_id: event.agentId,
+    payload: { model: event.model },
+  }),
+};
+
 // Attaches every present source's event stream to the audit log.
 // Returns a disposer that detaches all listeners.
 export function wireSubscriptions<S extends Record<string, unknown> = Record<string, unknown>>(
@@ -123,6 +137,10 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
 
   if (sources.secrets) {
     disposers.push(audit.attach("secrets", sources.secrets.events, secretsNormalizer));
+  }
+
+  if (sources.agentPrefs) {
+    disposers.push(audit.attach("agent-prefs", sources.agentPrefs.events, agentPrefsNormalizer));
   }
 
   if (sources.runs) {

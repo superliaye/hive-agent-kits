@@ -774,7 +774,21 @@ pre.config {
 }
 .composer-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.composer-model-picker {
+  max-width: 60%;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-base);
+  color: var(--color-fg-default);
+  font-size: 12px;
+}
+.composer-model-picker:disabled {
+  opacity: 0.6;
 }
 
 .empty-state {

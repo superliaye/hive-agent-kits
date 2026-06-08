@@ -3,12 +3,18 @@ import type { ApiConfig } from "./api.ts";
 import { AgentsPage } from "./pages/AgentsPage.tsx";
 import { CapabilitiesPage } from "./pages/CapabilitiesPage.tsx";
 import { ChatPage } from "./pages/ChatPage.tsx";
-import { SettingsPage } from "./pages/SettingsPage.tsx";
+import { type SectionId, SettingsPage } from "./pages/SettingsPage.tsx";
 
 type Page = "chat" | "agents" | "capabilities" | "settings";
 
 export default function App({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
   const [page, setPage] = useState<Page>("chat");
+  const [settingsSection, setSettingsSection] = useState<SectionId>("appearance");
+
+  function goToSettings(section: SectionId): void {
+    setSettingsSection(section);
+    setPage("settings");
+  }
   return (
     <div className="app">
       <div className="tabs">
@@ -46,10 +52,18 @@ export default function App({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elemen
         </button>
       </div>
       <div className="body">
-        {page === "chat" && <ChatPage apiConfig={apiConfig} />}
+        {page === "chat" && (
+          <ChatPage apiConfig={apiConfig} onNavigateToSecrets={() => goToSettings("secrets")} />
+        )}
         {page === "agents" && <AgentsPage apiConfig={apiConfig} />}
         {page === "capabilities" && <CapabilitiesPage apiConfig={apiConfig} />}
-        {page === "settings" && <SettingsPage apiConfig={apiConfig} />}
+        {page === "settings" && (
+          <SettingsPage
+            apiConfig={apiConfig}
+            section={settingsSection}
+            onSectionChange={setSettingsSection}
+          />
+        )}
       </div>
     </div>
   );

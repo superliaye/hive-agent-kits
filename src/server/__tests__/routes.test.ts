@@ -194,6 +194,79 @@ describe("server routes", () => {
     expect(existsSync(forkPath)).toBe(false);
   });
 
+  test("GET /api/agents/:id/model-pref returns null when unset", async () => {
+    const res = await server.app.fetch(authed("/api/agents/root/model-pref"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ model: null });
+  });
+
+  test("PUT then GET /api/agents/:id/model-pref round-trips the choice", async () => {
+    const put = await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai-codex/gpt-5.2" }),
+      }),
+    );
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({ model: "openai-codex/gpt-5.2" });
+
+    const get = await server.app.fetch(authed("/api/agents/root/model-pref"));
+    expect(await get.json()).toEqual({ model: "openai-codex/gpt-5.2" });
+  });
+
+  test("PUT /api/agents/:id/model-pref rejects a malformed model with 400", async () => {
+    const res = await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "no-slash" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("model-pref endpoints 404 for an unknown agent", async () => {
+    const get = await server.app.fetch(authed("/api/agents/ghost/model-pref"));
+    expect(get.status).toBe(404);
+    const put = await server.app.fetch(
+      authed("/api/agents/ghost/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "anthropic/claude-opus-4-7" }),
+      }),
+    );
+    expect(put.status).toBe(404);
+  });
+
+  test("GET /api/models lists models for configured + routable providers only", async () => {
+    // Nothing configured yet → empty list.
+    const empty = await server.app.fetch(authed("/api/models"));
+    expect(empty.status).toBe(200);
+    expect(await empty.json()).toEqual([]);
+
+    // anthropic + openai-codex are routable; openai stays unconfigured;
+    // "not-a-real-provider" is configured but unroutable.
+    for (const provider of ["anthropic", "openai-codex", "not-a-real-provider"]) {
+      await server.app.fetch(
+        authed(`/api/secrets/${provider}/api-key`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ apiKey: "x" }),
+        }),
+      );
+    }
+
+    const res = await server.app.fetch(authed("/api/models"));
+    const models = (await res.json()) as Array<{ provider: string; model: string }>;
+    const providers = new Set(models.map((m) => m.provider));
+    expect(providers.has("anthropic")).toBe(true); // configured + routable
+    expect(providers.has("openai-codex")).toBe(true); // ChatGPT, routable after the fix
+    expect(providers.has("openai")).toBe(false); // routable but not configured
+    expect(providers.has("not-a-real-provider")).toBe(false); // configured but unroutable
+    expect(models.every((m) => m.model.includes("/"))).toBe(true);
+  });
+
   test("GET /api/capabilities filters by kind", async () => {
     const all = await server.app.fetch(authed("/api/capabilities"));
     const allBody = (await all.json()) as Array<{ kind: string }>;

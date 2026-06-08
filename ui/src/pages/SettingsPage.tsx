@@ -1,9 +1,8 @@
-import { useState } from "react";
 import type { ApiConfig } from "../api.ts";
 import { AppearanceSettings } from "../components/AppearanceSettings.tsx";
 import { SecretsSettings } from "../components/SecretsSettings.tsx";
 
-type SectionId = "appearance" | "secrets" | "other";
+export type SectionId = "appearance" | "secrets" | "other";
 
 type Section = {
   id: SectionId;
@@ -31,8 +30,16 @@ const SECTIONS: readonly Section[] = [
   },
 ];
 
-export function SettingsPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
-  const [active, setActive] = useState<SectionId>("appearance");
+export function SettingsPage({
+  apiConfig,
+  section,
+  onSectionChange,
+}: {
+  apiConfig: ApiConfig;
+  section: SectionId;
+  onSectionChange: (section: SectionId) => void;
+}): JSX.Element {
+  const active = section;
   const activeSection = SECTIONS.find((s) => s.id === active) ?? SECTIONS[0];
 
   return (
@@ -44,7 +51,7 @@ export function SettingsPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Eleme
               <button
                 type="button"
                 className={`settings-nav-item${active === s.id ? " active" : ""}`}
-                onClick={() => setActive(s.id)}
+                onClick={() => onSectionChange(s.id)}
                 data-testid={`settings-nav-${s.id}`}
                 aria-current={active === s.id ? "page" : undefined}
               >

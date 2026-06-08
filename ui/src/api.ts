@@ -62,6 +62,16 @@ export type OAuthProvider = {
   name: string;
 };
 
+// A model the daemon can route (configured + routable). `model` is the
+// "provider/modelId" string sent as a Run's modelOverride / agent pref.
+// Mirrors the daemon's AvailableModel wire shape (GET /api/models).
+export type AvailableModel = {
+  provider: string;
+  modelId: string;
+  model: string;
+  label?: string;
+};
+
 // ─── Threads + Runs ────────────────────────────────────────────────────
 
 // Canonical ContentBlock lives in the daemon's model-gateway types. The UI
@@ -366,6 +376,22 @@ export const api = {
       onEvent,
       signal,
     ),
+
+  // ─── Models + per-agent model preference ─────────────────────────────
+  // Models the user can actually run (configured providers ∩ routable).
+  listModels: (cfg: ApiConfig) => call<AvailableModel[]>(cfg, "/api/models"),
+  // The agent's sticky model default; `model` is null when unset (executor
+  // then falls back to the harness config.model).
+  getAgentModelPref: (cfg: ApiConfig, agentId: string) =>
+    call<{ model: string | null }>(
+      cfg,
+      `/api/agents/${encodeURIComponent(agentId)}/model-pref`,
+    ),
+  setAgentModelPref: (cfg: ApiConfig, agentId: string, model: string) =>
+    call<{ model: string }>(cfg, `/api/agents/${encodeURIComponent(agentId)}/model-pref`, {
+      method: "PUT",
+      body: JSON.stringify({ model }),
+    }),
 
   // ─── Threads ────────────────────────────────────────────────────────
   listThreads: (cfg: ApiConfig) => call<ThreadSummary[]>(cfg, "/api/threads"),

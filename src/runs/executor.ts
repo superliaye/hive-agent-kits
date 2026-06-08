@@ -6,6 +6,7 @@
 //   - catalog   : agent lookup port (resolve agent_id → model + system prompt)
 //   - gateway   : the completion port (the typed `completeStream()` call)
 //   - secrets   : the auth-resolution port (provider → AuthInput)
+//   - prefs     : per-agent user model default (agent_id → model), read-only
 //
 // One verb: `startRun({ threadId, userMessage })` returns an
 // AsyncIterable<RunEvent>. The lifecycle:
@@ -49,6 +50,7 @@ import type { ThreadMessage } from "../threads/types.ts";
 import { MODEL_FALLBACK } from "./defaults.ts";
 import { drainCompletion } from "./effect/consume.ts";
 import type {
+  AgentModelPrefsPort,
   CatalogPort,
   CompletionPort,
   RunsStorePort,
@@ -91,11 +93,18 @@ export type CreateRunExecutorDeps = {
   catalog: CatalogPort;
   gateway: CompletionPort;
   secrets: SecretsPort;
+  /**
+   * User's per-agent model default — the tier between per-Run override and the
+   * Agent's harness `config.model`. Optional: when absent the executor falls
+   * back to the prior three-tier resolution.
+   */
+  prefs?: AgentModelPrefsPort;
   now?: () => number;
 };
 
 export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   const { threads, runs, catalog, gateway, secrets } = deps;
+  const prefs: AgentModelPrefsPort = deps.prefs ?? { get: () => undefined };
   const now = deps.now ?? Date.now;
   const events = new TypedEmitter<RunModuleEvents>();
   const inflight = new Map<string, { threadId: string; controller: AbortController }>();
@@ -146,16 +155,18 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         const run = runs.create({
           threadId,
           agentId,
-          model: modelOverride ?? MODEL_FALLBACK,
+          model: modelOverride ?? prefs.get(agentId) ?? MODEL_FALLBACK,
         });
         yield await emitFailed(run.id, "agent_not_found", `unknown agent: ${agentId}`);
         return;
       }
 
-      // Model resolution: per-Run override > harness config.model > deployment default.
+      // Model resolution: per-Run override > user's per-agent default >
+      // harness config.model > deployment default.
       const configuredModel =
         typeof agent.config.model === "string" ? agent.config.model : undefined;
-      const model = modelOverride ?? configuredModel ?? MODEL_FALLBACK;
+      const userDefault = prefs.get(agentId);
+      const model = modelOverride ?? userDefault ?? configuredModel ?? MODEL_FALLBACK;
 
       // Provider extraction (validated by the gateway's registry too; this
       // is just for the Secrets lookup).

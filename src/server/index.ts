@@ -8,6 +8,11 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { dirname } from "node:path";
 import { Layer, ManagedRuntime } from "effect";
 import type { Hono } from "hono";
+import {
+  AgentModelPrefsLive,
+  type AgentModelPrefsSvc,
+  AgentModelPrefs as AgentModelPrefsTag,
+} from "../agent-prefs/index.ts";
 import { AuditLive, Audit as AuditTag } from "../audit/effect/audit-live.ts";
 import type { Audit } from "../audit/index.ts";
 import { wireSubscriptions } from "../audit/subscriptions.ts";
@@ -55,6 +60,7 @@ export type ServerHandles = {
   catalog: Catalog;
   gateway: ModelGateway;
   secrets: Secrets;
+  agentModelPrefs: AgentModelPrefsSvc;
   threads: Threads;
   runs: RunExecutor;
   token: string;
@@ -90,6 +96,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     opts.mode === "memory"
       ? ({ mode: "memory" } as const)
       : ({ mode: "file", path: files.secrets() } as const);
+  const agentPrefsOpts =
+    opts.mode === "memory"
+      ? ({ mode: "memory" } as const)
+      : ({ mode: "file", path: files.agentModelPrefs() } as const);
   // Audit keeps its OWN sqlite file (~/.hive/audit.db); never routed onto hive.db.
   const auditOpts =
     opts.mode === "memory"
@@ -100,6 +110,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const rootLayer = Layer.mergeAll(
     dataLayer,
     SecretsLive(secretsOpts),
+    AgentModelPrefsLive(agentPrefsOpts),
     ConfigLive(configOpts),
     CatalogLive(),
     AuditLive(auditOpts),
@@ -133,6 +144,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     status: (provider) => secretsSvc.status(provider),
     dispose: () => {},
   };
+  const agentModelPrefs: AgentModelPrefsSvc = runtime.runSync(AgentModelPrefsTag);
   // AuditSvc is exactly the legacy `Audit` surface (attach/query/subscriptions);
   // the DB handle is closed by the layer's release, not exposed on the value.
   const audit: Audit = runtime.runSync(AuditTag);
@@ -160,6 +172,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     catalog,
     gateway,
     secrets,
+    prefs: agentModelPrefs,
   });
 
   const dispose = wireSubscriptions<AppConfig>(audit, {
@@ -168,6 +181,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     registry,
     catalog,
     secrets,
+    agentPrefs: agentModelPrefs,
     runs,
   });
 
@@ -184,6 +198,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     threads,
     runs,
     secrets,
+    gateway,
+    agentModelPrefs,
     config,
     token,
   });
@@ -196,6 +212,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     catalog,
     gateway,
     secrets,
+    agentModelPrefs,
     threads,
     runs,
     token,

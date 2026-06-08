@@ -3,17 +3,34 @@
 //   - Main: message panel + composer for the selected thread.
 
 import { useCallback, useEffect, useState } from "react";
-import { type ApiConfig, type ContentBlock, type ThreadSummary, api } from "../api.ts";
+import {
+  type ApiConfig,
+  type AvailableModel,
+  type ContentBlock,
+  type ThreadSummary,
+  api,
+} from "../api.ts";
 import { MessageComposer } from "../components/MessageComposer.tsx";
 import { MessageList } from "../components/MessageList.tsx";
 import { NewThreadModal } from "../components/NewThreadModal.tsx";
 import { useChatThread } from "../hooks/useChatThread.ts";
 
-export function ChatPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
+export function ChatPage({
+  apiConfig,
+  onNavigateToSecrets,
+}: {
+  apiConfig: ApiConfig;
+  onNavigateToSecrets: () => void;
+}): JSX.Element {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showNewThread, setShowNewThread] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  // Models the user can run, and the model selected for the active agent. The
+  // selection seeds from the agent's saved pref (or its harness default) and,
+  // when changed, persists as that agent's sticky default.
+  const [models, setModels] = useState<AvailableModel[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
 
   const refreshThreads = useCallback(async (): Promise<void> => {
     try {
@@ -37,6 +54,59 @@ export function ChatPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
   }, [refreshThreads]);
 
   const thread = useChatThread(apiConfig, activeId);
+  const agentId = thread.thread?.agentId ?? null;
+
+  // Load the runnable-models catalog once (and when the daemon config changes).
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .listModels(apiConfig)
+      .then((m) => {
+        if (!cancelled) setModels(m);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [apiConfig]);
+
+  // Seed the picker for the active agent: its saved pref, else its harness
+  // config.model, else nothing (the picker then prompts for a choice).
+  useEffect(() => {
+    if (!agentId) {
+      setSelectedModel(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [pref, agent] = await Promise.all([
+          api.getAgentModelPref(apiConfig, agentId),
+          api.getAgent(apiConfig, agentId),
+        ]);
+        if (cancelled) return;
+        const harnessModel = typeof agent.config.model === "string" ? agent.config.model : null;
+        setSelectedModel(pref.model ?? harnessModel);
+      } catch {
+        if (!cancelled) setSelectedModel(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiConfig, agentId]);
+
+  async function onSelectModel(model: string): Promise<void> {
+    setSelectedModel(model);
+    if (!agentId) return;
+    // Persist as the agent's sticky default. The in-flight message also carries
+    // it as modelOverride, so the choice takes effect immediately.
+    try {
+      await api.setAgentModelPref(apiConfig, agentId, model);
+    } catch (err) {
+      setListError((err as Error).message);
+    }
+  }
 
   async function createThread(agentId: string): Promise<void> {
     const created = await api.createThread(apiConfig, agentId);
@@ -54,7 +124,7 @@ export function ChatPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
 
   async function onSend(text: string): Promise<void> {
     const content: ContentBlock[] = [{ type: "text", text }];
-    await thread.sendMessage(content);
+    await thread.sendMessage(content, selectedModel ?? undefined);
   }
 
   const inFlight = thread.pending !== null;
@@ -141,7 +211,15 @@ export function ChatPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
               pending={thread.pending}
               runError={thread.runError}
             />
-            <MessageComposer inFlight={inFlight} onSend={onSend} onCancel={() => thread.cancel()} />
+            <MessageComposer
+              inFlight={inFlight}
+              onSend={onSend}
+              onCancel={() => thread.cancel()}
+              models={models}
+              selectedModel={selectedModel}
+              onSelectModel={(m) => void onSelectModel(m)}
+              onAddModels={onNavigateToSecrets}
+            />
           </>
         )}
       </div>

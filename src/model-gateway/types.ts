@@ -166,6 +166,21 @@ export type GatewayEvent =
 export type GatewayAdapter = {
   providers: string[];
   complete(input: CompletionInput): AsyncIterable<GatewayEvent>;
+  /**
+   * Enumerate the models this adapter can route for `provider` (one of its
+   * `providers`). Optional — adapters that can't enumerate (e.g. test fakes)
+   * omit it and contribute no catalog entries.
+   */
+  listModels?(provider: string): Array<{ id: string; label?: string }>;
+};
+
+// A model the gateway can route, surfaced by the models-catalog endpoint.
+// `model` is the "provider/modelId" string the executor and Run route consume.
+export type AvailableModel = {
+  provider: string;
+  modelId: string;
+  model: string;
+  label?: string;
 };
 
 // Module-level event stream for adapter registration changes.
