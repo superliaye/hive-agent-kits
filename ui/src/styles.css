@@ -719,10 +719,14 @@ pre.config {
 }
 /* Running = hollow ring (statically distinct from the solid unread/failed dots
    even when frozen — no motion, no screenshot, no reduced-motion needed). The
-   pulse rides on top for motion-OK users. */
+   pulse rides on top for motion-OK users. Sized larger than the solid 8px dots
+   so the live state is the visually dominant one; the open center keeps it a
+   ring, not a solid, preserving the static distinguisher. */
 .status-dot.status-running {
+  width: 10px;
+  height: 10px;
   background: transparent;
-  box-shadow: inset 0 0 0 2px var(--color-accent, #3b82f6);
+  box-shadow: inset 0 0 0 2.5px var(--color-accent, #3b82f6);
   animation: status-pulse 1s ease-in-out infinite;
 }
 @keyframes status-pulse {
