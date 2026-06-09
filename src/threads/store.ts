@@ -3,11 +3,12 @@
 // HTTP routes, future Settings UI) call these verbs and never touch
 // Drizzle directly.
 
-import { asc, eq, max } from "drizzle-orm";
+import { and, asc, eq, isNull, lt, max } from "drizzle-orm";
 import type { HiveDb } from "../db/hive-db.ts";
+import { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { ContentBlock, Message } from "../model-gateway/types.ts";
 import { messages, threads } from "./schema.ts";
-import type { Thread, ThreadMessage } from "./types.ts";
+import type { Thread, ThreadEvents, ThreadMessage, TitleSource } from "./types.ts";
 
 export type CreateThreadInput = {
   id?: string;
@@ -56,8 +57,46 @@ export type ThreadsStore = {
   /** List all threads, most-recently-updated first. */
   list(): Thread[];
 
-  /** Delete a thread and all its messages (cascade). */
-  remove(threadId: string): void;
+  /**
+   * Set a thread's title. `source==='manual'` always writes and pins
+   * `title_source='manual'`; `source==='auto'` no-ops once the title is manual
+   * (a user-chosen title is sticky). Does NOT bump `updatedAt`. The manual
+   * branch is audit-first (emits `thread.title_set` BEFORE the write); the
+   * auto branch never emits. No-op on a missing thread.
+   */
+  setTitle(threadId: string, title: string, source: TitleSource): Promise<void>;
+
+  /**
+   * Archive a thread (set `archived_at` to now()). Idempotent: a second
+   * archive keeps the original timestamp and does nothing. `source==='manual'`
+   * is audit-first (emits `thread.archived` BEFORE the write); `source==='auto'`
+   * (the boot sweep) never emits. Does NOT bump `updatedAt`. No-op on a missing
+   * or already-archived thread (no emit on the no-op).
+   */
+  archive(threadId: string, source: TitleSource): Promise<void>;
+
+  /** Mark a thread read at `at`. Sets `last_read_at`. Not audited. Sync. */
+  markRead(threadId: string, at: number): void;
+
+  /**
+   * Mark a thread unread (clear `last_read_at`). Audit-first: emits
+   * `thread.marked_unread` BEFORE the write. No-op on a missing thread.
+   */
+  markUnread(threadId: string): Promise<void>;
+
+  /**
+   * Active threads (archived_at IS NULL) whose `updated_at` is strictly before
+   * `cutoff`. The query the auto-archive boot sweep enumerates. Read-only.
+   */
+  listActiveIdleBefore(cutoff: number): Thread[];
+
+  /**
+   * Delete a thread and all its messages (cascade). Audit-first: emits
+   * `thread.deleted` BEFORE the delete. No-op (no emit) on a missing thread.
+   */
+  remove(threadId: string): Promise<void>;
+
+  events: TypedEmitter<ThreadEvents>;
 };
 
 export function createThreadsStore(
@@ -65,12 +104,18 @@ export function createThreadsStore(
   now: () => number = Date.now,
   newId: () => string = () => crypto.randomUUID(),
 ): ThreadsStore {
+  const events = new TypedEmitter<ThreadEvents>();
+
   function rowToThread(row: typeof threads.$inferSelect): Thread {
     return {
       id: row.id,
       agentId: row.agent_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+      title: row.title,
+      titleSource: row.title_source,
+      lastReadAt: row.last_read_at,
+      archivedAt: row.archived_at,
     };
   }
 
@@ -92,7 +137,16 @@ export function createThreadsStore(
       db.insert(threads)
         .values({ id, agent_id: input.agentId, created_at: t, updated_at: t })
         .run();
-      return { id, agentId: input.agentId, createdAt: t, updatedAt: t };
+      return {
+        id,
+        agentId: input.agentId,
+        createdAt: t,
+        updatedAt: t,
+        title: null,
+        titleSource: "auto",
+        lastReadAt: null,
+        archivedAt: null,
+      };
     },
 
     get(threadId) {
@@ -172,9 +226,69 @@ export function createThreadsStore(
       return rows.map(rowToThread).sort((a, b) => b.updatedAt - a.updatedAt);
     },
 
-    remove(threadId) {
+    async setTitle(threadId, title, source) {
+      const current = this.get(threadId);
+      if (!current) return;
+      // A user-chosen title is sticky: an auto write never clobbers manual.
+      if (source === "auto" && current.titleSource === "manual") return;
+
+      if (source === "manual") {
+        // Audit-first: emit BEFORE the write (ADR-0004). Refs only — the title
+        // string is NOT in the payload.
+        await events.emit("thread.title_set", {
+          threadId,
+          agentId: current.agentId,
+          titleSource: "manual",
+        });
+      }
+      // No updated_at bump — the sort key tracks messages, not metadata edits.
+      db.update(threads).set({ title, title_source: source }).where(eq(threads.id, threadId)).run();
+    },
+
+    async archive(threadId, source) {
+      const current = this.get(threadId);
+      if (!current) return;
+      // Idempotent: keep the first archive timestamp; a re-archive is a true
+      // no-op and emits nothing (no state change → no audit row).
+      if (current.archivedAt !== null) return;
+
+      if (source === "manual") {
+        await events.emit("thread.archived", { threadId, agentId: current.agentId });
+      }
+      // No updated_at bump.
+      db.update(threads).set({ archived_at: now() }).where(eq(threads.id, threadId)).run();
+    },
+
+    markRead(threadId, at) {
+      // Not audited; no updated_at bump.
+      db.update(threads).set({ last_read_at: at }).where(eq(threads.id, threadId)).run();
+    },
+
+    async markUnread(threadId) {
+      const current = this.get(threadId);
+      if (!current) return;
+      await events.emit("thread.marked_unread", { threadId, agentId: current.agentId });
+      db.update(threads).set({ last_read_at: null }).where(eq(threads.id, threadId)).run();
+    },
+
+    listActiveIdleBefore(cutoff) {
+      const rows = db
+        .select()
+        .from(threads)
+        .where(and(isNull(threads.archived_at), lt(threads.updated_at, cutoff)))
+        .all();
+      return rows.map(rowToThread);
+    },
+
+    async remove(threadId) {
+      const current = this.get(threadId);
+      if (!current) return;
+      // Audit-first: emit BEFORE the delete.
+      await events.emit("thread.deleted", { threadId, agentId: current.agentId });
       // Cascading FK deletes messages.
       db.delete(threads).where(eq(threads.id, threadId)).run();
     },
+
+    events,
   };
 }

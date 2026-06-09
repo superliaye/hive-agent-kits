@@ -130,12 +130,90 @@ describe("ThreadsStore.list + remove", () => {
     expect(ids).toEqual([t1.id, t2.id]);
   });
 
-  test("remove deletes the thread + cascades messages", () => {
+  test("remove deletes the thread + cascades messages", async () => {
     const t = store.create({ agentId: "agent-a" });
     store.append({ threadId: t.id, role: "user", content: [{ type: "text", text: "x" }] });
-    store.remove(t.id);
+    await store.remove(t.id);
     expect(store.get(t.id)).toBeUndefined();
     expect(store.listMessages(t.id)).toEqual([]);
+  });
+});
+
+describe("ThreadsStore.setTitle (AC #3 — title stickiness)", () => {
+  test("manual title is sticky: a later auto write does not clobber it", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setTitle(t.id, "x", "manual");
+    await store.setTitle(t.id, "y", "auto");
+    const got = store.get(t.id);
+    expect(got?.title).toBe("x");
+    expect(got?.titleSource).toBe("manual");
+  });
+
+  test("auto write updates an auto/untitled thread", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setTitle(t.id, "z", "auto");
+    const got = store.get(t.id);
+    expect(got?.title).toBe("z");
+    expect(got?.titleSource).toBe("auto");
+  });
+
+  test("manual write always overrides", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setTitle(t.id, "z", "auto");
+    await store.setTitle(t.id, "q", "manual");
+    const got = store.get(t.id);
+    expect(got?.title).toBe("q");
+    expect(got?.titleSource).toBe("manual");
+  });
+
+  test("does not bump updatedAt", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setTitle(t.id, "x", "manual");
+    expect(store.get(t.id)?.updatedAt).toBe(t.updatedAt);
+  });
+});
+
+describe("ThreadsStore.archive / markRead / markUnread (AC #4)", () => {
+  test("archive sets archived_at and is idempotent (keeps first timestamp)", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.archive(t.id, "manual");
+    const first = store.get(t.id)?.archivedAt;
+    expect(first).not.toBeNull();
+    await store.archive(t.id, "manual");
+    expect(store.get(t.id)?.archivedAt).toBe(first ?? -1);
+  });
+
+  test("markRead sets last_read_at; markUnread clears it", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    store.markRead(t.id, 4242);
+    expect(store.get(t.id)?.lastReadAt).toBe(4242);
+    await store.markUnread(t.id);
+    expect(store.get(t.id)?.lastReadAt).toBeNull();
+  });
+
+  test("none of the lifecycle verbs bump updatedAt; append still does", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    const base = t.updatedAt;
+    await store.archive(t.id, "manual");
+    store.markRead(t.id, 9999);
+    await store.markUnread(t.id);
+    await store.setTitle(t.id, "x", "manual");
+    expect(store.get(t.id)?.updatedAt).toBe(base);
+
+    store.append({ threadId: t.id, role: "user", content: [{ type: "text", text: "x" }] });
+    expect(store.get(t.id)?.updatedAt).toBeGreaterThan(base);
+  });
+});
+
+describe("ThreadsStore.listActiveIdleBefore", () => {
+  test("returns only active threads with updatedAt strictly before the cutoff", async () => {
+    const a = store.create({ agentId: "agent-a" }); // updatedAt 1001
+    const b = store.create({ agentId: "agent-a" }); // updatedAt 1002
+    await store.archive(a.id, "auto"); // archived → excluded regardless of age
+    // cutoff 1002: b.updatedAt (1002) is NOT strictly before → empty.
+    expect(store.listActiveIdleBefore(1002).map((t) => t.id)).toEqual([]);
+    // cutoff 1003: b is active and 1002 < 1003 → included; a is archived → out.
+    expect(store.listActiveIdleBefore(1003).map((t) => t.id)).toEqual([b.id]);
   });
 });
 

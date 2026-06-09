@@ -18,11 +18,23 @@ import { sql } from "drizzle-orm";
 import { foreignKey, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import type { ContentBlock } from "../model-gateway/types.ts";
 
+// `updated_at` is the sort key (most-recent-interaction first) AND is bumped
+// ONLY by `append` — no `last_interacted_at` column. The lifecycle verbs
+// (setTitle/archive/markRead/markUnread) deliberately do NOT touch it, so it
+// keeps meaning "time of the last message". `archived_at` is the single
+// lifecycle marker: NULL = active, non-NULL = archived; a deleted thread is a
+// gone row. No separate status enum column.
 export const threads = sqliteTable("threads", {
   id: text("id").primaryKey(),
   agent_id: text("agent_id").notNull(),
   created_at: integer("created_at").notNull(),
   updated_at: integer("updated_at").notNull(),
+  title: text("title"),
+  title_source: text("title_source", { enum: ["auto", "manual"] })
+    .notNull()
+    .default("auto"),
+  last_read_at: integer("last_read_at"),
+  archived_at: integer("archived_at"),
 });
 
 export const messages = sqliteTable(
@@ -41,16 +53,39 @@ export const messages = sqliteTable(
   ],
 );
 
+// The columns this module expects on `threads`, with the DDL fragment used to
+// ADD them to a pre-existing table. CREATE covers fresh DBs; the PRAGMA-guarded
+// ALTER below covers DBs created before a column existed (there is no migration
+// runner — `openHiveDb` only calls these ensure functions).
+const THREADS_ADDED_COLUMNS: ReadonlyArray<{ name: string; ddl: string }> = [
+  { name: "title", ddl: "title TEXT" },
+  { name: "title_source", ddl: "title_source TEXT NOT NULL DEFAULT 'auto'" },
+  { name: "last_read_at", ddl: "last_read_at INTEGER" },
+  { name: "archived_at", ddl: "archived_at INTEGER" },
+];
+
+// Minimal handle shape: `run` for DDL writes, `$client` (the bun:sqlite
+// Database) for the PRAGMA read, which returns rows and so can't go through
+// `run`. Satisfied by the full Drizzle `HiveDb` handle passed at boot.
+type EnsureHandle = {
+  run: (q: ReturnType<typeof sql>) => void;
+  $client: { query: <R>(sql: string) => { all: () => R[] } };
+};
+
 // IMPORTANT: this DDL must stay in sync with the Drizzle tables above.
 // They duplicate the shape today because we're not yet running drizzle-kit
 // migrations. When the schema changes, update both places.
-export function ensureThreadsSchema(db: { run: (q: ReturnType<typeof sql>) => void }): void {
+export function ensureThreadsSchema(db: EnsureHandle): void {
   db.run(sql`
     CREATE TABLE IF NOT EXISTS threads (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      title_source TEXT NOT NULL DEFAULT 'auto',
+      last_read_at INTEGER,
+      archived_at INTEGER
     )
   `);
   db.run(sql`
@@ -65,4 +100,19 @@ export function ensureThreadsSchema(db: { run: (q: ReturnType<typeof sql>) => vo
     )
   `);
   db.run(sql`CREATE INDEX IF NOT EXISTS idx_messages_thread_idx ON messages (thread_id, idx)`);
+
+  // Idempotent additive migration for DBs that predate the lifecycle columns.
+  // No-op on a fresh DB (CREATE already added them). PRAGMA returns rows, so
+  // it goes through `$client.query(...).all()`, not `run`.
+  const present = new Set(
+    db.$client
+      .query<{ name: string }>("PRAGMA table_info(threads)")
+      .all()
+      .map((r) => r.name),
+  );
+  for (const col of THREADS_ADDED_COLUMNS) {
+    if (!present.has(col.name)) {
+      db.run(sql.raw(`ALTER TABLE threads ADD COLUMN ${col.ddl}`));
+    }
+  }
 }

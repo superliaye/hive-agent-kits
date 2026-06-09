@@ -331,10 +331,10 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     return c.json(toThreadDetail(detail, detail.messages));
   });
 
-  app.delete("/api/threads/:id", (c) => {
+  app.delete("/api/threads/:id", async (c) => {
     const id = c.req.param("id");
     if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
-    deps.threads.remove(id);
+    await deps.threads.remove(id);
     return c.body(null, 204);
   });
 
