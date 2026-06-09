@@ -11,6 +11,19 @@ import type { ThreadSummary } from "./api.ts";
 
 export const PAGE_SIZE = 20;
 
+// The /api/events SSE wire names ChatPage subscribes to for live status-dot
+// updates. The daemon names each frame `${source}.${type}`; run envelopes have
+// source "run" and type "run.<verb>", so the wire name is double-prefixed
+// (`run.run.started` etc. — the daemon side is pinned in
+// routes-threads-runs.test.ts). This non-obvious double-prefix is a regression
+// footgun; thread-nav.run-wire.test.ts guards the names against drift.
+export const RUN_WIRE_EVENTS = [
+  "run.run.started",
+  "run.run.completed",
+  "run.run.failed",
+  "run.run.cancelled",
+] as const;
+
 // ─── Grouping ────────────────────────────────────────────────────────────
 
 // Group threads by agentId, each group internally sorted (see sortThreads).

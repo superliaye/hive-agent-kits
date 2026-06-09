@@ -26,6 +26,7 @@ import { useChatThread } from "../hooks/useChatThread.ts";
 import {
   groupByAgent,
   paginate,
+  RUN_WIRE_EVENTS,
   statusMeta,
   threadTitle,
   UNTITLED_PLACEHOLDER,
@@ -159,12 +160,11 @@ export function ChatPage({
     const onRun = (): void => {
       void refreshRef.current();
     };
-    // The daemon names each SSE frame `${source}.${type}`; run envelopes have
-    // source "run" and type "run.<verb>", so the wire name is double-prefixed:
-    // `run.run.started` etc. (routes.ts push(); asserted in
-    // routes-threads-runs.test.ts). Subscribe to the wire names, not the types.
-    for (const verb of ["started", "completed", "failed", "cancelled"] as const) {
-      source.addEventListener(`run.run.${verb}`, onRun);
+    // Subscribe to the double-prefixed SSE wire names (RUN_WIRE_EVENTS), not the
+    // run-envelope types. The names are pinned against drift in
+    // thread-nav.run-wire.test.ts (UI) / routes-threads-runs.test.ts (daemon).
+    for (const event of RUN_WIRE_EVENTS) {
+      source.addEventListener(event, onRun);
     }
     return () => source.close();
   }, [apiConfig.baseUrl, apiConfig.token]);
