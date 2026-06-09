@@ -142,6 +142,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
   async function emitFailed(
     runId: string,
+    threadId: string,
+    agentId: string,
     code: NonNullable<Run["errorCode"]>,
     message: string,
   ): Promise<RunEvent> {
@@ -149,7 +151,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     // and a persist failure must fail the originating op (ADR-0004 §Failure
     // semantics). TypedEmitter.emit is async, so a throwing audit listener only
     // surfaces via `await`.
-    await events.emit("run.failed", { runId, code, message });
+    await events.emit("run.failed", { runId, threadId, agentId, code, message });
     runs.fail({ runId, code, message });
     return { type: "run.failed", runId, error: { code, message }, ts: now() };
   }
@@ -187,7 +189,13 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
           agentId,
           model: modelOverride ?? prefs.getModel(agentId) ?? MODEL_FALLBACK,
         });
-        yield await emitFailed(run.id, "agent_not_found", `unknown agent: ${agentId}`);
+        yield await emitFailed(
+          run.id,
+          threadId,
+          agentId,
+          "agent_not_found",
+          `unknown agent: ${agentId}`,
+        );
         return;
       }
 
@@ -211,6 +219,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         const run = runs.create({ threadId, agentId, model });
         yield await emitFailed(
           run.id,
+          threadId,
+          agentId,
           "invalid_request",
           `agent ${agentId} has malformed model: ${JSON.stringify(model)}`,
         );
@@ -224,6 +234,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         const run = runs.create({ threadId, agentId, model });
         yield await emitFailed(
           run.id,
+          threadId,
+          agentId,
           "no_credentials",
           `no secret stored for provider "${provider}" — add it in Settings`,
         );
@@ -295,7 +307,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
       // Decide how to finalize.
       if (finishReason === "cancelled") {
-        await events.emit("run.cancelled", { runId: run.id });
+        await events.emit("run.cancelled", { runId: run.id, threadId, agentId });
         runs.cancel(run.id);
         yield { type: "run.cancelled", runId: run.id, ts: now() };
         return;
@@ -307,11 +319,17 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       if (finishReason === "error") {
         const code = latestError?.code ?? "unknown";
         const message = latestError?.message ?? "gateway emitted no error message";
-        yield await emitFailed(run.id, code, message);
+        yield await emitFailed(run.id, threadId, agentId, code, message);
         return;
       }
       if (!finishReason) {
-        yield await emitFailed(run.id, "unknown", "gateway stream ended without a `done` event");
+        yield await emitFailed(
+          run.id,
+          threadId,
+          agentId,
+          "unknown",
+          "gateway stream ended without a `done` event",
+        );
         return;
       }
 
@@ -325,7 +343,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // Audit-first relative to the Run-lifecycle mutation (runs.complete). The
       // separate Threads write above is the Threads module's concern and must
       // precede the yield regardless (finalMessage is yielded).
-      await events.emit("run.completed", { runId: run.id, finishReason });
+      await events.emit("run.completed", { runId: run.id, threadId, agentId, finishReason });
       runs.complete({ runId: run.id, finishReason });
       yield { type: "run.completed", runId: run.id, finishReason, finalMessage, ts: now() };
     } finally {

@@ -18,6 +18,8 @@ export type { ThreadStatus } from "./status.ts";
 export { deriveThreadStatus } from "./status.ts";
 export type { AppendMessageInput, CreateThreadInput } from "./store.ts";
 export { ThreadNotFoundError } from "./store.ts";
+export type { MaybeGenerateTitleDeps } from "./title.ts";
+export { maybeGenerateTitle } from "./title.ts";
 export type {
   Thread,
   ThreadEvents,

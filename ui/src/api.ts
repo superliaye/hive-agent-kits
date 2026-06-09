@@ -111,6 +111,10 @@ export type ThreadSummary = {
   agentId: string;
   createdAt: number;
   updatedAt: number;
+  title: string | null;
+  titleSource: "auto" | "manual";
+  archivedAt: number | null;
+  status: "idle" | "running" | "unread";
 };
 
 export type ThreadMessage = {
@@ -438,6 +442,19 @@ export const api = {
     call<ThreadDetail>(cfg, `/api/threads/${encodeURIComponent(threadId)}`),
   deleteThread: (cfg: ApiConfig, threadId: string) =>
     callVoid(cfg, `/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
+  setThreadTitle: (cfg: ApiConfig, threadId: string, title: string) =>
+    call<ThreadSummary>(cfg, `/api/threads/${encodeURIComponent(threadId)}/title`, {
+      method: "PUT",
+      body: JSON.stringify({ title }),
+    }),
+  archiveThread: (cfg: ApiConfig, threadId: string) =>
+    call<ThreadSummary>(cfg, `/api/threads/${encodeURIComponent(threadId)}/archive`, {
+      method: "POST",
+    }),
+  markThreadRead: (cfg: ApiConfig, threadId: string) =>
+    callVoid(cfg, `/api/threads/${encodeURIComponent(threadId)}/read`, { method: "POST" }),
+  markThreadUnread: (cfg: ApiConfig, threadId: string) =>
+    callVoid(cfg, `/api/threads/${encodeURIComponent(threadId)}/unread`, { method: "POST" }),
   listRuns: (cfg: ApiConfig, threadId: string) =>
     call<RunInfo[]>(cfg, `/api/threads/${encodeURIComponent(threadId)}/runs`),
 

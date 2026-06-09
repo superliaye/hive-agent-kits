@@ -58,7 +58,13 @@ export type RunEvent =
  */
 export type RunModuleEvents = {
   "run.started": { runId: string; threadId: string; agentId: string; model: string };
-  "run.completed": { runId: string; finishReason: FinishReason };
-  "run.failed": { runId: string; code: NonNullable<Run["errorCode"]>; message: string };
-  "run.cancelled": { runId: string };
+  "run.completed": { runId: string; threadId: string; agentId: string; finishReason: FinishReason };
+  "run.failed": {
+    runId: string;
+    threadId: string;
+    agentId: string;
+    code: NonNullable<Run["errorCode"]>;
+    message: string;
+  };
+  "run.cancelled": { runId: string; threadId: string; agentId: string };
 };
