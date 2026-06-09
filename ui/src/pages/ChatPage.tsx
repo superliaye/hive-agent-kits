@@ -159,8 +159,12 @@ export function ChatPage({
     const onRun = (): void => {
       void refreshRef.current();
     };
-    for (const name of ["run.started", "run.completed", "run.failed", "run.cancelled"]) {
-      source.addEventListener(name, onRun);
+    // The daemon names each SSE frame `${source}.${type}`; run envelopes have
+    // source "run" and type "run.<verb>", so the wire name is double-prefixed:
+    // `run.run.started` etc. (routes.ts push(); asserted in
+    // routes-threads-runs.test.ts). Subscribe to the wire names, not the types.
+    for (const verb of ["started", "completed", "failed", "cancelled"] as const) {
+      source.addEventListener(`run.run.${verb}`, onRun);
     }
     return () => source.close();
   }, [apiConfig.baseUrl, apiConfig.token]);
@@ -400,6 +404,9 @@ export function ChatPage({
                             className={`sidebar-item${activeId === t.id ? " active" : ""}${
                               t.archivedAt !== null ? " archived" : ""
                             }`}
+                            role="button"
+                            tabIndex={0}
+                            aria-current={activeId === t.id}
                             onClick={() => setActiveId(t.id)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter" || e.key === " ") {
@@ -408,8 +415,11 @@ export function ChatPage({
                               }
                             }}
                             onContextMenu={(e) => {
+                              // Don't activate the row: the menu targets
+                              // menu.threadId, and activating would trip the
+                              // "active thread auto-read" effect — undoing a
+                              // subsequent Mark-as-not-read.
                               e.preventDefault();
-                              setActiveId(t.id);
                               setMenu({ threadId: t.id, x: e.clientX, y: e.clientY });
                             }}
                             data-testid={`thread-${t.id}`}
