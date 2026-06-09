@@ -41,8 +41,9 @@ export function MessageComposer({
   selectedModel: string | null;
   onSelectModel: (model: string) => void;
   onAddModels: () => void;
-  // The selected model's supported effort levels (always includes "off").
-  // Empty when no model is selected — the picker then hides.
+  // The selected model's supported effort levels, in canonical order. May omit
+  // "off" for always-reasoning models; empty when no model is selected. The
+  // picker hides whenever there is no real (non-"off") level.
   efforts: ThinkingEffort[];
   selectedEffort: ThinkingEffort | null;
   onSelectEffort: (effort: ThinkingEffort) => void;

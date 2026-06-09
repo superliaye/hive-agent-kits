@@ -572,13 +572,15 @@ describe("pi-ai adapter — short-circuit paths", () => {
     const listed = createPiAiAdapter().listModels?.("openai-codex") ?? [];
     expect(listed.length).toBeGreaterThan(0);
     // Read the truth from pi-ai's registry, don't hardcode — the adapter must
-    // surface exactly the levels each model declares (plus "off"), in canonical
-    // order. openai-codex models declare {"xhigh":..,"minimal":..} today, so
-    // their efforts must include those alongside "off".
+    // surface exactly the levels each model declares (plus "off" unless the model
+    // declares off:null), in canonical order. openai-codex models declare
+    // {"xhigh":..,"minimal":..} today, so their efforts must include those
+    // alongside "off".
     for (const m of listed) {
       const truth = getModels("openai-codex").find((g) => g.id === m.id);
       expect(m.efforts).toEqual(effortsFromThinkingLevelMap(truth?.thinkingLevelMap));
-      // Always offered, and never a bare list (the helper always yields "off").
+      // "off" is dropped only when a model declares off:null (always reasons);
+      // no codex model does today, so every one can still disable reasoning.
       expect(m.efforts).toContain("off");
     }
     // The current codex catalog declares minimal + xhigh; assert the wiring
