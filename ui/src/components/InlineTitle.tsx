@@ -78,6 +78,10 @@ export function InlineTitle({
       onChange={(e) => setDraft(e.target.value)}
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
+        // The editor owns the keyboard while open; stop keys from bubbling to an
+        // interactive ancestor (e.g. the nav row's role="button" onKeyDown, which
+        // would otherwise preventDefault Space and re-fire select on Enter).
+        e.stopPropagation();
         if (e.key === "Enter") {
           e.preventDefault();
           commit();
