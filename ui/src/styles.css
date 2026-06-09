@@ -717,8 +717,12 @@ pre.config {
 .status-dot.status-failed {
   background: var(--color-danger, #ef4444);
 }
+/* Running = hollow ring (statically distinct from the solid unread/failed dots
+   even when frozen — no motion, no screenshot, no reduced-motion needed). The
+   pulse rides on top for motion-OK users. */
 .status-dot.status-running {
-  background: var(--color-accent, #3b82f6);
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--color-accent, #3b82f6);
   animation: status-pulse 1s ease-in-out infinite;
 }
 @keyframes status-pulse {
@@ -730,6 +734,14 @@ pre.config {
   50% {
     opacity: 0.4;
     transform: scale(0.7);
+  }
+}
+/* OS-level reduced-motion: the in-app data-reduce-motion flattener (tokens.css)
+   covers the app toggle; this closes the OS-pref gap so the pulse stops even
+   when the user only set the OS preference. */
+@media (prefers-reduced-motion: reduce) {
+  .status-dot.status-running {
+    animation: none;
   }
 }
 
