@@ -623,6 +623,165 @@ pre.config {
   font-weight: 500;
 }
 
+/* Grouped left-nav: collapsible per-agent sections, paginated rows. */
+.thread-group {
+  border-bottom: 1px solid var(--color-border-subtle, var(--color-border-default));
+}
+.thread-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+.thread-group-header:hover {
+  background: var(--color-bg-hover);
+}
+.thread-group-header:focus-visible {
+  outline: 2px solid var(--color-accent, currentColor);
+  outline-offset: -2px;
+}
+.group-caret {
+  display: inline-block;
+  transition: transform 0.12s ease;
+}
+.group-caret.collapsed {
+  transform: rotate(-90deg);
+}
+.thread-group-agent {
+  flex: 1;
+  font-weight: 600;
+}
+.thread-group-count {
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.thread-group-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.thread-group-list .sidebar-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sidebar-item.archived .thread-row-name {
+  color: var(--color-fg-muted);
+  font-style: italic;
+}
+.thread-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.thread-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-load-more {
+  padding: 4px 16px 8px;
+}
+.button.small {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* Four-state status dot. idle renders nothing (no element). */
+.status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.status-unread {
+  background: var(--color-accent, #3b82f6);
+}
+.status-dot.status-failed {
+  background: var(--color-danger, #ef4444);
+}
+.status-dot.status-running {
+  background: var(--color-accent, #3b82f6);
+  animation: status-pulse 1s ease-in-out infinite;
+}
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.7);
+  }
+}
+
+/* Right-click context menu (fixed-positioned at the click point). */
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
+  display: flex;
+  flex-direction: column;
+}
+.context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  text-align: left;
+  font: inherit;
+  color: var(--color-fg-default);
+  cursor: pointer;
+}
+.context-menu-item:hover,
+.context-menu-item:focus-visible {
+  background: var(--color-bg-hover);
+  outline: none;
+}
+.context-menu-item.danger {
+  color: var(--color-danger, #ef4444);
+}
+
+/* Inline-editable title (header + nav-row Rename target). */
+.inline-title-placeholder {
+  color: var(--color-fg-muted);
+  font-style: italic;
+}
+.inline-title-input {
+  font: inherit;
+  color: inherit;
+  padding: 1px 4px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface);
+  min-width: 0;
+  width: 100%;
+}
+.chat-title-input {
+  font-size: 18px;
+}
+
 .message-list {
   flex: 1;
   overflow: auto;
