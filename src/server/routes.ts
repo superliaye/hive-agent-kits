@@ -725,6 +725,30 @@ export function buildRoutes(deps: RoutesDeps): Hono {
           ),
         );
 
+        // Run lifecycle. Every envelope carries threadId + runId (terminal
+        // variants gained threadId/agentId for this) so the client can refetch
+        // the affected thread/run.
+        disposers.push(
+          deps.runs.events.on("run.started", (e) =>
+            push({ source: "run", type: "run.started", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.runs.events.on("run.completed", (e) =>
+            push({ source: "run", type: "run.completed", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.runs.events.on("run.failed", (e) =>
+            push({ source: "run", type: "run.failed", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.runs.events.on("run.cancelled", (e) =>
+            push({ source: "run", type: "run.cancelled", payload: e }),
+          ),
+        );
+
         // Open marker so the client knows the stream is live.
         await stream.writeSSE({ event: "ready", data: "{}" });
 

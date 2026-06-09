@@ -13,8 +13,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
-import type { GatewayEvent } from "../../model-gateway/types.ts";
+import { type FakeFixtures, makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
+import type { CompletionInput, GatewayEvent } from "../../model-gateway/types.ts";
 import { createServer, type ServerHandles } from "../index.ts";
 
 const TOKEN = "test-token";
@@ -50,6 +50,10 @@ function authed(path: string, init: RequestInit = {}): Request {
 
 function jsonBody(obj: unknown): RequestInit {
   return { method: "POST", body: JSON.stringify(obj) };
+}
+
+function putBody(obj: unknown): RequestInit {
+  return { method: "PUT", body: JSON.stringify(obj) };
 }
 
 // Parse an SSE response body into a list of {event, data} pairs.
@@ -100,7 +104,7 @@ describe("server routes — threads + runs", () => {
     if (existsSync(runtimeRoot)) rmSync(runtimeRoot, { recursive: true, force: true });
   });
 
-  function registerFake(fixtures: Record<string, GatewayEvent[]>): void {
+  function registerFake(fixtures: FakeFixtures): void {
     // Last registration wins (registry.test.ts) — overrides pi-ai for "anthropic".
     server.gateway.registerAdapter(makeFakeAdapter(["anthropic"], fixtures));
   }
@@ -329,5 +333,314 @@ describe("server routes — threads + runs", () => {
     const rows = (await list.json()) as Array<{ status: string }>;
     expect(rows).toHaveLength(1);
     expect(rows[0]?.status).toBe("completed");
+  });
+
+  // ─── Thread title / archive / read / unread ────────────────────────────
+
+  type ThreadWire = {
+    id: string;
+    title: string | null;
+    titleSource: "auto" | "manual";
+    archivedAt: number | null;
+    status: "idle" | "running" | "unread";
+  };
+
+  async function createThread(): Promise<string> {
+    const create = await server.app.fetch(authed("/api/threads", jsonBody({ agentId: "root" })));
+    return ((await create.json()) as { id: string }).id;
+  }
+
+  async function getThread(id: string): Promise<ThreadWire> {
+    const res = await server.app.fetch(authed(`/api/threads/${id}`));
+    return (await res.json()) as ThreadWire;
+  }
+
+  // A completed run finishes a text reply; title-gen replays the same fixture.
+  const TEXT_REPLY = [
+    { type: "text_start", blockIndex: 0 },
+    { type: "text_delta", blockIndex: 0, delta: "hello world" },
+    { type: "text_end", blockIndex: 0 },
+    { type: "done", finishReason: "stop" },
+  ] as const;
+
+  async function runOnce(threadId: string, text = "hi"): Promise<void> {
+    const res = await server.app.fetch(
+      authed(`/api/threads/${threadId}/runs`, jsonBody({ userMessage: [{ type: "text", text }] })),
+    );
+    await readSSE(res);
+  }
+
+  // Poll a thread until `pred` holds — auto-title fires fire-and-forget after
+  // the SSE stream closes, so it may not have settled when readSSE returns.
+  async function waitForThread(
+    id: string,
+    pred: (t: ThreadWire) => boolean,
+    tries = 50,
+  ): Promise<ThreadWire> {
+    for (let i = 0; i < tries; i++) {
+      const t = await getThread(id);
+      if (pred(t)) return t;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return getThread(id);
+  }
+
+  test("PUT /api/threads/:id/title sets title and flips titleSource to manual", async () => {
+    const id = await createThread();
+    const res = await server.app.fetch(
+      authed(`/api/threads/${id}/title`, putBody({ title: "My title" })),
+    );
+    expect(res.status).toBe(200);
+    const summary = (await res.json()) as ThreadWire;
+    expect(summary.title).toBe("My title");
+    expect(summary.titleSource).toBe("manual");
+    const after = await getThread(id);
+    expect(after.title).toBe("My title");
+    expect(after.titleSource).toBe("manual");
+  });
+
+  test("PUT /api/threads/:id/title 404s unknown thread; 400 on empty title", async () => {
+    const missing = await server.app.fetch(
+      authed("/api/threads/missing/title", putBody({ title: "x" })),
+    );
+    expect(missing.status).toBe(404);
+    const id = await createThread();
+    const bad = await server.app.fetch(authed(`/api/threads/${id}/title`, putBody({ title: "" })));
+    expect(bad.status).toBe(400);
+  });
+
+  test("POST /api/threads/:id/archive sets archivedAt; 404 unknown", async () => {
+    const id = await createThread();
+    const res = await server.app.fetch(authed(`/api/threads/${id}/archive`, { method: "POST" }));
+    expect(res.status).toBe(200);
+    const summary = (await res.json()) as ThreadWire;
+    expect(summary.archivedAt).not.toBeNull();
+    const missing = await server.app.fetch(
+      authed("/api/threads/missing/archive", { method: "POST" }),
+    );
+    expect(missing.status).toBe(404);
+  });
+
+  test("POST unread clears lastReadAt (status → unread); POST read → idle; 404s", async () => {
+    registerFake({ "anthropic/claude-haiku-4-5": [...TEXT_REPLY] });
+    const id = await createThread();
+    await runOnce(id);
+    // After a completed run, never-read → unread.
+    expect((await getThread(id)).status).toBe("unread");
+
+    const read = await server.app.fetch(authed(`/api/threads/${id}/read`, { method: "POST" }));
+    expect(read.status).toBe(204);
+    expect((await getThread(id)).status).toBe("idle");
+
+    const unread = await server.app.fetch(authed(`/api/threads/${id}/unread`, { method: "POST" }));
+    expect(unread.status).toBe(204);
+    expect((await getThread(id)).status).toBe("unread");
+
+    const missingRead = await server.app.fetch(
+      authed("/api/threads/missing/read", { method: "POST" }),
+    );
+    expect(missingRead.status).toBe(404);
+    const missingUnread = await server.app.fetch(
+      authed("/api/threads/missing/unread", { method: "POST" }),
+    );
+    expect(missingUnread.status).toBe(404);
+  });
+
+  test("GET /api/threads reports status/title/archivedAt per row, incl. archived", async () => {
+    registerFake({ "anthropic/claude-haiku-4-5": [...TEXT_REPLY] });
+    const idle = await createThread();
+    const unread = await createThread();
+    await runOnce(unread);
+    const archived = await createThread();
+    await server.app.fetch(authed(`/api/threads/${archived}/archive`, { method: "POST" }));
+
+    const res = await server.app.fetch(authed("/api/threads"));
+    const rows = (await res.json()) as ThreadWire[];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(idle)?.status).toBe("idle");
+    expect(byId.get(unread)?.status).toBe("unread");
+    // Archived row is still returned.
+    expect(byId.get(archived)?.archivedAt).not.toBeNull();
+  });
+
+  test("GET /api/threads reports running for an in-flight Run", async () => {
+    registerFake({
+      "anthropic/claude-haiku-4-5": (() => {
+        const evs: GatewayEvent[] = [];
+        for (let i = 0; i < 200; i++) evs.push({ type: "text_delta", blockIndex: 0, delta: "x" });
+        evs.push({ type: "done", finishReason: "stop" });
+        return evs;
+      })(),
+    });
+    const id = await createThread();
+    const inflight = server.app.fetch(
+      authed(`/api/threads/${id}/runs`, jsonBody({ userMessage: [{ type: "text", text: "go" }] })),
+    );
+    const res = await inflight;
+    // The busy-thread set is populated at startRun (before the stream drains).
+    const list = (await (await server.app.fetch(authed("/api/threads"))).json()) as ThreadWire[];
+    expect(list.find((r) => r.id === id)?.status).toBe("running");
+    await res.text();
+  });
+
+  // ─── Auto-title generation ─────────────────────────────────────────────
+
+  test("first completed exchange on an untitled auto thread gets a title", async () => {
+    registerFake({ "anthropic/claude-haiku-4-5": [...TEXT_REPLY] });
+    const id = await createThread();
+    await runOnce(id);
+    const t = await waitForThread(id, (t) => t.title !== null);
+    expect(t.title).toBe("hello world");
+    expect(t.titleSource).toBe("auto");
+  });
+
+  test("second completed exchange does NOT regenerate the title", async () => {
+    // First exchange yields a normal reply (→ title). Second exchange replies
+    // differently; if title-gen wrongly re-ran it would overwrite. The guard
+    // (completed-run-count === 1) must skip the second.
+    // Distinguish the run reply from the title-gen call by the system prompt
+    // (title-gen sends the fixed "Summarize…" instruction). The title-gen call
+    // always returns "TITLEGEN"; the run reply is "hello world". The first
+    // exchange must title to "TITLEGEN"; the second must NOT re-run title-gen.
+    registerFake({
+      "anthropic/claude-haiku-4-5": (input: CompletionInput): GatewayEvent[] =>
+        input.system?.startsWith("Summarize")
+          ? [
+              { type: "text_start", blockIndex: 0 },
+              { type: "text_delta", blockIndex: 0, delta: "TITLEGEN" },
+              { type: "text_end", blockIndex: 0 },
+              { type: "done", finishReason: "stop" },
+            ]
+          : [...TEXT_REPLY],
+    });
+    const id = await createThread();
+    await runOnce(id, "first");
+    const first = await waitForThread(id, (t) => t.title !== null);
+    expect(first.title).toBe("TITLEGEN");
+    await runOnce(id, "second");
+    // Give any (wrong) regen a chance to run, then assert unchanged.
+    const after = await waitForThread(id, () => false, 5);
+    expect(after.title).toBe("TITLEGEN");
+  });
+
+  test("manually-titled thread is never overwritten by auto-title", async () => {
+    registerFake({ "anthropic/claude-haiku-4-5": [...TEXT_REPLY] });
+    const id = await createThread();
+    await server.app.fetch(authed(`/api/threads/${id}/title`, putBody({ title: "Pinned" })));
+    await runOnce(id);
+    const after = await waitForThread(id, () => false, 5);
+    expect(after.title).toBe("Pinned");
+    expect(after.titleSource).toBe("manual");
+  });
+
+  test("title-gen failure leaves thread untitled, no Run failure, no audit row", async () => {
+    // Run replies normally; the title-gen call (system = TITLE_SYSTEM_PROMPT)
+    // returns an error → no title, no throw.
+    registerFake({
+      "anthropic/claude-haiku-4-5": (input: CompletionInput): GatewayEvent[] =>
+        input.system?.startsWith("Summarize")
+          ? [
+              { type: "error", code: "model_overloaded", message: "boom", retryable: false },
+              { type: "done", finishReason: "error" },
+            ]
+          : [...TEXT_REPLY],
+    });
+    const id = await createThread();
+    const res = await server.app.fetch(
+      authed(`/api/threads/${id}/runs`, jsonBody({ userMessage: [{ type: "text", text: "hi" }] })),
+    );
+    const events = await readSSE(res);
+    // Run itself completed (not failed).
+    expect(events[events.length - 1]?.event).toBe("run.completed");
+    const after = await waitForThread(id, () => false, 5);
+    expect(after.title).toBeNull();
+    // No source=thread audit row was produced by auto-title.
+    const audit = await server.app.fetch(authed("/api/audit?source=thread"));
+    const rows = (await audit.json()) as unknown[];
+    expect(rows).toHaveLength(0);
+  });
+
+  // ─── Run lifecycle on /api/events ──────────────────────────────────────
+
+  // Collect SSE frames off a streamed Response until `done` returns true or the
+  // timeout elapses. Mirrors the proven incremental-read pattern in
+  // routes.test.ts (per-read race so a pending read can't block forever).
+  async function collectEvents(
+    res: Response,
+    done: (frames: Array<{ event: string; data: string }>) => boolean,
+    timeoutMs: number,
+  ): Promise<Array<{ event: string; data: string }>> {
+    const out: Array<{ event: string; data: string }> = [];
+    if (!res.body) return out;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    const deadline = Date.now() + timeoutMs;
+    let buf = "";
+    while (Date.now() < deadline) {
+      const { value, done: streamDone } = await Promise.race([
+        reader.read(),
+        new Promise<{ value: undefined; done: true }>((resolve) =>
+          setTimeout(() => resolve({ value: undefined, done: true }), 200),
+        ),
+      ]);
+      if (value) buf += decoder.decode(value, { stream: true });
+      else if (streamDone && !value) {
+        if (done(out)) break;
+        continue;
+      }
+      const frames = buf.split(/\r?\n\r?\n/);
+      buf = frames.pop() ?? "";
+      for (const frame of frames) {
+        const eventLine = frame.split(/\r?\n/).find((l) => l.startsWith("event:"));
+        const dataLine = frame.split(/\r?\n/).find((l) => l.startsWith("data:"));
+        out.push({
+          event: eventLine?.slice("event:".length).trim() ?? "",
+          data: dataLine?.slice("data:".length).trim() ?? "",
+        });
+      }
+      if (done(out)) break;
+    }
+    await reader.cancel();
+    return out;
+  }
+
+  test("/api/events yields run.started + terminal run envelope with correct threadId", async () => {
+    registerFake({ "anthropic/claude-haiku-4-5": [...TEXT_REPLY] });
+    const id = await createThread();
+
+    const stream = await server.app.fetch(
+      new Request(`http://localhost/api/events?token=${TOKEN}`),
+    );
+    expect(stream.status).toBe(200);
+
+    // Read the events stream concurrently with firing a Run on the thread.
+    const [frames] = await Promise.all([
+      collectEvents(stream, (fs) => fs.some((f) => f.event === "run.run.completed"), 5000),
+      // Small delay so the events stream is attached before the run emits.
+      (async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        await runOnce(id);
+      })(),
+    ]);
+
+    const started = frames.find((f) => f.event === "run.run.started");
+    const completed = frames.find((f) => f.event === "run.run.completed");
+    expect(started).toBeDefined();
+    expect(completed).toBeDefined();
+    const startedPayload = JSON.parse(started?.data ?? "{}") as { payload: { threadId: string } };
+    const completedPayload = JSON.parse(completed?.data ?? "{}") as {
+      payload: { threadId: string };
+    };
+    expect(startedPayload.payload.threadId).toBe(id);
+    expect(completedPayload.payload.threadId).toBe(id);
+
+    // Registry/catalog events still flow on the same stream.
+    const patch = await server.app.fetch(
+      authed("/api/agents/root/bindings", {
+        method: "PATCH",
+        body: JSON.stringify({ patches: [{ kind: "skill", name: "alpha", action: "unbind" }] }),
+      }),
+    );
+    expect([200, 404]).toContain(patch.status);
   });
 });
