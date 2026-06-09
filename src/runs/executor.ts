@@ -91,6 +91,13 @@ export type RunExecutor = {
   /** List Runs on a thread, oldest first. */
   listByThread(threadId: string): Run[];
 
+  /**
+   * Whether a Run is currently in flight on the thread. Predicate over the
+   * executor's in-flight reservation set — the source of truth for the
+   * `running` thread status (see threads/status.ts).
+   */
+  isThreadBusy(threadId: string): boolean;
+
   /** Module event stream — audit subscribes here for lifecycle. */
   events: TypedEmitter<RunModuleEvents>;
 };
@@ -339,6 +346,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     },
     listByThread(threadId) {
       return runs.listByThread(threadId);
+    },
+    isThreadBusy(threadId) {
+      return threadsWithRun.has(threadId);
     },
   };
 }

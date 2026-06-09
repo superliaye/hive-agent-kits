@@ -672,4 +672,32 @@ describe("RunExecutor — concurrency + cancellation", () => {
       void _ev;
     }
   });
+
+  test("isThreadBusy is true during an in-flight Run, false otherwise (AC #7)", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: {
+        "anthropic/claude-haiku-4-5": [
+          { type: "text_start", blockIndex: 0 },
+          { type: "text_delta", blockIndex: 0, delta: "hi" },
+          { type: "text_end", blockIndex: 0 },
+          { type: "done", finishReason: "stop" },
+        ],
+      },
+    });
+
+    // Idle before any Run.
+    expect(executor.isThreadBusy(threadId)).toBe(false);
+
+    // startRun reserves the thread synchronously, before the iterator advances.
+    const iter = executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] });
+    expect(executor.isThreadBusy(threadId)).toBe(true);
+    // An unrelated thread is never busy.
+    expect(executor.isThreadBusy("other-thread")).toBe(false);
+
+    // Draining to completion releases the reservation.
+    for await (const _ev of iter) {
+      void _ev;
+    }
+    expect(executor.isThreadBusy(threadId)).toBe(false);
+  });
 });
