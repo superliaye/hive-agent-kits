@@ -25,6 +25,7 @@ export const ModuleSourceSchema = z.enum([
   "config",
   "gateway",
   "agent-prefs",
+  "thread",
 ]);
 
 // Query params for GET /api/audit. Hono passes everything as strings — coerce

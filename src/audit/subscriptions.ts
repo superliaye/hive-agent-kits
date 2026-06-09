@@ -15,6 +15,7 @@ import type { ModelGateway } from "../model-gateway/index.ts";
 import type { RunExecutor } from "../runs/index.ts";
 import type { RunModuleEvents } from "../runs/types.ts";
 import type { SecretEvents } from "../secrets/types.ts";
+import type { ThreadEvents } from "../threads/index.ts";
 import type { AuditSvc } from "./effect/audit-live.ts";
 import type { Normalizer } from "./types.ts";
 
@@ -30,6 +31,11 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   // Consumer-owned port: only the event stream is read here. Satisfied by the
   // AgentModelPrefs service (its `.events`).
   agentPrefs?: { events: TypedEmitter<AgentPrefEvents> };
+  // Consumer-owned port: only the event stream is read here. Satisfied by the
+  // Threads service (its `.events`). Only USER/explicit lifecycle actions
+  // (manual archive/rename, mark-unread, delete) flow here; auto-archive and
+  // auto-title are system-initiated → trace, not audit.
+  threads?: { events: TypedEmitter<ThreadEvents> };
   // Future:
   //   permission?: { events: TypedEmitter<PermissionEvents> }
   //   mcp?:        { events: TypedEmitter<McpLifecycleEvents> }
@@ -118,6 +124,34 @@ const agentPrefsNormalizer: Normalizer<AgentPrefEvents> = {
   }),
 };
 
+// Threads: user/explicit lifecycle actions on a conversation. Payloads carry
+// REFS only — threadId + agentId, and titleSource for a rename (never the
+// title string, ADR-0004 redaction). Auto-archive and auto-title don't emit
+// here (system-initiated → trace), so every row this normalizer produces is a
+// genuine user action.
+const threadsNormalizer: Normalizer<ThreadEvents> = {
+  "thread.archived": (event) => ({
+    event_type: "thread.archived",
+    agent_id: event.agentId,
+    payload: { thread_id: event.threadId },
+  }),
+  "thread.deleted": (event) => ({
+    event_type: "thread.deleted",
+    agent_id: event.agentId,
+    payload: { thread_id: event.threadId },
+  }),
+  "thread.title_set": (event) => ({
+    event_type: "thread.title_set",
+    agent_id: event.agentId,
+    payload: { thread_id: event.threadId, title_source: event.titleSource },
+  }),
+  "thread.marked_unread": (event) => ({
+    event_type: "thread.marked_unread",
+    agent_id: event.agentId,
+    payload: { thread_id: event.threadId },
+  }),
+};
+
 // Attaches every present source's event stream to the audit log.
 // Returns a disposer that detaches all listeners.
 export function wireSubscriptions<S extends Record<string, unknown> = Record<string, unknown>>(
@@ -146,6 +180,10 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
 
   if (sources.agentPrefs) {
     disposers.push(audit.attach("agent-prefs", sources.agentPrefs.events, agentPrefsNormalizer));
+  }
+
+  if (sources.threads) {
+    disposers.push(audit.attach("thread", sources.threads.events, threadsNormalizer));
   }
 
   if (sources.runs) {
