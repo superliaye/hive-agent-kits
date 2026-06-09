@@ -702,7 +702,7 @@ describe("RunExecutor — concurrency + cancellation", () => {
   });
 });
 
-// ─── newest-terminal / newest-completed accessors ────────────────────────────
+// ─── newest-terminal accessor ───────────────────────────────────────────────
 
 describe("RunExecutor — status accessors", () => {
   // Each accessor scan keys on endedAt; the store stamps endedAt at runs.create
@@ -713,7 +713,7 @@ describe("RunExecutor — status accessors", () => {
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "ok" }] }));
   }
 
-  test("no Runs → both accessors null", async () => {
+  test("no Runs → newestTerminalRun null", async () => {
     const { executor, threadId } = await setup({
       fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
     });
@@ -727,7 +727,6 @@ describe("RunExecutor — status accessors", () => {
     await completedRun(executor, threadId);
     const terminal = executor.newestTerminalRun(threadId);
     expect(terminal?.status).toBe("completed");
-    expect(terminal?.status === "completed" ? terminal.endedAt : null).not.toBeNull();
   });
 
   test("a failed Run → newestTerminalRun is failed", async () => {
@@ -742,8 +741,6 @@ describe("RunExecutor — status accessors", () => {
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "x" }] }));
     const terminal = executor.newestTerminalRun(threadId);
     expect(terminal?.status).toBe("failed");
-    // The `unread` half derives from a completed terminal; a failed one yields null.
-    expect(terminal?.status === "completed" ? terminal.endedAt : null).toBeNull();
   });
 
   test("a cancelled Run → newestTerminalRun is cancelled", async () => {
@@ -755,7 +752,6 @@ describe("RunExecutor — status accessors", () => {
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "x" }] }));
     const terminal = executor.newestTerminalRun(threadId);
     expect(terminal?.status).toBe("cancelled");
-    expect(terminal?.status === "completed" ? terminal.endedAt : null).toBeNull();
   });
 
   test("failed then a newer completed Run → newestTerminalRun is the completed one (ordering trap)", async () => {
@@ -800,6 +796,5 @@ describe("RunExecutor — status accessors", () => {
     // The newer completed Run has the larger endedAt, so it wins the scan.
     const terminal = executor.newestTerminalRun(threadId);
     expect(terminal?.status).toBe("completed");
-    expect(terminal?.status === "completed" ? terminal.endedAt : null).not.toBeNull();
   });
 });
