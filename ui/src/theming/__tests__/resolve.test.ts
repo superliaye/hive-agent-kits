@@ -153,8 +153,8 @@ describe("resolveReduceMotion", () => {
 // Catalog completeness — a shipped preset missing any color token would
 // leave a hole in :root. Assert every named theme resolves the full set.
 describe("resolveTokens — every shipped theme resolves a complete token map", () => {
-  // The 19 TokenName keys (types.ts). resolveTokens layers the named
-  // palette (14 colors + font-ui/font-code via the helper) and always adds
+  // The 20 TokenName keys (types.ts). resolveTokens layers the named
+  // palette (15 colors + font-ui/font-code via the helper) and always adds
   // font-size-ui, font-size-code, sidebar-opacity.
   const ALL_TOKENS = [
     "color-bg-base",
@@ -171,6 +171,7 @@ describe("resolveTokens — every shipped theme resolves a complete token map", 
     "color-danger",
     "color-warning",
     "color-success",
+    "color-status-running",
     "font-ui",
     "font-code",
     "font-size-ui",
@@ -189,5 +190,60 @@ describe("resolveTokens — every shipped theme resolves a complete token map", 
       const tokens = resolveTokens({ themeId: theme.id }, "dark");
       for (const key of ALL_TOKENS) expect(tokens[key]).toBeTruthy();
     });
+  }
+});
+
+// The running status dot must be distinguishable by HUE from unread (accent)
+// and failed (danger) in every theme — not just by shape. Guard the hue
+// separation so a future palette edit can't silently collapse the live state
+// back into the accent or danger color.
+describe("color-status-running is hue-distinct from accent and danger in every theme", () => {
+  // Minimum hue separation (degrees) we require on the color wheel.
+  const MIN_HUE_DELTA = 25;
+
+  function hexToHue(hex: string): number | null {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+    if (!m) return null;
+    const n = Number.parseInt(m[1], 16);
+    const r = (n >> 16) / 255;
+    const g = ((n >> 8) & 0xff) / 255;
+    const b = (n & 0xff) / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d = max - min;
+    if (d === 0) return null; // achromatic — hue undefined, distinctness is via lightness
+    let h: number;
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    return h < 0 ? h + 360 : h;
+  }
+
+  function hueDelta(a: number, b: number): number {
+    const raw = Math.abs(a - b) % 360;
+    return raw > 180 ? 360 - raw : raw;
+  }
+
+  function assertDistinct(themeId: string, mode: "light" | "dark"): void {
+    const tokens = resolveTokens({ themeId }, mode);
+    const running = hexToHue(tokens["color-status-running"] ?? "");
+    const accent = hexToHue(tokens["color-accent"] ?? "");
+    const danger = hexToHue(tokens["color-danger"] ?? "");
+    // Achromatic accent/danger (null hue) can't collide with our chromatic
+    // running hue, so only assert when both have a defined hue.
+    if (running !== null && accent !== null) {
+      expect(hueDelta(running, accent)).toBeGreaterThanOrEqual(MIN_HUE_DELTA);
+    }
+    if (running !== null && danger !== null) {
+      expect(hueDelta(running, danger)).toBeGreaterThanOrEqual(MIN_HUE_DELTA);
+    }
+  }
+
+  for (const theme of LIGHT_THEMES) {
+    test(`light "${theme.id}"`, () => assertDistinct(theme.id, "light"));
+  }
+  for (const theme of DARK_THEMES) {
+    test(`dark "${theme.id}"`, () => assertDistinct(theme.id, "dark"));
   }
 });
