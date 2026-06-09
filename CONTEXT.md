@@ -21,6 +21,21 @@ The logical focus area an **Agent** specializes in. Abstract — not a hardcoded
 **Thread**:
 A persistent conversation between a user (or another agent) and an **Agent**. Holds message history. One Agent can have multiple Threads, in parallel or sequentially. Modeled after OpenAI's Thread.
 
+**Thread Title**:
+A short human-readable label for a **Thread**. Its **Title Source** records whether it was set automatically (derived from the conversation) or chosen by the user; a user-chosen title is sticky and an automatic one never overrides it.
+
+**Archived**:
+A lifecycle state of a **Thread**: set aside, out of the active list, but not deleted and still fully readable. Archiving is reversible-by-design and may be done by the user or automatically (**Auto-Archive**).
+
+**Auto-Archive**:
+The system archiving a **Thread** that has gone untouched for long enough (no new message within the idle window). System-initiated, not a user action — it is a housekeeping behavior, not an audited decision.
+
+**Last-Read / Unread**:
+Last-Read marks how far the user has caught up on a **Thread**. A Thread is Unread when an **Agent**'s reply has arrived since the user last read it.
+
+**Thread Status**:
+The derived state of a **Thread** for display: _running_ (a **Run** is in flight), _unread_ (new agent output the user hasn't seen), or _idle_ (nothing pending). Derived, not stored — a function of in-flight Runs, the newest completed Run, and Last-Read.
+
 **Run**:
 One execution of an **Agent** on a **Thread**. Spans from invocation to completion — may include multiple model turns and tool calls. Multiple Runs of the same Agent (on the same or different Threads) may execute concurrently. The internal mechanics of a Run depend on the Agent's **Agent Backend**: a `native`-backend Run executes Hive's model-plus-tool-use loop in-process; a CLI-backend Run spawns an external agent CLI (`claude-code`, `codex`, …) and streams its output. From the outside (UI, CLI, audit), every Run is a stream of `RunEvent`s — the backend is invisible at the seam. Modeled after OpenAI's Run.
 
