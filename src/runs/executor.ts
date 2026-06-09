@@ -93,12 +93,6 @@ export type RunExecutor = {
   listByThread(threadId: string): Run[];
 
   /**
-   * Newest completed Run's `endedAt` on a thread, or null when none. Drives
-   * the `unread` half of the thread status derivation (threads/status.ts).
-   */
-  newestCompletedEndedAt(threadId: string): number | null;
-
-  /**
    * Newest terminal (non-`running`) Run on a thread by `endedAt`, carrying its
    * status — or null when the thread has no terminal Run. Feeds the full
    * four-state status derivation (the newest terminal row wins: a newer
@@ -380,15 +374,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     },
     listByThread(threadId) {
       return runs.listByThread(threadId);
-    },
-    newestCompletedEndedAt(threadId) {
-      // O(N) over the thread's Runs — v1 thread/run counts are tiny (single-user).
-      let newest: number | null = null;
-      for (const r of runs.listByThread(threadId)) {
-        if (r.status !== "completed" || r.endedAt === undefined) continue;
-        if (newest === null || r.endedAt > newest) newest = r.endedAt;
-      }
-      return newest;
     },
     newestTerminalRun(threadId) {
       // Newest terminal (non-running) Run by endedAt — the row with the max
