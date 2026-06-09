@@ -29,6 +29,9 @@
   --color-danger: #c75450;
   --color-warning: #a37a00;
   --color-success: #2a6a3a;
+  /* Live/active — running Run. Distinct hue from accent (near-black) and
+   * danger (red) so the running dot reads as a third state by hue alone. */
+  --color-status-running: #c77800;
 
   /* Fonts */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;

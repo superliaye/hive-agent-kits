@@ -717,16 +717,17 @@ pre.config {
 .status-dot.status-failed {
   background: var(--color-danger, #ef4444);
 }
-/* Running = hollow ring (statically distinct from the solid unread/failed dots
-   even when frozen — no motion, no screenshot, no reduced-motion needed). The
-   pulse rides on top for motion-OK users. Sized larger than the solid 8px dots
-   so the live state is the visually dominant one; the open center keeps it a
-   ring, not a solid, preserving the static distinguisher. */
+/* Running = distinct live HUE (--color-status-running) AND a hollow ring, so the
+   live state is distinguishable from unread (accent) and failed (danger) by hue
+   alone — no motion required. Sized larger than the solid 8px dots so the live
+   state is the visually dominant one; the open center keeps it a ring, not a
+   solid, preserving the static shape distinguisher. The pulse rides on top for
+   motion-OK users and flattens under reduced-motion (below). */
 .status-dot.status-running {
   width: 10px;
   height: 10px;
   background: transparent;
-  box-shadow: inset 0 0 0 2.5px var(--color-accent, #3b82f6);
+  box-shadow: inset 0 0 0 2.5px var(--color-status-running, #c77800);
   animation: status-pulse 1s ease-in-out infinite;
 }
 @keyframes status-pulse {
