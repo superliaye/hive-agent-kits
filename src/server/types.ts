@@ -258,7 +258,7 @@ export type ThreadSummaryWire = {
   title: string | null;
   titleSource: "auto" | "manual";
   archivedAt: number | null;
-  status: "idle" | "running" | "unread";
+  status: "idle" | "running" | "unread" | "failed";
 };
 
 export type ThreadDetailWire = ThreadSummaryWire & {

@@ -132,20 +132,9 @@ function toConfiguredProviderWire(p: ConfiguredProvider): ConfiguredProviderWire
 export function buildRoutes(deps: RoutesDeps): Hono {
   const app = new Hono();
 
-  // Newest completed Run's `endedAt` for a thread, or null when none. Drives
-  // the `unread` half of the thread status derivation (threads/status.ts).
-  // O(N) over the thread's Runs — v1 thread/run counts are tiny (single-user).
-  function newestCompletedEndedAt(threadId: string): number | null {
-    let newest: number | null = null;
-    for (const r of deps.runs.listByThread(threadId)) {
-      if (r.status !== "completed" || r.endedAt === undefined) continue;
-      if (newest === null || r.endedAt > newest) newest = r.endedAt;
-    }
-    return newest;
-  }
-
   // Thread → wire summary. Closes over `deps` to compose `status` from the
-  // executor's busy predicate + newest-completed-Run + the thread's lastReadAt.
+  // executor's busy predicate + the thread's newest terminal Run + lastReadAt.
+  // The newest-terminal scan lives on the executor (it owns Run knowledge).
   function toThreadSummary(t: Thread): ThreadSummaryWire {
     return {
       id: t.id,
@@ -157,7 +146,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       archivedAt: t.archivedAt,
       status: deriveThreadStatus({
         isBusy: deps.runs.isThreadBusy(t.id),
-        newestCompletedEndedAt: newestCompletedEndedAt(t.id),
+        newestTerminal: deps.runs.newestTerminalRun(t.id),
         lastReadAt: t.lastReadAt,
       }),
     };

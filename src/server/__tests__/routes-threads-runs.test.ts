@@ -342,7 +342,7 @@ describe("server routes — threads + runs", () => {
     title: string | null;
     titleSource: "auto" | "manual";
     archivedAt: number | null;
-    status: "idle" | "running" | "unread";
+    status: "idle" | "running" | "unread" | "failed";
   };
 
   async function createThread(): Promise<string> {
@@ -481,6 +481,38 @@ describe("server routes — threads + runs", () => {
     const list = (await (await server.app.fetch(authed("/api/threads"))).json()) as ThreadWire[];
     expect(list.find((r) => r.id === id)?.status).toBe("running");
     await res.text();
+  });
+
+  test("GET /api/threads reports failed; a later successful Run clears to unread; read → idle", async () => {
+    registerFake({ "anthropic/claude-haiku-4-5": [...TEXT_REPLY] });
+    const id = await createThread();
+
+    // Drive a failing Run: remove the secret so the executor records a failed
+    // Run row (no_credentials), then restore it for the recovery Run.
+    await server.secrets.remove("anthropic");
+    await runOnce(id, "will fail");
+    expect((await getThread(id)).status).toBe("failed");
+
+    // A later successful Run is the newest terminal — the row flips to unread.
+    await server.secrets.setApiKey("anthropic", "sk-test");
+    await runOnce(id, "now works");
+    expect((await getThread(id)).status).toBe("unread");
+
+    // Reading clears it to idle.
+    const read = await server.app.fetch(authed(`/api/threads/${id}/read`, { method: "POST" }));
+    expect(read.status).toBe(204);
+    expect((await getThread(id)).status).toBe("idle");
+  });
+
+  test("POST read on a failed thread clears it to idle", async () => {
+    const id = await createThread();
+    await server.secrets.remove("anthropic");
+    await runOnce(id, "will fail");
+    expect((await getThread(id)).status).toBe("failed");
+
+    const read = await server.app.fetch(authed(`/api/threads/${id}/read`, { method: "POST" }));
+    expect(read.status).toBe(204);
+    expect((await getThread(id)).status).toBe("idle");
   });
 
   // ─── Auto-title generation ─────────────────────────────────────────────

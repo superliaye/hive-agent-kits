@@ -34,7 +34,7 @@ The system archiving a **Thread** that has gone untouched for long enough (no ne
 Last-Read marks how far the user has caught up on a **Thread**. A Thread is Unread when an **Agent**'s reply has arrived since the user last read it.
 
 **Thread Status**:
-The derived state of a **Thread** for display: _running_ (a **Run** is in flight), _unread_ (new agent output the user hasn't seen), or _idle_ (nothing pending). Derived, not stored — a function of in-flight Runs, the newest completed Run, and Last-Read.
+The derived state of a **Thread** for display, in precedence order _running > failed > unread > idle_: _running_ (a **Run** is in flight), _failed_ (the thread's newest terminal Run failed or was cancelled and the user hasn't read it; clears on read), _unread_ (the newest terminal Run completed and the user hasn't seen it), or _idle_ (nothing pending). Derived, not stored — a function of in-flight Runs, the newest terminal Run, and Last-Read.
 
 **Run**:
 One execution of an **Agent** on a **Thread**. Spans from invocation to completion — may include multiple model turns and tool calls. Multiple Runs of the same Agent (on the same or different Threads) may execute concurrently. The internal mechanics of a Run depend on the Agent's **Agent Backend**: a `native`-backend Run executes Hive's model-plus-tool-use loop in-process; a CLI-backend Run spawns an external agent CLI (`claude-code`, `codex`, …) and streams its output. From the outside (UI, CLI, audit), every Run is a stream of `RunEvent`s — the backend is invisible at the seam. Modeled after OpenAI's Run.
