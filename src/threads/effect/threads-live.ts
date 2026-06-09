@@ -7,12 +7,17 @@
 // not leaked). That borrowed-handle shape is the proof Threads does not open a
 // second `hive.db` connection; open + close belong to `HiveDbLive`.
 //
-// No typed `E`: Threads is pure synchronous CRUD with no failure that earns the
-// error channel. Its one throw (`ThreadNotFoundError`, store.ts) is raised inside
-// an `append` transaction and surfaces unchanged through the legacy surface; no
-// consumer narrows on it as a domain precondition (contrast Catalog's
-// `requireAgent`/`CatalogAgentNotFound`). So `ThreadsSvc` is exactly the legacy
-// `ThreadsStore` surface — no Effect-returning verbs.
+// The store's lifecycle verbs (setTitle/archive/markUnread/remove) are async +
+// block-on-failure: each awaits its audit emit BEFORE the DB write (ADR-0004), so
+// a throwing audit listener rejects the verb and aborts the mutation (the Secrets
+// precedent). The remaining reads + `append`/`markRead` stay synchronous.
+//
+// Still no typed `E`: verbs return plain `Promise`, not `Effect`. The one throw
+// (`ThreadNotFoundError`, store.ts) is raised inside an `append` transaction and
+// surfaces unchanged through the legacy surface; no consumer narrows on it as a
+// domain precondition (contrast Catalog's `requireAgent`/`CatalogAgentNotFound`).
+// So `ThreadsSvc` is exactly the legacy `ThreadsStore` surface — no
+// Effect-returning verbs.
 
 import { Context, Effect, Layer } from "effect";
 import { HiveDb } from "../../db/effect/hive-db-live.ts";
