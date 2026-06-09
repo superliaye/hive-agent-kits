@@ -34,6 +34,7 @@ import { createGateway, type ModelGateway } from "../model-gateway/index.ts";
 import { createRunExecutor, createRunsStore, type RunExecutor } from "../runs/index.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
 import type { Secrets } from "../secrets/index.ts";
+import { autoArchiveSweep } from "../threads/auto-archive.ts";
 import { ThreadsLive, Threads as ThreadsTag } from "../threads/effect/threads-live.ts";
 import type { Threads } from "../threads/index.ts";
 import { buildRoutes } from "./routes.ts";
@@ -159,6 +160,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // Boot-time stale-Run recovery: any Run still `running` from a previous
   // process is flipped to `failed(daemon_restart)`. Per ADR for Part 3.
   runsStore.markStaleAsFailed();
+  // Boot-time auto-archive sweep: threads idle past the idle window are
+  // archived (system-initiated → trace, never audit).
+  await autoArchiveSweep(threads);
 
   // Register the default multi-provider adapter (ADR-0002 §"Model abstraction":
   // pi-ai is the v1 default for anthropic/openai/google/mistral/bedrock/…).
@@ -182,6 +186,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     catalog,
     secrets,
     agentPrefs: agentModelPrefs,
+    threads,
     runs,
   });
 
