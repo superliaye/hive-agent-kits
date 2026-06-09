@@ -14,7 +14,7 @@
 
 import { log } from "../lib/log.ts";
 import type { CompletionInput, GatewayEvent } from "../model-gateway/types.ts";
-import { MODEL_FALLBACK } from "../runs/defaults.ts";
+import { resolveAgentModel } from "../runs/resolve-model.ts";
 
 // Fixed instruction. Kept terse — the model summarizes the conversation into a
 // short, plain title with no surrounding quotes or punctuation.
@@ -82,17 +82,17 @@ export async function maybeGenerateTitle(
       .filter((r) => r.status === "completed").length;
     if (completedCount !== 1) return;
 
-    // Re-resolve the model the same way the executor does (executor.ts:194-199):
+    // Re-resolve the model the same way the executor does (shared resolver):
     // per-agent user default > harness config.model > deployment fallback. There
     // is no per-Run override in this context.
     const agent = catalog.get(t.agentId);
     if (!agent) return;
-    const configuredModel = typeof agent.config.model === "string" ? agent.config.model : undefined;
-    const model = agentModelPrefs.getModel(t.agentId) ?? configuredModel ?? MODEL_FALLBACK;
-
-    const slash = model.indexOf("/");
-    if (slash < 1) return;
-    const provider = model.slice(0, slash);
+    const resolved = resolveAgentModel({
+      configuredModel: typeof agent.config.model === "string" ? agent.config.model : undefined,
+      userModelDefault: agentModelPrefs.getModel(t.agentId),
+    });
+    if ("failure" in resolved) return;
+    const { model, provider } = resolved;
 
     const auth = await secrets.getAuth(provider);
     if (!auth) {

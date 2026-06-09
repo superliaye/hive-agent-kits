@@ -9,7 +9,7 @@ import { completeStream } from "./effect/complete.ts";
 import type { GatewayFailure } from "./effect/failure.ts";
 import { toErrorEvent } from "./effect/failure.ts";
 import { GatewayError, isRetryable } from "./errors.ts";
-import { createGatewayRegistry } from "./registry.ts";
+import { createGatewayRegistry, parseModelProvider } from "./registry.ts";
 import type {
   AvailableModel,
   CompletionInput,
@@ -64,6 +64,7 @@ export function createGateway(): ModelGateway {
   };
 }
 
+export type { GatewayFailure } from "./effect/failure.ts";
 export type {
   AuthInput,
   AvailableModel,
@@ -79,4 +80,4 @@ export type {
   ThinkingEffort,
   ToolDef,
 } from "./types.ts";
-export { GatewayError, isRetryable };
+export { GatewayError, isRetryable, parseModelProvider };

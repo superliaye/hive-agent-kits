@@ -701,3 +701,103 @@ describe("RunExecutor — concurrency + cancellation", () => {
     expect(executor.isThreadBusy(threadId)).toBe(false);
   });
 });
+
+// ─── newest-terminal / newest-completed accessors ────────────────────────────
+
+describe("RunExecutor — status accessors", () => {
+  // Each accessor scan keys on endedAt; the store stamps endedAt at runs.create
+  // /complete/fail/cancel time. Running real runs sequentially yields strictly
+  // increasing endedAt values, so "newest" == "last finalized".
+
+  async function completedRun(executor: RunExecutor, threadId: string): Promise<void> {
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "ok" }] }));
+  }
+
+  test("no Runs → both accessors null", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
+    });
+    expect(executor.newestCompletedEndedAt(threadId)).toBeNull();
+    expect(executor.newestTerminalRun(threadId)).toBeNull();
+  });
+
+  test("a completed Run → newestTerminalRun is completed; newestCompletedEndedAt set", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
+    });
+    await completedRun(executor, threadId);
+    const terminal = executor.newestTerminalRun(threadId);
+    expect(terminal?.status).toBe("completed");
+    expect(executor.newestCompletedEndedAt(threadId)).toBe(terminal?.endedAt ?? null);
+  });
+
+  test("a failed Run → newestTerminalRun is failed; newestCompletedEndedAt null", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: {
+        "anthropic/claude-haiku-4-5": [
+          { type: "error", code: "rate_limited", message: "429", retryable: true },
+          { type: "done", finishReason: "error" },
+        ],
+      },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "x" }] }));
+    expect(executor.newestTerminalRun(threadId)?.status).toBe("failed");
+    expect(executor.newestCompletedEndedAt(threadId)).toBeNull();
+  });
+
+  test("a cancelled Run → newestTerminalRun is cancelled; newestCompletedEndedAt null", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: {
+        "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "cancelled" }],
+      },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "x" }] }));
+    expect(executor.newestTerminalRun(threadId)?.status).toBe("cancelled");
+    expect(executor.newestCompletedEndedAt(threadId)).toBeNull();
+  });
+
+  test("failed then a newer completed Run → newestTerminalRun is the completed one (ordering trap)", async () => {
+    // Build a dedicated harness with a MONOTONIC store clock so the second
+    // Run's endedAt is strictly greater than the first's — otherwise two
+    // sub-millisecond runs could collide and the scan (strict `>`) would keep
+    // the older failed row. Two model fixtures: the first Run fails, the second
+    // (via modelOverride) completes.
+    const db = openHiveDb(":memory:");
+    const threadsStore = createThreadsStore(db);
+    let tick = 1000;
+    const runsStore = createRunsStore(db, () => tick++);
+    const secrets = makeSecrets();
+    await secrets.setApiKey("anthropic", "sk-test");
+    const catalog = makeCatalogStub([makeAgent({ agentId: "test-agent" })]);
+    const gateway = makeFakeGateway({
+      "anthropic/claude-haiku-4-5": [
+        { type: "error", code: "rate_limited", message: "429", retryable: true },
+        { type: "done", finishReason: "error" },
+      ],
+      "anthropic/claude-opus-4-7": [{ type: "done", finishReason: "stop" }],
+    });
+    const executor = createRunExecutor({
+      threads: threadsStore,
+      runs: runsStore,
+      catalog,
+      gateway,
+      secrets,
+    });
+    const threadId = threadsStore.create({ agentId: "test-agent" }).id;
+
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "first" }] }));
+    expect(executor.newestTerminalRun(threadId)?.status).toBe("failed");
+
+    await collect(
+      executor.startRun({
+        threadId,
+        userMessage: [{ type: "text", text: "retry" }],
+        modelOverride: "anthropic/claude-opus-4-7",
+      }),
+    );
+    // The newer completed Run has the larger endedAt, so it wins the scan.
+    const terminal = executor.newestTerminalRun(threadId);
+    expect(terminal?.status).toBe("completed");
+    expect(executor.newestCompletedEndedAt(threadId)).toBe(terminal?.endedAt ?? null);
+  });
+});

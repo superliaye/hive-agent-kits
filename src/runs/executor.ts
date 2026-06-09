@@ -59,6 +59,7 @@ import type {
   SecretsPort,
   ThreadsPort,
 } from "./effect/ports.ts";
+import { resolveAgentModel } from "./resolve-model.ts";
 import type { Run, RunEvent, RunModuleEvents } from "./types.ts";
 
 export type StartRunInput = {
@@ -90,6 +91,22 @@ export type RunExecutor = {
 
   /** List Runs on a thread, oldest first. */
   listByThread(threadId: string): Run[];
+
+  /**
+   * Newest completed Run's `endedAt` on a thread, or null when none. Drives
+   * the `unread` half of the thread status derivation (threads/status.ts).
+   */
+  newestCompletedEndedAt(threadId: string): number | null;
+
+  /**
+   * Newest terminal (non-`running`) Run on a thread by `endedAt`, carrying its
+   * status — or null when the thread has no terminal Run. Feeds the full
+   * four-state status derivation (the newest terminal row wins: a newer
+   * `completed` Run beats an older `failed`/`cancelled` one).
+   */
+  newestTerminalRun(
+    threadId: string,
+  ): { status: "completed" | "failed" | "cancelled"; endedAt: number } | null;
 
   /**
    * Whether a Run is currently in flight on the thread. Predicate over the
@@ -199,12 +216,14 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         return;
       }
 
-      // Model resolution: per-Run override > user's per-agent default >
-      // harness config.model > deployment default.
-      const configuredModel =
-        typeof agent.config.model === "string" ? agent.config.model : undefined;
-      const userModelDefault = prefs.getModel(agentId);
-      const model = modelOverride ?? userModelDefault ?? configuredModel ?? MODEL_FALLBACK;
+      // Model + provider resolution (shared resolver — tier policy ADR-0013 +
+      // the gateway's canonical provider parse ADR-0005).
+      const resolved = resolveAgentModel({
+        configuredModel: typeof agent.config.model === "string" ? agent.config.model : undefined,
+        userModelDefault: prefs.getModel(agentId),
+        ...(modelOverride !== undefined ? { modelOverride } : {}),
+      });
+      const { model } = resolved;
 
       // Effort resolution mirrors model: per-Run override > user's per-agent
       // default > harness config.thinkingEffort (type-guarded) > undefined
@@ -212,10 +231,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const effort: ThinkingEffort | undefined =
         effortOverride ?? prefs.getEffort(agentId) ?? configuredEffort(agent.config.thinkingEffort);
 
-      // Provider extraction (validated by the gateway's registry too; this
-      // is just for the Secrets lookup).
-      const slash = model.indexOf("/");
-      if (slash < 1) {
+      if ("failure" in resolved) {
         const run = runs.create({ threadId, agentId, model });
         yield await emitFailed(
           run.id,
@@ -226,7 +242,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         );
         return;
       }
-      const provider = model.slice(0, slash);
+      const { provider } = resolved;
 
       // Auth lookup.
       const auth = await secrets.getAuth(provider);
@@ -364,6 +380,28 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     },
     listByThread(threadId) {
       return runs.listByThread(threadId);
+    },
+    newestCompletedEndedAt(threadId) {
+      // O(N) over the thread's Runs — v1 thread/run counts are tiny (single-user).
+      let newest: number | null = null;
+      for (const r of runs.listByThread(threadId)) {
+        if (r.status !== "completed" || r.endedAt === undefined) continue;
+        if (newest === null || r.endedAt > newest) newest = r.endedAt;
+      }
+      return newest;
+    },
+    newestTerminalRun(threadId) {
+      // Newest terminal (non-running) Run by endedAt — the row with the max
+      // endedAt wins regardless of which terminal status it carries, so a newer
+      // completed Run correctly beats an older failed/cancelled one.
+      let newest: { status: "completed" | "failed" | "cancelled"; endedAt: number } | null = null;
+      for (const r of runs.listByThread(threadId)) {
+        if (r.status === "running" || r.endedAt === undefined) continue;
+        if (newest === null || r.endedAt > newest.endedAt) {
+          newest = { status: r.status, endedAt: r.endedAt };
+        }
+      }
+      return newest;
     },
     isThreadBusy(threadId) {
       return threadsWithRun.has(threadId);

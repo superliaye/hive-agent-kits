@@ -12,6 +12,26 @@ import { GatewayFailure } from "./effect/failure.ts";
 import { GatewayError } from "./errors.ts";
 import type { AvailableModel, GatewayAdapter, GatewayModuleEvents } from "./types.ts";
 
+// Canonical "provider/model" parse. The single place the slash convention is
+// decoded — `lookup` below and every non-gateway consumer (the Run model
+// resolver) route through this rather than hand-rolling `indexOf("/")`. Returns
+// the parsed provider as a value, or a typed failure with the same code/message
+// the gateway resolvers report.
+export function parseModelProvider(
+  model: string,
+): { provider: string } | { failure: GatewayFailure } {
+  const slash = model.indexOf("/");
+  if (slash < 1 || slash === model.length - 1) {
+    return {
+      failure: new GatewayFailure({
+        code: "invalid_request",
+        message: `model must be "provider/model"; got: ${JSON.stringify(model)}`,
+      }),
+    };
+  }
+  return { provider: model.slice(0, slash) };
+}
+
 export type GatewayRegistry = {
   registerAdapter(adapter: GatewayAdapter): () => void;
   /** Throwing resolution — the legacy `complete()` path. */
@@ -57,16 +77,9 @@ export function createGatewayRegistry(): GatewayRegistry {
   // Effect resolvers below are thin shells over it, so both report identical
   // codes and messages.
   function lookup(model: string): { adapter: GatewayAdapter } | { failure: GatewayFailure } {
-    const slash = model.indexOf("/");
-    if (slash < 1 || slash === model.length - 1) {
-      return {
-        failure: new GatewayFailure({
-          code: "invalid_request",
-          message: `model must be "provider/model"; got: ${JSON.stringify(model)}`,
-        }),
-      };
-    }
-    const provider = model.slice(0, slash);
+    const parsed = parseModelProvider(model);
+    if ("failure" in parsed) return parsed;
+    const { provider } = parsed;
     const adapter = adapters.get(provider);
     if (!adapter) {
       return {
