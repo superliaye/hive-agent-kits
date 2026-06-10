@@ -201,7 +201,7 @@ describe("resolveTokens — every shipped theme resolves a complete token map", 
 
 // The running status dot must be distinguishable by HUE from unread (accent)
 // and failed (danger) in every theme — not just by shape. Guard the hue
-// separation so a future palette edit can't silently collapse the live state
+// separation so a future palette edit can't silently collapse the running state
 // back into the accent or danger color.
 describe("color-status-running is hue-distinct from accent and danger in every theme", () => {
   function assertDistinct(themeId: string, mode: "light" | "dark"): void {

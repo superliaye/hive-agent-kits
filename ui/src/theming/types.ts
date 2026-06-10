@@ -34,7 +34,7 @@ export type TokenName =
   | "color-danger"
   | "color-warning"
   | "color-success"
-  // Live/active — a Run in progress. A distinct hue so the running status
+  // Running — a Run in flight. A distinct hue so the running status
   // dot is distinguishable from unread (accent) and failed (danger) by HUE,
   // not just shape, even with motion disabled.
   | "color-status-running"

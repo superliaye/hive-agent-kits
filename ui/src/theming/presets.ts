@@ -23,7 +23,7 @@ export type NamedTheme = {
   palette: ModePalette;
 };
 
-// Default live/active hue per mode. Each palette inherits it unless its own
+// Default running hue per mode. Each palette inherits it unless its own
 // tokens override it (done, below, where the default collides with that theme's
 // accent or danger — see the hue-distinctness test). Amber for both modes: far
 // from the blue/teal-leaning accents and the red dangers that dominate the
