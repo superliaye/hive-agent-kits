@@ -219,23 +219,34 @@ export function ChatPage({
     };
   }, [apiConfig, agentId]);
 
-  // ─── Mark active thread read ───────────────────────────────────────────
-  // Whenever the active thread is in an unread/failed state while being viewed,
-  // clear it. This covers both (a) opening an unread thread and (b) a
-  // run.completed/failed envelope reintroducing unread for the already-active
-  // thread (the live refetch surfaces the new status; this re-clears it).
-  // Optimistic local flip + the server POST /read; the EventSource backstops.
-  // The setState guard makes the flip idempotent, so no extra POST fires for a
-  // thread already shown as idle.
+  // ─── Read-on-select ────────────────────────────────────────────────────
+  // Selecting (or re-selecting) a thread marks it read. An explicit "Mark as
+  // not read" on the already-active thread must STICK until the user re-selects
+  // it, so read fires on a selection CHANGE only — NOT on every `threads`
+  // update, which would instantly revert the optimistic unread flip. `markRead`
+  // reads the latest threads through a ref so it need not depend on `threads`
+  // (which would re-introduce the revert).
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
+  const markRead = useCallback(
+    (id: string): void => {
+      const cur = threadsRef.current.find((t) => t.id === id);
+      if (!cur || (cur.status !== "unread" && cur.status !== "failed")) return;
+      setThreads((list) => list.map((t) => (t.id === id ? { ...t, status: "idle" } : t)));
+      void api.markThreadRead(apiConfig, id).catch(() => {});
+    },
+    [apiConfig],
+  );
+  const prevActiveRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!activeId) return;
-    const cur = threads.find((t) => t.id === activeId);
-    if (!cur || (cur.status !== "unread" && cur.status !== "failed")) return;
-    setThreads((list) =>
-      list.map((t) => (t.id === activeId ? { ...t, status: "idle" } : t)),
-    );
-    void api.markThreadRead(apiConfig, activeId).catch(() => {});
-  }, [threads, activeId, apiConfig]);
+    if (activeId === null) {
+      prevActiveRef.current = null;
+      return;
+    }
+    if (prevActiveRef.current === activeId) return; // not a selection change
+    prevActiveRef.current = activeId;
+    markRead(activeId);
+  }, [activeId, markRead]);
 
   function toggleCollapse(agent: string): void {
     setCollapsed((prev) => {
@@ -407,11 +418,18 @@ export function ChatPage({
                             role="button"
                             tabIndex={0}
                             aria-current={activeId === t.id}
-                            onClick={() => setActiveId(t.id)}
+                            onClick={() => {
+                              // Re-selecting the active thread dismisses an
+                              // explicit unread; selecting another reads it via
+                              // the selection-change effect.
+                              if (activeId === t.id) markRead(t.id);
+                              else setActiveId(t.id);
+                            }}
                             onKeyDown={(e) => {
                               if (e.key === "Enter" || e.key === " ") {
                                 e.preventDefault();
-                                setActiveId(t.id);
+                                if (activeId === t.id) markRead(t.id);
+                                else setActiveId(t.id);
                               }
                             }}
                             onContextMenu={(e) => {
@@ -434,7 +452,7 @@ export function ChatPage({
                                   data-testid={`status-${t.status}`}
                                 />
                               ) : null}
-                              {renamingId === t.id ? (
+                              {renamingId === t.id && t.id !== activeId ? (
                                 <InlineTitle
                                   value={t.title ?? ""}
                                   placeholder={UNTITLED_PLACEHOLDER}
