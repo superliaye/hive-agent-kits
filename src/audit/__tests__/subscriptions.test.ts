@@ -15,13 +15,20 @@ import type { Capability } from "../../capabilities/types.ts";
 import { CatalogLive, Catalog as CatalogTag } from "../../catalog/effect/catalog-live.ts";
 import type { Agent } from "../../catalog/types.ts";
 import { configRuntime } from "../../config/effect/config-live.ts";
+import { openHiveDb } from "../../db/hive-db.ts";
+import { TypedEmitter } from "../../lib/typed-emitter.ts";
+import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
 import { createGateway } from "../../model-gateway/index.ts";
-import type { GatewayAdapter } from "../../model-gateway/types.ts";
+import type { CompletionInput, GatewayAdapter, GatewayEvent } from "../../model-gateway/types.ts";
+import type { ShellRunnerPort } from "../../runs/effect/ports.ts";
+import { createRunExecutor } from "../../runs/executor.ts";
+import { createRunsStore } from "../../runs/store.ts";
 import {
   SecretsLive,
   type SecretsSvc,
   Secrets as SecretsTag,
 } from "../../secrets/effect/secrets-live.ts";
+import { createThreadsStore } from "../../threads/store.ts";
 import { AuditLive, type AuditSvc, Audit as AuditTag } from "../effect/audit-live.ts";
 import { wireSubscriptions } from "../subscriptions.ts";
 
@@ -221,6 +228,118 @@ describe("wireSubscriptions", () => {
     await expect(secrets.setApiKey("openai", "sk-test")).rejects.toThrow(/audit persist failed/);
     // Side effect not committed: the provider was never stored (emit-before-commit).
     expect(secrets.status("openai")).toBe("missing");
+
+    dispose();
+  });
+
+  // F1: tool-use rows land on the `run` source; permission decisions on the
+  // dedicated `permission` source (Q4) — both via wireSubscriptions, through
+  // the executor's two emitters, with redaction (no raw args, no stdout).
+  test("run.tool_use.* on `run` source + permission.* on `permission` source, redacted", async () => {
+    const MODEL = "anthropic/claude-haiku-4-5";
+    const audit = makeAudit();
+    const secrets = makeSecrets();
+    await secrets.setApiKey("anthropic", "sk-test");
+    const db = openHiveDb(":memory:");
+    const threads = createThreadsStore(db);
+    const runsStore = createRunsStore(db);
+
+    const agent: Agent = {
+      agentId: "tool-agent",
+      backend: "native",
+      domain: "t",
+      bindings: { skills: [], snippets: [], tools: ["run_shell"], mcp: [] },
+      config: { model: MODEL },
+      commandAllowlist: ["node"],
+      promptBody: "",
+      layer: "bundled",
+      hasFork: false,
+      path: "/p/HARNESS.md",
+    };
+    const catalogEvents = new TypedEmitter<Record<string, never>>();
+    const catalog = {
+      list: () => [agent],
+      get: (id: string) => (id === agent.agentId ? agent : undefined),
+      updateBindings: async () => {
+        throw new Error("nope");
+      },
+      resetToBundled: async () => {
+        throw new Error("nope");
+      },
+      start: async () => {},
+      rescan: async () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: stub emitter; executor never reads catalog events.
+      events: catalogEvents as any,
+      dispose: () => {},
+    };
+
+    // tool_use turn, then a text turn once a tool_result exists in history.
+    const script = (input: CompletionInput): GatewayEvent[] => {
+      const hasResult = input.messages
+        .flatMap((m) => m.content)
+        .some((b) => b.type === "tool_result");
+      if (hasResult) {
+        return [
+          { type: "text_start", blockIndex: 0 },
+          { type: "text_delta", blockIndex: 0, delta: "done" },
+          { type: "text_end", blockIndex: 0 },
+          { type: "done", finishReason: "stop" },
+        ];
+      }
+      return [
+        { type: "tool_use_start", blockIndex: 0, id: "tu_1", name: "run_shell" },
+        {
+          type: "tool_use_end",
+          blockIndex: 0,
+          id: "tu_1",
+          args: { command: "node", args: ["--secret"] },
+        },
+        { type: "done", finishReason: "tool_use" },
+      ];
+    };
+    const gateway = createGateway();
+    gateway.registerAdapter(makeFakeAdapter(["anthropic"], { [MODEL]: script }));
+    const shell: ShellRunnerPort = {
+      run: async () => ({ stdout: "REDACTED-STDOUT", stderr: "", exitCode: 0 }),
+    };
+
+    const executor = createRunExecutor({
+      threads,
+      runs: runsStore,
+      catalog,
+      gateway,
+      secrets,
+      shell,
+    });
+    const dispose = wireSubscriptions(audit, {
+      runs: executor,
+      permission: { events: executor.permissionEvents },
+    });
+
+    const threadId = threads.create({ agentId: agent.agentId }).id;
+    for await (const _ev of executor.startRun({
+      threadId,
+      userMessage: [{ type: "text", text: "go" }],
+    })) {
+      void _ev;
+    }
+
+    const runRows = await audit.query({ source: "run" });
+    expect(runRows.some((r) => r.event_type === "run.tool_use.requested")).toBe(true);
+    expect(runRows.some((r) => r.event_type === "run.tool_use.executed")).toBe(true);
+
+    const permRows = await audit.query({ source: "permission" });
+    expect(permRows.some((r) => r.event_type === "permission.requested")).toBe(true);
+    const decided = permRows.find((r) => r.event_type === "permission.decided");
+    expect(decided).toBeDefined();
+    expect((decided?.payload as { outcome?: string }).outcome).toBe("allow");
+
+    // Redaction: no raw arg, no stdout anywhere in the persisted rows; the
+    // command NAME (ref) IS present.
+    const blob = JSON.stringify([...runRows, ...permRows]);
+    expect(blob).not.toContain("--secret");
+    expect(blob).not.toContain("REDACTED-STDOUT");
+    expect(blob).toContain("node");
 
     dispose();
   });
