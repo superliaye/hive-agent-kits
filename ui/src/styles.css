@@ -727,7 +727,7 @@ pre.config {
   width: 10px;
   height: 10px;
   background: transparent;
-  box-shadow: inset 0 0 0 2.5px var(--color-status-running, #c77800);
+  box-shadow: inset 0 0 0 2.5px var(--color-status-running);
   animation: status-pulse 1s ease-in-out infinite;
 }
 @keyframes status-pulse {
