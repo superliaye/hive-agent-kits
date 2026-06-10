@@ -12,6 +12,8 @@
 export { MODEL_FALLBACK } from "./defaults.ts";
 export type { CreateRunExecutorDeps, RunExecutor, StartRunInput } from "./executor.ts";
 export { createRunExecutor } from "./executor.ts";
+export type { ResolveInput, ResolveResult } from "./resolve.ts";
+export { resolve } from "./resolve.ts";
 export type { ResolveAgentModelInput, ResolveAgentModelResult } from "./resolve-model.ts";
 export { resolveAgentModel } from "./resolve-model.ts";
 export type { RunsStore } from "./store.ts";

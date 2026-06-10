@@ -100,6 +100,12 @@ export const HarnessManifest = z
       })
       .strict(),
     config: z.record(z.string(), z.unknown()),
+    // Per-Agent command allowlist for the `run_shell` Tool, enforced by the
+    // Run executor's PermissionPort (F1). Deny-by-default: when absent or empty,
+    // every `run_shell` command is denied. A hard-coded destructive denylist
+    // remains an independent floor regardless of this list. Additive + optional
+    // so existing manifests stay valid.
+    commandAllowlist: z.array(z.string()).optional(),
   })
   .strict();
 export type HarnessManifest = z.infer<typeof HarnessManifest>;
