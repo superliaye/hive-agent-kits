@@ -16,6 +16,12 @@ import {
 import { AuditLive, Audit as AuditTag } from "../audit/effect/audit-live.ts";
 import type { Audit } from "../audit/index.ts";
 import { wireSubscriptions } from "../audit/subscriptions.ts";
+import {
+  BackendProbeLive,
+  type BackendProbeSvc,
+  BackendProbe as BackendProbeTag,
+  notInstalledRunner,
+} from "../backend-probe/index.ts";
 import { createRegistry, type Registry } from "../capabilities/index.ts";
 import { CatalogLive, Catalog as CatalogTag } from "../catalog/effect/catalog-live.ts";
 import type { Catalog } from "../catalog/index.ts";
@@ -27,7 +33,7 @@ import {
   type Config,
 } from "../config/index.ts";
 import { HiveDb, HiveDbLive } from "../db/effect/hive-db-live.ts";
-import { createLogger, setLogger } from "../lib/log.ts";
+import { createLogger, log, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { createPiAiAdapter } from "../model-gateway/adapters/pi-ai.ts";
 import { createGateway, type ModelGateway } from "../model-gateway/index.ts";
@@ -64,6 +70,7 @@ export type ServerHandles = {
   agentModelPrefs: AgentModelPrefsSvc;
   threads: Threads;
   runs: RunExecutor;
+  backendProbe: BackendProbeSvc;
   token: string;
   port: number;
   dispose(): Promise<void>;
@@ -116,6 +123,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     CatalogLive(),
     AuditLive(auditOpts),
     ThreadsLive().pipe(Layer.provide(dataLayer)),
+    // Memory mode (tests/fast-iter) reports every backend as not installed so
+    // booting a server never spawns `claude`/`codex`. File mode uses the real
+    // Bun.spawn runner (the module default).
+    BackendProbeLive(opts.mode === "memory" ? { runner: notInstalledRunner } : {}),
   );
   const runtime = ManagedRuntime.make(rootLayer);
 
@@ -146,6 +157,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     dispose: () => {},
   };
   const agentModelPrefs: AgentModelPrefsSvc = runtime.runSync(AgentModelPrefsTag);
+  const backendProbe: BackendProbeSvc = runtime.runSync(BackendProbeTag);
   // AuditSvc is exactly the legacy `Audit` surface (attach/query/subscriptions);
   // the DB handle is closed by the layer's release, not exposed on the value.
   const audit: Audit = runtime.runSync(AuditTag);
@@ -163,6 +175,29 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // Boot-time auto-archive sweep: threads idle past the idle window are
   // archived (system-initiated → trace, never audit).
   await autoArchiveSweep(threads);
+
+  // Boot-time backend availability probe (doctor-style; ADR-0016 detect-not-
+  // manage). A system diagnostic → trace, never audit. Fire-and-forget so a
+  // missing or slow CLI never delays daemon readiness; the service trace-logs
+  // any unhealthy backend on its own.
+  backendProbe
+    .probeAll()
+    .then((statuses) => {
+      log().info(
+        {
+          module: "backend-probe",
+          backends: statuses.map((s) => ({
+            backend: s.backend,
+            reason: s.reason,
+            version: s.version,
+          })),
+        },
+        "backend availability probed",
+      );
+    })
+    .catch((err) => {
+      log().error({ module: "backend-probe", err }, "backend availability probe failed");
+    });
 
   // Register the default multi-provider adapter (ADR-0002 §"Model abstraction":
   // pi-ai is the v1 default for anthropic/openai/google/mistral/bedrock/…).
@@ -205,6 +240,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     secrets,
     gateway,
     agentModelPrefs,
+    backendProbe,
     config,
     token,
   });
@@ -220,6 +256,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     agentModelPrefs,
     threads,
     runs,
+    backendProbe,
     token,
     port,
     async dispose() {

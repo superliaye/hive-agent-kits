@@ -7,6 +7,8 @@ import { streamSSE } from "hono/streaming";
 import { ZodError } from "zod";
 import type { AgentModelPrefsSvc } from "../agent-prefs/index.ts";
 import type { Audit } from "../audit/index.ts";
+import type { BackendProbeSvc } from "../backend-probe/index.ts";
+import { BackendStatus } from "../backend-probe/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Capability } from "../capabilities/types.ts";
 import { AgentNotFoundError } from "../catalog/index.ts";
@@ -51,6 +53,7 @@ export type RoutesDeps = {
   secrets: Secrets;
   gateway: ModelGateway;
   agentModelPrefs: AgentModelPrefsSvc;
+  backendProbe: BackendProbeSvc;
   config: Config<AppConfig>;
   token: string;
 };
@@ -193,6 +196,14 @@ export function buildRoutes(deps: RoutesDeps): Hono {
   app.use("/api/*", bearerAuth(deps.token));
 
   app.get("/api/ready", (c) => c.json({ status: "ok" }));
+
+  // On-demand backend availability probe (ADR-0016). Re-probes the CLI backends
+  // and reports installed/missing + version with stable reason codes. Zod
+  // guards the response shape at the boundary.
+  app.get("/api/backends", async (c) => {
+    const statuses = await deps.backendProbe.probeAll();
+    return c.json(BackendStatus.array().parse(statuses));
+  });
 
   app.get("/api/agents", (c) => {
     return c.json(deps.catalog.list().map(toAgentSummary));
