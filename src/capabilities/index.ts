@@ -1,5 +1,15 @@
 // Public API for the Capability Registry. See docs/adr/0007-capability-lifecycle-and-storage.md.
 
+export type {
+  BindingResolverSvc,
+  ResolvedSkill,
+  SkillRegistry,
+  SkillResolution,
+} from "./effect/binding-resolver.ts";
+export {
+  BindingResolver,
+  BindingResolverLive,
+} from "./effect/binding-resolver.ts";
 export type { LoaderError, LoaderResult } from "./loader.ts";
 export { scanAll } from "./loader.ts";
 export type { CreateRegistryOptions } from "./registry.ts";
