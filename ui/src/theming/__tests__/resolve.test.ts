@@ -27,6 +27,41 @@ const DEFAULTS: Preferences = {
   useSystemAccent: false,
 };
 
+// Test-only color math, shared across the hue-distinctness and contrast blocks.
+// Kept here (not in production hue.ts) — these are assertion wrappers and WCAG
+// helpers the resolver never needs.
+
+// Hue distance between two hex colors; fails the test if either is achromatic
+// (we only call it on chromatic inputs, where a null would be a real bug).
+function deltaOf(a: string, b: string): number {
+  const ha = hexToHue(a);
+  const hb = hexToHue(b);
+  expect(ha).not.toBeNull();
+  expect(hb).not.toBeNull();
+  if (ha === null || hb === null) throw new Error("expected chromatic colors");
+  return hueDelta(ha, hb);
+}
+
+// WCAG relative luminance + contrast ratio for two #rrggbb colors.
+function relLuminance(hex: string): number {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const chan = (v: number): number => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  const r = chan((n >> 16) & 0xff);
+  const g = chan((n >> 8) & 0xff);
+  const b = chan(n & 0xff);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+function contrast(a: string, b: string): number {
+  const la = relLuminance(a);
+  const lb = relLuminance(b);
+  const hi = Math.max(la, lb);
+  const lo = Math.min(la, lb);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
 describe("resolveMode", () => {
   test("returns concrete mode when prefs is light/dark", () => {
     expect(resolveMode({ ...DEFAULTS, mode: "light" }, "dark")).toBe("light");
@@ -234,17 +269,6 @@ describe("color-status-running is hue-distinct from accent and danger in every t
 // safe alt hue only when it actually collides; a non-colliding accent leaves the
 // theme default untouched, and an achromatic accent never fires the nudge.
 describe("resolveTokens — running hue is guarded against the accent override", () => {
-  // Hue distance between two hex colors; fails the test if either is achromatic
-  // (we only call it on chromatic inputs, where a null would be a real bug).
-  function deltaOf(a: string, b: string): number {
-    const ha = hexToHue(a);
-    const hb = hexToHue(b);
-    expect(ha).not.toBeNull();
-    expect(hb).not.toBeNull();
-    if (ha === null || hb === null) throw new Error("expected chromatic colors");
-    return hueDelta(ha, hb);
-  }
-
   const DEFAULT_DARK_RUNNING = DARK_THEMES.find((t) => t.id === "default-dark")?.palette.tokens[
     "color-status-running"
   ];
@@ -293,32 +317,6 @@ describe("resolveTokens — running hue is guarded against the accent override",
 // (mirroring DEFAULT_STATUS_RUNNING_LIGHT/_DARK); the nudge picks the mode-matched
 // literal. Hue distinctness is already covered above — this guards luminance.
 describe("resolveTokens — light-mode running safe-alt is contrast-legible", () => {
-  // WCAG relative luminance + contrast ratio for two #rrggbb colors.
-  function relLuminance(hex: string): number {
-    const n = Number.parseInt(hex.slice(1), 16);
-    const chan = (v: number): number => {
-      const s = v / 255;
-      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-    };
-    const r = chan((n >> 16) & 0xff);
-    const g = chan((n >> 8) & 0xff);
-    const b = chan(n & 0xff);
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  }
-  function contrast(a: string, b: string): number {
-    const la = relLuminance(a);
-    const lb = relLuminance(b);
-    const hi = Math.max(la, lb);
-    const lo = Math.min(la, lb);
-    return (hi + 0.05) / (lo + 0.05);
-  }
-  function deltaOf(a: string, b: string): number {
-    const ha = hexToHue(a);
-    const hb = hexToHue(b);
-    if (ha === null || hb === null) throw new Error("expected chromatic colors");
-    return hueDelta(ha, hb);
-  }
-
   // Pure white is the brightest possible bg and the true worst case for the 3:1
   // floor — brighter than default-light's #f5f5f7. Several shipped light themes
   // (github-light, notion-light, xcode-light) use #ffffff exactly, and the nudge
