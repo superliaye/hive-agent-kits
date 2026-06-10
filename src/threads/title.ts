@@ -71,16 +71,22 @@ export async function maybeGenerateTitle(
     const t = threads.get(threadId);
     if (!t || t.title !== null || t.titleSource !== "auto") return;
 
-    // Guard 2 (BINDING): exactly one completed run — the just-finished first
-    // exchange. Evaluated AFTER the run row is marked completed (the route
-    // observes `run.completed` only after `runs.complete(...)` persists), so the
-    // first completed exchange yields count === 1; a later exchange yields >= 2
-    // and is skipped. The completed-run count is the sole first-exchange signal
-    // (no message-count heuristic, no persisted `title_attempted` flag).
+    // Guard 2: at least one completed exchange. Evaluated AFTER the run row is
+    // marked completed (the route observes `run.completed` only after
+    // `runs.complete(...)` persists). This is a floor, not an exact count: it
+    // only blocks titling an exchange-less Thread. Guard 1 above
+    // (`title === null && titleSource === "auto"`) is the binding idempotency
+    // guard — once any title exists, generation stops permanently.
+    //
+    // Why a floor, not `=== 1`: title-gen retries until the Thread is titled.
+    // A first exchange that completed but whose title-gen failed (no auth, empty
+    // completion, or gateway error) leaves the Thread untitled, so the next
+    // completed exchange backfills the title (self-heal). This makes auto-titling
+    // disconnect / transient-failure resilient — see ADR-0014 §2.
     const completedCount = runs
       .listByThread(threadId)
       .filter((r) => r.status === "completed").length;
-    if (completedCount !== 1) return;
+    if (completedCount < 1) return;
 
     // Re-resolve the model the same way the executor does (shared resolver):
     // per-agent user default > harness config.model > deployment fallback. There

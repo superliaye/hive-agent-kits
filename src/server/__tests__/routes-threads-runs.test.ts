@@ -526,10 +526,10 @@ describe("server routes — threads + runs", () => {
     expect(t.titleSource).toBe("auto");
   });
 
-  test("second completed exchange does NOT regenerate the title", async () => {
+  test("second completed exchange does NOT regenerate once a title exists", async () => {
     // First exchange yields a normal reply (→ title). Second exchange replies
-    // differently; if title-gen wrongly re-ran it would overwrite. The guard
-    // (completed-run-count === 1) must skip the second.
+    // differently; if title-gen wrongly re-ran it would overwrite. Guard 1
+    // (title already present) — NOT a completed-run count — must skip the second.
     // Distinguish the run reply from the title-gen call by the system prompt
     // (title-gen sends the fixed "Summarize…" instruction). The title-gen call
     // always returns "TITLEGEN"; the run reply is "hello world". The first
@@ -553,6 +553,44 @@ describe("server routes — threads + runs", () => {
     // Give any (wrong) regen a chance to run, then assert unchanged.
     const after = await waitForThread(id, () => false, 5);
     expect(after.title).toBe("TITLEGEN");
+  });
+
+  test("later completed exchange backfills the title after an earlier title-gen failure", async () => {
+    // Self-heal / disconnect-resilience (ADR-0014 §2): the first exchange
+    // completes but its title-gen fails (gateway error), so the Thread stays
+    // untitled. The next completed exchange must backfill the title. This
+    // FAILS under the old `completedCount !== 1` guard (the 2nd exchange has
+    // count 2 and was skipped) and PASSES under the `< 1` floor.
+    let titleGenCalls = 0;
+    registerFake({
+      "anthropic/claude-haiku-4-5": (input: CompletionInput): GatewayEvent[] => {
+        if (input.system?.startsWith("Summarize")) {
+          titleGenCalls += 1;
+          // First title-gen attempt errors; subsequent attempts succeed.
+          return titleGenCalls === 1
+            ? [
+                { type: "error", code: "model_overloaded", message: "boom", retryable: false },
+                { type: "done", finishReason: "error" },
+              ]
+            : [
+                { type: "text_start", blockIndex: 0 },
+                { type: "text_delta", blockIndex: 0, delta: "BACKFILLED" },
+                { type: "text_end", blockIndex: 0 },
+                { type: "done", finishReason: "stop" },
+              ];
+        }
+        return [...TEXT_REPLY];
+      },
+    });
+    const id = await createThread();
+    await runOnce(id, "first");
+    // First exchange completed but title-gen failed → still untitled.
+    const afterFirst = await waitForThread(id, () => false, 5);
+    expect(afterFirst.title).toBeNull();
+    await runOnce(id, "second");
+    const afterSecond = await waitForThread(id, (t) => t.title !== null);
+    expect(afterSecond.title).toBe("BACKFILLED");
+    expect(afterSecond.titleSource).toBe("auto");
   });
 
   test("manually-titled thread is never overwritten by auto-title", async () => {

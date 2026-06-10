@@ -313,8 +313,8 @@ export function buildRoutes(deps: RoutesDeps): Hono {
   // ─── Threads ─────────────────────────────────────────────────────────
 
   // Returns ALL threads — active AND archived. `archivedAt` (non-null =
-  // archived) and `status` (idle/running/unread) drive client-side bucketing
-  // into active vs. archived lists; the daemon does not pre-filter.
+  // archived) and `status` (idle/running/unread/failed) drive client-side
+  // bucketing into active vs. archived lists; the daemon does not pre-filter.
   app.get("/api/threads", (c) => {
     return c.json(deps.threads.list().map(toThreadSummary));
   });
