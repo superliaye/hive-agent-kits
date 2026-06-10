@@ -458,6 +458,22 @@ export function ChatPage({
                                 minute: "2-digit",
                               })}
                             </div>
+                            <button
+                              type="button"
+                              className="thread-row-more"
+                              aria-label="Conversation actions"
+                              title="Conversation actions"
+                              data-testid={`thread-more-${t.id}`}
+                              onClick={(e) => {
+                                // Same menu as right-click, anchored to the button.
+                                // Stop the click from selecting the row.
+                                e.stopPropagation();
+                                const r = e.currentTarget.getBoundingClientRect();
+                                setMenu({ threadId: t.id, x: r.left, y: r.bottom });
+                              }}
+                            >
+                              ⋯
+                            </button>
                           </li>
                         );
                       })}

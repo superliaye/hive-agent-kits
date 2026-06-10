@@ -675,10 +675,43 @@ pre.config {
   list-style: none;
 }
 .thread-group-list .sidebar-item {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+/* Hover/focus overflow trigger — opens the same menu as right-click. Absolutely
+   positioned so it never shifts the row; it sits over the timestamp, which is
+   hidden while the trigger is shown. */
+.thread-row-more {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  padding: 0 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-fg-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.sidebar-item:hover .thread-row-more,
+.sidebar-item:focus-within .thread-row-more {
+  display: block;
+}
+.sidebar-item:hover .meta,
+.sidebar-item:focus-within .meta {
+  visibility: hidden;
+}
+.thread-row-more:hover,
+.thread-row-more:focus-visible {
+  background: var(--color-bg-hover);
+  color: var(--color-fg-default);
+  outline: none;
 }
 .sidebar-item.archived .thread-row-name {
   color: var(--color-fg-muted);
