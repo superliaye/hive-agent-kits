@@ -25,6 +25,7 @@ export const ModuleSourceSchema = z.enum([
   "config",
   "gateway",
   "agent-prefs",
+  "thread",
 ]);
 
 // Query params for GET /api/audit. Hono passes everything as strings — coerce
@@ -118,7 +119,7 @@ export type AgentDetailWire = AgentSummaryWire & {
 
 // Envelope for events delivered over /api/events (SSE).
 export type WireEvent = {
-  source: "registry" | "catalog" | "config" | "gateway";
+  source: "registry" | "catalog" | "config" | "gateway" | "run";
   type: string;
   payload: unknown;
 };
@@ -194,6 +195,15 @@ export const CreateThreadBody = z
   .strict();
 export type CreateThreadBody = z.infer<typeof CreateThreadBody>;
 
+// PUT /api/threads/:id/title body. A user-chosen title pins `titleSource` to
+// `manual` (sticky — auto-title never clobbers it). 200 cap is a sane bound.
+export const SetThreadTitleBody = z
+  .object({
+    title: z.string().min(1).max(200),
+  })
+  .strict();
+export type SetThreadTitleBody = z.infer<typeof SetThreadTitleBody>;
+
 // Thinking-effort levels accepted at the HTTP boundary. Inferred from the
 // canonical `EFFORT_ORDER` tuple (src/model-gateway/types.ts) — the closed set
 // of levels any provider can express — so this boundary enum can't drift from
@@ -245,6 +255,10 @@ export type ThreadSummaryWire = {
   agentId: string;
   createdAt: number;
   updatedAt: number;
+  title: string | null;
+  titleSource: "auto" | "manual";
+  archivedAt: number | null;
+  status: "idle" | "running" | "unread" | "failed";
 };
 
 export type ThreadDetailWire = ThreadSummaryWire & {

@@ -23,16 +23,47 @@ export type NamedTheme = {
   palette: ModePalette;
 };
 
+// Default running hue per mode. Each palette inherits it unless its own
+// tokens override it (done, below, where the default collides with that theme's
+// accent or danger — see the hue-distinctness test). Amber for both modes: far
+// from the blue/teal-leaning accents and the red dangers that dominate the
+// catalog, and never the green `--color-success` hue (which would read as done).
+// The few amber-accent themes override to cyan.
+export const DEFAULT_STATUS_RUNNING_LIGHT = "#c77800";
+const DEFAULT_STATUS_RUNNING_DARK = "#f5a623";
+
+// Safe fallback running hue for the warm-accent themes whose own accent would
+// collide with the amber default. Cyan — far from amber/red — and the single
+// source of truth: the warm-accent preset themes below and the resolveTokens
+// override-guard both reference these, so retuning them can't desync.
+//
+// Split per mode like DEFAULT_STATUS_RUNNING_LIGHT/_DARK: the same cyan that
+// reads ~10:1 on dark backgrounds drops to ~1.7:1 on near-white, below the 3:1
+// non-text-UI floor. The nudge picks the mode-matched literal. Both live in the
+// same cyan family (≈186°/193°), well past MIN_HUE_DELTA from the warm accents.
+export const STATUS_RUNNING_SAFE_ALT_DARK = "#3ad0e0";
+export const STATUS_RUNNING_SAFE_ALT_LIGHT = "#0e7490";
+
 function light(tokens: Omit<TokenMap, "font-ui" | "font-code">): ModePalette {
   return {
     mode: "light",
-    tokens: { ...tokens, "font-ui": DEFAULT_FONT_UI, "font-code": DEFAULT_FONT_CODE },
+    tokens: {
+      "color-status-running": DEFAULT_STATUS_RUNNING_LIGHT,
+      ...tokens,
+      "font-ui": DEFAULT_FONT_UI,
+      "font-code": DEFAULT_FONT_CODE,
+    },
   };
 }
 function dark(tokens: Omit<TokenMap, "font-ui" | "font-code">): ModePalette {
   return {
     mode: "dark",
-    tokens: { ...tokens, "font-ui": DEFAULT_FONT_UI, "font-code": DEFAULT_FONT_CODE },
+    tokens: {
+      "color-status-running": DEFAULT_STATUS_RUNNING_DARK,
+      ...tokens,
+      "font-ui": DEFAULT_FONT_UI,
+      "font-code": DEFAULT_FONT_CODE,
+    },
   };
 }
 
@@ -135,6 +166,8 @@ export const LIGHT_THEMES: readonly NamedTheme[] = [
       "color-danger": "#e65050",
       "color-warning": "#f29718",
       "color-success": "#6cbf43",
+      // amber default collides with the amber accent — use violet.
+      "color-status-running": "#8a5cf6",
     }),
   },
   {
@@ -356,6 +389,8 @@ export const LIGHT_THEMES: readonly NamedTheme[] = [
       "color-danger": "#bc4334",
       "color-warning": "#9a7320",
       "color-success": "#5a7a3a",
+      // amber default collides with the tan accent — use blue.
+      "color-status-running": "#1f6fd0",
     }),
   },
   {
@@ -559,6 +594,8 @@ export const DARK_THEMES: readonly NamedTheme[] = [
       "color-danger": "#d95757",
       "color-warning": "#e6b450",
       "color-success": "#70bf56",
+      // amber default collides with the amber accent — use cyan.
+      "color-status-running": STATUS_RUNNING_SAFE_ALT_DARK,
     }),
   },
   {
@@ -579,6 +616,8 @@ export const DARK_THEMES: readonly NamedTheme[] = [
       "color-danger": "#ff6666",
       "color-warning": "#ffcc66",
       "color-success": "#87d96c",
+      // amber default collides with the amber accent — use cyan.
+      "color-status-running": STATUS_RUNNING_SAFE_ALT_DARK,
     }),
   },
   {
@@ -900,6 +939,8 @@ export const DARK_THEMES: readonly NamedTheme[] = [
       "color-danger": "#ff6b5e",
       "color-warning": "#ffb454",
       "color-success": "#84c46b",
+      // amber default collides with the orange accent — use cyan.
+      "color-status-running": STATUS_RUNNING_SAFE_ALT_DARK,
     }),
   },
   {
@@ -920,6 +961,8 @@ export const DARK_THEMES: readonly NamedTheme[] = [
       "color-danger": "#cf6a52",
       "color-warning": "#c9a227",
       "color-success": "#8a9a4b",
+      // amber default collides with the gold accent — use cyan.
+      "color-status-running": STATUS_RUNNING_SAFE_ALT_DARK,
     }),
   },
 ];

@@ -672,4 +672,129 @@ describe("RunExecutor — concurrency + cancellation", () => {
       void _ev;
     }
   });
+
+  test("isThreadBusy is true during an in-flight Run, false otherwise (AC #7)", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: {
+        "anthropic/claude-haiku-4-5": [
+          { type: "text_start", blockIndex: 0 },
+          { type: "text_delta", blockIndex: 0, delta: "hi" },
+          { type: "text_end", blockIndex: 0 },
+          { type: "done", finishReason: "stop" },
+        ],
+      },
+    });
+
+    // Idle before any Run.
+    expect(executor.isThreadBusy(threadId)).toBe(false);
+
+    // startRun reserves the thread synchronously, before the iterator advances.
+    const iter = executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] });
+    expect(executor.isThreadBusy(threadId)).toBe(true);
+    // An unrelated thread is never busy.
+    expect(executor.isThreadBusy("other-thread")).toBe(false);
+
+    // Draining to completion releases the reservation.
+    for await (const _ev of iter) {
+      void _ev;
+    }
+    expect(executor.isThreadBusy(threadId)).toBe(false);
+  });
+});
+
+// ─── newest-terminal accessor ───────────────────────────────────────────────
+
+describe("RunExecutor — status accessors", () => {
+  // Each accessor scan keys on endedAt; the store stamps endedAt at runs.create
+  // /complete/fail/cancel time. Running real runs sequentially yields strictly
+  // increasing endedAt values, so "newest" == "last finalized".
+
+  async function completedRun(executor: RunExecutor, threadId: string): Promise<void> {
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "ok" }] }));
+  }
+
+  test("no Runs → newestTerminalRun null", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
+    });
+    expect(executor.newestTerminalRun(threadId)).toBeNull();
+  });
+
+  test("a completed Run → newestTerminalRun is completed", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
+    });
+    await completedRun(executor, threadId);
+    const terminal = executor.newestTerminalRun(threadId);
+    expect(terminal?.status).toBe("completed");
+  });
+
+  test("a failed Run → newestTerminalRun is failed", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: {
+        "anthropic/claude-haiku-4-5": [
+          { type: "error", code: "rate_limited", message: "429", retryable: true },
+          { type: "done", finishReason: "error" },
+        ],
+      },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "x" }] }));
+    const terminal = executor.newestTerminalRun(threadId);
+    expect(terminal?.status).toBe("failed");
+  });
+
+  test("a cancelled Run → newestTerminalRun is cancelled", async () => {
+    const { executor, threadId } = await setup({
+      fixtures: {
+        "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "cancelled" }],
+      },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "x" }] }));
+    const terminal = executor.newestTerminalRun(threadId);
+    expect(terminal?.status).toBe("cancelled");
+  });
+
+  test("failed then a newer completed Run → newestTerminalRun is the completed one (ordering trap)", async () => {
+    // Build a dedicated harness with a MONOTONIC store clock so the second
+    // Run's endedAt is strictly greater than the first's — otherwise two
+    // sub-millisecond runs could collide and the scan (strict `>`) would keep
+    // the older failed row. Two model fixtures: the first Run fails, the second
+    // (via modelOverride) completes.
+    const db = openHiveDb(":memory:");
+    const threadsStore = createThreadsStore(db);
+    let tick = 1000;
+    const runsStore = createRunsStore(db, () => tick++);
+    const secrets = makeSecrets();
+    await secrets.setApiKey("anthropic", "sk-test");
+    const catalog = makeCatalogStub([makeAgent({ agentId: "test-agent" })]);
+    const gateway = makeFakeGateway({
+      "anthropic/claude-haiku-4-5": [
+        { type: "error", code: "rate_limited", message: "429", retryable: true },
+        { type: "done", finishReason: "error" },
+      ],
+      "anthropic/claude-opus-4-7": [{ type: "done", finishReason: "stop" }],
+    });
+    const executor = createRunExecutor({
+      threads: threadsStore,
+      runs: runsStore,
+      catalog,
+      gateway,
+      secrets,
+    });
+    const threadId = threadsStore.create({ agentId: "test-agent" }).id;
+
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "first" }] }));
+    expect(executor.newestTerminalRun(threadId)?.status).toBe("failed");
+
+    await collect(
+      executor.startRun({
+        threadId,
+        userMessage: [{ type: "text", text: "retry" }],
+        modelOverride: "anthropic/claude-opus-4-7",
+      }),
+    );
+    // The newer completed Run has the larger endedAt, so it wins the scan.
+    const terminal = executor.newestTerminalRun(threadId);
+    expect(terminal?.status).toBe("completed");
+  });
 });

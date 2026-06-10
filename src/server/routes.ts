@@ -20,6 +20,7 @@ import type { Run } from "../runs/types.ts";
 import type { Secrets } from "../secrets/index.ts";
 import type { ConfiguredProvider } from "../secrets/types.ts";
 import type { Threads } from "../threads/index.ts";
+import { deriveThreadStatus, maybeGenerateTitle } from "../threads/index.ts";
 import type { Thread, ThreadMessage } from "../threads/types.ts";
 import { bearerAuth } from "./auth.ts";
 import {
@@ -34,6 +35,7 @@ import {
   type RunWire,
   SetAgentModelPrefBody,
   SetApiKeyBody,
+  SetThreadTitleBody,
   StartRunBody,
   type ThreadDetailWire,
   type ThreadSummaryWire,
@@ -100,28 +102,6 @@ function toAgentDetail(a: Agent): AgentDetailWire {
   };
 }
 
-function toThreadSummary(t: Thread): ThreadSummaryWire {
-  return {
-    id: t.id,
-    agentId: t.agentId,
-    createdAt: t.createdAt,
-    updatedAt: t.updatedAt,
-  };
-}
-
-function toThreadDetail(t: Thread, messages: ThreadMessage[]): ThreadDetailWire {
-  return {
-    ...toThreadSummary(t),
-    messages: messages.map((m) => ({
-      id: m.id,
-      idx: m.idx,
-      role: m.role,
-      content: m.content,
-      createdAt: m.createdAt,
-    })),
-  };
-}
-
 function toRunWire(r: Run): RunWire {
   return {
     id: r.id,
@@ -151,6 +131,39 @@ function toConfiguredProviderWire(p: ConfiguredProvider): ConfiguredProviderWire
 
 export function buildRoutes(deps: RoutesDeps): Hono {
   const app = new Hono();
+
+  // Thread → wire summary. Closes over `deps` to compose `status` from the
+  // executor's busy predicate + the thread's newest terminal Run + lastReadAt.
+  // The newest-terminal scan lives on the executor (it owns Run knowledge).
+  function toThreadSummary(t: Thread): ThreadSummaryWire {
+    return {
+      id: t.id,
+      agentId: t.agentId,
+      createdAt: t.createdAt,
+      updatedAt: t.updatedAt,
+      title: t.title,
+      titleSource: t.titleSource,
+      archivedAt: t.archivedAt,
+      status: deriveThreadStatus({
+        isBusy: deps.runs.isThreadBusy(t.id),
+        newestTerminal: deps.runs.newestTerminalRun(t.id),
+        lastReadAt: t.lastReadAt,
+      }),
+    };
+  }
+
+  function toThreadDetail(t: Thread, messages: ThreadMessage[]): ThreadDetailWire {
+    return {
+      ...toThreadSummary(t),
+      messages: messages.map((m) => ({
+        id: m.id,
+        idx: m.idx,
+        role: m.role,
+        content: m.content,
+        createdAt: m.createdAt,
+      })),
+    };
+  }
 
   // Single-flight guard for interactive OAuth logins. pi-ai's callback-server
   // providers each bind a *fixed* loopback port (openai-codex :1455,
@@ -299,6 +312,9 @@ export function buildRoutes(deps: RoutesDeps): Hono {
 
   // ─── Threads ─────────────────────────────────────────────────────────
 
+  // Returns ALL threads — active AND archived. `archivedAt` (non-null =
+  // archived) and `status` (idle/running/unread/failed) drive client-side
+  // bucketing into active vs. archived lists; the daemon does not pre-filter.
   app.get("/api/threads", (c) => {
     return c.json(deps.threads.list().map(toThreadSummary));
   });
@@ -331,10 +347,52 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     return c.json(toThreadDetail(detail, detail.messages));
   });
 
-  app.delete("/api/threads/:id", (c) => {
+  app.put("/api/threads/:id/title", async (c) => {
+    const id = c.req.param("id");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = SetThreadTitleBody.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid title body", issues: zodIssues(parsed.error) }, 400);
+    }
+    if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
+    await deps.threads.setTitle(id, parsed.data.title, "manual");
+    const updated = deps.threads.get(id);
+    if (!updated) return c.json({ error: "thread not found" }, 404);
+    return c.json(toThreadSummary(updated));
+  });
+
+  app.post("/api/threads/:id/archive", async (c) => {
     const id = c.req.param("id");
     if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
-    deps.threads.remove(id);
+    await deps.threads.archive(id, "manual");
+    const updated = deps.threads.get(id);
+    if (!updated) return c.json({ error: "thread not found" }, 404);
+    return c.json(toThreadSummary(updated));
+  });
+
+  app.post("/api/threads/:id/unread", async (c) => {
+    const id = c.req.param("id");
+    if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
+    await deps.threads.markUnread(id);
+    return c.body(null, 204);
+  });
+
+  app.post("/api/threads/:id/read", (c) => {
+    const id = c.req.param("id");
+    if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
+    deps.threads.markRead(id, Date.now());
+    return c.body(null, 204);
+  });
+
+  app.delete("/api/threads/:id", async (c) => {
+    const id = c.req.param("id");
+    if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
+    await deps.threads.remove(id);
     return c.body(null, 204);
   });
 
@@ -389,13 +447,37 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       throw err;
     }
     return streamSSE(c, async (stream) => {
+      let lastType: string | null = null;
       try {
         for await (const ev of runIterable as AsyncIterable<{ type: string }>) {
+          lastType = ev.type;
           await stream.writeSSE({ event: ev.type, data: JSON.stringify(ev) });
         }
       } catch {
         // Stream client disconnected mid-Run; iterable will continue in the
         // background and persist results normally.
+      }
+      // Best-effort auto-title after a terminal `run.completed`. Fired AFTER the
+      // loop drained (so it can't delay the SSE close) and NOT awaited within the
+      // stream's lifetime. The run row is already persisted `completed` by the
+      // time the loop saw `run.completed` (executor.ts: runs.complete precedes the
+      // yield), so the completed-run count guard in title.ts sees this exchange.
+      if (lastType === "run.completed") {
+        // Fire-and-forget: not awaited (must not delay the SSE close).
+        // maybeGenerateTitle self-contains all failure (its own try/catch →
+        // trace), so this .catch is a structural backstop for the
+        // no-floating-promises gate (ADR-0012), never expected to fire.
+        maybeGenerateTitle(
+          {
+            threads: deps.threads,
+            runs: deps.runs,
+            catalog: deps.catalog,
+            gateway: deps.gateway,
+            secrets: deps.secrets,
+            agentModelPrefs: deps.agentModelPrefs,
+          },
+          threadId,
+        ).catch(() => {});
       }
     });
   });
@@ -629,6 +711,30 @@ export function buildRoutes(deps: RoutesDeps): Hono {
         disposers.push(
           deps.catalog.events.on("harness.updated", (e) =>
             push({ source: "catalog", type: "harness.updated", payload: e }),
+          ),
+        );
+
+        // Run lifecycle. Every envelope carries threadId + runId (terminal
+        // variants gained threadId/agentId for this) so the client can refetch
+        // the affected thread/run.
+        disposers.push(
+          deps.runs.events.on("run.started", (e) =>
+            push({ source: "run", type: "run.started", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.runs.events.on("run.completed", (e) =>
+            push({ source: "run", type: "run.completed", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.runs.events.on("run.failed", (e) =>
+            push({ source: "run", type: "run.failed", payload: e }),
+          ),
+        );
+        disposers.push(
+          deps.runs.events.on("run.cancelled", (e) =>
+            push({ source: "run", type: "run.cancelled", payload: e }),
           ),
         );
 
