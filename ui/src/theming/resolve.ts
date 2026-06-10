@@ -10,14 +10,9 @@ import {
   DEFAULT_FONT_CODE_SIZE,
   DEFAULT_FONT_UI_SIZE,
   findNamedTheme,
+  STATUS_RUNNING_SAFE_ALT,
 } from "./presets.ts";
 import type { Mode, Preferences, ResolvedMode, ThemeConfig, TokenMap } from "./types.ts";
-
-// Fallback running hue when the resolved accent (or danger) collides with the
-// theme's amber running default. Cyan — the same alt the warm-accent built-in
-// themes already pin (presets.ts) — so the running dot stays hue-distinct under
-// a user/OS warm accent override too.
-const STATUS_RUNNING_SAFE_ALT = "#3ad0e0";
 
 /**
  * Pick the concrete mode the app renders in. `"system"` resolves via

@@ -3,7 +3,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { hexToHue, hueDelta, MIN_HUE_DELTA } from "../hue.ts";
-import { DARK_THEMES, DEFAULT_STATUS_RUNNING_LIGHT, LIGHT_THEMES } from "../presets.ts";
+import {
+  DARK_THEMES,
+  DEFAULT_STATUS_RUNNING_LIGHT,
+  LIGHT_THEMES,
+  STATUS_RUNNING_SAFE_ALT,
+} from "../presets.ts";
 import {
   resolveEffectiveConfig,
   resolveMode,
@@ -254,7 +259,7 @@ describe("resolveTokens — running hue is guarded against the accent override",
   test("colliding warm accent → running falls back to the safe alt hue, ≥ MIN_HUE_DELTA", () => {
     for (const accent of ["#f5a623", "#ff8c42"]) {
       const tokens = resolveTokens({ themeId: "default-dark", accent }, "dark");
-      expect(tokens["color-status-running"]).toBe("#3ad0e0");
+      expect(tokens["color-status-running"]).toBe(STATUS_RUNNING_SAFE_ALT);
       expect(deltaOf(tokens["color-status-running"] ?? "", accent)).toBeGreaterThanOrEqual(
         MIN_HUE_DELTA,
       );

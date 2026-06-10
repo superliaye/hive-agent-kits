@@ -32,6 +32,12 @@ export type NamedTheme = {
 export const DEFAULT_STATUS_RUNNING_LIGHT = "#c77800";
 const DEFAULT_STATUS_RUNNING_DARK = "#f5a623";
 
+// Safe fallback running hue for the warm-accent themes whose own accent would
+// collide with the amber default. Cyan — far from amber/red — and the single
+// source of truth: the warm-accent preset themes below and the resolveTokens
+// override-guard both reference this, so retuning it can't desync them.
+export const STATUS_RUNNING_SAFE_ALT = "#3ad0e0";
+
 function light(tokens: Omit<TokenMap, "font-ui" | "font-code">): ModePalette {
   return {
     mode: "light",
@@ -583,7 +589,7 @@ export const DARK_THEMES: readonly NamedTheme[] = [
       "color-warning": "#e6b450",
       "color-success": "#70bf56",
       // amber default collides with the amber accent — use cyan.
-      "color-status-running": "#3ad0e0",
+      "color-status-running": STATUS_RUNNING_SAFE_ALT,
     }),
   },
   {
@@ -605,7 +611,7 @@ export const DARK_THEMES: readonly NamedTheme[] = [
       "color-warning": "#ffcc66",
       "color-success": "#87d96c",
       // amber default collides with the amber accent — use cyan.
-      "color-status-running": "#3ad0e0",
+      "color-status-running": STATUS_RUNNING_SAFE_ALT,
     }),
   },
   {
@@ -928,7 +934,7 @@ export const DARK_THEMES: readonly NamedTheme[] = [
       "color-warning": "#ffb454",
       "color-success": "#84c46b",
       // amber default collides with the orange accent — use cyan.
-      "color-status-running": "#3ad0e0",
+      "color-status-running": STATUS_RUNNING_SAFE_ALT,
     }),
   },
   {
@@ -950,7 +956,7 @@ export const DARK_THEMES: readonly NamedTheme[] = [
       "color-warning": "#c9a227",
       "color-success": "#8a9a4b",
       // amber default collides with the gold accent — use cyan.
-      "color-status-running": "#3ad0e0",
+      "color-status-running": STATUS_RUNNING_SAFE_ALT,
     }),
   },
 ];
