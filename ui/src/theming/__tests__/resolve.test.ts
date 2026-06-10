@@ -7,7 +7,8 @@ import {
   DARK_THEMES,
   DEFAULT_STATUS_RUNNING_LIGHT,
   LIGHT_THEMES,
-  STATUS_RUNNING_SAFE_ALT,
+  STATUS_RUNNING_SAFE_ALT_DARK,
+  STATUS_RUNNING_SAFE_ALT_LIGHT,
 } from "../presets.ts";
 import {
   resolveEffectiveConfig,
@@ -259,7 +260,7 @@ describe("resolveTokens — running hue is guarded against the accent override",
   test("colliding warm accent → running falls back to the safe alt hue, ≥ MIN_HUE_DELTA", () => {
     for (const accent of ["#f5a623", "#ff8c42"]) {
       const tokens = resolveTokens({ themeId: "default-dark", accent }, "dark");
-      expect(tokens["color-status-running"]).toBe(STATUS_RUNNING_SAFE_ALT);
+      expect(tokens["color-status-running"]).toBe(STATUS_RUNNING_SAFE_ALT_DARK);
       expect(deltaOf(tokens["color-status-running"] ?? "", accent)).toBeGreaterThanOrEqual(
         MIN_HUE_DELTA,
       );
@@ -283,6 +284,80 @@ describe("resolveTokens — running hue is guarded against the accent override",
   test("achromatic accent (grey) never nudges — running keeps its theme default", () => {
     const tokens = resolveTokens({ themeId: "default-dark", accent: "#808080" }, "dark");
     expect(tokens["color-status-running"]).toBe(DEFAULT_DARK_RUNNING);
+  });
+});
+
+// The single safe-alt cyan is mode-blind, but the C1a nudge fires in BOTH modes.
+// On a light theme the original dark cyan dropped to ~1.7:1 against the near-white
+// bg — far below the 3:1 non-text-UI minimum. The safe-alt is split per mode
+// (mirroring DEFAULT_STATUS_RUNNING_LIGHT/_DARK); the nudge picks the mode-matched
+// literal. Hue distinctness is already covered above — this guards luminance.
+describe("resolveTokens — light-mode running safe-alt is contrast-legible", () => {
+  // WCAG relative luminance + contrast ratio for two #rrggbb colors.
+  function relLuminance(hex: string): number {
+    const n = Number.parseInt(hex.slice(1), 16);
+    const chan = (v: number): number => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    const r = chan((n >> 16) & 0xff);
+    const g = chan((n >> 8) & 0xff);
+    const b = chan(n & 0xff);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  }
+  function contrast(a: string, b: string): number {
+    const la = relLuminance(a);
+    const lb = relLuminance(b);
+    const hi = Math.max(la, lb);
+    const lo = Math.min(la, lb);
+    return (hi + 0.05) / (lo + 0.05);
+  }
+  function deltaOf(a: string, b: string): number {
+    const ha = hexToHue(a);
+    const hb = hexToHue(b);
+    if (ha === null || hb === null) throw new Error("expected chromatic colors");
+    return hueDelta(ha, hb);
+  }
+
+  const LIGHT_BG = LIGHT_THEMES.find((t) => t.id === "default-light")?.palette.tokens[
+    "color-bg-base"
+  ];
+
+  test("the dark safe-alt fails 3:1 on the brightest light bg (proves the gap)", () => {
+    // This is what the mode-blind single cyan rendered on light themes — the
+    // legibility regression the mode-aware split fixes.
+    expect(LIGHT_BG).toBeDefined();
+    expect(contrast(STATUS_RUNNING_SAFE_ALT_DARK, LIGHT_BG ?? "")).toBeLessThan(3);
+  });
+
+  test("colliding warm accent in light mode → running falls back to the light safe-alt, ≥3:1", () => {
+    for (const accent of ["#f5a623", "#ff8c42"]) {
+      const tokens = resolveTokens({ themeId: "default-light", accent }, "light");
+      expect(tokens["color-status-running"]).toBe(STATUS_RUNNING_SAFE_ALT_LIGHT);
+      expect(contrast(tokens["color-status-running"] ?? "", tokens["color-bg-base"] ?? "")).toBeGreaterThanOrEqual(
+        3,
+      );
+    }
+  });
+
+  test("the light safe-alt stays hue-distinct from warm accents and danger", () => {
+    const tokens = resolveTokens({ themeId: "default-light", accent: "#f5a623" }, "light");
+    const running = tokens["color-status-running"] ?? "";
+    expect(running).toBe(STATUS_RUNNING_SAFE_ALT_LIGHT);
+    for (const accent of ["#f5a623", "#ff8c42"]) {
+      expect(deltaOf(running, accent)).toBeGreaterThanOrEqual(MIN_HUE_DELTA);
+    }
+    expect(deltaOf(running, tokens["color-danger"] ?? "")).toBeGreaterThanOrEqual(MIN_HUE_DELTA);
+  });
+
+  test("non-colliding accent in light mode → running stays at the theme default", () => {
+    const tokens = resolveTokens({ themeId: "default-light", accent: "#4a8eff" }, "light");
+    expect(tokens["color-status-running"]).toBe(DEFAULT_STATUS_RUNNING_LIGHT);
+  });
+
+  test("achromatic accent in light mode never nudges — running keeps its theme default", () => {
+    const tokens = resolveTokens({ themeId: "default-light", accent: "#808080" }, "light");
+    expect(tokens["color-status-running"]).toBe(DEFAULT_STATUS_RUNNING_LIGHT);
   });
 });
 

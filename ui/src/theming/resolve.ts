@@ -10,7 +10,8 @@ import {
   DEFAULT_FONT_CODE_SIZE,
   DEFAULT_FONT_UI_SIZE,
   findNamedTheme,
-  STATUS_RUNNING_SAFE_ALT,
+  STATUS_RUNNING_SAFE_ALT_DARK,
+  STATUS_RUNNING_SAFE_ALT_LIGHT,
 } from "./presets.ts";
 import type { Mode, Preferences, ResolvedMode, ThemeConfig, TokenMap } from "./types.ts";
 
@@ -49,7 +50,9 @@ export function resolveTokens(config: ThemeConfig, mode: ResolvedMode): TokenMap
   // shape-only ambiguity the running token exists to remove; fall back to the
   // safe alt hue when running lands < MIN_HUE_DELTA from the accent or danger.
   // Achromatic accent/danger (null hue) can't collide with a chromatic running
-  // hue, so they never fire the nudge.
+  // hue, so they never fire the nudge. The safe alt is mode-aware: the dark cyan
+  // reads ~10:1 on dark backgrounds but only ~1.7:1 on near-white, so light mode
+  // takes the darker cyan sibling to clear the 3:1 non-text-UI contrast floor.
   const runningHue = hexToHue(tokens["color-status-running"] ?? "");
   if (runningHue !== null) {
     const accentHue = hexToHue(tokens["color-accent"] ?? "");
@@ -57,7 +60,10 @@ export function resolveTokens(config: ThemeConfig, mode: ResolvedMode): TokenMap
     const collides =
       (accentHue !== null && hueDelta(runningHue, accentHue) < MIN_HUE_DELTA) ||
       (dangerHue !== null && hueDelta(runningHue, dangerHue) < MIN_HUE_DELTA);
-    if (collides) tokens["color-status-running"] = STATUS_RUNNING_SAFE_ALT;
+    if (collides) {
+      tokens["color-status-running"] =
+        mode === "light" ? STATUS_RUNNING_SAFE_ALT_LIGHT : STATUS_RUNNING_SAFE_ALT_DARK;
+    }
   }
 
   const uiSize = config.fontUiSize ?? DEFAULT_FONT_UI_SIZE;
