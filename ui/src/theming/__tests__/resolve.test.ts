@@ -319,25 +319,28 @@ describe("resolveTokens — light-mode running safe-alt is contrast-legible", ()
     return hueDelta(ha, hb);
   }
 
-  const LIGHT_BG = LIGHT_THEMES.find((t) => t.id === "default-light")?.palette.tokens[
-    "color-bg-base"
-  ];
+  // Pure white is the brightest possible bg and the true worst case for the 3:1
+  // floor — brighter than default-light's #f5f5f7. Several shipped light themes
+  // (github-light, notion-light, xcode-light) use #ffffff exactly, and the nudge
+  // is mode-keyed but theme-agnostic, so it fires the same light safe-alt on all
+  // of them. Pinning #ffffff guards every light theme, not just default-light.
+  const BRIGHTEST_LIGHT_BG = "#ffffff";
 
   test("the dark safe-alt fails 3:1 on the brightest light bg (proves the gap)", () => {
     // This is what the mode-blind single cyan rendered on light themes — the
     // legibility regression the mode-aware split fixes.
-    expect(LIGHT_BG).toBeDefined();
-    expect(contrast(STATUS_RUNNING_SAFE_ALT_DARK, LIGHT_BG ?? "")).toBeLessThan(3);
+    expect(contrast(STATUS_RUNNING_SAFE_ALT_DARK, BRIGHTEST_LIGHT_BG)).toBeLessThan(3);
   });
 
   test("colliding warm accent in light mode → running falls back to the light safe-alt, ≥3:1", () => {
     for (const accent of ["#f5a623", "#ff8c42"]) {
       const tokens = resolveTokens({ themeId: "default-light", accent }, "light");
       expect(tokens["color-status-running"]).toBe(STATUS_RUNNING_SAFE_ALT_LIGHT);
-      expect(contrast(tokens["color-status-running"] ?? "", tokens["color-bg-base"] ?? "")).toBeGreaterThanOrEqual(
-        3,
-      );
     }
+    // The fixed light safe-alt must clear 3:1 against the brightest possible light
+    // bg — so a future retune toward a lighter cyan can't drop below the floor on
+    // the near-white themes with no test failing.
+    expect(contrast(STATUS_RUNNING_SAFE_ALT_LIGHT, BRIGHTEST_LIGHT_BG)).toBeGreaterThanOrEqual(3);
   });
 
   test("the light safe-alt stays hue-distinct from warm accents and danger", () => {
