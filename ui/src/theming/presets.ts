@@ -29,7 +29,7 @@ export type NamedTheme = {
 // from the blue/teal-leaning accents and the red dangers that dominate the
 // catalog, and never the green `--color-success` hue (which would read as done).
 // The few amber-accent themes override to cyan.
-const DEFAULT_STATUS_RUNNING_LIGHT = "#c77800";
+export const DEFAULT_STATUS_RUNNING_LIGHT = "#c77800";
 const DEFAULT_STATUS_RUNNING_DARK = "#f5a623";
 
 function light(tokens: Omit<TokenMap, "font-ui" | "font-code">): ModePalette {

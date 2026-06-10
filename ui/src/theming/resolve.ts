@@ -4,6 +4,7 @@
 // via color-mix, font-size px formatting, sidebar opacity) is testable
 // and callable from any context — no React, no DOM.
 
+import { hexToHue, hueDelta, MIN_HUE_DELTA } from "./hue.ts";
 import {
   DEFAULT_CONTRAST,
   DEFAULT_FONT_CODE_SIZE,
@@ -11,6 +12,12 @@ import {
   findNamedTheme,
 } from "./presets.ts";
 import type { Mode, Preferences, ResolvedMode, ThemeConfig, TokenMap } from "./types.ts";
+
+// Fallback running hue when the resolved accent (or danger) collides with the
+// theme's amber running default. Cyan — the same alt the warm-accent built-in
+// themes already pin (presets.ts) — so the running dot stays hue-distinct under
+// a user/OS warm accent override too.
+const STATUS_RUNNING_SAFE_ALT = "#3ad0e0";
 
 /**
  * Pick the concrete mode the app renders in. `"system"` resolves via
@@ -40,6 +47,23 @@ export function resolveTokens(config: ThemeConfig, mode: ResolvedMode): TokenMap
   if (config.foreground) tokens["color-fg-default"] = config.foreground;
   if (config.fontUi) tokens["font-ui"] = config.fontUi;
   if (config.fontCode) tokens["font-code"] = config.fontCode;
+
+  // Guard running's hue against the RESOLVED accent (post-override, including the
+  // OS accent injected via resolveEffectiveConfig → config.accent). A user-chosen
+  // warm accent can collide with the amber running default and re-create the
+  // shape-only ambiguity the running token exists to remove; fall back to the
+  // safe alt hue when running lands < MIN_HUE_DELTA from the accent or danger.
+  // Achromatic accent/danger (null hue) can't collide with a chromatic running
+  // hue, so they never fire the nudge.
+  const runningHue = hexToHue(tokens["color-status-running"] ?? "");
+  if (runningHue !== null) {
+    const accentHue = hexToHue(tokens["color-accent"] ?? "");
+    const dangerHue = hexToHue(tokens["color-danger"] ?? "");
+    const collides =
+      (accentHue !== null && hueDelta(runningHue, accentHue) < MIN_HUE_DELTA) ||
+      (dangerHue !== null && hueDelta(runningHue, dangerHue) < MIN_HUE_DELTA);
+    if (collides) tokens["color-status-running"] = STATUS_RUNNING_SAFE_ALT;
+  }
 
   const uiSize = config.fontUiSize ?? DEFAULT_FONT_UI_SIZE;
   const codeSize = config.fontCodeSize ?? DEFAULT_FONT_CODE_SIZE;

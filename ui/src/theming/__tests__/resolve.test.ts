@@ -2,7 +2,8 @@
 // No React, no DOM — call the function, compare the object.
 
 import { describe, expect, test } from "bun:test";
-import { DARK_THEMES, LIGHT_THEMES } from "../presets.ts";
+import { hexToHue, hueDelta, MIN_HUE_DELTA } from "../hue.ts";
+import { DARK_THEMES, DEFAULT_STATUS_RUNNING_LIGHT, LIGHT_THEMES } from "../presets.ts";
 import {
   resolveEffectiveConfig,
   resolveMode,
@@ -198,33 +199,6 @@ describe("resolveTokens — every shipped theme resolves a complete token map", 
 // separation so a future palette edit can't silently collapse the live state
 // back into the accent or danger color.
 describe("color-status-running is hue-distinct from accent and danger in every theme", () => {
-  // Minimum hue separation (degrees) we require on the color wheel.
-  const MIN_HUE_DELTA = 25;
-
-  function hexToHue(hex: string): number | null {
-    const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
-    if (!m) return null;
-    const n = Number.parseInt(m[1], 16);
-    const r = (n >> 16) / 255;
-    const g = ((n >> 8) & 0xff) / 255;
-    const b = (n & 0xff) / 255;
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const d = max - min;
-    if (d === 0) return null; // achromatic — hue undefined, distinctness is via lightness
-    let h: number;
-    if (max === r) h = ((g - b) / d) % 6;
-    else if (max === g) h = (b - r) / d + 2;
-    else h = (r - g) / d + 4;
-    h *= 60;
-    return h < 0 ? h + 360 : h;
-  }
-
-  function hueDelta(a: number, b: number): number {
-    const raw = Math.abs(a - b) % 360;
-    return raw > 180 ? 360 - raw : raw;
-  }
-
   function assertDistinct(themeId: string, mode: "light" | "dark"): void {
     const tokens = resolveTokens({ themeId }, mode);
     const running = hexToHue(tokens["color-status-running"] ?? "");
@@ -246,4 +220,74 @@ describe("color-status-running is hue-distinct from accent and danger in every t
   for (const theme of DARK_THEMES) {
     test(`dark "${theme.id}"`, () => assertDistinct(theme.id, "dark"));
   }
+});
+
+// C1a — the running hue must stay distinct even when the user (or the OS, via
+// useSystemAccent) overrides `--color-accent` with a warm hue that collides with
+// the amber running default. The nudge in resolveTokens falls running back to a
+// safe alt hue only when it actually collides; a non-colliding accent leaves the
+// theme default untouched, and an achromatic accent never fires the nudge.
+describe("resolveTokens — running hue is guarded against the accent override", () => {
+  // Hue distance between two hex colors; fails the test if either is achromatic
+  // (we only call it on chromatic inputs, where a null would be a real bug).
+  function deltaOf(a: string, b: string): number {
+    const ha = hexToHue(a);
+    const hb = hexToHue(b);
+    expect(ha).not.toBeNull();
+    expect(hb).not.toBeNull();
+    if (ha === null || hb === null) throw new Error("expected chromatic colors");
+    return hueDelta(ha, hb);
+  }
+
+  const DEFAULT_DARK_RUNNING = DARK_THEMES.find((t) => t.id === "default-dark")?.palette.tokens[
+    "color-status-running"
+  ];
+
+  test("a warm accent override collides with the amber running default (proves the gap)", () => {
+    // Without the nudge, the raw amber default sits < MIN_HUE_DELTA from a warm
+    // (amber/orange) accent — the collision the guard exists to prevent.
+    const rawRunning =
+      resolveTokens({ themeId: "default-dark" }, "dark")["color-status-running"] ?? "";
+    expect(deltaOf(rawRunning, "#f5a623")).toBeLessThan(MIN_HUE_DELTA);
+  });
+
+  test("colliding warm accent → running falls back to the safe alt hue, ≥ MIN_HUE_DELTA", () => {
+    for (const accent of ["#f5a623", "#ff8c42"]) {
+      const tokens = resolveTokens({ themeId: "default-dark", accent }, "dark");
+      expect(tokens["color-status-running"]).toBe("#3ad0e0");
+      expect(deltaOf(tokens["color-status-running"] ?? "", accent)).toBeGreaterThanOrEqual(
+        MIN_HUE_DELTA,
+      );
+    }
+  });
+
+  test("non-colliding accent → running stays at the theme default (nudge does not over-fire)", () => {
+    const tokens = resolveTokens({ themeId: "default-dark", accent: "#4a8eff" }, "dark");
+    expect(tokens["color-status-running"]).toBe(DEFAULT_DARK_RUNNING);
+  });
+
+  test("nudge also guards against a danger collision", () => {
+    // A warm accent triggers the fallback; assert running ends up ≥ MIN_HUE_DELTA
+    // from BOTH accent and danger.
+    const tokens = resolveTokens({ themeId: "default-dark", accent: "#f5a623" }, "dark");
+    const running = tokens["color-status-running"] ?? "";
+    expect(deltaOf(running, "#f5a623")).toBeGreaterThanOrEqual(MIN_HUE_DELTA);
+    expect(deltaOf(running, tokens["color-danger"] ?? "")).toBeGreaterThanOrEqual(MIN_HUE_DELTA);
+  });
+
+  test("achromatic accent (grey) never nudges — running keeps its theme default", () => {
+    const tokens = resolveTokens({ themeId: "default-dark", accent: "#808080" }, "dark");
+    expect(tokens["color-status-running"]).toBe(DEFAULT_DARK_RUNNING);
+  });
+});
+
+// C2a — the TS running-default literal must equal the value the resolver
+// actually injects for the default light theme, so the constant can't silently
+// drift from the resolved color (the CSS :root fallback in tokens.css mirrors it
+// by adjacency).
+describe("DEFAULT_STATUS_RUNNING_LIGHT pins the resolved default-light running token", () => {
+  test("constant equals the injected value", () => {
+    const tokens = resolveTokens({ themeId: "default-light" }, "light");
+    expect(tokens["color-status-running"]).toBe(DEFAULT_STATUS_RUNNING_LIGHT);
+  });
 });
