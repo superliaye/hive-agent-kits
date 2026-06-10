@@ -71,6 +71,41 @@ export class ThreadHistory extends Context.Service<ThreadHistory, ThreadsPort>()
   "runs/ThreadHistory",
 ) {}
 
+// Cap config: the single value the tool-loop reads — snapshot once per Run.
+// A narrow port over Config (not the whole Config tree). `maxIterations` is the
+// turn cap; `0` = unlimited (no cap, no grace).
+export type CapConfigPort = {
+  maxIterations(): number;
+};
+export class CapConfig extends Context.Service<CapConfig, CapConfigPort>()("runs/CapConfig") {}
+
+// Permission gate at the tool-dispatch point (ADR-0003 G2). The full G2
+// Permission System is unbuilt; the executor satisfies this port itself today
+// with a default impl (allowlist + destructive denylist). When G2 lands it
+// provides this port. `decide` is async to leave room for an approval prompt.
+export type PermissionDecision = { outcome: "allow" | "deny"; reason?: string };
+export type PermissionPort = {
+  decide(input: {
+    agentId: string;
+    runId: string;
+    tool: string;
+    command?: string;
+    args?: string[];
+  }): Promise<PermissionDecision>;
+};
+export class Permission extends Context.Service<Permission, PermissionPort>()("runs/Permission") {}
+
+// Shell runner: the single I/O edge the run_shell Tool spawns through. Plain
+// async (AGENTS.md "plain async only at I/O edges"). Injectable so tests stub
+// it; the default impl uses node:child_process.
+export type ShellResult = { stdout: string; stderr: string; exitCode: number };
+export type ShellRunnerPort = {
+  run(input: { command: string; args: string[]; cwd: string }): Promise<ShellResult>;
+};
+export class ShellRunner extends Context.Service<ShellRunner, ShellRunnerPort>()(
+  "runs/ShellRunner",
+) {}
+
 // Runs store: the lifecycle verbs the executor records through.
 export type RunsStorePort = {
   create(input: CreateRunInput): Run;
