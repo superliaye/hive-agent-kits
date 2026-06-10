@@ -1,8 +1,10 @@
 // Best-effort auto-title generation for a Thread.
 //
 // Called from the run route after a terminal `run.completed`. Generates a
-// short title from the thread's first completed exchange via the model
-// gateway, then writes it through `setTitle(..., "auto")` (sticky: a manual
+// short title from the thread's conversation history (once it has at least one
+// completed exchange, backfilling on a later exchange if an earlier title-gen
+// failed) via the model gateway, then writes it through `setTitle(..., "auto")`
+// (sticky: a manual
 // title is never clobbered; auto writes emit NO audit row by construction —
 // see store.ts:233 + the auto branch at store.ts:setTitle).
 //
