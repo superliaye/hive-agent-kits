@@ -19,7 +19,7 @@ import type { ToolContext, ToolHandler, ToolResult } from "./registry.ts";
 const RUN_SHELL_DEF: ToolDef = {
   name: "run_shell",
   description:
-    "Run a shell command in the Agent's workspace and return its stdout, stderr, and exit code.",
+    'Run an executable directly (no shell) in the Agent\'s workspace and return its stdout, stderr, and exit code. Shell builtins like `echo` and `cd` are unavailable — pass an executable plus its arguments (e.g. command "node", args ["-e", "…"]).',
   inputSchema: {
     type: "object",
     properties: {

@@ -22,3 +22,9 @@ The addition that makes a `native`-backend Agent able to *act* and to load Skill
 ## Why
 
 The loop is the unavoidable substrate: both *acting* and *skill disclosure* require it, so it is the real unblock behind "the agent says it has no skills." Built-in tools over MCP-first because a native agent brings nothing and must be able to act; a CLI backend brings its own tools and gets this for free. The cap is **unlimited by default** (operator-chosen): a hard default ceiling risks truncating legitimate long tool sequences, so the safety ceiling is opt-in per deployment rather than imposed — and the grace turn ensures a *capped* run still ends with a model summary rather than an abrupt cut.
+
+## Amendment — `run_shell` runs executables only, not shell builtins
+
+`run_shell` spawns the named program directly with `shell: false`, passing arguments as a vector. It does **not** invoke a host shell, so shell builtins (`echo`, `cd`, `&&`, pipes, globs, environment expansion) are unavailable and a builtin-only command fails to spawn (ENOENT / exit 127 on Windows). The model must pass a real executable plus its arguments (e.g. `node -e "…"`).
+
+This is the deliberate posture, not a gap. Running through a shell (`shell: true`) would re-introduce the command-injection surface that the no-shell, vector-args design exists to avoid: the per-Agent command allowlist gates on the *executable name*, and that guard is only meaningful while arguments cannot be reinterpreted by a shell. Executables-only keeps the allowlist authoritative. The `run_shell` tool description states this explicitly so the model picks an executable rather than a builtin.
