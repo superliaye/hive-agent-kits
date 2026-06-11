@@ -16,7 +16,7 @@ import type { Agent, Catalog } from "../catalog/types.ts";
 import { type AppConfig, AppearanceConfigSchema } from "../config/schema.ts";
 import type { Config } from "../config/types.ts";
 import { CapabilityKind } from "../lib/capability-types.ts";
-import type { ModelGateway } from "../model-gateway/index.ts";
+import { type ModelGateway, orderByRecency } from "../model-gateway/index.ts";
 import type { RunExecutor } from "../runs/index.ts";
 import type { Run } from "../runs/types.ts";
 import type { Secrets } from "../secrets/index.ts";
@@ -486,6 +486,15 @@ export function buildRoutes(deps: RoutesDeps): Hono {
             gateway: deps.gateway,
             secrets: deps.secrets,
             agentModelPrefs: deps.agentModelPrefs,
+            // Same runnable-catalog snapshot the executor uses, so title-gen
+            // resolves a symbolic default ("latest") identically (ADR-0015 S2).
+            runnableCatalog: {
+              snapshot: () => ({
+                models: orderByRecency(
+                  deps.secrets.list().flatMap((p) => deps.gateway.listModels(p.provider)),
+                ),
+              }),
+            },
           },
           threadId,
         ).catch(() => {});

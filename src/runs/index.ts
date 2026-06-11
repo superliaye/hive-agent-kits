@@ -12,6 +12,7 @@
 export { MODEL_FALLBACK } from "./defaults.ts";
 export type {
   FsRunnerPort,
+  RunnableCatalogPort,
   SkillListing,
   SkillResolverPort,
 } from "./effect/ports.ts";
@@ -23,4 +24,5 @@ export type { ResolveAgentModelInput, ResolveAgentModelResult } from "./resolve-
 export { resolveAgentModel } from "./resolve-model.ts";
 export type { RunsStore } from "./store.ts";
 export { createRunsStore } from "./store.ts";
+export type { RunnableCatalog } from "./symbolic.ts";
 export type { PermissionEvents, Run, RunEvent, RunModuleEvents, RunStatus } from "./types.ts";

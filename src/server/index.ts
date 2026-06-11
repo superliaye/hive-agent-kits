@@ -41,11 +41,12 @@ import { HiveDb, HiveDbLive } from "../db/effect/hive-db-live.ts";
 import { createLogger, log, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { createPiAiAdapter } from "../model-gateway/adapters/pi-ai.ts";
-import { createGateway, type ModelGateway } from "../model-gateway/index.ts";
+import { createGateway, type ModelGateway, orderByRecency } from "../model-gateway/index.ts";
 import {
   createRunExecutor,
   createRunsStore,
   type RunExecutor,
+  type RunnableCatalogPort,
   type SkillResolverPort,
 } from "../runs/index.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
@@ -243,6 +244,18 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     },
   };
 
+  // RunnableCatalogPort adapter (E3/E5): the credentialed ∩ routable models the
+  // symbolic-default resolver consumes. Same intersection the `/api/models`
+  // route exposes (secrets.list ⨯ gateway.listModels), ordered newest-first
+  // across providers so "latest" picks a runnable head. Snapshot per Run — a
+  // newly-added credential is visible on the next Run. pi-ai stays imported
+  // only in its adapter (ADR-0005): enumeration goes through the gateway seam.
+  const runnableCatalogPort: RunnableCatalogPort = {
+    snapshot: () => ({
+      models: orderByRecency(secrets.list().flatMap((p) => gateway.listModels(p.provider))),
+    }),
+  };
+
   const runs = createRunExecutor({
     threads,
     runs: runsStore,
@@ -250,6 +263,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     gateway,
     secrets,
     prefs: agentModelPrefs,
+    runnableCatalog: runnableCatalogPort,
     skillResolver,
     // Cap port — snapshot of runs.maxIterations off the root Config (0 =
     // unlimited). Narrow consumer-owned port, not the whole Config tree.

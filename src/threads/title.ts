@@ -17,6 +17,7 @@
 import { log } from "../lib/log.ts";
 import type { CompletionInput, GatewayEvent } from "../model-gateway/types.ts";
 import { resolveAgentModel } from "../runs/resolve-model.ts";
+import type { RunnableCatalog } from "../runs/symbolic.ts";
 
 // Fixed instruction. Kept terse — the model summarizes the conversation into a
 // short, plain title with no surrounding quotes or punctuation.
@@ -53,6 +54,15 @@ type AgentModelPrefsPort = {
   getModel(agentId: string): string | undefined;
 };
 
+// Optional runnable-catalog source so title-gen resolves a SYMBOLIC default
+// ("latest") the same way the executor does (ADR-0015 S2 guard). Absent ⇒ a
+// symbolic default resolves against an empty catalog → `resolveAgentModel`
+// returns a typed failure → title-gen skips cleanly (no crash, no malformed
+// model call), which is the existing fail-soft behavior.
+type RunnableCatalogPort = {
+  snapshot(): RunnableCatalog;
+};
+
 export type MaybeGenerateTitleDeps = {
   threads: ThreadsPort;
   runs: RunsPort;
@@ -60,6 +70,7 @@ export type MaybeGenerateTitleDeps = {
   gateway: GatewayPort;
   secrets: SecretsPort;
   agentModelPrefs: AgentModelPrefsPort;
+  runnableCatalog?: RunnableCatalogPort;
 };
 
 export async function maybeGenerateTitle(
@@ -67,7 +78,7 @@ export async function maybeGenerateTitle(
   threadId: string,
 ): Promise<void> {
   try {
-    const { threads, runs, catalog, gateway, secrets, agentModelPrefs } = deps;
+    const { threads, runs, catalog, gateway, secrets, agentModelPrefs, runnableCatalog } = deps;
 
     // Guard 1: only untitled auto threads. A manual title is sticky.
     const t = threads.get(threadId);
@@ -98,7 +109,10 @@ export async function maybeGenerateTitle(
     const resolved = resolveAgentModel({
       configuredModel: typeof agent.config.model === "string" ? agent.config.model : undefined,
       userModelDefault: agentModelPrefs.getModel(t.agentId),
+      ...(runnableCatalog !== undefined ? { runnableCatalog: runnableCatalog.snapshot() } : {}),
     });
+    // A symbolic default with no runnable model surfaces as a typed failure here;
+    // title-gen skips cleanly (best-effort, never fails the Run).
     if ("failure" in resolved) return;
     const { model, provider } = resolved;
 

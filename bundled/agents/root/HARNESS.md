@@ -19,9 +19,9 @@ bindings:
 commandAllowlist:
   - node
 config:
-  model: anthropic/claude-opus-4-7
+  model: latest
   modelFallback: anthropic/claude-sonnet-4-6
-  thinkingEffort: high
+  thinkingEffort: highest
   temperature: 1.0
   maxTokens: 16000
 ---

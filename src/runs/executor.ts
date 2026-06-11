@@ -49,6 +49,7 @@ import type {
   CompletionPort,
   FsRunnerPort,
   PermissionPort,
+  RunnableCatalogPort,
   RunsStorePort,
   SecretsPort,
   ShellRunnerPort,
@@ -134,6 +135,13 @@ export type CreateRunExecutorDeps = {
    */
   prefs?: AgentModelPrefsPort;
   /**
+   * Runnable model catalog (credentialed ∩ routable, newest-first) — the data
+   * the symbolic-default resolver consumes. Optional: when absent a symbolic
+   * "latest"/"highest" default resolves against an empty catalog (so a symbolic
+   * model surfaces a typed model_not_found; concrete defaults are unaffected).
+   */
+  runnableCatalog?: RunnableCatalogPort;
+  /**
    * Tool-loop iteration cap (snapshot once per Run). Optional: when absent the
    * loop runs unbounded (the cap=0 default).
    */
@@ -161,6 +169,11 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   };
   // cap=0 default ⇒ unlimited (Q5). Snapshot once per Run inside runIterator.
   const capConfig: CapConfigPort = deps.capConfig ?? { maxIterations: () => 0 };
+  // No runnable catalog wired ⇒ empty snapshot. A symbolic default then has
+  // nothing to resolve to (typed failure); concrete defaults are unaffected.
+  const runnableCatalog: RunnableCatalogPort = deps.runnableCatalog ?? {
+    snapshot: () => ({ models: [] }),
+  };
   const shell: ShellRunnerPort = deps.shell ?? createDefaultShellRunner();
   const fs: FsRunnerPort = deps.fs ?? createDefaultFsRunner();
   // No-op resolver when no capabilities are wired: load_skill yields isError,
@@ -232,7 +245,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         return;
       }
 
-      // Seam 2 — resolve model + effort + backend.
+      // Seam 2 — resolve model + effort + backend. The runnable catalog feeds
+      // the symbolic-default resolver (S2): a "latest"/"highest" default
+      // resolves to a credentialed+routable concrete model/effort here.
       const resolved = resolve({
         configuredModel: typeof agent.config.model === "string" ? agent.config.model : undefined,
         configuredEffort: agent.config.thinkingEffort,
@@ -241,6 +256,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         ...(modelOverride !== undefined ? { modelOverride } : {}),
         ...(effortOverride !== undefined ? { effortOverride } : {}),
         backend: agent.backend,
+        runnableCatalog: runnableCatalog.snapshot(),
       });
       const { model } = resolved;
 

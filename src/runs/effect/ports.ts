@@ -21,6 +21,7 @@ import type {
 } from "../../model-gateway/types.ts";
 import type { ThreadMessage } from "../../threads/types.ts";
 import type { CompleteRunInput, CreateRunInput, FailRunInput } from "../store.ts";
+import type { RunnableCatalog } from "../symbolic.ts";
 import type { Run } from "../types.ts";
 
 // Completion: the typed gateway Stream, not the full ModelGateway. A thrown
@@ -44,6 +45,20 @@ export type CatalogPort = {
   get(agentId: string): Agent | undefined;
 };
 export class AgentLookup extends Context.Service<AgentLookup, CatalogPort>()("runs/AgentLookup") {}
+
+// Runnable model catalog: the credentialed ∩ routable models, newest-first.
+// The symbolic resolver (resolve()) consumes this to turn a "latest"/"highest"
+// default into a concrete provider/model + effort. Consumer-owned and narrow —
+// the executor never imports ModelGateway/Secrets concretes. Synchronous (both
+// the gateway catalog read and the secrets provider list are sync), snapshot
+// once per Run. The composition root adapts gateway.listModels ∩ secrets.list.
+export type RunnableCatalogPort = {
+  snapshot(): RunnableCatalog;
+};
+export class RunnableCatalogLookup extends Context.Service<
+  RunnableCatalogLookup,
+  RunnableCatalogPort
+>()("runs/RunnableCatalogLookup") {}
 
 // Agent preferences: the user's per-agent model + effort defaults, read-only.
 // Synchronous (no audit on reads — the resolved model/effort are recorded by
