@@ -10,16 +10,18 @@
 // (CONTEXT.md: bindings frozen into the Harness). An unknown/unbound name is an
 // `isError` result, never a throw (mirrors the F2 `missing` discipline).
 //
-// On a successful load the handler emits a `run.skill_loaded` audit event
-// (skill NAME only — the body is never in the payload, ADR-0004 redaction),
-// audit-first: the emit is awaited before the body is returned to the model.
+// On a successful load the handler returns the skill NAME in
+// `result.loadedSkill`; the executor's dispatch site emits the
+// `run.skill_loaded` audit event from it (the body is never in the payload,
+// ADR-0004 redaction), audit-first — mirroring run.tool_use.executed.
 
 import type { ToolDef } from "../../model-gateway/types.ts";
 import type { SkillResolverPort } from "../effect/ports.ts";
+import { LOAD_SKILL_TOOL_NAME } from "./names.ts";
 import type { ToolContext, ToolHandler, ToolResult } from "./registry.ts";
 
 const LOAD_SKILL_DEF: ToolDef = {
-  name: "load_skill",
+  name: LOAD_SKILL_TOOL_NAME,
   description: "Load the full body of one of your available skills by name.",
   inputSchema: {
     type: "object",
@@ -37,13 +39,7 @@ function parseInput(input: unknown): { name: string } | null {
   return { name: rec.name };
 }
 
-// `onLoaded` is the audit-first hook the executor wires to emit
-// `run.skill_loaded` (it owns the run/agent ids and the events emitter). The
-// handler awaits it BEFORE returning the body, preserving audit-first ordering.
-export function makeLoadSkillTool(
-  skills: SkillResolverPort,
-  onLoaded: (ctx: ToolContext, skillName: string) => Promise<void>,
-): ToolHandler {
+export function makeLoadSkillTool(skills: SkillResolverPort): ToolHandler {
   return {
     def: LOAD_SKILL_DEF,
     async run(input: unknown, ctx: ToolContext): Promise<ToolResult> {
@@ -58,8 +54,8 @@ export function makeLoadSkillTool(
           isError: true,
         };
       }
-      await onLoaded(ctx, parsed.name);
-      return { content: loaded.body, isError: false };
+      // Surface the loaded name; the dispatch site emits run.skill_loaded.
+      return { content: loaded.body, isError: false, loadedSkill: parsed.name };
     },
     // Command-less; no sensitive projection (the skill name is surfaced through
     // the dedicated run.skill_loaded event, not the generic tool_use payload).

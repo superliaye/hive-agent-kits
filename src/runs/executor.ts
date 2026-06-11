@@ -58,6 +58,7 @@ import type {
 import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
 import { createDefaultFsRunner } from "./tools/file-tools.ts";
+import { LOAD_SKILL_TOOL_NAME } from "./tools/names.ts";
 import {
   buildToolRegistry,
   type ToolContext,
@@ -176,10 +177,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     shell,
     fs,
     skills: skillResolver,
-    // Audit-first: emit run.skill_loaded (ref only — name, never body) before
-    // the body is handed back to the model.
-    onSkillLoaded: (ctx, skill) =>
-      events.emit("run.skill_loaded", { runId: ctx.runId, agentId: ctx.agentId, skill }),
   });
   const inflight = new Map<string, { threadId: string; controller: AbortController }>();
   const threadsWithRun = new Set<string>();
@@ -298,7 +295,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // that loads them would name an uncallable tool. Both conditions (skills
       // bound AND load_skill bound) must hold for the block to appear.
       const boundSkills = agent.bindings.skills;
-      const canLoadSkill = agent.bindings.tools.includes("load_skill");
+      const canLoadSkill = agent.bindings.tools.includes(LOAD_SKILL_TOOL_NAME);
       const skillListing = canLoadSkill ? skillResolver.list(boundSkills) : [];
       const systemPrompt = buildSystemPrompt(agent.promptBody, skillListing);
       // Tools sent for this Run: registry filtered by the Agent's bound tools.
@@ -585,6 +582,12 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       toolUseId: call.id,
       isError: result.isError,
     });
+    // Audit-first: a successful skill load surfaces its name; emit
+    // run.skill_loaded (ref only — name, never body) before the tool_result is
+    // fed back to the model, mirroring run.tool_use.executed.
+    if (result.loadedSkill !== undefined) {
+      await events.emit("run.skill_loaded", { runId, agentId, skill: result.loadedSkill });
+    }
     return result;
   }
 
@@ -632,7 +635,7 @@ function buildSystemPrompt(
   const body = promptBody.trim();
   const listing =
     skills.length > 0
-      ? `Available skills (call load_skill to load one):\n${skills
+      ? `Available skills (call ${LOAD_SKILL_TOOL_NAME} to load one):\n${skills
           .map((s) => `- ${s.name}: ${s.description}`)
           .join("\n")}`
       : "";

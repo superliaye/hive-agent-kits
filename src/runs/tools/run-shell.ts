@@ -87,8 +87,9 @@ export function resolveWorkingDir(agentId: string): string {
 }
 
 // Per-stream capture cap. Bounds accumulation at the runner so a runaway
-// process can't OOM the daemon or balloon the tool_result.
-const MAX_STREAM_BYTES = 64 * 1024;
+// process can't OOM the daemon or balloon the tool_result. Measured in UTF-16
+// code units (String.length/.slice), not a hard byte ceiling.
+const MAX_STREAM_CHARS = 64 * 1024;
 
 // Default ShellRunner — the true external I/O edge. Plain async around
 // node:child_process; wrapped inward at the executor. `spawn` (not exec) with
@@ -113,8 +114,8 @@ export function createDefaultShellRunner(): ShellRunnerPort {
         const append = (current: string, chunk: string, truncated: boolean) => {
           if (truncated) return { value: current, truncated };
           const next = current + chunk;
-          if (next.length >= MAX_STREAM_BYTES) {
-            return { value: `${next.slice(0, MAX_STREAM_BYTES)}\n…(truncated)`, truncated: true };
+          if (next.length >= MAX_STREAM_CHARS) {
+            return { value: `${next.slice(0, MAX_STREAM_CHARS)}\n…(truncated)`, truncated: true };
           }
           return { value: next, truncated: false };
         };

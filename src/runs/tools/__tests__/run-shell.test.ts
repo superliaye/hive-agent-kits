@@ -24,7 +24,7 @@ function registryDeps(): BuildRegistryDeps {
     fileExists: async () => false,
   };
   const skills: SkillResolverPort = { list: () => [], load: () => undefined };
-  return { shell: createDefaultShellRunner(), fs, skills, onSkillLoaded: async () => {} };
+  return { shell: createDefaultShellRunner(), fs, skills };
 }
 
 describe("run_shell tool", () => {

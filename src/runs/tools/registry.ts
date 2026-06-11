@@ -14,7 +14,9 @@ import { makeLoadSkillTool } from "./load-skill.ts";
 import { makeRunShellTool } from "./run-shell.ts";
 
 // What a tool returns, folded into a `tool_result` content block.
-export type ToolResult = { content: string; isError: boolean };
+// `loadedSkill` surfaces a skill name known only AFTER run() resolves (describe()
+// runs pre-dispatch); the executor emits run.skill_loaded from it.
+export type ToolResult = { content: string; isError: boolean; loadedSkill?: string };
 
 // Per-call execution context handed to a tool's `run`.
 export type ToolContext = {
@@ -59,10 +61,6 @@ export type BuildRegistryDeps = {
   shell: ShellRunnerPort;
   fs: FsRunnerPort;
   skills: SkillResolverPort;
-  // Audit-first hook the load_skill handler awaits before returning the body.
-  // The executor owns the run/agent ids + the events emitter, so it supplies
-  // the emit; the registry only wires it in.
-  onSkillLoaded: (ctx: ToolContext, skillName: string) => Promise<void>;
 };
 
 // Built once per executor. The single place tools are registered — D edits
@@ -73,7 +71,7 @@ export function buildToolRegistry(deps: BuildRegistryDeps): ToolRegistry {
     makeReadTool(deps.fs),
     makeWriteTool(deps.fs),
     makeEditTool(deps.fs),
-    makeLoadSkillTool(deps.skills, deps.onSkillLoaded),
+    makeLoadSkillTool(deps.skills),
   ];
   return new Map(handlers.map((h) => [h.def.name, h]));
 }

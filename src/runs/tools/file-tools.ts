@@ -28,12 +28,14 @@ import type { FsRunnerPort } from "../effect/ports.ts";
 import type { ToolContext, ToolHandler, ToolResult } from "./registry.ts";
 
 // Cap read output the same way run_shell caps stream capture, so a large file
-// can't balloon the tool_result / context.
-const MAX_FILE_BYTES = 64 * 1024;
+// can't balloon the tool_result / context. Measured in UTF-16 code units
+// (String.length/.slice) — bounds context growth, not a hard byte ceiling.
+const MAX_FILE_CHARS = 64 * 1024;
 
 // Resolve a model-provided relative path against the workspace root and confine
-// it. Returns the absolute path, or null when the input escapes the workspace
-// (absolute path, or `..` traversal above `cwd`).
+// it. Returns `{ abs }`, or `{ error }` (the shared escape ToolResult) when the
+// input escapes the workspace (absolute path, or `..` traversal above `cwd`).
+// The security invariant + its rejection message live here, once.
 //
 // KNOWN LIMITATION (string-level guard, no realpath): a symlink residing inside
 // the workspace that targets a path outside it passes confinement — the fs verb
@@ -42,15 +44,18 @@ const MAX_FILE_BYTES = 64 * 1024;
 // workspace. A hard boundary would realpath `abs` (and its parent, for write)
 // and re-check containment under realpath(cwd); deferred until the G2 permission
 // system replaces this interim confinement guard.
-function confine(cwd: string, path: string): string | null {
-  if (typeof path !== "string" || path.length === 0) return null;
-  if (isAbsolute(path)) return null;
+function confined(cwd: string, path: string): { abs: string } | { error: ToolResult } {
+  const rejected = (): { error: ToolResult } => ({
+    error: { content: `path escapes the workspace: ${path}`, isError: true },
+  });
+  if (typeof path !== "string" || path.length === 0) return rejected();
+  if (isAbsolute(path)) return rejected();
   const abs = resolvePath(cwd, path);
   const rel = relative(cwd, abs);
   // Outside the workspace iff the relative path climbs out (`..`) or is itself
   // absolute (different drive on Windows).
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
-  return abs;
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return rejected();
+  return { abs };
 }
 
 // The path ref projected into audit (P-4) — the workspace-relative path the
@@ -94,19 +99,15 @@ export function makeReadTool(fs: FsRunnerPort): ToolHandler {
       if (!parsed) {
         return { content: "read: invalid input — expected { path: string }", isError: true };
       }
-      const abs = confine(ctx.cwd, parsed.path);
-      if (abs === null) {
-        return {
-          content: `read: path escapes the workspace: ${parsed.path}`,
-          isError: true,
-        };
-      }
+      const guard = confined(ctx.cwd, parsed.path);
+      if ("error" in guard) return guard.error;
+      const { abs } = guard;
       if (!(await fs.fileExists(abs))) {
         return { content: `read: file not found: ${parsed.path}`, isError: true };
       }
       let content = await fs.readFile(abs);
-      if (content.length > MAX_FILE_BYTES) {
-        content = `${content.slice(0, MAX_FILE_BYTES)}\n…(truncated)`;
+      if (content.length > MAX_FILE_CHARS) {
+        content = `${content.slice(0, MAX_FILE_CHARS)}\n…(truncated)`;
       }
       return { content, isError: false };
     },
@@ -154,10 +155,9 @@ export function makeWriteTool(fs: FsRunnerPort): ToolHandler {
           isError: true,
         };
       }
-      const abs = confine(ctx.cwd, parsed.path);
-      if (abs === null) {
-        return { content: `write: path escapes the workspace: ${parsed.path}`, isError: true };
-      }
+      const guard = confined(ctx.cwd, parsed.path);
+      if ("error" in guard) return guard.error;
+      const { abs } = guard;
       await fs.writeFile(abs, parsed.content);
       return { content: `wrote ${parsed.content.length} bytes to ${parsed.path}`, isError: false };
     },
@@ -209,10 +209,9 @@ export function makeEditTool(fs: FsRunnerPort): ToolHandler {
           isError: true,
         };
       }
-      const abs = confine(ctx.cwd, parsed.path);
-      if (abs === null) {
-        return { content: `edit: path escapes the workspace: ${parsed.path}`, isError: true };
-      }
+      const guard = confined(ctx.cwd, parsed.path);
+      if ("error" in guard) return guard.error;
+      const { abs } = guard;
       if (!(await fs.fileExists(abs))) {
         return { content: `edit: file not found: ${parsed.path}`, isError: true };
       }
