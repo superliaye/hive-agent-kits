@@ -21,11 +21,22 @@ export type ToolContext = {
   // The working directory the tool runs in. F1 defaults this via
   // resolveWorkingDir(); F/C4 owns the three-tier Working Directory resolution.
   cwd: string;
+  // Loop-scoped cancellation. Threaded to the I/O edge so an aborted Run kills
+  // in-flight work (e.g. the run_shell child).
+  signal: AbortSignal;
 };
 
 export type ToolHandler = {
   def: ToolDef;
   run(input: unknown, ctx: ToolContext): Promise<ToolResult>;
+  /**
+   * Projects the tool's input into the gate + audit metadata the executor
+   * needs, so the executor never knows a tool's wire shape. `command` is a ref
+   * (drives the permission gate); `argSummary` is count-only (redaction is
+   * authored centrally — the handler only DECLARES fields). Command-less tools
+   * omit this or return {}.
+   */
+  describe?(input: unknown): { command?: string; argSummary?: { count: number } };
 };
 
 export type ToolRegistry = ReadonlyMap<string, ToolHandler>;

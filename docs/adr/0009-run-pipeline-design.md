@@ -133,7 +133,10 @@ Rejected:
 
 ## Cancellation
 
-`cancelRun(runId)` aborts the underlying `AbortController` registered when the Run started. The signal flows into `CompletionInput.signal`; ModelGateway adapters (pi-ai, claude-cli) react with `done(cancelled)` per ADR-0005's verification list. Run executor sees the `done(cancelled)` and yields `run.cancelled`, marks the Run row.
+`cancelRun(runId)` aborts the underlying `AbortController` registered when the Run started. The signal reaches every cancellable edge of the Run, not just the gateway stream:
+
+- **Gateway stream.** The signal flows into `CompletionInput.signal`; ModelGateway adapters (pi-ai, claude-cli) react with `done(cancelled)` per ADR-0005's verification list. The executor sees `done(cancelled)`, yields `run.cancelled`, and marks the Run row.
+- **Tool dispatch.** The same signal threads through `dispatchToolCall` into the `ToolContext`. An already-aborted signal short-circuits dispatch (no gate, no run); `run_shell` forwards it to the `ShellRunner`, which kills the spawned child on abort and surfaces a non-zero exit (130) with a "process killed (run cancelled)" stderr note.
 
 If `cancelRun` is called on an unknown id (already finished, never existed): no-op. Cancellation is fire-and-forget.
 

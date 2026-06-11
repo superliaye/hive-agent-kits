@@ -26,7 +26,6 @@ const req = (command: string) => ({
   runId: "r",
   tool: "run_shell",
   command,
-  args: [] as string[],
 });
 
 describe("default PermissionPort — run_shell (deny-by-default)", () => {
@@ -62,8 +61,13 @@ describe("default PermissionPort — run_shell (deny-by-default)", () => {
     expect((await perm.decide(req("/bin/rm"))).outcome).toBe("deny");
   });
 
-  test("non-run_shell tool is allowed (no allowlist semantics in F1)", async () => {
+  test("command-less tool is allowed (no command → no allowlist semantics)", async () => {
     const perm = createDefaultPermission(catalogWith(makeAgent({})));
     expect((await perm.decide({ agentId: "a", runId: "r", tool: "read" })).outcome).toBe("allow");
+    // Even a run_shell call that projects no command is allowed (gate is
+    // command-presence-driven, not tool-name-driven).
+    expect((await perm.decide({ agentId: "a", runId: "r", tool: "run_shell" })).outcome).toBe(
+      "allow",
+    );
   });
 });

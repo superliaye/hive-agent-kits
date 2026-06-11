@@ -3,7 +3,7 @@ import type { ShellRunnerPort } from "../../effect/ports.ts";
 import { buildToolRegistry, toolsForBindings } from "../registry.ts";
 import { createDefaultShellRunner, makeRunShellTool, resolveWorkingDir } from "../run-shell.ts";
 
-const ctx = { agentId: "a", runId: "r", cwd: process.cwd() };
+const ctx = { agentId: "a", runId: "r", cwd: process.cwd(), signal: new AbortController().signal };
 
 function stubShell(impl: ShellRunnerPort["run"]): ShellRunnerPort {
   return { run: impl };
@@ -58,6 +58,34 @@ describe("run_shell tool", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("OK");
+  });
+
+  test("default ShellRunner caps a >64KiB stream and marks it truncated", async () => {
+    const runner = createDefaultShellRunner();
+    // Emit ~128 KiB to stdout — well past the 64 KiB cap.
+    const result = await runner.run({
+      command: process.execPath,
+      args: ["-e", "process.stdout.write('x'.repeat(128 * 1024))"],
+      cwd: process.cwd(),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.length).toBeLessThan(70 * 1024);
+    expect(result.stdout).toContain("…(truncated)");
+  });
+
+  test("default ShellRunner kills the child on abort → exit 130", async () => {
+    const runner = createDefaultShellRunner();
+    const controller = new AbortController();
+    const promise = runner.run({
+      command: process.execPath,
+      args: ["-e", "setTimeout(() => {}, 60000)"],
+      cwd: process.cwd(),
+      signal: controller.signal,
+    });
+    controller.abort();
+    const result = await promise;
+    expect(result.exitCode).toBe(130);
+    expect(result.stderr).toContain("process killed (run cancelled)");
   });
 });
 

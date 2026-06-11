@@ -222,6 +222,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const { model } = resolved;
 
       if ("failure" in resolved) {
+        // resolved.failure.code/.message is deliberately reserved for the E
+        // (selection) lane to thread through; today the only failure source is
+        // the malformed-model parse, so we hardcode invalid_request here.
         const run = runs.create({ threadId, agentId, model });
         yield await emitFailed(
           run.id,
@@ -352,11 +355,18 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         return;
       }
 
+      // On the grace turn the model may still emit tool_use (tools were
+      // stripped from the request, but the model can ignore that). We finalize
+      // regardless, so strip the dangling tool_use blocks before persisting —
+      // they have no matching tool_result and Anthropic rejects empty content.
+      const content =
+        graceTurn && outcome.kind === "tools" ? stripToolUse(outcome.assistant) : outcome.assistant;
+
       // Persist the assistant message this turn produced.
       const assistantMessage: ThreadMessage = threads.append({
         threadId,
         role: "assistant",
-        content: outcome.assistant,
+        content,
       });
 
       // No tools wanted, or this was the grace turn → finalize.
@@ -382,7 +392,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // call, then feed the tool_results back as a single user message.
       const resultBlocks: ContentBlock[] = [];
       for (const call of outcome.calls) {
-        const result = await dispatchToolCall(runId, agentId, call);
+        const result = await dispatchToolCall(runId, agentId, call, args.signal);
         resultBlocks.push({
           type: "tool_result",
           tool_use_id: call.id,
@@ -462,8 +472,17 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     runId: string,
     agentId: string,
     call: { id: string; name: string; input: unknown },
+    signal: AbortSignal,
   ): Promise<{ content: string; isError: boolean }> {
-    const command = commandOf(call.name, call.input);
+    if (signal.aborted) {
+      return { content: "run cancelled", isError: true };
+    }
+
+    // The handler projects its own gate + audit metadata — the executor never
+    // knows a tool's wire shape. Command-less tools yield {} (no command).
+    const handler = registry.get(call.name);
+    const meta = handler?.describe?.(call.input) ?? {};
+    const { command, argSummary } = meta;
 
     // Permission gate (emit on the dedicated permission source, audit-first).
     await permissionEvents.emit("permission.requested", {
@@ -477,7 +496,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       runId,
       tool: call.name,
       ...(command !== undefined ? { command } : {}),
-      ...(argsOf(call.input) !== undefined ? { args: argsOf(call.input) } : {}),
     });
     await permissionEvents.emit("permission.decided", {
       runId,
@@ -494,7 +512,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       };
     }
 
-    const handler = registry.get(call.name);
     if (!handler) {
       return { content: `unknown tool: ${call.name}`, isError: true };
     }
@@ -507,9 +524,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       tool: call.name,
       toolUseId: call.id,
       ...(command !== undefined ? { command } : {}),
-      ...(argSummaryOf(call.input) !== undefined ? { argSummary: argSummaryOf(call.input) } : {}),
+      ...(argSummary !== undefined ? { argSummary } : {}),
     });
-    const ctx: ToolContext = { agentId, runId, cwd: resolveWorkingDir(agentId) };
+    const ctx: ToolContext = { agentId, runId, cwd: resolveWorkingDir(agentId), signal };
     const result = await handler.run(call.input, ctx);
     await events.emit("run.tool_use.executed", {
       runId,
@@ -552,29 +569,12 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   };
 }
 
-// run_shell carries a `command` ref + `args`. Pull them out for the gate +
-// audit summary; other tools have no command (undefined).
-function commandOf(tool: string, input: unknown): string | undefined {
-  if (tool !== "run_shell") return undefined;
-  if (input && typeof input === "object") {
-    const c = (input as Record<string, unknown>).command;
-    if (typeof c === "string") return c;
-  }
-  return undefined;
-}
-
-function argsOf(input: unknown): string[] | undefined {
-  if (input && typeof input === "object") {
-    const a = (input as Record<string, unknown>).args;
-    if (Array.isArray(a) && a.every((x) => typeof x === "string")) return a as string[];
-  }
-  return undefined;
-}
-
-// Redacted arg summary for audit — count only, never the values (ADR-0004:141).
-function argSummaryOf(input: unknown): { count: number } | undefined {
-  const args = argsOf(input);
-  return args !== undefined ? { count: args.length } : undefined;
+// Grace-turn finalize: keep only text/thinking blocks, dropping dangling
+// tool_use. Falls back to a minimal text block — Anthropic rejects empty
+// content, and a tool_use-only turn would otherwise strip to nothing.
+function stripToolUse(content: ContentBlock[]): ContentBlock[] {
+  const kept = content.filter((b) => b.type !== "tool_use");
+  return kept.length > 0 ? kept : [{ type: "text", text: "[stopped: iteration cap reached]" }];
 }
 
 // ─── Accumulator ────────────────────────────────────────────────────────────

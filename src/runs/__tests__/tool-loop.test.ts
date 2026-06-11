@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ManagedRuntime } from "effect";
-import type { Agent, Catalog } from "../../catalog/index.ts";
+import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
@@ -35,7 +35,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 }
 
 function makeCatalogStub(agents: Agent[]): Catalog {
-  const events = new TypedEmitter<Record<string, never>>();
+  // Fresh empty emitter — the executor doesn't read catalog events.
+  const events = new TypedEmitter<CatalogEvents>();
   return {
     list: () => agents,
     get: (id) => agents.find((a) => a.agentId === id),
@@ -47,8 +48,7 @@ function makeCatalogStub(agents: Agent[]): Catalog {
     },
     start: async () => {},
     rescan: async () => {},
-    // biome-ignore lint/suspicious/noExplicitAny: stub emitter generic differs; executor doesn't read catalog events.
-    events: events as any,
+    events,
     dispose: () => {},
   };
 }
@@ -279,6 +279,74 @@ describe("tool-loop — AC2 (termination)", () => {
     // All 3 dispatches happened (no premature cap), ending completed.
     expect(shellCalls).toHaveLength(3);
     expect(events[events.length - 1]?.type).toBe("run.completed");
+  });
+});
+
+// ─── Grace-turn: no dangling tool_use persisted ──────────────────────────────
+
+describe("tool-loop — grace turn strips dangling tool_use", () => {
+  test("cap reached, model still emits tool_use on grace turn → no dangling tool_use, completed", async () => {
+    // Always emits tool_use even when no tools are offered (grace turn).
+    const stubbornScript = (input: CompletionInput): GatewayEvent[] => {
+      const toolResults = input.messages
+        .flatMap((m) => m.content)
+        .filter((b) => b.type === "tool_result").length;
+      return [
+        { type: "tool_use_start", blockIndex: 0, id: `tu_${toolResults}`, name: "run_shell" },
+        {
+          type: "tool_use_end",
+          blockIndex: 0,
+          id: `tu_${toolResults}`,
+          args: { command: "node", args: [] },
+        },
+        { type: "done", finishReason: "tool_use" },
+      ];
+    };
+    const { threads, executor, threadId } = await build({
+      script: stubbornScript,
+      capConfig: { maxIterations: () => 1 },
+    });
+    const events = await collect(
+      executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }),
+    );
+    expect(events[events.length - 1]?.type).toBe("run.completed");
+
+    // No tool_use block may lack a matching tool_result in the final history.
+    const msgs = threads.listMessages(threadId);
+    const blocks = msgs.flatMap((m) => m.content);
+    const toolUseIds = blocks.filter((b) => b.type === "tool_use").map((b) => b.id);
+    const toolResultIds = new Set(
+      blocks.filter((b) => b.type === "tool_result").map((b) => b.tool_use_id),
+    );
+    for (const id of toolUseIds) {
+      expect(toolResultIds.has(id)).toBe(true);
+    }
+  });
+});
+
+// ─── Abort: aborted signal short-circuits dispatch ───────────────────────────
+
+describe("tool-loop — abort short-circuits dispatch", () => {
+  test("cancelRun on run.started → shell never runs, ends run.cancelled", async () => {
+    const { executor, threadId, shellCalls } = await build({
+      script: alwaysToolScript("run_shell", { command: "node", args: [] }),
+    });
+    let cancelled = false;
+    const out: RunEvent[] = [];
+    for await (const ev of executor.startRun({
+      threadId,
+      userMessage: [{ type: "text", text: "go" }],
+    })) {
+      out.push(ev);
+      if (ev.type === "run.started" && !cancelled) {
+        cancelled = true;
+        executor.cancelRun(ev.runId);
+      }
+    }
+    // Signal aborted before the first turn streamed any tool_use → no dispatch,
+    // so the shell handler was never invoked.
+    expect(shellCalls).toHaveLength(0);
+    expect(out[out.length - 1]?.type).toBe("run.cancelled");
   });
 });
 

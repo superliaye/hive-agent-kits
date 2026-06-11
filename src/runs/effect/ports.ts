@@ -90,7 +90,6 @@ export type PermissionPort = {
     runId: string;
     tool: string;
     command?: string;
-    args?: string[];
   }): Promise<PermissionDecision>;
 };
 export class Permission extends Context.Service<Permission, PermissionPort>()("runs/Permission") {}
@@ -100,7 +99,12 @@ export class Permission extends Context.Service<Permission, PermissionPort>()("r
 // it; the default impl uses node:child_process.
 export type ShellResult = { stdout: string; stderr: string; exitCode: number };
 export type ShellRunnerPort = {
-  run(input: { command: string; args: string[]; cwd: string }): Promise<ShellResult>;
+  run(input: {
+    command: string;
+    args: string[];
+    cwd: string;
+    signal?: AbortSignal;
+  }): Promise<ShellResult>;
 };
 export class ShellRunner extends Context.Service<ShellRunner, ShellRunnerPort>()(
   "runs/ShellRunner",

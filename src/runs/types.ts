@@ -75,7 +75,7 @@ export type RunModuleEvents = {
     agentId: string;
     tool: string;
     toolUseId: string;
-    /** run_shell only: the command name (a ref, not an arg). */
+    /** Command-bearing tools only: the command name (a ref, not an arg). */
     command?: string;
     /** Redacted/elided arg summary — count only, never the values. */
     argSummary?: { count: number };
@@ -100,7 +100,7 @@ export type PermissionEvents = {
     runId: string;
     agentId: string;
     tool: string;
-    /** run_shell only: command name (ref). Never raw args. */
+    /** Command-bearing tools only: command name (ref). Never raw args. */
     command?: string;
   };
   "permission.decided": {
