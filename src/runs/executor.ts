@@ -292,8 +292,15 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // Agent's bound skills at Run start (CONTEXT.md). The model then decides
       // when to `load_skill`. Misses are non-fatal (F2 trace-logs them); no
       // bound/resolvable skills ⇒ no block injected.
+      //
+      // The listing is suppressed unless `load_skill` is among the Agent's
+      // bound tools: advertising skill one-liners while withholding the tool
+      // that loads them would name an uncallable tool. Both conditions (skills
+      // bound AND load_skill bound) must hold for the block to appear.
       const boundSkills = agent.bindings.skills;
-      const systemPrompt = buildSystemPrompt(agent.promptBody, skillResolver.list(boundSkills));
+      const canLoadSkill = agent.bindings.tools.includes("load_skill");
+      const skillListing = canLoadSkill ? skillResolver.list(boundSkills) : [];
+      const systemPrompt = buildSystemPrompt(agent.promptBody, skillListing);
       // Tools sent for this Run: registry filtered by the Agent's bound tools.
       const boundTools: ToolDef[] | undefined = toolsForBindings(registry, agent.bindings.tools);
 

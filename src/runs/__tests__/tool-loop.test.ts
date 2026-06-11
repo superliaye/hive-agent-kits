@@ -672,7 +672,7 @@ describe("tool-loop — D-4 Run-start skill listing in system prompt", () => {
     };
   }
 
-  test("two bound skills → both one-line descriptions present, bodies absent", async () => {
+  test("two bound skills + load_skill bound → both one-line descriptions present, bodies absent", async () => {
     const captured: { system?: string } = {};
     const { executor, threadId } = await build({
       script: capturingScript(captured),
@@ -682,7 +682,12 @@ describe("tool-loop — D-4 Run-start skill listing in system prompt", () => {
       }),
       agent: {
         promptBody: "You are a test agent.",
-        bindings: { skills: ["diagnose", "grill-me"], snippets: [], tools: [], mcp: [] },
+        bindings: {
+          skills: ["diagnose", "grill-me"],
+          snippets: [],
+          tools: ["load_skill"],
+          mcp: [],
+        },
       },
     });
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
@@ -694,6 +699,28 @@ describe("tool-loop — D-4 Run-start skill listing in system prompt", () => {
     expect(captured.system).not.toContain("GRILL BODY");
     // The authored prompt body is preserved.
     expect(captured.system).toContain("You are a test agent.");
+  });
+
+  test("skills bound but load_skill NOT bound → no listing block (uncallable tool not advertised)", async () => {
+    const captured: { system?: string } = {};
+    const { executor, threadId } = await build({
+      script: capturingScript(captured),
+      skillResolver: stubSkillResolver({
+        diagnose: { description: "Debug hard problems", body: "DIAGNOSE BODY" },
+        "grill-me": { description: "Stress-test a plan", body: "GRILL BODY" },
+      }),
+      agent: {
+        promptBody: "You are a test agent.",
+        // Skills are bound, but load_skill is NOT among the bound tools.
+        bindings: { skills: ["diagnose", "grill-me"], snippets: [], tools: [], mcp: [] },
+      },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
+    // The block must be suppressed: surfacing skill one-liners while
+    // withholding the load tool would advertise an uncallable tool.
+    expect(captured.system).toBe("You are a test agent.");
+    expect(captured.system).not.toContain("Available skills");
+    expect(captured.system).not.toContain("diagnose: Debug hard problems");
   });
 
   test("no bound skills → no listing block injected (just the prompt body)", async () => {
