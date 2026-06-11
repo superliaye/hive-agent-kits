@@ -6,7 +6,7 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { Layer, ManagedRuntime } from "effect";
+import { Effect, Layer, ManagedRuntime } from "effect";
 import type { Hono } from "hono";
 import {
   AgentModelPrefsLive,
@@ -22,7 +22,12 @@ import {
   BackendProbe as BackendProbeTag,
   notInstalledRunner,
 } from "../backend-probe/index.ts";
-import { createRegistry, type Registry } from "../capabilities/index.ts";
+import {
+  BindingResolver,
+  BindingResolverLive,
+  createRegistry,
+  type Registry,
+} from "../capabilities/index.ts";
 import { CatalogLive, Catalog as CatalogTag } from "../catalog/effect/catalog-live.ts";
 import type { Catalog } from "../catalog/index.ts";
 import { ConfigLive, Config as ConfigTag } from "../config/effect/config-live.ts";
@@ -37,7 +42,12 @@ import { createLogger, log, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { createPiAiAdapter } from "../model-gateway/adapters/pi-ai.ts";
 import { createGateway, type ModelGateway } from "../model-gateway/index.ts";
-import { createRunExecutor, createRunsStore, type RunExecutor } from "../runs/index.ts";
+import {
+  createRunExecutor,
+  createRunsStore,
+  type RunExecutor,
+  type SkillResolverPort,
+} from "../runs/index.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
 import type { Secrets } from "../secrets/index.ts";
 import { autoArchiveSweep } from "../threads/auto-archive.ts";
@@ -205,6 +215,27 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // — last registration wins per registry.test.ts.
   gateway.registerAdapter(createPiAiAdapter());
 
+  // SkillResolverPort adapter (D-5): adapt the F2 BindingResolver over the
+  // existing Capability Registry to the runs-owned port. F2's `resolveSkills`
+  // is a synchronous, never-failing Effect, so we discharge it with runSync at
+  // this composition root — runs/ never imports capabilities concretes. Skill
+  // loads are scoped to the Run's bound names (load(boundNames, name)).
+  const bindingResolver = ManagedRuntime.make(BindingResolverLive(registry)).runSync(
+    BindingResolver,
+  );
+  const skillResolver: SkillResolverPort = {
+    list: (boundNames) =>
+      Effect.runSync(bindingResolver.resolveSkills(boundNames)).resolved.map((s) => ({
+        name: s.name,
+        description: s.description,
+      })),
+    load: (boundNames, name) => {
+      if (!boundNames.includes(name)) return undefined;
+      const found = Effect.runSync(bindingResolver.resolveSkills([name])).resolved[0];
+      return found ? { description: found.description, body: found.body } : undefined;
+    },
+  };
+
   const runs = createRunExecutor({
     threads,
     runs: runsStore,
@@ -212,6 +243,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     gateway,
     secrets,
     prefs: agentModelPrefs,
+    skillResolver,
     // Cap port — snapshot of runs.maxIterations off the root Config (0 =
     // unlimited). Narrow consumer-owned port, not the whole Config tree.
     capConfig: { maxIterations: () => config.get("runs").maxIterations },
