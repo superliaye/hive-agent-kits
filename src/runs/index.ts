@@ -10,6 +10,11 @@
 // only ever produces `running` rows it eventually finalizes.
 
 export { MODEL_FALLBACK } from "./defaults.ts";
+export type {
+  FsRunnerPort,
+  SkillListing,
+  SkillResolverPort,
+} from "./effect/ports.ts";
 export type { CreateRunExecutorDeps, RunExecutor, StartRunInput } from "./executor.ts";
 export { createRunExecutor } from "./executor.ts";
 export type { ResolveInput, ResolveResult } from "./resolve.ts";

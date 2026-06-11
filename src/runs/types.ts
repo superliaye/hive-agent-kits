@@ -87,6 +87,14 @@ export type RunModuleEvents = {
     toolUseId: string;
     isError: boolean;
   };
+  // Skill progressive disclosure (N3): the model pulled a bound Skill's body via
+  // `load_skill`. The skill NAME is a ref — the body NEVER enters the payload
+  // (ADR-0004 redaction). Emitted audit-first, before the body returns.
+  "run.skill_loaded": {
+    runId: string;
+    agentId: string;
+    skill: string;
+  };
 };
 
 /**

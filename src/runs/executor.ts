@@ -47,14 +47,17 @@ import type {
   CapConfigPort,
   CatalogPort,
   CompletionPort,
+  FsRunnerPort,
   PermissionPort,
   RunsStorePort,
   SecretsPort,
   ShellRunnerPort,
+  SkillResolverPort,
   ThreadsPort,
 } from "./effect/ports.ts";
 import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
+import { createDefaultFsRunner } from "./tools/file-tools.ts";
 import {
   buildToolRegistry,
   type ToolContext,
@@ -138,6 +141,14 @@ export type CreateRunExecutorDeps = {
   permission?: PermissionPort;
   /** run_shell I/O edge. Default: node:child_process. */
   shell?: ShellRunnerPort;
+  /** File-tools I/O edge (read/write/edit). Default: node:fs/promises. */
+  fs?: FsRunnerPort;
+  /**
+   * Skill resolver for `load_skill` + the Run-start listing. Optional: when
+   * absent no skill resolves, so `load_skill` always returns `isError` and no
+   * listing is injected (the executor stays runnable without capabilities).
+   */
+  skillResolver?: SkillResolverPort;
   now?: () => number;
 };
 
@@ -150,11 +161,26 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   // cap=0 default ⇒ unlimited (Q5). Snapshot once per Run inside runIterator.
   const capConfig: CapConfigPort = deps.capConfig ?? { maxIterations: () => 0 };
   const shell: ShellRunnerPort = deps.shell ?? createDefaultShellRunner();
+  const fs: FsRunnerPort = deps.fs ?? createDefaultFsRunner();
+  // No-op resolver when no capabilities are wired: load_skill yields isError,
+  // and the Run-start listing is empty (no block injected).
+  const skillResolver: SkillResolverPort = deps.skillResolver ?? {
+    list: () => [],
+    load: () => undefined,
+  };
   const permission: PermissionPort = deps.permission ?? createDefaultPermission(catalog);
-  const registry: ToolRegistry = buildToolRegistry({ shell });
   const now = deps.now ?? Date.now;
   const events = new TypedEmitter<RunModuleEvents>();
   const permissionEvents = new TypedEmitter<PermissionEvents>();
+  const registry: ToolRegistry = buildToolRegistry({
+    shell,
+    fs,
+    skills: skillResolver,
+    // Audit-first: emit run.skill_loaded (ref only — name, never body) before
+    // the body is handed back to the model.
+    onSkillLoaded: (ctx, skill) =>
+      events.emit("run.skill_loaded", { runId: ctx.runId, agentId: ctx.agentId, skill }),
+  });
   const inflight = new Map<string, { threadId: string; controller: AbortController }>();
   const threadsWithRun = new Set<string>();
 
@@ -262,7 +288,12 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       inflight.set(run.id, { threadId, controller });
       yield { type: "run.started", runId: run.id, threadId, agentId, model, ts: now() };
 
-      const systemPrompt = agent.promptBody.trim().length > 0 ? agent.promptBody : undefined;
+      // Progressive disclosure (N3): surface one-line descriptions of the
+      // Agent's bound skills at Run start (CONTEXT.md). The model then decides
+      // when to `load_skill`. Misses are non-fatal (F2 trace-logs them); no
+      // bound/resolvable skills ⇒ no block injected.
+      const boundSkills = agent.bindings.skills;
+      const systemPrompt = buildSystemPrompt(agent.promptBody, skillResolver.list(boundSkills));
       // Tools sent for this Run: registry filtered by the Agent's bound tools.
       const boundTools: ToolDef[] | undefined = toolsForBindings(registry, agent.bindings.tools);
 
@@ -279,6 +310,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
             auth,
             signal: controller.signal,
             ...(boundTools !== undefined ? { tools: boundTools } : {}),
+            boundSkills,
             maxIterations: capConfig.maxIterations(),
           });
           return;
@@ -316,6 +348,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     auth: CompletionInput["auth"];
     signal: AbortSignal;
     tools?: ToolDef[];
+    /** The Agent's bound skill names — scopes load_skill to the frozen Harness. */
+    boundSkills: readonly string[];
     /** 0 = unlimited (no cap, no grace). >0 = finite cap + one grace turn. */
     maxIterations: number;
   };
@@ -392,7 +426,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // call, then feed the tool_results back as a single user message.
       const resultBlocks: ContentBlock[] = [];
       for (const call of outcome.calls) {
-        const result = await dispatchToolCall(runId, agentId, call, args.signal);
+        const result = await dispatchToolCall(runId, agentId, call, args.boundSkills, args.signal);
         resultBlocks.push({
           type: "tool_result",
           tool_use_id: call.id,
@@ -472,6 +506,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     runId: string,
     agentId: string,
     call: { id: string; name: string; input: unknown },
+    boundSkills: readonly string[],
     signal: AbortSignal,
   ): Promise<{ content: string; isError: boolean }> {
     if (signal.aborted) {
@@ -526,7 +561,13 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       ...(command !== undefined ? { command } : {}),
       ...(argSummary !== undefined ? { argSummary } : {}),
     });
-    const ctx: ToolContext = { agentId, runId, cwd: resolveWorkingDir(agentId), signal };
+    const ctx: ToolContext = {
+      agentId,
+      runId,
+      cwd: resolveWorkingDir(agentId),
+      boundSkills,
+      signal,
+    };
     const result = await handler.run(call.input, ctx);
     await events.emit("run.tool_use.executed", {
       runId,
@@ -567,6 +608,27 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       return threadsWithRun.has(threadId);
     },
   };
+}
+
+// Compose the Run's system prompt: the Agent's authored prompt body + a
+// one-line-per-skill listing of its bound, resolvable skills (N3 progressive
+// disclosure). The model reads the listing and decides when to `load_skill`.
+// Returns undefined only when BOTH the body and the listing are empty (so the
+// loop omits `system` entirely); an empty skill set injects no block (no empty
+// header).
+function buildSystemPrompt(
+  promptBody: string,
+  skills: ReadonlyArray<{ name: string; description: string }>,
+): string | undefined {
+  const body = promptBody.trim();
+  const listing =
+    skills.length > 0
+      ? `Available skills (call load_skill to load one):\n${skills
+          .map((s) => `- ${s.name}: ${s.description}`)
+          .join("\n")}`
+      : "";
+  const parts = [body, listing].filter((p) => p.length > 0);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
 
 // Grace-turn finalize: keep only text/thinking blocks, dropping dangling

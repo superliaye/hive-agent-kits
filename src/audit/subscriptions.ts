@@ -249,6 +249,14 @@ const runsNormalizer: Normalizer<RunModuleEvents> = {
     agent_id: event.agentId,
     payload: { tool: event.tool, tool_use_id: event.toolUseId, is_error: event.isError },
   }),
+  // Skill load (N3) on the `run` source. The skill NAME is a ref; the body is
+  // never in the payload (ADR-0004:141 redaction).
+  "run.skill_loaded": (event) => ({
+    event_type: "run.skill_loaded",
+    run_id: event.runId,
+    agent_id: event.agentId,
+    payload: { skill: event.skill },
+  }),
 };
 
 // Permission: the dedicated `permission` AuditSource (Q4). Payloads carry the
