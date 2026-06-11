@@ -21,7 +21,7 @@ import type {
 } from "../effect/ports.ts";
 import { createRunExecutor, type RunExecutor } from "../executor.ts";
 import { createRunsStore } from "../store.ts";
-import type { RunEvent } from "../types.ts";
+import type { RunEvent, RunModuleEvents } from "../types.ts";
 
 const MODEL = "anthropic/claude-haiku-4-5";
 
@@ -590,9 +590,9 @@ describe("tool-loop — D-1 file tools (write then read round-trip)", () => {
       fs,
       agent: { bindings: { skills: [], snippets: [], tools: ["write"], mcp: [] } },
     });
-    const requested: Array<Record<string, unknown>> = [];
+    const requested: Array<RunModuleEvents["run.tool_use.requested"]> = [];
     executor.events.on("run.tool_use.requested", (e) => {
-      requested.push(e as unknown as Record<string, unknown>);
+      requested.push(e);
     });
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
     const writeReq = requested.find((e) => e.tool === "write");
@@ -615,9 +615,9 @@ describe("tool-loop — D-1 file tools (write then read round-trip)", () => {
       fs,
       agent: { bindings: { skills: [], snippets: [], tools: ["edit"], mcp: [] } },
     });
-    const requested: Array<Record<string, unknown>> = [];
+    const requested: Array<RunModuleEvents["run.tool_use.requested"]> = [];
     executor.events.on("run.tool_use.requested", (e) => {
-      requested.push(e as unknown as Record<string, unknown>);
+      requested.push(e);
     });
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
     const editReq = requested.find((e) => e.tool === "edit");
