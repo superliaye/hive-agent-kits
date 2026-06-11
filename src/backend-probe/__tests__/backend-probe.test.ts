@@ -1,0 +1,96 @@
+import { describe, expect, test } from "bun:test";
+import { ManagedRuntime } from "effect";
+import { BackendProbe, BackendProbeLive } from "../effect/backend-probe-live.ts";
+import { type CommandResult, type CommandRunner, parseVersion, probeBackend } from "../probe.ts";
+
+// A runner that returns canned results keyed by binary name.
+function fakeRunner(byBinary: Record<string, CommandResult>): CommandRunner {
+  return async (command) => {
+    const bin = command[0] ?? "";
+    return byBinary[bin] ?? { kind: "spawn_failed", message: "unknown" };
+  };
+}
+
+const opts = { timeoutMs: 1000 };
+
+describe("probeBackend", () => {
+  test("installed: exit 0 with a parseable version → ok", async () => {
+    const runner = fakeRunner({
+      claude: { kind: "exited", exitCode: 0, stdout: "2.0.13 (Claude Code)\n", stderr: "" },
+    });
+    const status = await probeBackend("claude-code", runner, opts);
+    expect(status.reason).toBe("ok");
+    expect(status.installed).toBe(true);
+    expect(status.version).toBe("2.0.13");
+  });
+
+  test("missing: spawn failure → not_installed, not an error", async () => {
+    const runner = fakeRunner({});
+    const status = await probeBackend("codex", runner, opts);
+    expect(status.reason).toBe("not_installed");
+    expect(status.installed).toBe(false);
+    expect(status.version).toBeNull();
+  });
+
+  test("present but exit non-zero → probe_failed, still installed", async () => {
+    const runner = fakeRunner({
+      claude: { kind: "exited", exitCode: 1, stdout: "", stderr: "boom" },
+    });
+    const status = await probeBackend("claude-code", runner, opts);
+    expect(status.reason).toBe("probe_failed");
+    expect(status.installed).toBe(true);
+    expect(status.version).toBeNull();
+  });
+
+  test("clean exit but no version in output → version_unreadable", async () => {
+    const runner = fakeRunner({
+      codex: { kind: "exited", exitCode: 0, stdout: "no version here\n", stderr: "" },
+    });
+    const status = await probeBackend("codex", runner, opts);
+    expect(status.reason).toBe("version_unreadable");
+    expect(status.installed).toBe(true);
+  });
+
+  test("timeout → timeout reason", async () => {
+    const runner: CommandRunner = async () => ({ kind: "timeout" });
+    const status = await probeBackend("codex", runner, opts);
+    expect(status.reason).toBe("timeout");
+    expect(status.installed).toBe(true);
+  });
+
+  test("version is read from stderr when stdout is empty", async () => {
+    const runner = fakeRunner({
+      codex: { kind: "exited", exitCode: 0, stdout: "", stderr: "codex-cli 0.5.1\n" },
+    });
+    const status = await probeBackend("codex", runner, opts);
+    expect(status.version).toBe("0.5.1");
+    expect(status.reason).toBe("ok");
+  });
+});
+
+describe("parseVersion", () => {
+  test.each([
+    ["2.0.13 (Claude Code)", "2.0.13"],
+    ["codex-cli 0.5.0", "0.5.0"],
+    ["v1.2.3-beta.1", "1.2.3-beta.1"],
+    ["no digits", null],
+  ])("%s → %s", (input, expected) => {
+    expect(parseVersion(input)).toBe(expected);
+  });
+});
+
+describe("BackendProbeLive", () => {
+  test("probeAll probes both backends through the injected runner", async () => {
+    const runner = fakeRunner({
+      claude: { kind: "exited", exitCode: 0, stdout: "2.0.0", stderr: "" },
+      codex: { kind: "spawn_failed", message: "ENOENT" },
+    });
+    const rt = ManagedRuntime.make(BackendProbeLive({ runner }));
+    const svc = rt.runSync(BackendProbe);
+    const statuses = await svc.probeAll();
+    expect(statuses.map((s) => s.backend).sort()).toEqual(["claude-code", "codex"]);
+    expect(statuses.find((s) => s.backend === "claude-code")?.reason).toBe("ok");
+    expect(statuses.find((s) => s.backend === "codex")?.reason).toBe("not_installed");
+    rt.dispose();
+  });
+});
