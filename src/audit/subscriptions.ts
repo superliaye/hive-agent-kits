@@ -13,7 +13,7 @@ import type { Config, ConfigEvents } from "../config/types.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { ModelGateway } from "../model-gateway/index.ts";
 import type { RunExecutor } from "../runs/index.ts";
-import type { RunModuleEvents } from "../runs/types.ts";
+import type { PermissionEvents, RunModuleEvents } from "../runs/types.ts";
 import type { SecretEvents } from "../secrets/types.ts";
 import type { ThreadEvents } from "../threads/index.ts";
 import type { AuditSvc } from "./effect/audit-live.ts";
@@ -36,8 +36,11 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   // (manual archive/rename, mark-unread, delete) flow here; auto-archive and
   // auto-title are system-initiated → trace, not audit.
   threads?: { events: TypedEmitter<ThreadEvents> };
+  // Dedicated `permission` source (ADR-0004, Q4). Consumer-owned port: only the
+  // event stream is read here. Satisfied by the Run executor's
+  // `permissionEvents` emitter (separate from its `events`/run source).
+  permission?: { events: TypedEmitter<PermissionEvents> };
   // Future:
-  //   permission?: { events: TypedEmitter<PermissionEvents> }
   //   mcp?:        { events: TypedEmitter<McpLifecycleEvents> }
   //   memory?:     { events: TypedEmitter<MemoryEvents> }
 };
@@ -190,6 +193,10 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
     disposers.push(audit.attach("run", sources.runs.events, runsNormalizer));
   }
 
+  if (sources.permission) {
+    disposers.push(audit.attach("permission", sources.permission.events, permissionNormalizer));
+  }
+
   return () => {
     for (const d of disposers) d();
   };
@@ -221,5 +228,48 @@ const runsNormalizer: Normalizer<RunModuleEvents> = {
     event_type: "run.cancelled",
     run_id: event.runId,
     payload: {},
+  }),
+  // Tool dispatch on the `run` source. Payload carries REFS only — tool name,
+  // tool_use_id, the command NAME (a ref), and a redacted arg count. Never raw
+  // arg strings, never stdout (ADR-0004:141, Q6).
+  "run.tool_use.requested": (event) => ({
+    event_type: "run.tool_use.requested",
+    run_id: event.runId,
+    agent_id: event.agentId,
+    payload: {
+      tool: event.tool,
+      tool_use_id: event.toolUseId,
+      ...(event.command !== undefined && { command: event.command }),
+      ...(event.argSummary !== undefined && { arg_count: event.argSummary.count }),
+    },
+  }),
+  "run.tool_use.executed": (event) => ({
+    event_type: "run.tool_use.executed",
+    run_id: event.runId,
+    agent_id: event.agentId,
+    payload: { tool: event.tool, tool_use_id: event.toolUseId, is_error: event.isError },
+  }),
+};
+
+// Permission: the dedicated `permission` AuditSource (Q4). Payloads carry the
+// command NAME (a ref) + the decision — never raw args. The full G2 Permission
+// System is unbuilt; F1 carves this normalizer + source now.
+const permissionNormalizer: Normalizer<PermissionEvents> = {
+  "permission.requested": (event) => ({
+    event_type: "permission.requested",
+    run_id: event.runId,
+    agent_id: event.agentId,
+    payload: { tool: event.tool, ...(event.command !== undefined && { command: event.command }) },
+  }),
+  "permission.decided": (event) => ({
+    event_type: "permission.decided",
+    run_id: event.runId,
+    agent_id: event.agentId,
+    payload: {
+      tool: event.tool,
+      ...(event.command !== undefined && { command: event.command }),
+      outcome: event.outcome,
+      ...(event.reason !== undefined && { reason: event.reason }),
+    },
   }),
 };

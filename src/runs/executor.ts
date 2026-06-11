@@ -1,41 +1,33 @@
 // Run executor — the Thread → Run → event-stream loop.
 //
 // Inputs (injected at module construction):
-//   - threads   : the Threads store (read history, append messages)
-//   - runs      : the Runs store    (record lifecycle)
-//   - catalog   : agent lookup port (resolve agent_id → model + system prompt)
-//   - gateway   : the completion port (the typed `completeStream()` call)
-//   - secrets   : the auth-resolution port (provider → AuthInput)
-//   - prefs     : per-agent user model default (agent_id → model), read-only
+//   - threads    : the Threads store (read history, append messages)
+//   - runs       : the Runs store    (record lifecycle)
+//   - catalog    : agent lookup port (resolve agent_id → model + system prompt)
+//   - gateway    : the completion port (the typed `completeStream()` call)
+//   - secrets    : the auth-resolution port (provider → AuthInput)
+//   - prefs      : per-agent user model + effort defaults, read-only
+//   - capConfig  : the tool-loop iteration cap (snapshot once per Run)
+//   - permission : the pre-dispatch gate (default: allowlist + denylist)
+//   - shell      : the run_shell I/O edge (default: node:child_process)
 //
 // One verb: `startRun({ threadId, userMessage })` returns an
 // AsyncIterable<RunEvent>. The lifecycle:
 //
-//   1. Resolve Thread → Agent → model + auth. If anything missing, emit
-//      `run.failed` and stop.
-//   2. Append the user message to the Thread (so the history written to
-//      disk matches what we send to the model).
+//   1. Resolve Thread → Agent → model + effort + backend + auth. If anything
+//      missing, emit `run.failed` and stop.
+//   2. Append the user message to the Thread.
 //   3. Insert a `running` Run row, emit `run.started`.
-//   4. Drain `gateway.completeStream(...)` (the typed gateway Stream). Re-emit
-//      each GatewayEvent wrapped in `model.event`. Accumulate the assistant
-//      content from text + thinking + tool_use deltas. A typed
-//      `GatewayFailure` (resolve miss or thrown adapter) arrives in-band as a
-//      terminal failure item carrying its real GatewayErrorCode.
-//   5. On `done`:
-//      - finishReason=cancelled  → emit `run.cancelled`, mark Run row.
-//      - finishReason=error      → emit `run.failed` with the classified
-//                                  error (in-band `error` event OR typed
-//                                  GatewayFailure).
-//      - otherwise               → append assistant message to Thread,
-//                                  emit `run.completed`, mark Run row.
+//   4. Branch on backend (seam 3): `native` → the tool-loop; non-native →
+//      a typed `invalid_request` failure (F replaces those arms with a CLI
+//      spawn).
+//   5. The tool-loop (seam 1) runs model turns; a `tool_use` turn is gated +
+//      dispatched, results fed back as a `tool_result` user message, and the
+//      loop re-invokes the model. A no-tool turn finalizes the Run.
 //
 // Concurrency: one in-flight Run per Thread. A second `startRun` on the
 // same thread while one is active throws synchronously — caller bug, not
 // a Run failure (no Run row is created for the rejected request).
-//
-// Tool execution: stops at `done(tool_use)` per Q1. The assistant message
-// with tool_use blocks lands in the Thread; future Part 7 handles dispatch
-// + re-running with tool_results.
 
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import type {
@@ -44,23 +36,33 @@ import type {
   FinishReason,
   GatewayErrorCode,
   GatewayEvent,
-  Message,
   ThinkingEffort,
+  ToolDef,
 } from "../model-gateway/types.ts";
-import { EFFORT_ORDER } from "../model-gateway/types.ts";
 import type { ThreadMessage } from "../threads/types.ts";
 import { MODEL_FALLBACK } from "./defaults.ts";
 import { drainCompletion } from "./effect/consume.ts";
 import type {
   AgentModelPrefsPort,
+  CapConfigPort,
   CatalogPort,
   CompletionPort,
+  PermissionPort,
   RunsStorePort,
   SecretsPort,
+  ShellRunnerPort,
   ThreadsPort,
 } from "./effect/ports.ts";
-import { resolveAgentModel } from "./resolve-model.ts";
-import type { Run, RunEvent, RunModuleEvents } from "./types.ts";
+import { createDefaultPermission } from "./permission.ts";
+import { resolve } from "./resolve.ts";
+import {
+  buildToolRegistry,
+  type ToolContext,
+  type ToolRegistry,
+  toolsForBindings,
+} from "./tools/registry.ts";
+import { createDefaultShellRunner, resolveWorkingDir } from "./tools/run-shell.ts";
+import type { PermissionEvents, Run, RunEvent, RunModuleEvents } from "./types.ts";
 
 export type StartRunInput = {
   threadId: string;
@@ -94,23 +96,25 @@ export type RunExecutor = {
 
   /**
    * Newest terminal (non-`running`) Run on a thread by `endedAt`, carrying its
-   * status — or null when the thread has no terminal Run. Feeds the full
-   * four-state status derivation (the newest terminal row wins: a newer
-   * `completed` Run beats an older `failed`/`cancelled` one).
+   * status — or null when the thread has no terminal Run.
    */
   newestTerminalRun(
     threadId: string,
   ): { status: "completed" | "failed" | "cancelled"; endedAt: number } | null;
 
   /**
-   * Whether a Run is currently in flight on the thread. Predicate over the
-   * executor's in-flight reservation set — the source of truth for the
-   * `running` thread status (see threads/status.ts).
+   * Whether a Run is currently in flight on the thread.
    */
   isThreadBusy(threadId: string): boolean;
 
-  /** Module event stream — audit subscribes here for lifecycle. */
+  /** Module event stream — audit subscribes here for lifecycle + tool-use. */
   events: TypedEmitter<RunModuleEvents>;
+
+  /**
+   * Dedicated `permission` AuditSource stream (Q4). Audit attaches this to the
+   * `permission` source, separate from `events` (the `run` source).
+   */
+  permissionEvents: TypedEmitter<PermissionEvents>;
 };
 
 export type CreateRunExecutorDeps = {
@@ -122,23 +126,20 @@ export type CreateRunExecutorDeps = {
   /**
    * User's per-agent model + effort defaults — the tier between per-Run
    * override and the Agent's harness config. Optional: when absent the executor
-   * falls back to the prior resolution (harness/fallback only).
+   * falls back to harness/fallback only.
    */
   prefs?: AgentModelPrefsPort;
+  /**
+   * Tool-loop iteration cap (snapshot once per Run). Optional: when absent the
+   * loop runs unbounded (the cap=0 default).
+   */
+  capConfig?: CapConfigPort;
+  /** Pre-dispatch permission gate. Default: allowlist + destructive denylist. */
+  permission?: PermissionPort;
+  /** run_shell I/O edge. Default: node:child_process. */
+  shell?: ShellRunnerPort;
   now?: () => number;
 };
-
-function isThinkingEffort(v: unknown): v is ThinkingEffort {
-  return typeof v === "string" && (EFFORT_ORDER as readonly string[]).includes(v);
-}
-
-// Narrow an Agent's harness `config.thinkingEffort` (an `unknown` from the
-// open config record) to a valid `ThinkingEffort`, or `undefined` if it's
-// absent / not a recognized level. Mirrors the `typeof config.model === string`
-// guard, but the effort is a closed enum so we validate membership too.
-function configuredEffort(raw: unknown): ThinkingEffort | undefined {
-  return isThinkingEffort(raw) ? raw : undefined;
-}
 
 export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   const { threads, runs, catalog, gateway, secrets } = deps;
@@ -146,8 +147,14 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     getModel: () => undefined,
     getEffort: () => undefined,
   };
+  // cap=0 default ⇒ unlimited (Q5). Snapshot once per Run inside runIterator.
+  const capConfig: CapConfigPort = deps.capConfig ?? { maxIterations: () => 0 };
+  const shell: ShellRunnerPort = deps.shell ?? createDefaultShellRunner();
+  const permission: PermissionPort = deps.permission ?? createDefaultPermission(catalog);
+  const registry: ToolRegistry = buildToolRegistry({ shell });
   const now = deps.now ?? Date.now;
   const events = new TypedEmitter<RunModuleEvents>();
+  const permissionEvents = new TypedEmitter<PermissionEvents>();
   const inflight = new Map<string, { threadId: string; controller: AbortController }>();
   const threadsWithRun = new Set<string>();
 
@@ -160,8 +167,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   ): Promise<RunEvent> {
     // Audit-first: the emit (audit row) must precede the hive.db Run mutation,
     // and a persist failure must fail the originating op (ADR-0004 §Failure
-    // semantics). TypedEmitter.emit is async, so a throwing audit listener only
-    // surfaces via `await`.
+    // semantics).
     await events.emit("run.failed", { runId, threadId, agentId, code, message });
     runs.fail({ runId, code, message });
     return { type: "run.failed", runId, error: { code, message }, ts: now() };
@@ -169,8 +175,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
   // Pre-flight runs synchronously in `startRun` (not inside the generator
   // body) so caller-error checks fire BEFORE the iterable is constructed.
-  // Without this split, an unconsumed iterable's generator body never
-  // executes, and concurrent-Run / missing-Thread checks become race-prone.
   function startRun(input: StartRunInput): AsyncIterable<RunEvent> {
     const { threadId } = input;
     const thread = threads.get(threadId);
@@ -180,17 +184,12 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     if (threadsWithRun.has(threadId)) {
       throw new Error(`runs/executor: a Run is already in flight on thread ${threadId}`);
     }
-    // Reserve the thread synchronously. Any path through `runIterator` —
-    // including pre-iteration abandonment by the caller — must release it.
     threadsWithRun.add(threadId);
     return runIterator(input, thread.agentId);
   }
 
   async function* runIterator(input: StartRunInput, agentId: string): AsyncIterable<RunEvent> {
     const { threadId, userMessage, modelOverride, effortOverride } = input;
-    // Outer try/finally guarantees the busy-thread reservation made
-    // synchronously in `startRun` is released even if the iterator is
-    // abandoned mid-iteration.
     try {
       // Agent lookup.
       const agent = catalog.get(agentId);
@@ -210,22 +209,22 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         return;
       }
 
-      // Model + provider resolution (shared resolver — tier policy ADR-0013 +
-      // the gateway's canonical provider parse ADR-0005).
-      const resolved = resolveAgentModel({
+      // Seam 2 — resolve model + effort + backend.
+      const resolved = resolve({
         configuredModel: typeof agent.config.model === "string" ? agent.config.model : undefined,
+        configuredEffort: agent.config.thinkingEffort,
         userModelDefault: prefs.getModel(agentId),
+        userEffortDefault: prefs.getEffort(agentId),
         ...(modelOverride !== undefined ? { modelOverride } : {}),
+        ...(effortOverride !== undefined ? { effortOverride } : {}),
+        backend: agent.backend,
       });
       const { model } = resolved;
 
-      // Effort resolution mirrors model: per-Run override > user's per-agent
-      // default > harness config.thinkingEffort (type-guarded) > undefined
-      // (let the provider default — no `thinking` block sent).
-      const effort: ThinkingEffort | undefined =
-        effortOverride ?? prefs.getEffort(agentId) ?? configuredEffort(agent.config.thinkingEffort);
-
       if ("failure" in resolved) {
+        // resolved.failure.code/.message is deliberately reserved for the E
+        // (selection) lane to thread through; today the only failure source is
+        // the malformed-model parse, so we hardcode invalid_request here.
         const run = runs.create({ threadId, agentId, model });
         yield await emitFailed(
           run.id,
@@ -236,7 +235,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         );
         return;
       }
-      const { provider } = resolved;
+      const { provider, effort, backend } = resolved;
 
       // Auth lookup.
       const auth = await secrets.getAuth(provider);
@@ -252,18 +251,10 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         return;
       }
 
-      // Append the user message FIRST so on-disk history matches what we
-      // send to the model. Threads is not an audited source, so this write sits
-      // deliberately OUTSIDE the Run's audit-first window (run.started, below):
-      // if Threads ever becomes audited it needs its own audit-first treatment,
-      // and note a block-on-failure on run.started leaves this message appended.
+      // Append the user message FIRST so on-disk history matches what we send.
       threads.append({ threadId, role: "user", content: userMessage });
 
-      // Insert the Run row, emit run.started. Pre-generate the id so the audit
-      // emit precedes runs.create (audit-first): the run.id is normally produced
-      // BY the insert, so awaiting the emit afterward would commit the Run row
-      // before its audit row — the silent gap ADR-0004 forbids. CreateRunInput.id
-      // is optional; passing it keeps the store unchanged.
+      // Insert the Run row, emit run.started (audit-first — see emitFailed note).
       const runId = crypto.randomUUID();
       await events.emit("run.started", { runId, threadId, agentId, model });
       const run = runs.create({ id: runId, threadId, agentId, model });
@@ -271,98 +262,285 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       inflight.set(run.id, { threadId, controller });
       yield { type: "run.started", runId: run.id, threadId, agentId, model, ts: now() };
 
-      // Build CompletionInput. Re-read history (which now includes the
-      // user message we just appended).
-      const history: Message[] = threads.getCompletionMessages(threadId);
       const systemPrompt = agent.promptBody.trim().length > 0 ? agent.promptBody : undefined;
-      const completionInput: CompletionInput = {
-        model,
-        messages: history,
-        ...(systemPrompt ? { system: systemPrompt } : {}),
-        // Only carry a `thinking` block when an effort actually resolved;
-        // omitting it lets each provider apply its own default.
-        ...(effort !== undefined ? { thinking: { effort } } : {}),
-        auth,
-        signal: controller.signal,
-      };
+      // Tools sent for this Run: registry filtered by the Agent's bound tools.
+      const boundTools: ToolDef[] | undefined = toolsForBindings(registry, agent.bindings.tools);
 
-      // Stream + accumulate. The completion port hands back the typed gateway
-      // Stream; a thrown adapter/resolve failure arrives in-band as a typed
-      // `GatewayFailure` (kind: "failure") carrying its real GatewayErrorCode —
-      // there is no out-of-band throw path to reconcile.
-      const accumulator = new AssistantAccumulator();
-      let latestError: { code: GatewayErrorCode; message: string } | null = null;
-      let finishReason: FinishReason | null = null;
-
-      try {
-        for await (const item of drainCompletion(gateway.completeStream(completionInput))) {
-          if (item.kind === "failure") {
-            latestError = { code: item.failure.code, message: item.failure.message };
-            finishReason = "error";
-            continue;
-          }
-          const ev = item.event;
-          accumulator.consume(ev);
-          if (ev.type === "error") {
-            latestError = { code: ev.code, message: ev.message };
-          }
-          if (ev.type === "done") {
-            finishReason = ev.finishReason;
-          }
-          yield { type: "model.event", runId: run.id, event: ev };
-        }
-      } finally {
-        inflight.delete(run.id);
+      // Seam 3 — backend dispatch. F replaces the non-native arms.
+      switch (backend) {
+        case "native":
+          yield* runToolLoop({
+            runId: run.id,
+            threadId,
+            agentId,
+            model,
+            ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+            ...(effort !== undefined ? { effort } : {}),
+            auth,
+            signal: controller.signal,
+            ...(boundTools !== undefined ? { tools: boundTools } : {}),
+            maxIterations: capConfig.maxIterations(),
+          });
+          return;
+        case "claude-code":
+        case "codex":
+          yield await emitFailed(
+            run.id,
+            threadId,
+            agentId,
+            "invalid_request",
+            `backend not yet implemented: ${backend}`,
+          );
+          return;
       }
-
-      // Decide how to finalize.
-      if (finishReason === "cancelled") {
-        await events.emit("run.cancelled", { runId: run.id, threadId, agentId });
-        runs.cancel(run.id);
-        yield { type: "run.cancelled", runId: run.id, ts: now() };
-        return;
-      }
-      // Per ADR-0005 an `error` event is always followed by `done(finishReason:
-      // "error")`, and a typed gateway failure sets `finishReason` above — so an
-      // error always lands here with `finishReason === "error"` carrying the
-      // real code. (A bare `error` with no `done` is contract-forbidden.)
-      if (finishReason === "error") {
-        const code = latestError?.code ?? "unknown";
-        const message = latestError?.message ?? "gateway emitted no error message";
-        yield await emitFailed(run.id, threadId, agentId, code, message);
-        return;
-      }
-      if (!finishReason) {
-        yield await emitFailed(
-          run.id,
-          threadId,
-          agentId,
-          "unknown",
-          "gateway stream ended without a `done` event",
-        );
-        return;
-      }
-
-      // Happy path: persist the assistant message + complete the Run.
-      const assistantContent = accumulator.finalize();
-      const finalMessage: ThreadMessage = threads.append({
-        threadId,
-        role: "assistant",
-        content: assistantContent,
-      });
-      // Audit-first relative to the Run-lifecycle mutation (runs.complete). The
-      // separate Threads write above is the Threads module's concern and must
-      // precede the yield regardless (finalMessage is yielded).
-      await events.emit("run.completed", { runId: run.id, threadId, agentId, finishReason });
-      runs.complete({ runId: run.id, finishReason });
-      yield { type: "run.completed", runId: run.id, finishReason, finalMessage, ts: now() };
     } finally {
       threadsWithRun.delete(threadId);
+      // Release the in-flight reservation once the whole Run (all turns) ends,
+      // including abandonment mid-loop. The controller (and its signal) is
+      // reused across turns, so it must NOT be cleared per-turn.
+      for (const [id, entry] of inflight) {
+        if (entry.threadId === threadId) inflight.delete(id);
+      }
     }
+  }
+
+  // ─── Seam 1: the tool-loop ────────────────────────────────────────────────
+
+  type LoopArgs = {
+    runId: string;
+    threadId: string;
+    agentId: string;
+    model: string;
+    systemPrompt?: string;
+    effort?: ThinkingEffort;
+    auth: CompletionInput["auth"];
+    signal: AbortSignal;
+    tools?: ToolDef[];
+    /** 0 = unlimited (no cap, no grace). >0 = finite cap + one grace turn. */
+    maxIterations: number;
+  };
+
+  async function* runToolLoop(args: LoopArgs): AsyncIterable<RunEvent> {
+    const { runId, threadId, agentId, model, maxIterations } = args;
+    const finite = maxIterations > 0;
+    let turns = 0;
+
+    while (true) {
+      turns += 1;
+      // Strip tools on a grace turn (finite cap reached) so the model must
+      // produce a final text answer (Hermes strip-tools-force-summary).
+      const graceTurn = finite && turns > maxIterations;
+      const turnTools = graceTurn ? undefined : args.tools;
+
+      const completionInput: CompletionInput = {
+        model,
+        messages: threads.getCompletionMessages(threadId),
+        ...(args.systemPrompt ? { system: args.systemPrompt } : {}),
+        ...(args.effort !== undefined ? { thinking: { effort: args.effort } } : {}),
+        ...(turnTools !== undefined ? { tools: turnTools } : {}),
+        auth: args.auth,
+        signal: args.signal,
+      };
+
+      const outcome = yield* runTurn(runId, completionInput);
+
+      if (outcome.kind === "cancelled") {
+        await events.emit("run.cancelled", { runId, threadId, agentId });
+        runs.cancel(runId);
+        yield { type: "run.cancelled", runId, ts: now() };
+        return;
+      }
+      if (outcome.kind === "error") {
+        yield await emitFailed(runId, threadId, agentId, outcome.code, outcome.message);
+        return;
+      }
+
+      // On the grace turn the model may still emit tool_use (tools were
+      // stripped from the request, but the model can ignore that). We finalize
+      // regardless, so strip the dangling tool_use blocks before persisting —
+      // they have no matching tool_result and Anthropic rejects empty content.
+      const content =
+        graceTurn && outcome.kind === "tools" ? stripToolUse(outcome.assistant) : outcome.assistant;
+
+      // Persist the assistant message this turn produced.
+      const assistantMessage: ThreadMessage = threads.append({
+        threadId,
+        role: "assistant",
+        content,
+      });
+
+      // No tools wanted, or this was the grace turn → finalize.
+      if (outcome.kind === "text" || graceTurn) {
+        await events.emit("run.completed", {
+          runId,
+          threadId,
+          agentId,
+          finishReason: outcome.finishReason,
+        });
+        runs.complete({ runId, finishReason: outcome.finishReason });
+        yield {
+          type: "run.completed",
+          runId,
+          finishReason: outcome.finishReason,
+          finalMessage: assistantMessage,
+          ts: now(),
+        };
+        return;
+      }
+
+      // outcome.kind === "tools" and not a grace turn: gate + dispatch each
+      // call, then feed the tool_results back as a single user message.
+      const resultBlocks: ContentBlock[] = [];
+      for (const call of outcome.calls) {
+        const result = await dispatchToolCall(runId, agentId, call, args.signal);
+        resultBlocks.push({
+          type: "tool_result",
+          tool_use_id: call.id,
+          content: result.content,
+          ...(result.isError ? { is_error: true } : {}),
+        });
+      }
+      threads.append({ threadId, role: "user", content: resultBlocks });
+      // Loop: re-invoke the model with the tool_results now in history.
+    }
+  }
+
+  // A single model turn: stream + accumulate, classify the outcome. Yields each
+  // GatewayEvent wrapped in `model.event`; returns the typed turn outcome.
+  type TurnOutcome =
+    | { kind: "text"; assistant: ContentBlock[]; finishReason: FinishReason }
+    | {
+        kind: "tools";
+        assistant: ContentBlock[];
+        calls: Array<{ id: string; name: string; input: unknown }>;
+        finishReason: FinishReason;
+      }
+    | { kind: "cancelled" }
+    | { kind: "error"; code: GatewayErrorCode | "unknown"; message: string };
+
+  async function* runTurn(
+    runId: string,
+    completionInput: CompletionInput,
+  ): AsyncGenerator<RunEvent, TurnOutcome, void> {
+    const accumulator = new AssistantAccumulator();
+    let latestError: { code: GatewayErrorCode; message: string } | null = null;
+    let finishReason: FinishReason | null = null;
+
+    for await (const item of drainCompletion(gateway.completeStream(completionInput))) {
+      if (item.kind === "failure") {
+        latestError = { code: item.failure.code, message: item.failure.message };
+        finishReason = "error";
+        continue;
+      }
+      const ev = item.event;
+      accumulator.consume(ev);
+      if (ev.type === "error") latestError = { code: ev.code, message: ev.message };
+      if (ev.type === "done") finishReason = ev.finishReason;
+      yield { type: "model.event", runId, event: ev };
+    }
+
+    if (finishReason === "cancelled") return { kind: "cancelled" };
+    if (finishReason === "error") {
+      return {
+        kind: "error",
+        code: latestError?.code ?? "unknown",
+        message: latestError?.message ?? "gateway emitted no error message",
+      };
+    }
+    if (!finishReason) {
+      return {
+        kind: "error",
+        code: "unknown",
+        message: "gateway stream ended without a `done` event",
+      };
+    }
+
+    const assistant = accumulator.finalize();
+    const calls = assistant
+      .filter((b): b is Extract<ContentBlock, { type: "tool_use" }> => b.type === "tool_use")
+      .map((b) => ({ id: b.id, name: b.name, input: b.input }));
+    if (calls.length > 0) {
+      return { kind: "tools", assistant, calls, finishReason };
+    }
+    return { kind: "text", assistant, finishReason };
+  }
+
+  // Gate (permission, dedicated audit source) → dispatch (tool handler, run
+  // audit source) a single tool_use call. Audit-first throughout: every emit is
+  // awaited BEFORE its side effect.
+  async function dispatchToolCall(
+    runId: string,
+    agentId: string,
+    call: { id: string; name: string; input: unknown },
+    signal: AbortSignal,
+  ): Promise<{ content: string; isError: boolean }> {
+    if (signal.aborted) {
+      return { content: "run cancelled", isError: true };
+    }
+
+    // The handler projects its own gate + audit metadata — the executor never
+    // knows a tool's wire shape. Command-less tools yield {} (no command).
+    const handler = registry.get(call.name);
+    const meta = handler?.describe?.(call.input) ?? {};
+    const { command, argSummary } = meta;
+
+    // Permission gate (emit on the dedicated permission source, audit-first).
+    await permissionEvents.emit("permission.requested", {
+      runId,
+      agentId,
+      tool: call.name,
+      ...(command !== undefined ? { command } : {}),
+    });
+    const decision = await permission.decide({
+      agentId,
+      runId,
+      tool: call.name,
+      ...(command !== undefined ? { command } : {}),
+    });
+    await permissionEvents.emit("permission.decided", {
+      runId,
+      agentId,
+      tool: call.name,
+      ...(command !== undefined ? { command } : {}),
+      outcome: decision.outcome,
+      ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+    });
+    if (decision.outcome === "deny") {
+      return {
+        content: `Permission denied${decision.reason ? `: ${decision.reason}` : ""}.`,
+        isError: true,
+      };
+    }
+
+    if (!handler) {
+      return { content: `unknown tool: ${call.name}`, isError: true };
+    }
+
+    // Audit-first: emit the requested event (with a REDACTED arg summary —
+    // never raw args, never stdout, Q6) BEFORE running the side effect.
+    await events.emit("run.tool_use.requested", {
+      runId,
+      agentId,
+      tool: call.name,
+      toolUseId: call.id,
+      ...(command !== undefined ? { command } : {}),
+      ...(argSummary !== undefined ? { argSummary } : {}),
+    });
+    const ctx: ToolContext = { agentId, runId, cwd: resolveWorkingDir(agentId), signal };
+    const result = await handler.run(call.input, ctx);
+    await events.emit("run.tool_use.executed", {
+      runId,
+      agentId,
+      tool: call.name,
+      toolUseId: call.id,
+      isError: result.isError,
+    });
+    return result;
   }
 
   return {
     events,
+    permissionEvents,
     startRun,
     getRun(runId) {
       return runs.get(runId);
@@ -376,9 +554,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       return runs.listByThread(threadId);
     },
     newestTerminalRun(threadId) {
-      // Newest terminal (non-running) Run by endedAt — the row with the max
-      // endedAt wins regardless of which terminal status it carries, so a newer
-      // completed Run correctly beats an older failed/cancelled one.
       let newest: { status: "completed" | "failed" | "cancelled"; endedAt: number } | null = null;
       for (const r of runs.listByThread(threadId)) {
         if (r.status === "running" || r.endedAt === undefined) continue;
@@ -394,17 +569,20 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   };
 }
 
+// Grace-turn finalize: keep only text/thinking blocks, dropping dangling
+// tool_use. Falls back to a minimal text block — Anthropic rejects empty
+// content, and a tool_use-only turn would otherwise strip to nothing.
+function stripToolUse(content: ContentBlock[]): ContentBlock[] {
+  const kept = content.filter((b) => b.type !== "tool_use");
+  return kept.length > 0 ? kept : [{ type: "text", text: "[stopped: iteration cap reached]" }];
+}
+
 // ─── Accumulator ────────────────────────────────────────────────────────────
 
 /**
  * Builds the assistant ContentBlock[] from a GatewayEvent stream. Mirrors
  * Anthropic's content-block semantics (parallel blocks identified by
  * `blockIndex`, deltas append, `_end` finalizes).
- *
- * tool_use args: GatewayEvent emits delta chunks (`tool_use_delta`) and a
- * final parsed object (`tool_use_end.args`). We trust the final parsed
- * object — adapters reassemble it (see ADR-0005 §"tool_use_end carries
- * parsed args").
  */
 class AssistantAccumulator {
   private readonly text = new Map<number, string>();
@@ -456,9 +634,6 @@ class AssistantAccumulator {
         }
         break;
       }
-      // text_end / tool_use_delta / refusal_delta / server_tool / usage / done / error:
-      // not material to assembly. text_end is a punctuation event; deltas are
-      // already appended; usage/done/error are lifecycle.
       default:
         break;
     }

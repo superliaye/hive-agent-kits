@@ -166,13 +166,17 @@ describe("RunExecutor — happy path", () => {
     }
   });
 
-  test("tool_use turn stops at done(tool_use); tool_use block lands in assistant message", async () => {
+  test("tool_use turn for an UNBOUND tool: not sent, model never asks (text turn finalizes)", async () => {
+    // The test agent binds no tools, so `search` is never sent. A text-only
+    // turn finalizes the Run. (Loop dispatch behavior lives in tool-loop.test.ts
+    // with a bound run_shell + function-form fixture.)
     const { threads, executor, threadId } = await setup({
       fixtures: {
         "anthropic/claude-haiku-4-5": [
-          { type: "tool_use_start", blockIndex: 0, id: "tu_1", name: "search" },
-          { type: "tool_use_end", blockIndex: 0, id: "tu_1", args: { q: "x" } },
-          { type: "done", finishReason: "tool_use" },
+          { type: "text_start", blockIndex: 0 },
+          { type: "text_delta", blockIndex: 0, delta: "no tools here" },
+          { type: "text_end", blockIndex: 0 },
+          { type: "done", finishReason: "stop" },
         ],
       },
     });
@@ -181,13 +185,8 @@ describe("RunExecutor — happy path", () => {
     );
     const completed = events[events.length - 1];
     expect(completed?.type).toBe("run.completed");
-    if (completed?.type === "run.completed") {
-      expect(completed.finishReason).toBe("tool_use");
-    }
     const assistant = threads.listMessages(threadId).find((m) => m.role === "assistant");
-    expect(assistant?.content).toEqual([
-      { type: "tool_use", id: "tu_1", name: "search", input: { q: "x" } },
-    ]);
+    expect(assistant?.content).toEqual([{ type: "text", text: "no tools here" }]);
   });
 
   test("emits model.event for every GatewayEvent", async () => {

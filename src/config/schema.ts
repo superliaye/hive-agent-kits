@@ -22,6 +22,13 @@ export const DaemonConfigSchema = z.object({
   logLevel: z.enum(["trace", "debug", "info", "warn", "error"]),
 });
 
+// Runs subtree (ADR-0006 + ADR-0017). `maxIterations` is the tool-loop turn
+// cap. Sentinel `0` = UNLIMITED (no cap, no grace turn); a positive integer
+// is a finite cap that triggers one grace turn (tools stripped) on overrun.
+export const RunsConfigSchema = z.object({
+  maxIterations: z.number().int().min(0),
+});
+
 // Theme/font preferences — what CONTEXT.md calls "UI theme". A single
 // nested subtree under the top-level `appearance` key. Per-mode configs
 // persist independently (the user can customize Light and Dark without
@@ -63,6 +70,7 @@ export const AppConfigSchema = z.object({
   ui: UiConfigSchema,
   appearance: AppearanceConfigSchema,
   daemon: DaemonConfigSchema,
+  runs: RunsConfigSchema,
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;
@@ -91,5 +99,10 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
   daemon: {
     httpPort: 3117,
     logLevel: "info",
+  },
+  runs: {
+    // 0 = unlimited (Q5 resolution: default-unlimited). A positive integer
+    // caps the tool-loop and adds one grace turn on overrun.
+    maxIterations: 0,
   },
 };

@@ -44,6 +44,9 @@ function writeHarness(path: string, agent: Agent): void {
     domain: agent.domain,
     bindings: agent.bindings,
     config: agent.config,
+    // Preserve the per-Agent run_shell allowlist across fork-writes (binding
+    // edits) so a binding mutation never silently drops it.
+    ...(agent.commandAllowlist !== undefined ? { commandAllowlist: agent.commandAllowlist } : {}),
   };
   // Sanity-check before writing.
   HarnessManifest.parse(manifest);

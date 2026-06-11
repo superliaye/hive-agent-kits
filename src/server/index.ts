@@ -212,6 +212,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     gateway,
     secrets,
     prefs: agentModelPrefs,
+    // Cap port — snapshot of runs.maxIterations off the root Config (0 =
+    // unlimited). Narrow consumer-owned port, not the whole Config tree.
+    capConfig: { maxIterations: () => config.get("runs").maxIterations },
   });
 
   const dispose = wireSubscriptions<AppConfig>(audit, {
@@ -223,6 +226,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     agentPrefs: agentModelPrefs,
     threads,
     runs,
+    // Dedicated `permission` audit source (Q4) — the executor's separate
+    // permission emitter, distinct from its `events` (run source).
+    permission: { events: runs.permissionEvents },
   });
 
   await registry.start();

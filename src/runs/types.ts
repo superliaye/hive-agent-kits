@@ -67,4 +67,48 @@ export type RunModuleEvents = {
     message: string;
   };
   "run.cancelled": { runId: string; threadId: string; agentId: string };
+  // Tool dispatch (ADR-0004:83). `requested` is emitted (audit-first) BEFORE the
+  // side effect; `executed` after it returns. Payloads carry REFS + a redacted
+  // arg summary only — never raw arg strings, never stdout (ADR-0004:141, Q6).
+  "run.tool_use.requested": {
+    runId: string;
+    agentId: string;
+    tool: string;
+    toolUseId: string;
+    /** Command-bearing tools only: the command name (a ref, not an arg). */
+    command?: string;
+    /** Redacted/elided arg summary — count only, never the values. */
+    argSummary?: { count: number };
+  };
+  "run.tool_use.executed": {
+    runId: string;
+    agentId: string;
+    tool: string;
+    toolUseId: string;
+    isError: boolean;
+  };
+};
+
+/**
+ * Dedicated `permission` AuditSource event map (ADR-0004:81, Q4). Emitted on a
+ * SEPARATE TypedEmitter (not the run emitter) so the permission decision lands
+ * on its own audit source. The full G2 Permission System is unbuilt; F1 carves
+ * this audit seam now.
+ */
+export type PermissionEvents = {
+  "permission.requested": {
+    runId: string;
+    agentId: string;
+    tool: string;
+    /** Command-bearing tools only: command name (ref). Never raw args. */
+    command?: string;
+  };
+  "permission.decided": {
+    runId: string;
+    agentId: string;
+    tool: string;
+    command?: string;
+    outcome: "allow" | "deny";
+    reason?: string;
+  };
 };
