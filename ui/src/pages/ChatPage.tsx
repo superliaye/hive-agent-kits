@@ -219,6 +219,33 @@ export function ChatPage({
     };
   }, [apiConfig, agentId]);
 
+  // Load the active Thread's conversation-scope pick (ADR-0015 S1) into the
+  // in-session pick state, so a per-conversation choice persists across reloads
+  // and layers above the agent default. A symbolic stored scope ("latest"/
+  // "highest") is not surfaced in the concrete picker (deferred to Lane F C5):
+  // it is left for the resolver and the display falls through to the default.
+  useEffect(() => {
+    setUserPick(null);
+    setEffortPick(null);
+    if (!activeId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const scope = await api.getThreadScope(apiConfig, activeId);
+        if (cancelled) return;
+        if (typeof scope.model === "string" && scope.model.includes("/")) setUserPick(scope.model);
+        if (typeof scope.effort === "string" && isThinkingEffort(scope.effort)) {
+          setEffortPick(scope.effort);
+        }
+      } catch {
+        // Best-effort: a scope read failure just leaves the default selected.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [apiConfig, activeId]);
+
   // ─── Read-on-select ────────────────────────────────────────────────────
   // Selecting (or re-selecting) a thread marks it read. An explicit "Mark as
   // not read" on the already-active thread must STICK until the user re-selects
@@ -329,11 +356,13 @@ export function ChatPage({
 
   async function onSelectModel(model: string): Promise<void> {
     setUserPick(model);
-    if (!agentId) return;
-    // Persist as the agent's sticky default. The in-flight message also carries
-    // it as modelOverride, so the choice takes effect immediately.
+    if (!activeId) return;
+    // Use-here (ADR-0015 S1): the pick applies to THIS conversation and sticks
+    // for its later Runs, WITHOUT touching the agent default. The in-flight
+    // message also carries it as modelOverride, so it takes effect immediately.
+    // (Apply-to-default is a separate affordance — Lane F C5.)
     try {
-      await api.setAgentModelPref(apiConfig, agentId, { model });
+      await api.setThreadScope(apiConfig, activeId, { model });
     } catch (err) {
       setListError((err as Error).message);
     }
@@ -341,11 +370,11 @@ export function ChatPage({
 
   async function onSelectEffort(effort: ThinkingEffort): Promise<void> {
     setEffortPick(effort);
-    if (!agentId) return;
-    // Persist as the agent's sticky effort default (merge — leaves the model
-    // pref untouched). The next message also carries it as effortOverride.
+    if (!activeId) return;
+    // Use-here effort pick (merge — leaves the Thread's model scope untouched).
+    // The next message also carries it as effortOverride.
     try {
-      await api.setAgentModelPref(apiConfig, agentId, { effort });
+      await api.setThreadScope(apiConfig, activeId, { effort });
     } catch (err) {
       setListError((err as Error).message);
     }

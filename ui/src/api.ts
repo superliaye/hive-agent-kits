@@ -447,6 +447,31 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ title }),
     }),
+  // The Thread's conversation-scope model/effort pick (ADR-0015 S1); each is
+  // null when unset (the executor then falls back to the agent default). May be
+  // a symbolic token ("latest"/"highest").
+  getThreadScope: (cfg: ApiConfig, threadId: string) =>
+    call<{ model: string | null; effort: string | null }>(
+      cfg,
+      `/api/threads/${encodeURIComponent(threadId)}/scope`,
+    ),
+  // Use-here: applies to THIS Thread only (sticks for its later Runs), without
+  // touching the agent default. Merge semantics — omit a field to leave it
+  // unchanged; pass null to clear an axis. Apply-to-default is the separate
+  // setAgentModelPref act.
+  setThreadScope: (
+    cfg: ApiConfig,
+    threadId: string,
+    patch: { model?: string | null; effort?: ThinkingEffort | null },
+  ) =>
+    call<{ model: string | null; effort: string | null }>(
+      cfg,
+      `/api/threads/${encodeURIComponent(threadId)}/scope`,
+      {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      },
+    ),
   archiveThread: (cfg: ApiConfig, threadId: string) =>
     call<ThreadSummary>(cfg, `/api/threads/${encodeURIComponent(threadId)}/archive`, {
       method: "POST",
