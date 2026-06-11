@@ -37,6 +37,7 @@ import {
   type RunWire,
   SetAgentModelPrefBody,
   SetApiKeyBody,
+  SetThreadScopeBody,
   SetThreadTitleBody,
   StartRunBody,
   type ThreadDetailWire,
@@ -375,6 +376,42 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     const updated = deps.threads.get(id);
     if (!updated) return c.json({ error: "thread not found" }, 404);
     return c.json(toThreadSummary(updated));
+  });
+
+  // Conversation-scope model/effort pick (ADR-0015 S1: use-here — sticks for
+  // the Thread's later Runs, NOT the agent default). A `null` field clears that
+  // axis (back to the agent default); an omitted field is unchanged. Symbolic
+  // values allowed. Apply-to-default is the SEPARATE /api/agents/:id/model-pref
+  // act. Returns the Thread's resolved scope.
+  app.get("/api/threads/:id/scope", (c) => {
+    const id = c.req.param("id");
+    const t = deps.threads.get(id);
+    if (!t) return c.json({ error: "thread not found" }, 404);
+    return c.json({ model: t.modelPref ?? null, effort: t.effortPref ?? null });
+  });
+
+  app.put("/api/threads/:id/scope", async (c) => {
+    const id = c.req.param("id");
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = SetThreadScopeBody.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid scope body", issues: zodIssues(parsed.error) }, 400);
+    }
+    if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
+    // Merge semantics: pass only the present axes (a `null` clears, an omitted
+    // axis is untouched), so the two axes stay independent.
+    await deps.threads.setScope(id, {
+      ...(parsed.data.model !== undefined && { model: parsed.data.model }),
+      ...(parsed.data.effort !== undefined && { effort: parsed.data.effort }),
+    });
+    const updated = deps.threads.get(id);
+    if (!updated) return c.json({ error: "thread not found" }, 404);
+    return c.json({ model: updated.modelPref ?? null, effort: updated.effortPref ?? null });
   });
 
   app.post("/api/threads/:id/archive", async (c) => {

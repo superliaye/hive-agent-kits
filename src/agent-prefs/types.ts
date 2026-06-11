@@ -22,20 +22,28 @@
 
 import { z } from "zod";
 import { EFFORT_ORDER, type ThinkingEffort } from "../model-gateway/types.ts";
+import { SYMBOLIC_EFFORT_HIGHEST, SYMBOLIC_MODEL_LATEST } from "../runs/symbolic.ts";
 
-// "provider/model-id" — mirrors StartRunBody.modelOverride; the gateway
-// registry is the real validator, this is the boundary sanity-check.
-export const ModelStringSchema = z
-  .string()
-  .min(1)
-  .regex(/^[^/]+\/.+$/, "must be 'provider/model-id'");
+// An agent default may be SYMBOLIC (ADR-0015): "latest" model / "highest"
+// effort, a rule resolved at Run start rather than a pinned id. So the stored
+// value admits the symbolic token OR a concrete value. A concrete model is the
+// "provider/model-id" shape (gateway registry is the real validator); a
+// concrete effort is an EFFORT_ORDER member.
+export const ModelStringSchema = z.union([
+  z.literal(SYMBOLIC_MODEL_LATEST),
+  z
+    .string()
+    .min(1)
+    .regex(/^[^/]+\/.+$/, "must be 'provider/model-id'"),
+]);
 
-// Thinking-effort levels — the boundary validator, inferred from the canonical
-// `EFFORT_ORDER` tuple so this enum can never drift from `ThinkingEffort`.
-export const EffortSchema = z.enum(EFFORT_ORDER);
+// Thinking-effort default — a concrete level (from the canonical EFFORT_ORDER
+// tuple, so this can never drift from `ThinkingEffort`) or the symbolic
+// "highest".
+export const EffortSchema = z.union([z.literal(SYMBOLIC_EFFORT_HIGHEST), z.enum(EFFORT_ORDER)]);
 export type Effort = z.infer<typeof EffortSchema>;
-// Compile-time guard: EffortSchema's members are exactly ThinkingEffort.
-const _effortMatches: ThinkingEffort = "off" satisfies Effort;
+// Compile-time guard: a concrete ThinkingEffort is a valid Effort.
+const _effortMatches: Effort = "off" satisfies ThinkingEffort;
 void _effortMatches;
 
 // A single agent's stored preference. Both fields optional and independent;

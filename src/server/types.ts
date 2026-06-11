@@ -8,6 +8,7 @@ import {
   KebabName,
   Origin,
 } from "../lib/capability-types.ts";
+import { SYMBOLIC_EFFORT_HIGHEST, SYMBOLIC_MODEL_LATEST } from "../runs/symbolic.ts";
 
 // Mirrors the ModuleSource union in src/audit/types.ts. Kept here so the
 // HTTP boundary validates incoming source filters without leaking the audit
@@ -231,22 +232,46 @@ export const StartRunBody = z
   .strict();
 export type StartRunBody = z.infer<typeof StartRunBody>;
 
+// Default-tier values may be SYMBOLIC (ADR-0015 S2): a default is a rule
+// ("latest" model / "highest" effort) resolved at Run start, not a pinned id.
+// These admit the symbolic token OR a concrete value — used by the agent
+// default (apply-to-default) and the Thread scope (use-here), NEVER by a per-Run
+// override (which stays strictly concrete: ModelOverride / EffortLevel above).
+const DefaultModel = z.union([z.literal(SYMBOLIC_MODEL_LATEST), ModelOverride]);
+const DefaultEffort = z.union([z.literal(SYMBOLIC_EFFORT_HIGHEST), EffortLevel]);
+
 // PUT /api/agents/:id/model-pref body. Sets the user's sticky model and/or
-// thinking-effort default for an Agent (the tier between per-Run override and
-// the harness config). Both fields optional and independent — omitting one
-// leaves the stored value unchanged (merge semantics). At least one must be
-// present (a no-op body is rejected). v1 has no "clear" contract — the picker
-// always sends a concrete value.
+// thinking-effort default for an Agent (the tier between Thread scope and the
+// harness config) — the apply-to-default target (ADR-0015: a separate act from
+// use-here). Both fields optional and independent — omitting one leaves the
+// stored value unchanged (merge semantics). At least one must be present (a
+// no-op body is rejected). A default may be symbolic.
 export const SetAgentModelPrefBody = z
   .object({
-    model: ModelOverride.optional(),
-    effort: EffortLevel.optional(),
+    model: DefaultModel.optional(),
+    effort: DefaultEffort.optional(),
   })
   .strict()
   .refine((b) => b.model !== undefined || b.effort !== undefined, {
     message: "at least one of { model, effort } is required",
   });
 export type SetAgentModelPrefBody = z.infer<typeof SetAgentModelPrefBody>;
+
+// PUT /api/threads/:id/scope body. Sets the conversation-scope model/effort
+// pick (ADR-0015 S1: use-here — applies to THIS Thread and sticks for its later
+// Runs, without touching the agent default). Both fields optional and
+// independent (merge semantics); a default may be symbolic. `null` clears an
+// axis (back to the agent default). At least one field must be present.
+export const SetThreadScopeBody = z
+  .object({
+    model: DefaultModel.nullable().optional(),
+    effort: DefaultEffort.nullable().optional(),
+  })
+  .strict()
+  .refine((b) => b.model !== undefined || b.effort !== undefined, {
+    message: "at least one of { model, effort } is required",
+  });
+export type SetThreadScopeBody = z.infer<typeof SetThreadScopeBody>;
 
 // Wire shapes returned by GET endpoints.
 

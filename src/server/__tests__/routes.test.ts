@@ -307,6 +307,127 @@ describe("server routes", () => {
     expect((row?.payload as Record<string, unknown>).model).toBeUndefined();
   });
 
+  async function createThread(): Promise<string> {
+    const res = await server.app.fetch(
+      authed("/api/threads", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agentId: "root" }),
+      }),
+    );
+    const body = (await res.json()) as { id: string };
+    return body.id;
+  }
+
+  test("PUT then GET /api/threads/:id/scope round-trips a Thread-scope pick", async () => {
+    const id = await createThread();
+    const put = await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai-codex/gpt-5.2", effort: "minimal" }),
+      }),
+    );
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: "minimal" });
+    const get = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect(await get.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: "minimal" });
+  });
+
+  test("a Thread-scope write does NOT touch the agent default", async () => {
+    const id = await createThread();
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai-codex/gpt-5.2" }),
+      }),
+    );
+    // The agent default is still unset — use-here did not promote.
+    const def = await server.app.fetch(authed("/api/agents/root/model-pref"));
+    expect(await def.json()).toEqual({ model: null, effort: null });
+  });
+
+  test("apply-to-default (model-pref) promotes independently of Thread scope", async () => {
+    const id = await createThread();
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai-codex/gpt-5.2" }),
+      }),
+    );
+    // Explicit apply-to-default — the separate act.
+    await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai-codex/gpt-5.2" }),
+      }),
+    );
+    const def = await server.app.fetch(authed("/api/agents/root/model-pref"));
+    expect(await def.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: null });
+    // Thread scope unchanged by the promotion.
+    const scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect(await scope.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: null });
+  });
+
+  test("Thread scope accepts symbolic values and clears with null", async () => {
+    const id = await createThread();
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "latest", effort: "highest" }),
+      }),
+    );
+    let scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect(await scope.json()).toEqual({ model: "latest", effort: "highest" });
+    // Clear the model axis only; effort untouched.
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: null }),
+      }),
+    );
+    scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect(await scope.json()).toEqual({ model: null, effort: "highest" });
+  });
+
+  test("a Thread-scope write records a thread.scope_set audit row", async () => {
+    const id = await createThread();
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ effort: "high" }),
+      }),
+    );
+    const rows = await server.audit.query({ source: "thread" });
+    const row = rows.find((r) => r.event_type === "thread.scope_set");
+    expect(row).toBeDefined();
+    expect(row?.agent_id).toBe("root");
+    expect(row?.payload).toMatchObject({ effort: "high" });
+  });
+
+  test("PUT /api/threads/:id/scope rejects an empty body with 400", async () => {
+    const id = await createThread();
+    const res = await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("scope endpoints 404 for an unknown thread", async () => {
+    const get = await server.app.fetch(authed("/api/threads/ghost/scope"));
+    expect(get.status).toBe(404);
+  });
+
   test("model-pref endpoints 404 for an unknown agent", async () => {
     const get = await server.app.fetch(authed("/api/agents/ghost/model-pref"));
     expect(get.status).toBe(404);

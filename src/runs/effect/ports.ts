@@ -62,19 +62,26 @@ export class RunnableCatalogLookup extends Context.Service<
 
 // Agent preferences: the user's per-agent model + effort defaults, read-only.
 // Synchronous (no audit on reads — the resolved model/effort are recorded by
-// `run.started`), so they slot into the executor's sync resolution.
+// `run.started`), so they slot into the executor's sync resolution. The effort
+// default may be the symbolic "highest" (ADR-0015), so it is not narrowed to a
+// concrete level here; resolve() concretizes it against the runnable catalog.
 export type AgentModelPrefsPort = {
   getModel(agentId: string): string | undefined;
-  getEffort(agentId: string): ThinkingEffort | undefined;
+  getEffort(agentId: string): ThinkingEffort | "highest" | undefined;
 };
 export class AgentModelPrefsLookup extends Context.Service<
   AgentModelPrefsLookup,
   AgentModelPrefsPort
 >()("runs/AgentModelPrefsLookup") {}
 
-// Threads: the three verbs the executor uses.
+// Threads: the three verbs the executor uses. `get` also surfaces the Thread's
+// conversation-scope model/effort pick (ADR-0015 S1) — null when unset; may be
+// a symbolic token. The resolver places it between the per-Run override and the
+// user agent default.
 export type ThreadsPort = {
-  get(threadId: string): { agentId: string } | undefined;
+  get(
+    threadId: string,
+  ): { agentId: string; modelPref?: string | null; effortPref?: string | null } | undefined;
   append(input: {
     threadId: string;
     role: "user" | "assistant";

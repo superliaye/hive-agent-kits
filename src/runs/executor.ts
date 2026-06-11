@@ -30,14 +30,15 @@
 // a Run failure (no Run row is created for the rejected request).
 
 import { TypedEmitter } from "../lib/typed-emitter.ts";
-import type {
-  CompletionInput,
-  ContentBlock,
-  FinishReason,
-  GatewayErrorCode,
-  GatewayEvent,
-  ThinkingEffort,
-  ToolDef,
+import {
+  type CompletionInput,
+  type ContentBlock,
+  EFFORT_ORDER,
+  type FinishReason,
+  type GatewayErrorCode,
+  type GatewayEvent,
+  type ThinkingEffort,
+  type ToolDef,
 } from "../model-gateway/types.ts";
 import type { ThreadMessage } from "../threads/types.ts";
 import { MODEL_FALLBACK } from "./defaults.ts";
@@ -58,6 +59,7 @@ import type {
 } from "./effect/ports.ts";
 import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
+import { isSymbolicEffort } from "./symbolic.ts";
 import { createDefaultFsRunner } from "./tools/file-tools.ts";
 import { LOAD_SKILL_TOOL_NAME } from "./tools/names.ts";
 import {
@@ -245,6 +247,12 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         return;
       }
 
+      // Conversation-scope pick (S1): the Thread's model/effort, between the
+      // per-Run override and the user agent default. null/absent ⇒ unset.
+      const thread = threads.get(threadId);
+      const threadModel = thread?.modelPref ?? undefined;
+      const threadEffort = effortDefaultOrUndefined(thread?.effortPref);
+
       // Seam 2 — resolve model + effort + backend. The runnable catalog feeds
       // the symbolic-default resolver (S2): a "latest"/"highest" default
       // resolves to a credentialed+routable concrete model/effort here.
@@ -253,6 +261,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         configuredEffort: agent.config.thinkingEffort,
         userModelDefault: prefs.getModel(agentId),
         userEffortDefault: prefs.getEffort(agentId),
+        ...(threadModel !== undefined ? { threadModel } : {}),
+        ...(threadEffort !== undefined ? { threadEffort } : {}),
         ...(modelOverride !== undefined ? { modelOverride } : {}),
         ...(effortOverride !== undefined ? { effortOverride } : {}),
         backend: agent.backend,
@@ -657,6 +667,22 @@ function buildSystemPrompt(
       : "";
   const parts = [body, listing].filter((p) => p.length > 0);
   return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+function isThinkingEffort(v: string): v is ThinkingEffort {
+  return (EFFORT_ORDER as readonly string[]).includes(v);
+}
+
+// Narrow a stored Thread-scope effort (a free `string | null` column) to a
+// resolver-accepted default-tier value — a concrete level or the symbolic
+// "highest" — or undefined for unset / malformed. Mirrors the harness-config
+// effort narrowing in resolve.ts.
+function effortDefaultOrUndefined(
+  raw: string | null | undefined,
+): ThinkingEffort | "highest" | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  if (isThinkingEffort(raw)) return raw;
+  return isSymbolicEffort(raw) ? "highest" : undefined;
 }
 
 // Grace-turn finalize: keep only text/thinking blocks, dropping dangling
