@@ -1,6 +1,23 @@
 import { describe, expect, test } from "bun:test";
+import type { AvailableModel } from "../../model-gateway/types.ts";
 import { MODEL_FALLBACK } from "../defaults.ts";
 import { resolve } from "../resolve.ts";
+import type { RunnableCatalog } from "../symbolic.ts";
+
+function avail(id: string, efforts: AvailableModel["efforts"] = ["off"]): AvailableModel {
+  const [provider, modelId] = id.split("/") as [string, string];
+  return { provider, modelId, model: id, efforts };
+}
+
+// A newest-first runnable catalog with a single credentialed provider.
+function catalog(): RunnableCatalog {
+  return {
+    models: [
+      avail("openai-codex/gpt-5.10", ["off", "minimal", "xhigh"]),
+      avail("openai-codex/gpt-5.4-mini", ["off", "minimal"]),
+    ],
+  };
+}
 
 // Base input — no tiers set. Each test overrides exactly the tier under test so
 // the precedence ordering (override > user default > harness config > fallback)
@@ -81,6 +98,107 @@ describe("resolve — effort tier (preserves no-effort fallback)", () => {
       effortOverride: "xhigh",
     });
     if (!("failure" in r)) expect(r.effort).toBe("xhigh");
+  });
+});
+
+describe("resolve — symbolic defaults (S2, ADR-0015)", () => {
+  test('"latest" model resolves to the runnable-catalog head', () => {
+    const r = resolve({ ...base(), configuredModel: "latest", runnableCatalog: catalog() });
+    expect("failure" in r).toBe(false);
+    if (!("failure" in r)) {
+      expect(r.model).toBe("openai-codex/gpt-5.10");
+      expect(r.provider).toBe("openai-codex");
+    }
+  });
+
+  test('"latest" with an empty runnable catalog → typed model_not_found failure', () => {
+    const r = resolve({ ...base(), configuredModel: "latest", runnableCatalog: { models: [] } });
+    expect("failure" in r).toBe(true);
+    if ("failure" in r) expect(r.failure.code).toBe("model_not_found");
+  });
+
+  test('"latest" with no catalog supplied → typed failure (nothing to resolve to)', () => {
+    const r = resolve({ ...base(), configuredModel: "latest" });
+    expect("failure" in r).toBe(true);
+  });
+
+  test('"highest" effort resolves against the resolved model\'s efforts', () => {
+    const r = resolve({
+      ...base(),
+      configuredModel: "latest",
+      configuredEffort: "highest",
+      runnableCatalog: catalog(),
+    });
+    if (!("failure" in r)) expect(r.effort).toBe("xhigh");
+  });
+
+  test('"highest" effort on a concrete model looks efforts up in the catalog', () => {
+    const r = resolve({
+      ...base(),
+      configuredModel: "openai-codex/gpt-5.4-mini",
+      userEffortDefault: "highest",
+      runnableCatalog: catalog(),
+    });
+    if (!("failure" in r)) expect(r.effort).toBe("minimal");
+  });
+
+  test('"highest" with no catalog efforts → undefined (no thinking block)', () => {
+    const r = resolve({ ...base(), configuredModel: "p/m", configuredEffort: "highest" });
+    if (!("failure" in r)) expect(r.effort).toBeUndefined();
+  });
+
+  test("Thread-scope symbolic model beats a concrete user default", () => {
+    const r = resolve({
+      ...base(),
+      userModelDefault: "openai-codex/gpt-5.4-mini",
+      threadModel: "latest",
+      runnableCatalog: catalog(),
+    });
+    if (!("failure" in r)) expect(r.model).toBe("openai-codex/gpt-5.10");
+  });
+});
+
+describe("resolve — Thread scope tier (S1, ADR-0015)", () => {
+  test("Thread model beats user default, loses to per-Run override", () => {
+    const r = resolve({
+      ...base(),
+      userModelDefault: "anthropic/claude-haiku-4-5",
+      threadModel: "anthropic/claude-sonnet-4-6",
+    });
+    if (!("failure" in r)) expect(r.model).toBe("anthropic/claude-sonnet-4-6");
+
+    const r2 = resolve({
+      ...base(),
+      userModelDefault: "anthropic/claude-haiku-4-5",
+      threadModel: "anthropic/claude-sonnet-4-6",
+      modelOverride: "anthropic/claude-opus-4-7",
+    });
+    if (!("failure" in r2)) expect(r2.model).toBe("anthropic/claude-opus-4-7");
+  });
+
+  test("Thread effort beats user default, loses to per-Run override", () => {
+    const r = resolve({ ...base(), userEffortDefault: "low", threadEffort: "high" });
+    if (!("failure" in r)) expect(r.effort).toBe("high");
+
+    const r2 = resolve({
+      ...base(),
+      userEffortDefault: "low",
+      threadEffort: "high",
+      effortOverride: "xhigh",
+    });
+    if (!("failure" in r2)) expect(r2.effort).toBe("xhigh");
+  });
+
+  test("axes stay independent — a Thread model pick leaves effort untouched", () => {
+    const r = resolve({
+      ...base(),
+      threadModel: "anthropic/claude-sonnet-4-6",
+      configuredEffort: "medium",
+    });
+    if (!("failure" in r)) {
+      expect(r.model).toBe("anthropic/claude-sonnet-4-6");
+      expect(r.effort).toBe("medium");
+    }
   });
 });
 

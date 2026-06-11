@@ -43,6 +43,18 @@ export type GatewayRegistry = {
   events: TypedEmitter<GatewayModuleEvents>;
 };
 
+// Deterministic, provider-scoped recency ordering over a catalog (ADR-0015 S2:
+// an explicit catalog ordering the symbolic "latest" resolver consumes, not an
+// adapter implementation detail). Newest-first by model id, numeric-aware so
+// "5.10" > "5.9"; ties broken by the full id for stability. The gateway owns
+// this so pi-ai stays imported only in its adapter (ADR-0005).
+export function orderByRecency(models: readonly AvailableModel[]): AvailableModel[] {
+  return [...models].sort((a, b) => {
+    const byId = b.modelId.localeCompare(a.modelId, undefined, { numeric: true });
+    return byId !== 0 ? byId : b.model.localeCompare(a.model);
+  });
+}
+
 export function createGatewayRegistry(): GatewayRegistry {
   const adapters = new Map<string, GatewayAdapter>();
   const events = new TypedEmitter<GatewayModuleEvents>();
@@ -108,13 +120,16 @@ export function createGatewayRegistry(): GatewayRegistry {
   function listModels(provider: string): AvailableModel[] {
     const adapter = adapters.get(provider);
     if (!adapter?.listModels) return [];
-    return adapter.listModels(provider).map((m) => ({
+    const mapped = adapter.listModels(provider).map((m) => ({
       provider,
       modelId: m.id,
       model: `${provider}/${m.id}`,
       ...(m.label !== undefined ? { label: m.label } : {}),
       efforts: m.efforts,
     }));
+    // Apply the explicit gateway-owned recency ordering (ADR-0015 S2), not the
+    // adapter's best-effort internal sort. Deterministic, provider-scoped.
+    return orderByRecency(mapped);
   }
 
   return { registerAdapter, resolve, resolveEffect, listModels, events };

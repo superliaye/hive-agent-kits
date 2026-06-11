@@ -9,7 +9,7 @@ import { completeStream } from "./effect/complete.ts";
 import type { GatewayFailure } from "./effect/failure.ts";
 import { toErrorEvent } from "./effect/failure.ts";
 import { GatewayError, isRetryable } from "./errors.ts";
-import { createGatewayRegistry, parseModelProvider } from "./registry.ts";
+import { createGatewayRegistry, orderByRecency, parseModelProvider } from "./registry.ts";
 import type {
   AvailableModel,
   CompletionInput,
@@ -80,4 +80,4 @@ export type {
   ThinkingEffort,
   ToolDef,
 } from "./types.ts";
-export { GatewayError, isRetryable, parseModelProvider };
+export { GatewayError, isRetryable, orderByRecency, parseModelProvider };

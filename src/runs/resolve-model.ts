@@ -8,30 +8,65 @@
 // canonical `parseModelProvider` (ADR-0005) rather than a hand-rolled
 // `indexOf("/")`.
 
-import { type GatewayFailure, parseModelProvider } from "../model-gateway/index.ts";
+import { GatewayFailure } from "../model-gateway/effect/failure.ts";
+import { parseModelProvider } from "../model-gateway/index.ts";
+import type { ThinkingEffort } from "../model-gateway/types.ts";
 import { MODEL_FALLBACK } from "./defaults.ts";
+import { isSymbolicModel, type RunnableCatalog, resolveLatestModel } from "./symbolic.ts";
 
 export type ResolveAgentModelInput = {
   /** Agent's harness `config.model`, when set to a string; else undefined. */
   configuredModel: string | undefined;
   /** User's sticky per-agent model default, when set; else undefined. */
   userModelDefault: string | undefined;
-  /** Per-Run model override, when present; else undefined. */
+  /** Thread-scope model pick, when set; else undefined. Symbolic allowed. */
+  threadModel?: string;
+  /** Per-Run model override, when present; else undefined. Always concrete. */
   modelOverride?: string;
+  /**
+   * Runnable model catalog (credentialed ∩ routable, newest-first) — the data a
+   * symbolic "latest" default resolves against. Absent on call sites that never
+   * see a symbolic value (a symbolic winner then surfaces as a failure).
+   */
+  runnableCatalog?: RunnableCatalog;
 };
 
 export type ResolveAgentModelResult =
-  | { model: string; provider: string }
+  | { model: string; provider: string; efforts?: readonly ThinkingEffort[] }
   | { model: string; failure: GatewayFailure };
 
-// Tier order (ADR-0013): per-Run override > user default > harness config >
-// deployment fallback. Provider parsed off the resolved model via the gateway's
-// canonical parse — a malformed model surfaces as `failure` for the caller to
-// classify (the executor emits `invalid_request`; title-gen silently skips).
+// Tier order (ADR-0013, +ADR-0015 Thread scope): per-Run override > Thread scope
+// > user default > harness config > deployment fallback. A SYMBOLIC winner
+// ("latest") is resolved against the runnable catalog BEFORE the provider parse,
+// so the concrete result is guaranteed credentialed+routable. Provider parsed
+// off the resolved model via the gateway's canonical parse — a malformed model
+// surfaces as `failure` for the caller to classify (the executor emits
+// `invalid_request`; title-gen silently skips). `efforts` (when a symbolic model
+// resolved) carries the resolved model's supported levels for "highest".
 export function resolveAgentModel(input: ResolveAgentModelInput): ResolveAgentModelResult {
-  const model =
-    input.modelOverride ?? input.userModelDefault ?? input.configuredModel ?? MODEL_FALLBACK;
-  const parsed = parseModelProvider(model);
-  if ("failure" in parsed) return { model, failure: parsed.failure };
-  return { model, provider: parsed.provider };
+  const winner =
+    input.modelOverride ??
+    input.threadModel ??
+    input.userModelDefault ??
+    input.configuredModel ??
+    MODEL_FALLBACK;
+
+  if (isSymbolicModel(winner)) {
+    const latest = resolveLatestModel(input.runnableCatalog ?? { models: [] });
+    if (!latest) {
+      return {
+        model: winner,
+        failure: new GatewayFailure({
+          code: "model_not_found",
+          message:
+            'symbolic model "latest" has no runnable model to resolve to — no credentialed, routable provider is configured',
+        }),
+      };
+    }
+    return { model: latest.model, provider: latest.provider, efforts: latest.efforts };
+  }
+
+  const parsed = parseModelProvider(winner);
+  if ("failure" in parsed) return { model: winner, failure: parsed.failure };
+  return { model: winner, provider: parsed.provider };
 }

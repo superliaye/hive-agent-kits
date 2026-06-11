@@ -21,6 +21,11 @@ import type { AgentBackend } from "../lib/capability-types.ts";
 import type { GatewayFailure } from "../model-gateway/effect/failure.ts";
 import { EFFORT_ORDER, type ThinkingEffort } from "../model-gateway/types.ts";
 import { resolveAgentModel } from "./resolve-model.ts";
+import { isSymbolicEffort, type RunnableCatalog, resolveHighestEffort } from "./symbolic.ts";
+
+// A default-tier effort value: a concrete level OR the symbolic "highest".
+// (A per-Run override stays strictly concrete — see `effortOverride`.)
+type EffortDefault = ThinkingEffort | "highest";
 
 export type ResolveInput = {
   /** Agent's harness `config.model`, when a string; else undefined. */
@@ -30,13 +35,24 @@ export type ResolveInput = {
   /** User's sticky per-agent model default, when set; else undefined. */
   userModelDefault: string | undefined;
   /** User's sticky per-agent effort default, when set; else undefined. */
-  userEffortDefault: ThinkingEffort | undefined;
-  /** Per-Run model override, when present; else undefined. */
+  userEffortDefault: EffortDefault | undefined;
+  /** Thread-scope model pick, when set; else undefined. Symbolic allowed. */
+  threadModel?: string;
+  /** Thread-scope effort pick, when set; else undefined. Symbolic allowed. */
+  threadEffort?: EffortDefault;
+  /** Per-Run model override, when present; else undefined. Always concrete. */
   modelOverride?: string;
-  /** Per-Run effort override, when present; else undefined. */
+  /** Per-Run effort override, when present; else undefined. Always concrete. */
   effortOverride?: ThinkingEffort;
   /** The Agent's backend (native | claude-code | codex). */
   backend: AgentBackend;
+  /**
+   * Runnable model catalog (credentialed ∩ routable, newest-first). Supplies
+   * the symbolic resolver: "latest" → catalog head, "highest" → strongest
+   * supported level of the resolved model. Absent on call sites with no
+   * symbolic tiers (a symbolic winner then surfaces as a typed failure).
+   */
+  runnableCatalog?: RunnableCatalog;
 };
 
 export type ResolveResult =
@@ -48,26 +64,49 @@ function isThinkingEffort(v: unknown): v is ThinkingEffort {
 }
 
 // Narrow an Agent's harness `config.thinkingEffort` (an `unknown` from the open
-// config record) to a valid `ThinkingEffort`, or `undefined` if absent / not a
-// recognized level — the closed-enum membership check the loop relied on inline.
-function configuredEffort(raw: unknown): ThinkingEffort | undefined {
-  return isThinkingEffort(raw) ? raw : undefined;
+// config record) to a concrete `ThinkingEffort` or the symbolic "highest", or
+// `undefined` if absent / not a recognized value — the closed-enum membership
+// check the loop relied on inline, now also admitting the symbolic token.
+function configuredEffort(raw: unknown): EffortDefault | undefined {
+  if (isThinkingEffort(raw)) return raw;
+  return isSymbolicEffort(typeof raw === "string" ? raw : undefined) ? "highest" : undefined;
 }
 
 export function resolve(input: ResolveInput): ResolveResult {
   const modelResult = resolveAgentModel({
     configuredModel: input.configuredModel,
     userModelDefault: input.userModelDefault,
+    ...(input.threadModel !== undefined ? { threadModel: input.threadModel } : {}),
     ...(input.modelOverride !== undefined ? { modelOverride: input.modelOverride } : {}),
+    ...(input.runnableCatalog !== undefined ? { runnableCatalog: input.runnableCatalog } : {}),
   });
   if ("failure" in modelResult) {
     return { model: modelResult.model, failure: modelResult.failure };
   }
 
-  // Effort tier (mirrors model): per-Run override > user default > harness
-  // config.thinkingEffort (type-guarded) > undefined (no `thinking` block).
-  const effort: ThinkingEffort | undefined =
-    input.effortOverride ?? input.userEffortDefault ?? configuredEffort(input.configuredEffort);
+  // Effort tier (mirrors model + Thread scope): per-Run override > Thread scope
+  // > user default > harness config.thinkingEffort > undefined (no `thinking`
+  // block — the no-effort-fallback invariant, ADR-0013).
+  const effortWinner: EffortDefault | undefined =
+    input.effortOverride ??
+    input.threadEffort ??
+    input.userEffortDefault ??
+    configuredEffort(input.configuredEffort);
+
+  // Symbolic-resolve pass (S2): "highest" → the strongest level the RESOLVED
+  // model supports. Use the efforts a symbolic model resolution already carried;
+  // otherwise look the resolved model up in the runnable catalog. Absent efforts
+  // ⇒ undefined ⇒ no `thinking` block (preserves the no-effort-fallback).
+  let effort: ThinkingEffort | undefined;
+  if (isSymbolicEffort(effortWinner)) {
+    const efforts =
+      modelResult.efforts ??
+      input.runnableCatalog?.models.find((m) => m.model === modelResult.model)?.efforts ??
+      [];
+    effort = resolveHighestEffort(efforts);
+  } else {
+    effort = effortWinner;
+  }
 
   return {
     model: modelResult.model,
