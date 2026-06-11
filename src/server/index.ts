@@ -124,6 +124,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       ? ({ mode: "memory" } as const)
       : ({ mode: "file", path: files.auditDb() } as const);
 
+  // Built ahead of the layer build so `BindingResolverLive(registry)` can fold
+  // into `rootLayer` and be discharged off the single composition-root runtime
+  // (no separate throwaway ManagedRuntime for skill resolution).
+  const registry = createRegistry({ watch: opts.mode === "file" });
+
   const dataLayer = HiveDbLive(dbPath);
   const rootLayer = Layer.mergeAll(
     dataLayer,
@@ -137,6 +142,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // booting a server never spawns `claude`/`codex`. File mode uses the real
     // Bun.spawn runner (the module default).
     BackendProbeLive(opts.mode === "memory" ? { runner: notInstalledRunner } : {}),
+    // F2 binding resolver over the in-memory Registry — one composition-root
+    // runtime owns it (P-3), not a second ManagedRuntime.
+    BindingResolverLive(registry),
   );
   const runtime = ManagedRuntime.make(rootLayer);
 
@@ -172,7 +180,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // the DB handle is closed by the layer's release, not exposed on the value.
   const audit: Audit = runtime.runSync(AuditTag);
 
-  const registry = createRegistry({ watch: opts.mode === "file" });
   const gateway = createGateway();
   // Threads + Runs consume the single Layer-owned `hive.db` handle. Threads
   // resolves off the root runtime (built over `dataLayer`); Runs still wraps the
@@ -220,9 +227,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // is a synchronous, never-failing Effect, so we discharge it with runSync at
   // this composition root — runs/ never imports capabilities concretes. Skill
   // loads are scoped to the Run's bound names (load(boundNames, name)).
-  const bindingResolver = ManagedRuntime.make(BindingResolverLive(registry)).runSync(
-    BindingResolver,
-  );
+  // The resolver is reached only through the single composition-root runtime
+  // (P-3) — `BindingResolverLive(registry)` is folded into `rootLayer` above.
+  const bindingResolver = runtime.runSync(BindingResolver);
   const skillResolver: SkillResolverPort = {
     list: (boundNames) =>
       Effect.runSync(bindingResolver.resolveSkills(boundNames)).resolved.map((s) => ({
