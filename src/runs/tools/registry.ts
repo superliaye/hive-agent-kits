@@ -38,8 +38,9 @@ export type ToolHandler = {
   /**
    * Projects the tool's input into the gate + audit metadata the executor
    * needs, so the executor never knows a tool's wire shape. `command` is a ref
-   * (drives the permission gate); `path` is the confined workspace-relative
-   * path ref (file tools — same ref treatment as `command`); `argSummary` is
+   * (drives the permission gate); `path` is the model-supplied workspace-relative
+   * path (the call's target ref — file tools, same ref treatment as `command`);
+   * `argSummary` is
    * count-only and `editSummary` is length-only — both redaction-safe (the
    * handler only DECLARES fields; never values, never file content). Tools with
    * no projection omit this or return {}.

@@ -12,8 +12,11 @@
 // invariant in each handler, independent of the command allowlist.
 //
 // File CONTENT never enters audit (ADR-0004 redaction). `describe()` projects
-// the confined workspace-relative PATH as a ref (P-4) — the same ref treatment
-// `run_shell` gives its command name — and, for `edit`, a redacted
+// the model-supplied workspace-relative path (the call's target ref) as a ref
+// (P-4) — the same ref treatment `run_shell` gives its command name. It runs
+// before `run()` and has no `ctx.cwd`, so the ref is the raw requested path:
+// a path-escaping call is still recorded as a ref while `run()` rejects it
+// (ADR-0004 over-records rather than under-records). Plus, for `edit`, a redacted
 // `{oldLen, newLen}` length summary (string lengths only). The path ref + the
 // tool name + tool_use_id are the audit record; content never enters it.
 
@@ -107,8 +110,8 @@ export function makeReadTool(fs: FsRunnerPort): ToolHandler {
       }
       return { content, isError: false };
     },
-    // Project the confined workspace-relative path as a ref (P-4); content never
-    // enters audit (ADR-0004).
+    // Project the model-supplied workspace-relative path (the call's target ref)
+    // as a ref (P-4); content never enters audit (ADR-0004).
     describe(input) {
       const path = pathRef(input);
       return path !== undefined ? { path } : {};

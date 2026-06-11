@@ -77,7 +77,7 @@ export type RunModuleEvents = {
     toolUseId: string;
     /** Command-bearing tools only: the command name (a ref, not an arg). */
     command?: string;
-    /** File tools only: the confined workspace-relative path (a ref, like `command`). */
+    /** File tools only: the model-supplied workspace-relative path (the call's target ref, like `command`). */
     path?: string;
     /** Redacted/elided arg summary — count only, never the values. */
     argSummary?: { count: number };

@@ -575,9 +575,9 @@ describe("tool-loop — D-1 file tools (write then read round-trip)", () => {
     expect(files.size).toBe(0);
   });
 
-  // P-4: file-tool describe() projects the confined workspace-relative PATH as
-  // an audit ref (like run_shell's command), plus an {oldLen,newLen} summary for
-  // edit — and NEVER the file content.
+  // P-4: file-tool describe() projects the model-supplied workspace-relative
+  // path (the call's target ref) as an audit ref (like run_shell's command),
+  // plus an {oldLen,newLen} summary for edit — and NEVER the file content.
   test("write audit ref carries the path, never the content", async () => {
     const script = toolThenTextScript({
       toolName: "write",
@@ -627,6 +627,36 @@ describe("tool-loop — D-1 file tools (write then read round-trip)", () => {
     const blob = JSON.stringify(requested);
     expect(blob).not.toContain("BEFORE");
     expect(blob).not.toContain("AFTER-LONGER");
+  });
+
+  // P-6: describe() runs before run() and has no ctx.cwd, so a path-escaping call
+  // is still projected into the requested audit ref verbatim (over-records per
+  // ADR-0004) while run() rejects it with isError.
+  test("an escaping path is still projected as a ref while run() returns isError", async () => {
+    const script = toolThenTextScript({
+      toolName: "write",
+      toolInput: { path: "../escape.txt", content: "x" },
+      toolTurns: 1,
+    });
+    const { fs, files } = memFs();
+    const { threads, executor, threadId } = await build({
+      script,
+      fs,
+      agent: { bindings: { skills: [], snippets: [], tools: ["write"], mcp: [] } },
+    });
+    const requested: Array<RunModuleEvents["run.tool_use.requested"]> = [];
+    executor.events.on("run.tool_use.requested", (e) => {
+      requested.push(e);
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
+    const writeReq = requested.find((e) => e.tool === "write");
+    expect(writeReq?.path).toBe("../escape.txt");
+    const result = threads
+      .listMessages(threadId)
+      .flatMap((m) => m.content)
+      .find((b) => b.type === "tool_result");
+    if (result?.type === "tool_result") expect(result.is_error).toBe(true);
+    expect(files.size).toBe(0);
   });
 });
 
