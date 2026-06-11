@@ -110,6 +110,41 @@ export class ShellRunner extends Context.Service<ShellRunner, ShellRunnerPort>()
   "runs/ShellRunner",
 ) {}
 
+// Filesystem runner: the single I/O edge the file tools (read/write/edit) go
+// through. Sibling of ShellRunnerPort — plain async at the true external
+// boundary (node:fs), injectable so tests stub it. Returns typed results; the
+// handlers fold them into ToolResults. Path safety (workspace confinement) is
+// enforced in the handlers BEFORE these verbs are called, not here.
+export type FsRunnerPort = {
+  readFile(path: string): Promise<string>;
+  writeFile(path: string, content: string): Promise<void>;
+  fileExists(path: string): Promise<boolean>;
+};
+export class FsRunner extends Context.Service<FsRunner, FsRunnerPort>()("runs/FsRunner") {}
+
+// Skill resolver: the narrow, consumer-owned port `load_skill` + the Run-start
+// progressive-disclosure listing read. Shaped to the runs consumer — it never
+// imports capabilities concretes. The composition root adapts the F2
+// BindingResolver to this shape and discharges its Effect to a plain value.
+//
+// `list(boundNames)` returns the resolvable bound skills' one-line listings
+// (name + description) for the Run-start injection. `load(boundNames, name)`
+// returns the body of `name` ONLY when it is in `boundNames` — scoping skill
+// loads to the Agent's spawn-time bindings (CONTEXT.md: bindings are frozen
+// into the Harness). An unbound or unresolvable name returns undefined; the
+// handler turns that into an `isError` tool_result (never a throw).
+export type SkillListing = { name: string; description: string };
+export type SkillResolverPort = {
+  list(boundNames: readonly string[]): SkillListing[];
+  load(
+    boundNames: readonly string[],
+    name: string,
+  ): { description: string; body: string } | undefined;
+};
+export class SkillResolver extends Context.Service<SkillResolver, SkillResolverPort>()(
+  "runs/SkillResolver",
+) {}
+
 // Runs store: the lifecycle verbs the executor records through.
 export type RunsStorePort = {
   create(input: CreateRunInput): Run;

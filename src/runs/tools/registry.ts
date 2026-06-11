@@ -8,7 +8,9 @@
 // `bindings.tools`. This is the exact seam N2 extends for file tools.
 
 import type { ToolDef } from "../../model-gateway/types.ts";
-import type { ShellRunnerPort } from "../effect/ports.ts";
+import type { FsRunnerPort, ShellRunnerPort, SkillResolverPort } from "../effect/ports.ts";
+import { makeEditTool, makeReadTool, makeWriteTool } from "./file-tools.ts";
+import { makeLoadSkillTool } from "./load-skill.ts";
 import { makeRunShellTool } from "./run-shell.ts";
 
 // What a tool returns, folded into a `tool_result` content block.
@@ -21,6 +23,10 @@ export type ToolContext = {
   // The working directory the tool runs in. F1 defaults this via
   // resolveWorkingDir(); F/C4 owns the three-tier Working Directory resolution.
   cwd: string;
+  // The Agent's spawn-time bound skill names for this Run. `load_skill` resolves
+  // only names in this set — skill loading is scoped to the frozen Harness
+  // bindings (CONTEXT.md), not the whole Capability Registry.
+  boundSkills: readonly string[];
   // Loop-scoped cancellation. Threaded to the I/O edge so an aborted Run kills
   // in-flight work (e.g. the run_shell child).
   signal: AbortSignal;
@@ -43,12 +49,24 @@ export type ToolRegistry = ReadonlyMap<string, ToolHandler>;
 
 export type BuildRegistryDeps = {
   shell: ShellRunnerPort;
+  fs: FsRunnerPort;
+  skills: SkillResolverPort;
+  // Audit-first hook the load_skill handler awaits before returning the body.
+  // The executor owns the run/agent ids + the events emitter, so it supplies
+  // the emit; the registry only wires it in.
+  onSkillLoaded: (ctx: ToolContext, skillName: string) => Promise<void>;
 };
 
 // Built once per executor. The single place tools are registered — D edits
 // only this builder + the tools/ folder.
 export function buildToolRegistry(deps: BuildRegistryDeps): ToolRegistry {
-  const handlers: ToolHandler[] = [makeRunShellTool(deps.shell)];
+  const handlers: ToolHandler[] = [
+    makeRunShellTool(deps.shell),
+    makeReadTool(deps.fs),
+    makeWriteTool(deps.fs),
+    makeEditTool(deps.fs),
+    makeLoadSkillTool(deps.skills, deps.onSkillLoaded),
+  ];
   return new Map(handlers.map((h) => [h.def.name, h]));
 }
 
