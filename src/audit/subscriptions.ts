@@ -240,7 +240,12 @@ const runsNormalizer: Normalizer<RunModuleEvents> = {
       tool: event.tool,
       tool_use_id: event.toolUseId,
       ...(event.command !== undefined && { command: event.command }),
+      ...(event.path !== undefined && { path: event.path }),
       ...(event.argSummary !== undefined && { arg_count: event.argSummary.count }),
+      ...(event.editSummary !== undefined && {
+        old_len: event.editSummary.oldLen,
+        new_len: event.editSummary.newLen,
+      }),
     },
   }),
   "run.tool_use.executed": (event) => ({

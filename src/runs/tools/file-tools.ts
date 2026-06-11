@@ -11,9 +11,11 @@
 // escapes are rejected with an `isError` result. This is a value-level
 // invariant in each handler, independent of the command allowlist.
 //
-// File CONTENT never enters audit (ADR-0004 redaction): `describe()` returns
-// {} for read, and {} for write/edit too — no content, no path-as-arg. The
-// tool name + tool_use_id (refs) are the audit record.
+// File CONTENT never enters audit (ADR-0004 redaction). `describe()` projects
+// the confined workspace-relative PATH as a ref (P-4) — the same ref treatment
+// `run_shell` gives its command name — and, for `edit`, a redacted
+// `{oldLen, newLen}` length summary (string lengths only). The path ref + the
+// tool name + tool_use_id are the audit record; content never enters it.
 
 import { existsSync } from "node:fs";
 import { readFile as fsReadFile, writeFile as fsWriteFile, mkdir } from "node:fs/promises";
@@ -46,6 +48,17 @@ function confine(cwd: string, path: string): string | null {
   // absolute (different drive on Windows).
   if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
   return abs;
+}
+
+// The path ref projected into audit (P-4) — the workspace-relative path the
+// call targets, treated like run_shell's command name: the model-supplied
+// string verbatim, never normalized to an OS-specific separator and never the
+// file content. Unparseable input → no ref.
+function pathRef(input: unknown): string | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const rec = input as Record<string, unknown>;
+  if (typeof rec.path !== "string" || rec.path.length === 0) return undefined;
+  return rec.path;
 }
 
 // ─── read ────────────────────────────────────────────────────────────────────
@@ -94,9 +107,11 @@ export function makeReadTool(fs: FsRunnerPort): ToolHandler {
       }
       return { content, isError: false };
     },
-    // No command, no content in audit (ADR-0004): the tool name + id are the ref.
-    describe() {
-      return {};
+    // Project the confined workspace-relative path as a ref (P-4); content never
+    // enters audit (ADR-0004).
+    describe(input) {
+      const path = pathRef(input);
+      return path !== undefined ? { path } : {};
     },
   };
 }
@@ -143,8 +158,9 @@ export function makeWriteTool(fs: FsRunnerPort): ToolHandler {
       await fs.writeFile(abs, parsed.content);
       return { content: `wrote ${parsed.content.length} bytes to ${parsed.path}`, isError: false };
     },
-    describe() {
-      return {};
+    describe(input) {
+      const path = pathRef(input);
+      return path !== undefined ? { path } : {};
     },
   };
 }
@@ -214,8 +230,18 @@ export function makeEditTool(fs: FsRunnerPort): ToolHandler {
       await fs.writeFile(abs, next);
       return { content: `edited ${parsed.path}`, isError: false };
     },
-    describe() {
-      return {};
+    // Path ref + a redacted length summary (string lengths only — never the
+    // old/new content) per P-4.
+    describe(input) {
+      const path = pathRef(input);
+      const parsed = parseEdit(input);
+      const editSummary = parsed
+        ? { oldLen: parsed.oldStr.length, newLen: parsed.newStr.length }
+        : undefined;
+      return {
+        ...(path !== undefined ? { path } : {}),
+        ...(editSummary !== undefined ? { editSummary } : {}),
+      };
     },
   };
 }

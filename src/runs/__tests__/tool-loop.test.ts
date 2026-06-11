@@ -574,6 +574,60 @@ describe("tool-loop — D-1 file tools (write then read round-trip)", () => {
     // Nothing was written outside the workspace.
     expect(files.size).toBe(0);
   });
+
+  // P-4: file-tool describe() projects the confined workspace-relative PATH as
+  // an audit ref (like run_shell's command), plus an {oldLen,newLen} summary for
+  // edit — and NEVER the file content.
+  test("write audit ref carries the path, never the content", async () => {
+    const script = toolThenTextScript({
+      toolName: "write",
+      toolInput: { path: "notes/out.txt", content: "TOP-SECRET-CONTENT" },
+      toolTurns: 1,
+    });
+    const { fs } = memFs();
+    const { executor, threadId } = await build({
+      script,
+      fs,
+      agent: { bindings: { skills: [], snippets: [], tools: ["write"], mcp: [] } },
+    });
+    const requested: Array<Record<string, unknown>> = [];
+    executor.events.on("run.tool_use.requested", (e) => {
+      requested.push(e as unknown as Record<string, unknown>);
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
+    const writeReq = requested.find((e) => e.tool === "write");
+    expect(writeReq).toBeDefined();
+    expect(writeReq?.path).toBe("notes/out.txt");
+    expect(JSON.stringify(requested)).not.toContain("TOP-SECRET-CONTENT");
+  });
+
+  test("edit audit ref carries path + {oldLen,newLen}, never old/new content", async () => {
+    const { fs } = memFs();
+    // describe() projects path + length summary from the call input (audit-first,
+    // before the side effect) — the file need not exist for the requested event.
+    const script = toolThenTextScript({
+      toolName: "edit",
+      toolInput: { path: "doc.txt", old_str: "BEFORE", new_str: "AFTER-LONGER" },
+      toolTurns: 1,
+    });
+    const { executor, threadId } = await build({
+      script,
+      fs,
+      agent: { bindings: { skills: [], snippets: [], tools: ["edit"], mcp: [] } },
+    });
+    const requested: Array<Record<string, unknown>> = [];
+    executor.events.on("run.tool_use.requested", (e) => {
+      requested.push(e as unknown as Record<string, unknown>);
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
+    const editReq = requested.find((e) => e.tool === "edit");
+    expect(editReq).toBeDefined();
+    expect(editReq?.path).toBe("doc.txt");
+    expect(editReq?.editSummary).toEqual({ oldLen: 6, newLen: 12 });
+    const blob = JSON.stringify(requested);
+    expect(blob).not.toContain("BEFORE");
+    expect(blob).not.toContain("AFTER-LONGER");
+  });
 });
 
 // ─── D-3: load_skill ─────────────────────────────────────────────────────────

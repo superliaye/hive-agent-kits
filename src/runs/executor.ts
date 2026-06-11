@@ -524,7 +524,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     // knows a tool's wire shape. Command-less tools yield {} (no command).
     const handler = registry.get(call.name);
     const meta = handler?.describe?.(call.input) ?? {};
-    const { command, argSummary } = meta;
+    const { command, path, argSummary, editSummary } = meta;
 
     // Permission gate (emit on the dedicated permission source, audit-first).
     await permissionEvents.emit("permission.requested", {
@@ -566,7 +566,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       tool: call.name,
       toolUseId: call.id,
       ...(command !== undefined ? { command } : {}),
+      ...(path !== undefined ? { path } : {}),
       ...(argSummary !== undefined ? { argSummary } : {}),
+      ...(editSummary !== undefined ? { editSummary } : {}),
     });
     const ctx: ToolContext = {
       agentId,

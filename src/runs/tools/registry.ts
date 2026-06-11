@@ -38,11 +38,18 @@ export type ToolHandler = {
   /**
    * Projects the tool's input into the gate + audit metadata the executor
    * needs, so the executor never knows a tool's wire shape. `command` is a ref
-   * (drives the permission gate); `argSummary` is count-only (redaction is
-   * authored centrally — the handler only DECLARES fields). Command-less tools
-   * omit this or return {}.
+   * (drives the permission gate); `path` is the confined workspace-relative
+   * path ref (file tools — same ref treatment as `command`); `argSummary` is
+   * count-only and `editSummary` is length-only — both redaction-safe (the
+   * handler only DECLARES fields; never values, never file content). Tools with
+   * no projection omit this or return {}.
    */
-  describe?(input: unknown): { command?: string; argSummary?: { count: number } };
+  describe?(input: unknown): {
+    command?: string;
+    path?: string;
+    argSummary?: { count: number };
+    editSummary?: { oldLen: number; newLen: number };
+  };
 };
 
 export type ToolRegistry = ReadonlyMap<string, ToolHandler>;

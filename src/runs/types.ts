@@ -77,8 +77,12 @@ export type RunModuleEvents = {
     toolUseId: string;
     /** Command-bearing tools only: the command name (a ref, not an arg). */
     command?: string;
+    /** File tools only: the confined workspace-relative path (a ref, like `command`). */
+    path?: string;
     /** Redacted/elided arg summary — count only, never the values. */
     argSummary?: { count: number };
+    /** `edit` only: redacted length summary — string lengths, never the content. */
+    editSummary?: { oldLen: number; newLen: number };
   };
   "run.tool_use.executed": {
     runId: string;
