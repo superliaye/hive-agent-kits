@@ -1,12 +1,30 @@
 import { describe, expect, test } from "bun:test";
-import type { ShellRunnerPort } from "../../effect/ports.ts";
-import { buildToolRegistry, toolsForBindings } from "../registry.ts";
+import type { FsRunnerPort, ShellRunnerPort, SkillResolverPort } from "../../effect/ports.ts";
+import { type BuildRegistryDeps, buildToolRegistry, toolsForBindings } from "../registry.ts";
 import { createDefaultShellRunner, makeRunShellTool, resolveWorkingDir } from "../run-shell.ts";
 
-const ctx = { agentId: "a", runId: "r", cwd: process.cwd(), signal: new AbortController().signal };
+const ctx = {
+  agentId: "a",
+  runId: "r",
+  cwd: process.cwd(),
+  boundSkills: [],
+  signal: new AbortController().signal,
+};
 
 function stubShell(impl: ShellRunnerPort["run"]): ShellRunnerPort {
   return { run: impl };
+}
+
+// Minimal deps to build the registry — the file/skill ports are stubbed; these
+// tests only assert run_shell presence + the bindings filter.
+function registryDeps(): BuildRegistryDeps {
+  const fs: FsRunnerPort = {
+    readFile: async () => "",
+    writeFile: async () => {},
+    fileExists: async () => false,
+  };
+  const skills: SkillResolverPort = { list: () => [], load: () => undefined };
+  return { shell: createDefaultShellRunner(), fs, skills, onSkillLoaded: async () => {} };
 }
 
 describe("run_shell tool", () => {
@@ -91,12 +109,20 @@ describe("run_shell tool", () => {
 
 describe("tool registry + bindings filter", () => {
   test("run_shell present in registry", () => {
-    const reg = buildToolRegistry({ shell: createDefaultShellRunner() });
+    const reg = buildToolRegistry(registryDeps());
     expect(reg.has("run_shell")).toBe(true);
   });
 
+  test("file tools + load_skill present in registry", () => {
+    const reg = buildToolRegistry(registryDeps());
+    expect(reg.has("read")).toBe(true);
+    expect(reg.has("write")).toBe(true);
+    expect(reg.has("edit")).toBe(true);
+    expect(reg.has("load_skill")).toBe(true);
+  });
+
   test("toolsForBindings sends run_shell only when bound", () => {
-    const reg = buildToolRegistry({ shell: createDefaultShellRunner() });
+    const reg = buildToolRegistry(registryDeps());
     expect(toolsForBindings(reg, ["run_shell"])?.map((d) => d.name)).toEqual(["run_shell"]);
     // Unbound → omitted entirely (undefined).
     expect(toolsForBindings(reg, [])).toBeUndefined();
