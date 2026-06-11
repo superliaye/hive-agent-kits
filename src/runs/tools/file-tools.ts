@@ -29,6 +29,14 @@ const MAX_FILE_BYTES = 64 * 1024;
 // Resolve a model-provided relative path against the workspace root and confine
 // it. Returns the absolute path, or null when the input escapes the workspace
 // (absolute path, or `..` traversal above `cwd`).
+//
+// KNOWN LIMITATION (string-level guard, no realpath): a symlink residing inside
+// the workspace that targets a path outside it passes confinement — the fs verb
+// then follows it and escapes. These tools cannot create symlinks (write only
+// emits file content), so the only vector is a symlink Hive itself placed in the
+// workspace. A hard boundary would realpath `abs` (and its parent, for write)
+// and re-check containment under realpath(cwd); deferred until the G2 permission
+// system replaces this interim confinement guard.
 function confine(cwd: string, path: string): string | null {
   if (typeof path !== "string" || path.length === 0) return null;
   if (isAbsolute(path)) return null;
