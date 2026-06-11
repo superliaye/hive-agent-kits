@@ -35,6 +35,11 @@ export const threads = sqliteTable("threads", {
     .default("auto"),
   last_read_at: integer("last_read_at"),
   archived_at: integer("archived_at"),
+  // Per-Thread (conversation-scope) model/effort pick (ADR-0015 S1). NULL =
+  // unset (fall through to the agent default). May hold a symbolic token
+  // ("latest"/"highest"); the executor's resolver concretizes it at Run start.
+  model_pref: text("model_pref"),
+  effort_pref: text("effort_pref"),
 });
 
 export const messages = sqliteTable(
@@ -62,6 +67,8 @@ const THREADS_ADDED_COLUMNS: ReadonlyArray<{ name: string; ddl: string }> = [
   { name: "title_source", ddl: "title_source TEXT NOT NULL DEFAULT 'auto'" },
   { name: "last_read_at", ddl: "last_read_at INTEGER" },
   { name: "archived_at", ddl: "archived_at INTEGER" },
+  { name: "model_pref", ddl: "model_pref TEXT" },
+  { name: "effort_pref", ddl: "effort_pref TEXT" },
 ];
 
 // Minimal handle shape: `run` for DDL writes, `$client` (the bun:sqlite
@@ -85,7 +92,9 @@ export function ensureThreadsSchema(db: EnsureHandle): void {
       title TEXT,
       title_source TEXT NOT NULL DEFAULT 'auto',
       last_read_at INTEGER,
-      archived_at INTEGER
+      archived_at INTEGER,
+      model_pref TEXT,
+      effort_pref TEXT
     )
   `);
   db.run(sql`

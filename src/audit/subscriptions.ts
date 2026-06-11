@@ -153,6 +153,17 @@ const threadsNormalizer: Normalizer<ThreadEvents> = {
     agent_id: event.agentId,
     payload: { thread_id: event.threadId },
   }),
+  "thread.scope_set": (event) => ({
+    event_type: "thread.scope_set",
+    agent_id: event.agentId,
+    // model id / effort level are non-secret identifiers (same as
+    // agent_pref.set); carry whichever axes the write touched.
+    payload: {
+      thread_id: event.threadId,
+      ...(event.model !== undefined ? { model: event.model } : {}),
+      ...(event.effort !== undefined ? { effort: event.effort } : {}),
+    },
+  }),
 };
 
 // Attaches every present source's event stream to the audit log.

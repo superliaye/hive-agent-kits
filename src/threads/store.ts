@@ -75,6 +75,21 @@ export type ThreadsStore = {
    */
   archive(threadId: string, source: TitleSource): Promise<void>;
 
+  /**
+   * Set a thread's conversation-scope model/effort pick (ADR-0015 S1). A field
+   * present in the patch is written (a `null` clears it); an OMITTED field is
+   * left unchanged — so the two axes stay independent (setting one never
+   * clobbers the other). A symbolic token ("latest"/"highest") is accepted; the
+   * resolver concretizes it at Run start. Audit-first: emits `thread.scope_set`
+   * (carrying the touched axes) BEFORE the write (ADR-0004). Does NOT bump
+   * `updatedAt` (a metadata edit, not a message). No-op on a missing thread.
+   * A no-op patch (neither field present) is rejected as a caller bug.
+   */
+  setScope(
+    threadId: string,
+    patch: { model?: string | null; effort?: string | null },
+  ): Promise<void>;
+
   /** Mark a thread read at `at`. Sets `last_read_at`. Not audited. Sync. */
   markRead(threadId: string, at: number): void;
 
@@ -116,6 +131,8 @@ export function createThreadsStore(
       titleSource: row.title_source,
       lastReadAt: row.last_read_at,
       archivedAt: row.archived_at,
+      modelPref: row.model_pref,
+      effortPref: row.effort_pref,
     };
   }
 
@@ -146,6 +163,8 @@ export function createThreadsStore(
         titleSource: "auto",
         lastReadAt: null,
         archivedAt: null,
+        modelPref: null,
+        effortPref: null,
       };
     },
 
@@ -257,6 +276,37 @@ export function createThreadsStore(
       }
       // No updated_at bump.
       db.update(threads).set({ archived_at: now() }).where(eq(threads.id, threadId)).run();
+    },
+
+    async setScope(threadId, patch) {
+      const hasModel = patch.model !== undefined;
+      const hasEffort = patch.effort !== undefined;
+      if (!hasModel && !hasEffort) {
+        throw new Error("threads/store: setScope requires at least one of { model, effort }");
+      }
+      const current = this.get(threadId);
+      if (!current) return;
+
+      // Audit-first: emit BEFORE the write (ADR-0004). Carries the touched axes
+      // (a cleared field, set to null, is still a touch). null → omit from the
+      // payload (the event field is `string`, not nullable); the write still
+      // clears it.
+      await events.emit("thread.scope_set", {
+        threadId,
+        agentId: current.agentId,
+        ...(hasModel && patch.model !== null ? { model: patch.model } : {}),
+        ...(hasEffort && patch.effort !== null ? { effort: patch.effort } : {}),
+      });
+
+      // Merge: write only the touched columns (no updated_at bump). An omitted
+      // axis keeps its stored value, so the two axes stay independent.
+      db.update(threads)
+        .set({
+          ...(hasModel ? { model_pref: patch.model } : {}),
+          ...(hasEffort ? { effort_pref: patch.effort } : {}),
+        })
+        .where(eq(threads.id, threadId))
+        .run();
     },
 
     markRead(threadId, at) {

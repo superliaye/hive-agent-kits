@@ -231,3 +231,77 @@ describe("ThreadsStore.getWithMessages", () => {
     expect(store.getWithMessages("nope")).toBeUndefined();
   });
 });
+
+describe("ThreadsStore.setScope (S1, ADR-0015)", () => {
+  test("fresh thread has null model/effort scope", () => {
+    const t = store.create({ agentId: "agent-a" });
+    expect(t.modelPref).toBeNull();
+    expect(t.effortPref).toBeNull();
+  });
+
+  test("round-trips a model + effort pick", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setScope(t.id, { model: "openai-codex/gpt-5.5", effort: "minimal" });
+    const got = store.get(t.id);
+    expect(got?.modelPref).toBe("openai-codex/gpt-5.5");
+    expect(got?.effortPref).toBe("minimal");
+  });
+
+  test("accepts a symbolic token", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setScope(t.id, { model: "latest", effort: "highest" });
+    const got = store.get(t.id);
+    expect(got?.modelPref).toBe("latest");
+    expect(got?.effortPref).toBe("highest");
+  });
+
+  test("axes are independent — setting one leaves the other untouched", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setScope(t.id, { model: "anthropic/claude-sonnet-4-6" });
+    await store.setScope(t.id, { effort: "high" });
+    const got = store.get(t.id);
+    expect(got?.modelPref).toBe("anthropic/claude-sonnet-4-6");
+    expect(got?.effortPref).toBe("high");
+  });
+
+  test("null clears an axis without touching the other", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setScope(t.id, { model: "anthropic/claude-sonnet-4-6", effort: "high" });
+    await store.setScope(t.id, { model: null });
+    const got = store.get(t.id);
+    expect(got?.modelPref).toBeNull();
+    expect(got?.effortPref).toBe("high");
+  });
+
+  test("does not bump updatedAt (metadata edit, not a message)", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    const before = store.get(t.id)?.updatedAt;
+    await store.setScope(t.id, { model: "anthropic/claude-haiku-4-5" });
+    expect(store.get(t.id)?.updatedAt).toBe(before);
+  });
+
+  test("emits thread.scope_set (audit-first) with the touched axes", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    const seen: Array<{ agentId: string; model?: string; effort?: string }> = [];
+    store.events.on("thread.scope_set", (e) => {
+      seen.push({
+        agentId: e.agentId,
+        ...(e.model ? { model: e.model } : {}),
+        ...(e.effort ? { effort: e.effort } : {}),
+      });
+    });
+    await store.setScope(t.id, { model: "openai-codex/gpt-5.5" });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({ agentId: "agent-a", model: "openai-codex/gpt-5.5" });
+  });
+
+  test("rejects a no-op patch (neither axis present)", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await expect(store.setScope(t.id, {})).rejects.toThrow(/at least one/);
+  });
+
+  test("no-op on a missing thread", async () => {
+    await store.setScope("nope", { model: "anthropic/claude-haiku-4-5" });
+    expect(store.get("nope")).toBeUndefined();
+  });
+});

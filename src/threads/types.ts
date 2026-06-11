@@ -18,6 +18,12 @@ export type Thread = {
   titleSource: "auto" | "manual";
   lastReadAt: number | null;
   archivedAt: number | null;
+  // Conversation-scope model/effort pick (ADR-0015 S1). null = unset (fall
+  // through to the agent default at Run resolution). May be a symbolic token
+  // ("latest"/"highest"); the resolver concretizes it. The two axes are
+  // independent — setting one never clobbers the other.
+  modelPref: string | null;
+  effortPref: string | null;
 };
 
 export type TitleSource = "auto" | "manual";
@@ -45,4 +51,9 @@ export type ThreadEvents = {
   "thread.deleted": { threadId: string; agentId: string };
   "thread.title_set": { threadId: string; agentId: string; titleSource: "manual" };
   "thread.marked_unread": { threadId: string; agentId: string };
+  // A user's per-conversation model/effort pick (ADR-0015 S1) — a USER action,
+  // so audited (ADR-0004). Carries whichever axes the write touched; the model
+  // id / effort level are non-secret identifiers (same posture as
+  // `agent_pref.set`), safe in the payload.
+  "thread.scope_set": { threadId: string; agentId: string; model?: string; effort?: string };
 };
