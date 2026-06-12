@@ -33,7 +33,6 @@ import { TypedEmitter } from "../lib/typed-emitter.ts";
 import {
   type CompletionInput,
   type ContentBlock,
-  EFFORT_ORDER,
   type FinishReason,
   type GatewayErrorCode,
   type GatewayEvent,
@@ -59,7 +58,7 @@ import type {
 } from "./effect/ports.ts";
 import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
-import { isSymbolicEffort } from "./symbolic.ts";
+import { type EffortDefault, isSymbolicEffort, isThinkingEffort } from "./symbolic.ts";
 import { createDefaultFsRunner } from "./tools/file-tools.ts";
 import { LOAD_SKILL_TOOL_NAME } from "./tools/names.ts";
 import {
@@ -674,17 +673,13 @@ function buildSystemPrompt(
   return parts.length > 0 ? parts.join("\n\n") : undefined;
 }
 
-function isThinkingEffort(v: string): v is ThinkingEffort {
-  return (EFFORT_ORDER as readonly string[]).includes(v);
-}
-
 // Narrow a stored Thread-scope effort (a free `string | null` column) to a
 // resolver-accepted default-tier value — a concrete level or the symbolic
-// "highest" — or undefined for unset / malformed. Mirrors the harness-config
-// effort narrowing in resolve.ts.
-function effortDefaultOrUndefined(
-  raw: string | null | undefined,
-): ThinkingEffort | "highest" | undefined {
+// "highest" — or undefined for unset / malformed. Uses the SHARED
+// `isThinkingEffort` / `EffortDefault` (P3), the same narrowing resolve()'s
+// harness-config path uses. The store keeps the raw `string | null`; this is a
+// consumer-side narrowing on the way INTO resolve(), not a store-level tighten.
+function effortDefaultOrUndefined(raw: string | null | undefined): EffortDefault | undefined {
   if (raw === null || raw === undefined) return undefined;
   if (isThinkingEffort(raw)) return raw;
   return isSymbolicEffort(raw) ? "highest" : undefined;

@@ -4,6 +4,7 @@ import type { AvailableModel } from "../../model-gateway/types.ts";
 import {
   isSymbolicEffort,
   isSymbolicModel,
+  isThinkingEffort,
   PROVIDER_PREFERENCE,
   resolveHighestEffort,
   resolveLatestModel,
@@ -26,6 +27,14 @@ describe("symbolic — token predicates", () => {
     expect(isSymbolicEffort("highest")).toBe(true);
     expect(isSymbolicEffort("xhigh")).toBe(false);
     expect(isSymbolicEffort(undefined)).toBe(false);
+  });
+
+  test("isThinkingEffort accepts EFFORT_ORDER members only (shared helper, P3)", () => {
+    expect(isThinkingEffort("xhigh")).toBe(true);
+    expect(isThinkingEffort("off")).toBe(true);
+    expect(isThinkingEffort("highest")).toBe(false); // symbolic, not concrete
+    expect(isThinkingEffort("bogus")).toBe(false);
+    expect(isThinkingEffort(undefined)).toBe(false);
   });
 });
 

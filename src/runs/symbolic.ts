@@ -37,6 +37,19 @@ export function isSymbolicEffort(value: string | undefined): value is SymbolicEf
   return value === SYMBOLIC_EFFORT_HIGHEST;
 }
 
+// A default-tier effort value: a concrete level OR the symbolic "highest". A
+// per-Run override stays strictly concrete (this never admits "highest"). The
+// SINGLE shared shape both resolve() and the executor's Thread-scope narrowing
+// reference (P3), so the two cannot drift.
+export type EffortDefault = ThinkingEffort | SymbolicEffort;
+
+// Concrete-effort membership check against the canonical EFFORT_ORDER. Shared by
+// resolve()'s harness-config narrowing and the executor's Thread-scope narrowing
+// (P3) — one definition, no per-call-site re-spelling.
+export function isThinkingEffort(value: string | undefined): value is ThinkingEffort {
+  return value !== undefined && (EFFORT_ORDER as readonly string[]).includes(value);
+}
+
 // The runnable-catalog snapshot the symbolic resolver consumes: the credentialed
 // ∩ routable models, already ordered newest-first per provider (the explicit
 // catalog ordering ADR-0015 asks for, surfaced via the gateway seam). The

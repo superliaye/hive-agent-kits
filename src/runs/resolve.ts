@@ -19,13 +19,15 @@
 
 import type { AgentBackend } from "../lib/capability-types.ts";
 import type { GatewayFailure } from "../model-gateway/effect/failure.ts";
-import { EFFORT_ORDER, type ThinkingEffort } from "../model-gateway/types.ts";
+import type { ThinkingEffort } from "../model-gateway/types.ts";
 import { resolveAgentModel } from "./resolve-model.ts";
-import { isSymbolicEffort, type RunnableCatalog, resolveHighestEffort } from "./symbolic.ts";
-
-// A default-tier effort value: a concrete level OR the symbolic "highest".
-// (A per-Run override stays strictly concrete — see `effortOverride`.)
-type EffortDefault = ThinkingEffort | "highest";
+import {
+  type EffortDefault,
+  isSymbolicEffort,
+  isThinkingEffort,
+  type RunnableCatalog,
+  resolveHighestEffort,
+} from "./symbolic.ts";
 
 export type ResolveInput = {
   /** Agent's harness `config.model`, when a string; else undefined. */
@@ -59,17 +61,15 @@ export type ResolveResult =
   | { model: string; provider: string; effort?: ThinkingEffort; backend: AgentBackend }
   | { model: string; failure: GatewayFailure };
 
-function isThinkingEffort(v: unknown): v is ThinkingEffort {
-  return typeof v === "string" && (EFFORT_ORDER as readonly string[]).includes(v);
-}
-
 // Narrow an Agent's harness `config.thinkingEffort` (an `unknown` from the open
 // config record) to a concrete `ThinkingEffort` or the symbolic "highest", or
 // `undefined` if absent / not a recognized value — the closed-enum membership
-// check the loop relied on inline, now also admitting the symbolic token.
+// check the loop relied on inline, now also admitting the symbolic token. Uses
+// the shared `isThinkingEffort` (P3).
 function configuredEffort(raw: unknown): EffortDefault | undefined {
-  if (isThinkingEffort(raw)) return raw;
-  return isSymbolicEffort(typeof raw === "string" ? raw : undefined) ? "highest" : undefined;
+  const s = typeof raw === "string" ? raw : undefined;
+  if (isThinkingEffort(s)) return s;
+  return isSymbolicEffort(s) ? "highest" : undefined;
 }
 
 export function resolve(input: ResolveInput): ResolveResult {
