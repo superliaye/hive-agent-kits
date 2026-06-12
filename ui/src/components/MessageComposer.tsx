@@ -6,7 +6,13 @@
 // options are only the levels the selected model supports.
 
 import { useState } from "react";
-import type { AvailableModel, ThinkingEffort } from "../api.ts";
+import type { AgentBackend, AvailableModel, ThinkingEffort } from "../api.ts";
+
+// A backend option offered in the composer's backend picker: the backend id +
+// a human label (with the detected version for CLI backends). `native` is
+// always offered (in-process, nothing to detect); CLI backends appear only when
+// installed and healthy.
+export type BackendOption = { backend: AgentBackend; label: string };
 
 // Sentinel option value: selecting it navigates to Settings → Secrets rather
 // than picking a model. No slash, so it can't collide with a "provider/model".
@@ -33,6 +39,10 @@ export function MessageComposer({
   efforts,
   selectedEffort,
   onSelectEffort,
+  backends,
+  selectedBackend,
+  onSelectBackend,
+  showBackendPicker,
 }: {
   inFlight: boolean;
   onSend: (text: string) => void | Promise<void>;
@@ -47,6 +57,14 @@ export function MessageComposer({
   efforts: ThinkingEffort[];
   selectedEffort: ThinkingEffort | null;
   onSelectEffort: (effort: ThinkingEffort) => void;
+  // Agent-Backend axis (ADR-0015), Worker-only. `backends` lists the offerable
+  // options (synthetic `native` + installed CLI backends with versions);
+  // `selectedBackend` is the resolved pick. The picker renders only when
+  // `showBackendPicker` is true (the daemon-supplied Worker gate).
+  backends: BackendOption[];
+  selectedBackend: AgentBackend | null;
+  onSelectBackend: (backend: AgentBackend) => void;
+  showBackendPicker: boolean;
 }): JSX.Element {
   const [text, setText] = useState("");
   const canSend = !inFlight && text.trim().length > 0;
@@ -98,6 +116,30 @@ export function MessageComposer({
       />
       <div className="composer-actions">
         <div className="composer-run-settings">
+          {showBackendPicker && (
+            <select
+              className="composer-backend-picker"
+              value={selectedBackend ?? ""}
+              onChange={(e) => {
+                const picked = backends.find((b) => b.backend === e.target.value);
+                if (picked) onSelectBackend(picked.backend);
+              }}
+              disabled={inFlight}
+              data-testid="composer-backend-picker"
+              aria-label="Agent backend"
+            >
+              {selectedBackend === null && (
+                <option value="" disabled>
+                  Select a backend…
+                </option>
+              )}
+              {backends.map((b) => (
+                <option key={b.backend} value={b.backend}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
+          )}
           <select
             className="composer-model-picker"
             value={selectedModel ?? ""}

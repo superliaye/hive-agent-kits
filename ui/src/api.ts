@@ -2,12 +2,30 @@
 //   1. window.__hive (provided by Electron preload)
 //   2. URL query string ?baseUrl=...&token=... (dev mode in a browser tab)
 
+// AgentBackend ids the daemon knows. Mirrors the daemon's `AgentBackend` Zod
+// enum (src/lib/capability-types.ts); the UI is a separate Vite bundle, so this
+// literal is kept in sync by hand. `native` is the in-process loop; the other
+// two are CLI-driven backends a Worker agent may switch to.
+export type AgentBackend = "native" | "claude-code" | "codex";
+
+const AGENT_BACKENDS: readonly AgentBackend[] = ["native", "claude-code", "codex"];
+
+// Narrow an `unknown` (e.g. a stored scope backend or an agent's harness
+// `backend`) to an AgentBackend, cast-free.
+export function isAgentBackend(v: unknown): v is AgentBackend {
+  return typeof v === "string" && (AGENT_BACKENDS as readonly string[]).includes(v);
+}
+
 export type AgentSummary = {
   agentId: string;
   backend: string;
   domain: string;
   layer: "bundled" | "runtime";
   hasFork: boolean;
+  // True iff a Worker Agent (not Root / Agent Manager). The composer gates the
+  // per-conversation Agent-Backend axis on this — only Workers may switch
+  // backend (ADR-0015). Daemon-supplied; the UI never hardcodes the kernel ids.
+  isWorker: boolean;
   bindingCounts: {
     skills: number;
     snippets: number;
@@ -25,7 +43,21 @@ export type AgentDetail = AgentSummary & {
   };
   config: Record<string, unknown>;
   promptBody: string;
+  // Per-Agent `run_shell` command allowlist (read-only here). Absent/empty ⇒
+  // deny-all (no commands allowed). Mirrors the daemon's AgentDetailWire field.
+  commandAllowlist?: string[];
   forkError?: string;
+};
+
+// Backend availability status (GET /api/backends). Mirrors the daemon's
+// BackendStatus wire shape (src/backend-probe/types.ts). `backend` is a
+// CLI-driven (probeable) backend; `native` is never probed.
+export type BackendStatus = {
+  backend: "claude-code" | "codex";
+  installed: boolean;
+  version: string | null;
+  reason: "ok" | "not_installed" | "probe_failed" | "version_unreadable" | "timeout";
+  checkedAt: number;
 };
 
 export type CapabilityWire = {
@@ -411,18 +443,19 @@ export const api = {
   // The agent's sticky model + effort defaults; each is null when unset (the
   // executor then falls back to the harness config.model / config.thinkingEffort).
   getAgentModelPref: (cfg: ApiConfig, agentId: string) =>
-    call<{ model: string | null; effort: ThinkingEffort | null }>(
+    call<{ model: string | null; effort: ThinkingEffort | null; backend: AgentBackend | null }>(
       cfg,
       `/api/agents/${encodeURIComponent(agentId)}/model-pref`,
     ),
   // Merge semantics: omit a field to leave its stored value unchanged. Pass at
-  // least one of { model, effort }.
+  // least one of { model, effort, backend }. `backend: null` clears the stored
+  // backend default. Apply-to-default widens to the backend axis (OQ-2).
   setAgentModelPref: (
     cfg: ApiConfig,
     agentId: string,
-    patch: { model?: string; effort?: ThinkingEffort },
+    patch: { model?: string; effort?: ThinkingEffort; backend?: AgentBackend | null },
   ) =>
-    call<{ model: string | null; effort: ThinkingEffort | null }>(
+    call<{ model: string | null; effort: ThinkingEffort | null; backend: AgentBackend | null }>(
       cfg,
       `/api/agents/${encodeURIComponent(agentId)}/model-pref`,
       {
@@ -430,6 +463,17 @@ export const api = {
         body: JSON.stringify(patch),
       },
     ),
+
+  // ─── Backends ────────────────────────────────────────────────────────
+  // Detected CLI agent backends with health + version (ADR-0016). Re-probes
+  // on every call.
+  listBackends: (cfg: ApiConfig) => call<BackendStatus[]>(cfg, "/api/backends"),
+  // Delegate to the backend CLI's OWN updater, then re-probe. Returns the fresh
+  // status on success; throws on a 4xx/5xx (updater missing / failed / timeout).
+  upgradeBackend: (cfg: ApiConfig, backend: "claude-code" | "codex") =>
+    call<BackendStatus>(cfg, `/api/backends/${encodeURIComponent(backend)}/upgrade`, {
+      method: "POST",
+    }),
 
   // ─── Threads ────────────────────────────────────────────────────────
   listThreads: (cfg: ApiConfig) => call<ThreadSummary[]>(cfg, "/api/threads"),
@@ -451,20 +495,21 @@ export const api = {
   // null when unset (the executor then falls back to the agent default). May be
   // a symbolic token ("latest"/"highest").
   getThreadScope: (cfg: ApiConfig, threadId: string) =>
-    call<{ model: string | null; effort: string | null }>(
+    call<{ model: string | null; effort: string | null; backend: AgentBackend | null }>(
       cfg,
       `/api/threads/${encodeURIComponent(threadId)}/scope`,
     ),
   // Use-here: applies to THIS Thread only (sticks for its later Runs), without
   // touching the agent default. Merge semantics — omit a field to leave it
   // unchanged; pass null to clear an axis. Apply-to-default is the separate
-  // setAgentModelPref act.
+  // setAgentModelPref act. The backend axis is Worker-only (the daemon rejects a
+  // non-native backend for Root / Agent Manager).
   setThreadScope: (
     cfg: ApiConfig,
     threadId: string,
-    patch: { model?: string | null; effort?: ThinkingEffort | null },
+    patch: { model?: string | null; effort?: ThinkingEffort | null; backend?: AgentBackend | null },
   ) =>
-    call<{ model: string | null; effort: string | null }>(
+    call<{ model: string | null; effort: string | null; backend: AgentBackend | null }>(
       cfg,
       `/api/threads/${encodeURIComponent(threadId)}/scope`,
       {

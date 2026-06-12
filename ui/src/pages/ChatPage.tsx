@@ -6,16 +6,19 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  type AgentBackend,
   type ApiConfig,
   type AvailableModel,
+  type BackendStatus,
   type ContentBlock,
   type ThinkingEffort,
   type ThreadSummary,
   api,
+  isAgentBackend,
   isThinkingEffort,
 } from "../api.ts";
 import { InlineTitle } from "../components/InlineTitle.tsx";
-import { MessageComposer } from "../components/MessageComposer.tsx";
+import { type BackendOption, MessageComposer } from "../components/MessageComposer.tsx";
 import { MessageList } from "../components/MessageList.tsx";
 import { NewThreadModal } from "../components/NewThreadModal.tsx";
 import {
@@ -89,6 +92,15 @@ export function ChatPage({
   // incompatible stored effort is dropped when the model changes.
   const [effortDefault, setEffortDefault] = useState<ThinkingEffort | null>(null);
   const [effortPick, setEffortPick] = useState<ThinkingEffort | null>(null);
+  // Agent-Backend axis (ADR-0015), Worker-only. `backendStatuses` is the daemon
+  // probe (which CLI backends are installed + healthy); `isWorker` gates the
+  // picker (daemon-supplied — never hardcoded ids). `backendDefault` is the
+  // agent default (saved pref, else the harness-authored backend); `backendPick`
+  // an explicit in-session choice. Same default/pick shape as model/effort.
+  const [backendStatuses, setBackendStatuses] = useState<BackendStatus[]>([]);
+  const [isWorker, setIsWorker] = useState(false);
+  const [backendDefault, setBackendDefault] = useState<AgentBackend | null>(null);
+  const [backendPick, setBackendPick] = useState<AgentBackend | null>(null);
 
   const selectedModel: string | null =
     userPick ??
@@ -115,6 +127,34 @@ export function ChatPage({
   // effortOverride for such models — a bare "off" would be a meaningless no-op.
   const hasRealEffort = selectedModelEfforts.some((eff) => eff !== "off");
   const effortToSend: ThinkingEffort | null = hasRealEffort ? selectedEffort : null;
+
+  // Offerable backends: the synthetic `native` (always available, in-process)
+  // plus each installed + healthy CLI backend, labelled with its detected
+  // version. The picker is Worker-only (gated below on `isWorker`).
+  const backendOptions: BackendOption[] = [
+    { backend: "native", label: "native" },
+    ...backendStatuses
+      .filter((s) => s.installed && s.reason === "ok")
+      .map<BackendOption>((s) => ({
+        backend: s.backend,
+        label: s.version ? `${s.backend} ${s.version}` : s.backend,
+      })),
+  ];
+
+  // Effective backend selection: the in-session pick, else the agent default if
+  // offerable, else `native` (always available). Mirrors the model tier.
+  const selectedBackend: AgentBackend | null =
+    backendPick ??
+    (backendDefault && backendOptions.some((b) => b.backend === backendDefault)
+      ? backendDefault
+      : "native");
+
+  // The apply-to-default affordance surfaces only when the conversation's
+  // backend pick differs from the agent default (ADR-0015:22).
+  const backendDiffersFromDefault =
+    isWorker &&
+    selectedBackend !== null &&
+    selectedBackend !== (backendDefault ?? "native");
 
   // Keep activeId stable across live refetches: only auto-select when nothing
   // is selected, or when the selected thread has disappeared.
@@ -183,14 +223,29 @@ export function ChatPage({
     };
   }, [apiConfig]);
 
+  // Load the backend availability probe once (ADR-0016). Feeds the composer's
+  // Worker-only backend picker with the installed CLI backends + versions.
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .listBackends(apiConfig)
+      .then((b) => {
+        if (!cancelled) setBackendStatuses(b);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [apiConfig]);
+
   // Load the active agent's stored defaults (saved pref, else harness config),
   // for both model and effort, and clear any prior in-session picks.
   useEffect(() => {
-    setUserPick(null);
-    setEffortPick(null);
     if (!agentId) {
       setAgentDefault(null);
       setEffortDefault(null);
+      setBackendDefault(null);
+      setIsWorker(false);
       return;
     }
     let cancelled = false;
@@ -207,10 +262,17 @@ export function ChatPage({
           ? agent.config.thinkingEffort
           : null;
         setEffortDefault(pref.effort ?? harnessEffort);
+        // Backend default: the saved pref, else the harness-authored backend.
+        // The Worker gate is daemon-supplied (no hardcoded kernel ids).
+        setIsWorker(agent.isWorker);
+        const harnessBackend = isAgentBackend(agent.backend) ? agent.backend : null;
+        setBackendDefault(pref.backend ?? harnessBackend);
       } catch {
         if (!cancelled) {
           setAgentDefault(null);
           setEffortDefault(null);
+          setBackendDefault(null);
+          setIsWorker(false);
         }
       }
     })();
@@ -227,6 +289,7 @@ export function ChatPage({
   useEffect(() => {
     setUserPick(null);
     setEffortPick(null);
+    setBackendPick(null);
     if (!activeId) return;
     let cancelled = false;
     void (async () => {
@@ -237,6 +300,9 @@ export function ChatPage({
         if (typeof scope.effort === "string" && isThinkingEffort(scope.effort)) {
           setEffortPick(scope.effort);
         }
+        // The stored backend scope is a concrete id; surface it as the
+        // in-session pick so the choice survives a reload (ADR-0015).
+        if (isAgentBackend(scope.backend)) setBackendPick(scope.backend);
       } catch {
         // Best-effort: a scope read failure just leaves the default selected.
       }
@@ -375,6 +441,31 @@ export function ChatPage({
     // The next message also carries it as effortOverride.
     try {
       await api.setThreadScope(apiConfig, activeId, { effort });
+    } catch (err) {
+      setListError((err as Error).message);
+    }
+  }
+
+  async function onSelectBackend(backend: AgentBackend): Promise<void> {
+    setBackendPick(backend);
+    if (!activeId) return;
+    // Use-here backend pick (ADR-0015): applies to THIS conversation and sticks
+    // for its later Runs (resolved via the daemon's threadBackend tier), without
+    // touching the agent default. Merge — leaves model/effort scope untouched.
+    try {
+      await api.setThreadScope(apiConfig, activeId, { backend });
+    } catch (err) {
+      setListError((err as Error).message);
+    }
+  }
+
+  async function applyBackendToDefault(): Promise<void> {
+    if (!agentId || selectedBackend === null) return;
+    // Apply-to-default (ADR-0015): promote the conversation backend pick to the
+    // agent default. A SEPARATE act from use-here.
+    try {
+      await api.setAgentModelPref(apiConfig, agentId, { backend: selectedBackend });
+      setBackendDefault(selectedBackend);
     } catch (err) {
       setListError((err as Error).message);
     }
@@ -591,6 +682,22 @@ export function ChatPage({
               pending={thread.pending}
               runError={thread.runError}
             />
+            {backendDiffersFromDefault && (
+              <div className="composer-apply-default">
+                <span className="meta">
+                  This conversation uses <strong>{selectedBackend}</strong> (agent default:{" "}
+                  {backendDefault ?? "native"}).
+                </span>
+                <button
+                  type="button"
+                  className="button ghost small"
+                  onClick={() => void applyBackendToDefault()}
+                  data-testid="apply-backend-default"
+                >
+                  Apply backend to agent default
+                </button>
+              </div>
+            )}
             <MessageComposer
               inFlight={inFlight}
               onSend={onSend}
@@ -602,6 +709,10 @@ export function ChatPage({
               efforts={selectedModelEfforts}
               selectedEffort={selectedEffort}
               onSelectEffort={(e) => void onSelectEffort(e)}
+              backends={backendOptions}
+              selectedBackend={selectedBackend}
+              onSelectBackend={(b) => void onSelectBackend(b)}
+              showBackendPicker={isWorker}
             />
           </>
         )}

@@ -1000,7 +1000,8 @@ pre.config {
   min-width: 0;
 }
 .composer-model-picker,
-.composer-effort-picker {
+.composer-effort-picker,
+.composer-backend-picker {
   padding: 6px 8px;
   border: 1px solid var(--color-border-default);
   border-radius: 4px;
@@ -1014,9 +1015,39 @@ pre.config {
 .composer-effort-picker {
   max-width: 40%;
 }
+.composer-backend-picker {
+  max-width: 40%;
+}
 .composer-model-picker:disabled,
-.composer-effort-picker:disabled {
+.composer-effort-picker:disabled,
+.composer-backend-picker:disabled {
   opacity: 0.6;
+}
+
+/* Apply-to-default affordance: surfaces above the composer when the
+   conversation's backend pick differs from the agent default. */
+.composer-apply-default {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+}
+
+/* Read-only command-allowlist list (Backends settings). */
+.allowlist {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.allowlist li {
+  background: var(--color-bg-subtle, var(--color-bg-base));
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  padding: 2px 8px;
 }
 
 .empty-state {

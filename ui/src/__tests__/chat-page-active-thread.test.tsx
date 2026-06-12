@@ -65,8 +65,13 @@ function installStubs(): void {
       return json({ ...s, messages: [] });
     }
     if (method === "GET" && path === "/api/models") return json([]);
-    if (method === "GET" && path.endsWith("/model-pref")) return json({ model: null, effort: null });
-    if (method === "GET" && parts[1] === "agents") return json({ agentId: "root", config: {} });
+    if (method === "GET" && path === "/api/backends") return json([]);
+    if (method === "GET" && path.endsWith("/scope"))
+      return json({ model: null, effort: null, workingDir: null, backend: null });
+    if (method === "GET" && path.endsWith("/model-pref"))
+      return json({ model: null, effort: null, backend: null });
+    if (method === "GET" && parts[1] === "agents")
+      return json({ agentId: "root", backend: "native", isWorker: false, config: {} });
     if (method === "PUT" && path.endsWith("/title")) {
       const id = decodeURIComponent(parts[2] ?? "");
       const body = JSON.parse(String(init?.body ?? "{}")) as { title: string };
