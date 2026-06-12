@@ -48,6 +48,7 @@ import {
   type RunExecutor,
   type RunnableCatalogPort,
   runnableCatalog,
+  type SkillProjectionPort,
   type SkillResolverPort,
 } from "../runs/index.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
@@ -245,6 +246,20 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     },
   };
 
+  // SkillProjectionPort adapter (C3): the sibling port the CLI (claude-code)
+  // path uses to copy bound skills into a `--add-dir` location. Reuses the same
+  // `bindingResolver` handle + Effect.runSync discharge as skillResolver above —
+  // no second runtime. Surfaces `path`/`origin` (the file-system facts the
+  // projector needs), unlike the N3-shaped skillResolver.
+  const skillProjection: SkillProjectionPort = {
+    resolve: (names) =>
+      Effect.runSync(bindingResolver.resolveSkills(names)).resolved.map((s) => ({
+        name: s.name,
+        path: s.path,
+        origin: s.origin,
+      })),
+  };
+
   // RunnableCatalogPort adapter (E3/E5): the credentialed ∩ routable models the
   // symbolic-default resolver consumes, assembled by the SINGLE shared
   // `runnableCatalog` helper (P2) — the same globally-ordered list the title-gen
@@ -266,6 +281,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     prefs: agentModelPrefs,
     runnableCatalog: runnableCatalogPort,
     skillResolver,
+    skillProjection,
     // Cap port — snapshot of runs.maxIterations off the root Config (0 =
     // unlimited). Narrow consumer-owned port, not the whole Config tree.
     capConfig: { maxIterations: () => config.get("runs").maxIterations },

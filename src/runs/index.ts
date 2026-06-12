@@ -14,9 +14,12 @@ export type {
   CliSpawnerPort,
   CliSpawnInput,
   CliSpawnResult,
+  FsCopyPort,
   FsRunnerPort,
+  ProjectableSkill,
   RunnableCatalogPort,
   SkillListing,
+  SkillProjectionPort,
   SkillResolverPort,
 } from "./effect/ports.ts";
 export type { CreateRunExecutorDeps, RunExecutor, StartRunInput } from "./executor.ts";

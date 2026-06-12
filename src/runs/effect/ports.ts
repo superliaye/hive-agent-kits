@@ -10,6 +10,7 @@
 
 import { Context, type Stream } from "effect";
 import type { Agent } from "../../catalog/types.ts";
+import type { Origin } from "../../lib/capability-types.ts";
 import type { GatewayFailure } from "../../model-gateway/effect/failure.ts";
 import type {
   AuthInput,
@@ -210,6 +211,33 @@ export type SkillResolverPort = {
 export class SkillResolver extends Context.Service<SkillResolver, SkillResolverPort>()(
   "runs/SkillResolver",
 ) {}
+
+// Skill projection: the sibling, consumer-owned port the CLI (claude-code) path
+// uses to copy bound skills into a Hive-owned `--add-dir` location (C3 / ADR-0016
+// "projecting spawn"). Deliberately separate from SkillResolverPort — that port
+// stays shaped to the native N3 path (name/description/body) and never exposes
+// file-system concerns. This one exposes `path` (the skill's SKILL.md, whose
+// containing dir is copied) + `origin` (carried for future workplace-scoping).
+// Misses are simply absent from the array (the underlying resolver drops +
+// trace-logs them).
+export type ProjectableSkill = { name: string; path: string; origin: Origin };
+export type SkillProjectionPort = {
+  resolve(boundNames: readonly string[]): ProjectableSkill[];
+};
+export class SkillProjection extends Context.Service<SkillProjection, SkillProjectionPort>()(
+  "runs/SkillProjection",
+) {}
+
+// FS copy: the single I/O edge the CLI skill projector copies skill DIRECTORIES
+// through (recursive dir copy + best-effort recursive remove for cleanup).
+// Separate from FsRunnerPort, whose file-level read/write/exists verbs don't
+// cover `cp -r`. Plain async at the true external boundary (node:fs/promises),
+// injectable so the projector test stubs it.
+export type FsCopyPort = {
+  copy(src: string, dest: string): Promise<void>;
+  remove(target: string): Promise<void>;
+};
+export class FsCopy extends Context.Service<FsCopy, FsCopyPort>()("runs/FsCopy") {}
 
 // Runs store: the lifecycle verbs the executor records through.
 export type RunsStorePort = {
