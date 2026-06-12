@@ -79,11 +79,16 @@ export type ThreadsStore = {
    * Set a thread's conversation-scope model/effort pick (ADR-0015 S1). A field
    * present in the patch is written (a `null` clears it); an OMITTED field is
    * left unchanged — so the two axes stay independent (setting one never
-   * clobbers the other). A symbolic token ("latest"/"highest") is accepted; the
-   * resolver concretizes it at Run start. Audit-first: emits `thread.scope_set`
-   * (carrying the touched axes) BEFORE the write (ADR-0004). Does NOT bump
-   * `updatedAt` (a metadata edit, not a message). No-op on a missing thread.
-   * A no-op patch (neither field present) is rejected as a caller bug.
+   * clobbers the other). Audit-first: emits `thread.scope_set` (carrying the
+   * touched axes) BEFORE the write (ADR-0004). Does NOT bump `updatedAt` (a
+   * metadata edit, not a message). No-op on a missing thread. A no-op patch
+   * (neither field present) is rejected as a caller bug.
+   *
+   * The patch values are deliberately raw `string | null`, NOT narrowed to a
+   * `ModelDefault | EffortDefault` (ADR-0015 §"Stored conversation-scope values
+   * are open strings"): the store accepts a concrete value OR a symbolic token
+   * ("latest"/"highest") verbatim. The resolver at Run start is the SINGLE
+   * concretization point and fails soft — the store never classifies.
    */
   setScope(
     threadId: string,

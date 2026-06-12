@@ -36,8 +36,11 @@ export const threads = sqliteTable("threads", {
   last_read_at: integer("last_read_at"),
   archived_at: integer("archived_at"),
   // Per-Thread (conversation-scope) model/effort pick (ADR-0015 S1). NULL =
-  // unset (fall through to the agent default). May hold a symbolic token
-  // ("latest"/"highest"); the executor's resolver concretizes it at Run start.
+  // unset (fall through to the agent default). Deliberately OPEN `text` columns
+  // (ADR-0015 §"Stored conversation-scope values are open strings"): a concrete
+  // `provider/model` or effort level, OR a symbolic token ("latest"/"highest").
+  // Not narrowed here — the executor's resolver is the SINGLE concretization
+  // point at Run start and fails soft.
   model_pref: text("model_pref"),
   effort_pref: text("effort_pref"),
 });
