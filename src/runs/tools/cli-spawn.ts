@@ -10,26 +10,21 @@
 // draining it to one string, and exposes the exit as a separate Promise. The
 // probe folds the whole lifecycle into one resolved value because it is
 // short-lived; a CLI Run's consumer (C2b) maps stdout to RunEvents as it
-// arrives. Deliberately NO 64 KiB cap on stdout (unlike run-shell, which returns
-// one bounded string): a stream's purpose is unbounded incremental delivery; the
-// consumer bounds what it forwards.
+// arrives.
 //
-// stderr is exposed symmetric with stdout but ACTIVELY DRAINED here (a
-// background pump) so a full stderr pipe never blocks the child — the
-// >64 KiB-stderr deadlock — no matter when the consumer reads it. C2b iterates
-// the exposed stderr to route diagnostics. `stderr:"ignore"` is NOT used.
-//
-// The RETAINED stderr is bounded to a ~64 Ki UTF-16-code-unit HEAD+TAIL window
-// (not a hard byte ceiling — String.length/.slice, the run-shell stance): the
-// first 32 Ki units + a dropped-middle marker + the last 32 Ki units. For
-// multibyte stderr the retained string is up to ~2x that figure in bytes; the
-// marker (~38 chars) is additive on top. Bounded by a small constant factor is
-// all the "can't OOM the daemon" argument needs — it rests on boundedness, not
-// on a literal byte count. Plain head-only truncate (run-shell) would discard
-// the tail, where the actual error usually is. The bound is on RETAINED content,
-// NOT CONSUMED content: the pump keeps reading-and-discarding past the cap so the
-// child never blocks on a full pipe — the eager-drain that fixes the deadlock
-// stays intact.
+// Stream contract:
+// - stdout: a LAZY, consumer-driven live stream (`decodeReader`). Iteration
+//   drives the read; no cap — a stream's purpose is unbounded incremental
+//   delivery, and the consumer bounds what it forwards.
+// - stderr: an adapter-PUMPED live stream that never clogs the child and retains
+//   nothing. A background pump ALWAYS reads stderr to completion (so the OS pipe
+//   can't fill and deadlock the >64 KiB-stderr child), forwarding each decoded
+//   chunk through a small bounded handoff to the exposed iterable. A consumer
+//   keeping up gets every chunk live; a stalled/absent consumer doesn't stop the
+//   pump — chunks that don't fit the handoff are DROPPED (discard-unconsumed),
+//   so memory stays flat regardless of total stderr volume. The SINK for stderr
+//   diagnostics (Trace, disk, or a bounded tail for a `run.failed` message) is
+//   the consumer's (C2b's) feature-driven choice, deferred to C2b.
 
 import type { ReadableStreamDefaultReader } from "node:stream/web";
 import type { CliSpawnerPort, CliSpawnInput, CliSpawnResult } from "../effect/ports.ts";
@@ -38,6 +33,11 @@ import type { CliSpawnerPort, CliSpawnInput, CliSpawnResult } from "../effect/po
 // `node:stream/web` flavor (not the lib global, which has an incompatible BYOB
 // `read()` overload).
 type ByteReader = ReadableStreamDefaultReader<Uint8Array<ArrayBuffer>>;
+
+// Capacity of the pump→consumer handoff. A handful of chunks: enough slack to
+// stay faithful when the consumer keeps pace, small enough that a stalled
+// consumer drops rather than accumulates (memory O(1), independent of volume).
+const STDERR_HANDOFF_CAP = 8;
 
 // Decode a Uint8Array stream reader to a string AsyncIterable, holding multibyte
 // chars that straddle a chunk boundary via TextDecoder({stream:true}) + a final
@@ -60,44 +60,39 @@ async function* decodeReader(reader: ByteReader): AsyncIterable<string> {
   }
 }
 
-// Retained-stderr bound: 64 KiB total, split as a 32 KiB head + 32 KiB tail
-// window. Measured in UTF-16 code units (String.length/.slice), mirroring
-// run-shell's MAX_STREAM_CHARS stance.
-const STDERR_HALF_CAP = 32 * 1024;
-const STDERR_DROPPED_MARKER = "\n…(stderr truncated; middle dropped)…\n";
-
-// Head+tail accumulator: keeps the first STDERR_HALF_CAP chars and a rolling
-// last STDERR_HALF_CAP chars, dropping the middle. Bounds RETAINED chars only —
-// the caller keeps feeding (and the pump keeps reading) past the cap so the
-// child never blocks on a full pipe. `finalize` joins head + marker + tail only
-// when the middle was actually dropped; otherwise returns the intact content.
-function createHeadTailBuffer() {
-  let head = "";
-  let tail = "";
-  let dropped = false;
+// A small bounded handoff between the always-reading stderr pump and the exposed
+// live iterable. `push` never blocks: if the ring is full the chunk is dropped
+// (consumer can't keep up — discard-unconsumed, memory stays flat). `drain`
+// yields buffered chunks as they arrive, waking on each push, ending once the
+// pump signals `close`.
+function createBoundedHandoff() {
+  const ring: string[] = [];
+  let closed = false;
+  let wake: (() => void) | null = null;
   return {
     push(chunk: string): void {
-      if (head.length < STDERR_HALF_CAP) {
-        const room = STDERR_HALF_CAP - head.length;
-        head += chunk.slice(0, room);
-        const overflow = chunk.slice(room);
-        if (overflow.length > 0) appendTail(overflow);
-      } else {
-        appendTail(chunk);
+      if (ring.length >= STDERR_HANDOFF_CAP) return;
+      ring.push(chunk);
+      wake?.();
+    },
+    close(): void {
+      closed = true;
+      wake?.();
+    },
+    async *drain(): AsyncIterable<string> {
+      while (true) {
+        if (ring.length > 0) {
+          yield ring.shift() as string;
+          continue;
+        }
+        if (closed) return;
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+        wake = null;
       }
     },
-    finalize(): string {
-      if (!dropped) return head + tail;
-      return head + STDERR_DROPPED_MARKER + tail;
-    },
   };
-  function appendTail(chunk: string): void {
-    tail += chunk;
-    if (tail.length > STDERR_HALF_CAP) {
-      dropped = true;
-      tail = tail.slice(tail.length - STDERR_HALF_CAP);
-    }
-  }
 }
 
 export function createDefaultCliSpawner(): CliSpawnerPort {
@@ -151,26 +146,25 @@ export function createDefaultCliSpawner(): CliSpawnerPort {
         signal?.addEventListener("abort", kill);
       }
 
-      // Drain stderr eagerly so a full stderr pipe can't block the child while
-      // the consumer is busy with stdout. RETAINED stderr is bounded to a 64 KiB
-      // head+tail window (see createHeadTailBuffer); the pump keeps reading past
-      // the cap (reading-and-discarding the dropped middle) so draining — and
-      // thus the deadlock fix — is independent of the cap. The exposed `stderr`
-      // iterable replays the bounded content once draining completes.
-      const stderrBuffer = createHeadTailBuffer();
-      const stderrDrained = (async () => {
-        for await (const chunk of decodeReader(stderrReader)) stderrBuffer.push(chunk);
+      // stderr pump: ALWAYS read stderr to completion so a full stderr pipe can
+      // never block the child (the >64 KiB-stderr deadlock), regardless of
+      // when/whether the consumer iterates. Each decoded chunk is offered to the
+      // bounded handoff — delivered live if the consumer keeps pace, dropped if
+      // it doesn't (no retention). `close` ends the exposed iterable once stderr
+      // is drained.
+      const stderrHandoff = createBoundedHandoff();
+      (async () => {
+        try {
+          for await (const chunk of decodeReader(stderrReader)) stderrHandoff.push(chunk);
+        } finally {
+          stderrHandoff.close();
+        }
       })().catch(() => {});
-      async function* stderrReplay(): AsyncIterable<string> {
-        await stderrDrained;
-        const retained = stderrBuffer.finalize();
-        if (retained.length > 0) yield retained;
-      }
 
       return {
         kind: "spawned",
         stdout: decodeReader(stdoutReader),
-        stderr: stderrReplay(),
+        stderr: stderrHandoff.drain(),
         exit: proc.exited.then((exitCode) => ({ exitCode })),
       };
     },

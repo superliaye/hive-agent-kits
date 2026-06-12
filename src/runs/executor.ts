@@ -60,7 +60,6 @@ import type {
 import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
 import { type EffortDefault, isSymbolicEffort, isThinkingEffort } from "./symbolic.ts";
-import { createDefaultCliSpawner } from "./tools/cli-spawn.ts";
 import { createDefaultFsRunner } from "./tools/file-tools.ts";
 import { LOAD_SKILL_TOOL_NAME } from "./tools/names.ts";
 import {
@@ -184,10 +183,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     snapshot: () => ({ models: [] }),
   };
   const shell: ShellRunnerPort = deps.shell ?? createDefaultShellRunner();
-  // CLI streaming-spawn edge — wired now so the dep is provided once; the
-  // non-native dispatch arm (C2b) consumes it. Not read yet by design.
-  const cliSpawner: CliSpawnerPort = deps.cliSpawner ?? createDefaultCliSpawner();
-  void cliSpawner;
+  // CLI streaming-spawn edge stays an optional dep — NOT instantiated until its
+  // consumer (the non-native dispatch arm, C2b) exists. No eager default here.
   const fs: FsRunnerPort = deps.fs ?? createDefaultFsRunner();
   // No-op resolver when no capabilities are wired: load_skill yields isError,
   // and the Run-start listing is empty (no block injected).

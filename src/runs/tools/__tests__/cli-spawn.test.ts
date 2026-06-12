@@ -85,38 +85,55 @@ describe("createDefaultCliSpawner", () => {
     expect(await result.exit).toEqual({ exitCode: 0 });
   });
 
-  test("large stderr is drained without deadlock and retained as a 64 KiB head+tail window", async () => {
-    // stderr is drained eagerly by the adapter, so a stderr write larger than the
-    // pipe buffer cannot block the child even if the consumer only reads stdout.
-    // The RETAINED stderr is bounded to a 64 KiB head+tail window (first 32 KiB +
-    // dropped-middle marker + last 32 KiB), NOT unbounded accumulation.
+  test("stderr is a live stream — distinct lines arrive as multiple chunks, not one post-exit replay", async () => {
+    // A child emits three distinct stderr lines spaced over time. A promptly
+    // pulling consumer must receive them as they arrive (multiple chunks), not as
+    // a single chunk replayed after the process exits.
     const spawner = createDefaultCliSpawner();
     const result = spawner.spawn({
       command: [
         NODE,
         "-e",
-        // Distinct head/tail sentinels around 2 MiB of filler so we can prove the
-        // head and tail survived and the middle was dropped.
-        "process.stderr.write('HEAD' + 'x'.repeat(2 * 1024 * 1024) + 'TAIL'); process.stdout.write('DONE')",
+        "process.stderr.write('one\\n'); setTimeout(() => { process.stderr.write('two\\n'); setTimeout(() => process.stderr.write('three\\n'), 20); }, 20)",
       ],
       cwd: process.cwd(),
     });
     expect(result.kind).toBe("spawned");
     if (result.kind !== "spawned") return;
-    // Consume only stdout first to prove the child still completes (drain did not
-    // deadlock past the cap).
+
+    const chunks: string[] = [];
+    for await (const chunk of result.stderr) chunks.push(chunk);
+    // Faithful live delivery: every line made it through (consumer kept pace).
+    expect(chunks.join("")).toContain("one");
+    expect(chunks.join("")).toContain("two");
+    expect(chunks.join("")).toContain("three");
+    // Live, not a single post-exit replay: the spaced-out writes arrive as
+    // separate chunks rather than one finalized blob.
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(await result.exit).toEqual({ exitCode: 0 });
+  });
+
+  test("large stderr does not clog the child when the consumer never reads stderr", async () => {
+    // The adapter pump always reads stderr to completion, so a stderr write far
+    // larger than the OS pipe buffer cannot deadlock the child even if the
+    // consumer iterates ONLY stdout (never stderr). Nothing is retained — the
+    // pump drops what the (absent) stderr consumer can't take.
+    const spawner = createDefaultCliSpawner();
+    const result = spawner.spawn({
+      command: [
+        NODE,
+        "-e",
+        "process.stderr.write('x'.repeat(256 * 1024)); process.stdout.write('DONE')",
+      ],
+      cwd: process.cwd(),
+    });
+    expect(result.kind).toBe("spawned");
+    if (result.kind !== "spawned") return;
+    // Consume only stdout. If the pump did not drain stderr, the >pipe-buffer
+    // write would block the child and this would hang.
     const out = await collect(result.stdout);
     expect(out).toContain("DONE");
     expect(await result.exit).toEqual({ exitCode: 0 });
-
-    const err = await collect(result.stderr);
-    // Bounded: total retained ≤ 64 KiB (head 32 KiB + marker + tail 32 KiB), far
-    // below the 2 MiB written.
-    expect(err.length).toBeLessThanOrEqual(64 * 1024 + 64);
-    // Head survived, tail survived, middle was dropped via the marker.
-    expect(err.startsWith("HEAD")).toBe(true);
-    expect(err.endsWith("TAIL")).toBe(true);
-    expect(err).toContain("truncated");
   });
 
   test("large stdin to a child that exits without reading does not crash", async () => {
