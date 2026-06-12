@@ -18,6 +18,14 @@
 // background pump) so a full stderr pipe never blocks the child — the
 // >64 KiB-stderr deadlock — no matter when the consumer reads it. C2b iterates
 // the exposed stderr to route diagnostics. `stderr:"ignore"` is NOT used.
+//
+// The RETAINED stderr is bounded at 64 KiB (can't OOM the daemon — the
+// run-shell stance) via a HEAD+TAIL window: the first 32 KiB + a dropped-middle
+// marker + the last 32 KiB. Plain head-only truncate (run-shell) would discard
+// the tail, where the actual error usually is. The bound is on RETAINED bytes,
+// NOT CONSUMED bytes: the pump keeps reading-and-discarding past the cap so the
+// child never blocks on a full pipe — the eager-drain that fixes the deadlock
+// stays intact.
 
 import type { ReadableStreamDefaultReader } from "node:stream/web";
 import type { CliSpawnerPort, CliSpawnInput, CliSpawnResult } from "../effect/ports.ts";
@@ -45,6 +53,46 @@ async function* decodeReader(reader: ByteReader): AsyncIterable<string> {
     if (tail.length > 0) yield tail;
   } finally {
     reader.releaseLock();
+  }
+}
+
+// Retained-stderr bound: 64 KiB total, split as a 32 KiB head + 32 KiB tail
+// window. Measured in UTF-16 code units (String.length/.slice), mirroring
+// run-shell's MAX_STREAM_CHARS stance.
+const STDERR_HALF_CAP = 32 * 1024;
+const STDERR_DROPPED_MARKER = "\n…(stderr truncated; middle dropped)…\n";
+
+// Head+tail accumulator: keeps the first STDERR_HALF_CAP chars and a rolling
+// last STDERR_HALF_CAP chars, dropping the middle. Bounds RETAINED chars only —
+// the caller keeps feeding (and the pump keeps reading) past the cap so the
+// child never blocks on a full pipe. `finalize` joins head + marker + tail only
+// when the middle was actually dropped; otherwise returns the intact content.
+function createHeadTailBuffer() {
+  let head = "";
+  let tail = "";
+  let dropped = false;
+  return {
+    push(chunk: string): void {
+      if (head.length < STDERR_HALF_CAP) {
+        const room = STDERR_HALF_CAP - head.length;
+        head += chunk.slice(0, room);
+        const overflow = chunk.slice(room);
+        if (overflow.length > 0) appendTail(overflow);
+      } else {
+        appendTail(chunk);
+      }
+    },
+    finalize(): string {
+      if (!dropped) return head + tail;
+      return head + STDERR_DROPPED_MARKER + tail;
+    },
+  };
+  function appendTail(chunk: string): void {
+    tail += chunk;
+    if (tail.length > STDERR_HALF_CAP) {
+      dropped = true;
+      tail = tail.slice(tail.length - STDERR_HALF_CAP);
+    }
   }
 }
 
@@ -99,17 +147,20 @@ export function createDefaultCliSpawner(): CliSpawnerPort {
         signal?.addEventListener("abort", kill);
       }
 
-      // Drain stderr eagerly into a buffer so a full stderr pipe can't block the
-      // child while the consumer is busy with stdout. The exposed `stderr`
-      // iterable replays the buffered chunks once draining completes — the
-      // consumer still gets a string AsyncIterable, decoded by the same helper.
-      const stderrChunks: string[] = [];
+      // Drain stderr eagerly so a full stderr pipe can't block the child while
+      // the consumer is busy with stdout. RETAINED stderr is bounded to a 64 KiB
+      // head+tail window (see createHeadTailBuffer); the pump keeps reading past
+      // the cap (reading-and-discarding the dropped middle) so draining — and
+      // thus the deadlock fix — is independent of the cap. The exposed `stderr`
+      // iterable replays the bounded content once draining completes.
+      const stderrBuffer = createHeadTailBuffer();
       const stderrDrained = (async () => {
-        for await (const chunk of decodeReader(stderrReader)) stderrChunks.push(chunk);
+        for await (const chunk of decodeReader(stderrReader)) stderrBuffer.push(chunk);
       })().catch(() => {});
       async function* stderrReplay(): AsyncIterable<string> {
         await stderrDrained;
-        for (const chunk of stderrChunks) yield chunk;
+        const retained = stderrBuffer.finalize();
+        if (retained.length > 0) yield retained;
       }
 
       return {
