@@ -4,8 +4,10 @@ import type { AvailableModel } from "../../model-gateway/types.ts";
 import {
   isSymbolicEffort,
   isSymbolicModel,
+  PROVIDER_PREFERENCE,
   resolveHighestEffort,
   resolveLatestModel,
+  runnableCatalog,
 } from "../symbolic.ts";
 
 function model(id: string, efforts: AvailableModel["efforts"] = ["off"]): AvailableModel {
@@ -55,6 +57,54 @@ describe('resolveLatestModel — "latest" picks the top of the runnable catalog'
 
   test("undefined when the runnable catalog is empty", () => {
     expect(resolveLatestModel({ models: [] })).toBeUndefined();
+  });
+});
+
+describe("runnableCatalog — single shared credentialed ∩ routable + ordered helper", () => {
+  function gateway(byProvider: Record<string, AvailableModel[]>) {
+    return { listModels: (p: string) => byProvider[p] ?? [] };
+  }
+
+  test("intersects credentialed with routable (a credentialed-but-unroutable provider drops out)", () => {
+    const secrets = { list: () => [{ provider: "anthropic" }, { provider: "not-routable" }] };
+    const gw = gateway({ anthropic: [model("anthropic/claude-opus-4-7")] });
+    const cat = runnableCatalog(secrets, gw);
+    expect(cat.models.map((m) => m.model)).toEqual(["anthropic/claude-opus-4-7"]);
+  });
+
+  test("orders WITHIN a provider by recency and ACROSS providers by PROVIDER_PREFERENCE (not lexical)", () => {
+    // openai-codex listed FIRST in secrets, but anthropic outranks it by
+    // PROVIDER_PREFERENCE, so anthropic's models come first regardless of id.
+    const secrets = { list: () => [{ provider: "openai-codex" }, { provider: "anthropic" }] };
+    const gw = gateway({
+      "openai-codex": [model("openai-codex/gpt-5.9"), model("openai-codex/gpt-5.10")],
+      anthropic: [model("anthropic/claude-opus-4-7")],
+    });
+    const cat = runnableCatalog(secrets, gw);
+    expect(cat.models.map((m) => m.model)).toEqual([
+      "anthropic/claude-opus-4-7",
+      "openai-codex/gpt-5.10",
+      "openai-codex/gpt-5.9",
+    ]);
+  });
+
+  test("with only openai-codex credentialed, latest is its newest (finding #3 case)", () => {
+    const secrets = { list: () => [{ provider: "openai-codex" }] };
+    const gw = gateway({
+      "openai-codex": [model("openai-codex/gpt-5.4-mini"), model("openai-codex/gpt-5.10")],
+    });
+    const cat = runnableCatalog(secrets, gw);
+    expect(resolveLatestModel(cat)?.model).toBe("openai-codex/gpt-5.10");
+  });
+
+  test("empty when nothing is credentialed", () => {
+    expect(runnableCatalog({ list: () => [] }, gateway({})).models).toEqual([]);
+  });
+
+  test("PROVIDER_PREFERENCE prefers anthropic over openai-codex", () => {
+    expect(PROVIDER_PREFERENCE.indexOf("anthropic")).toBeLessThan(
+      PROVIDER_PREFERENCE.indexOf("openai-codex"),
+    );
   });
 });
 

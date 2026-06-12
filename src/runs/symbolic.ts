@@ -19,6 +19,7 @@
 // tiers — never as a per-Run override (ADR-0015: an override is always
 // concrete). The HTTP boundary enforces that (server/types.ts).
 
+import { orderByRecency } from "../model-gateway/index.ts";
 import type { AvailableModel, ThinkingEffort } from "../model-gateway/types.ts";
 import { EFFORT_ORDER } from "../model-gateway/types.ts";
 
@@ -50,6 +51,47 @@ export type RunnableCatalog = {
 // typed failure (no runnable model to resolve a symbolic default to).
 export function resolveLatestModel(catalog: RunnableCatalog): AvailableModel | undefined {
   return catalog.models[0];
+}
+
+// Cross-provider winner ordering for the runnable catalog. Within a provider,
+// recency (`orderByRecency`) decides; ACROSS providers the catalog is laid out
+// in this fixed preference order — NOT a lexical cross-provider id sort (which
+// would let an "openai-codex/gpt-9" outrank an "anthropic/claude-opus" purely on
+// the id string). A symbolic "latest" therefore prefers the strongest provider
+// that is actually credentialed: anthropic when present, else openai-codex.
+// Providers absent from this list sort after the listed ones (stable, in their
+// incoming order). Seeded per ADR-0015; extend as providers are added.
+export const PROVIDER_PREFERENCE: readonly string[] = ["anthropic", "openai-codex"];
+
+// Narrow, consumer-owned ports for the shared catalog builder — only the two
+// verbs it reads. The composition root passes the real Secrets / ModelGateway;
+// the gateway never learns about secrets (the intersection is computed HERE,
+// not inside the gateway — P2).
+export type RunnableCatalogSecretsPort = {
+  list(): ReadonlyArray<{ provider: string }>;
+};
+export type RunnableCatalogGatewayPort = {
+  listModels(provider: string): AvailableModel[];
+};
+
+// The SINGLE place the runnable catalog is assembled (P2): credentialed
+// (`secrets.list`) ∩ routable (`gateway.listModels`), ordered newest-first
+// WITHIN each provider (`orderByRecency`) and laid out ACROSS providers by
+// `PROVIDER_PREFERENCE`. Every consumer (the executor's RunnableCatalogPort, the
+// title-gen path, and `GET /api/models`) goes through this so "latest" and the
+// picker's data source are the same globally-ordered list.
+export function runnableCatalog(
+  secrets: RunnableCatalogSecretsPort,
+  gateway: RunnableCatalogGatewayPort,
+): RunnableCatalog {
+  const credentialed = secrets.list().map((p) => p.provider);
+  const rank = (provider: string) => {
+    const i = PROVIDER_PREFERENCE.indexOf(provider);
+    return i === -1 ? PROVIDER_PREFERENCE.length : i;
+  };
+  const ordered = [...credentialed].sort((a, b) => rank(a) - rank(b));
+  const models = ordered.flatMap((provider) => orderByRecency(gateway.listModels(provider)));
+  return { models };
 }
 
 // "highest" → the strongest supported level in `efforts`, ordered by the

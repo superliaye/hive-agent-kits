@@ -25,4 +25,5 @@ export { resolveAgentModel } from "./resolve-model.ts";
 export type { RunsStore } from "./store.ts";
 export { createRunsStore } from "./store.ts";
 export type { RunnableCatalog } from "./symbolic.ts";
+export { PROVIDER_PREFERENCE, runnableCatalog } from "./symbolic.ts";
 export type { PermissionEvents, Run, RunEvent, RunModuleEvents, RunStatus } from "./types.ts";

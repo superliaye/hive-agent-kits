@@ -16,8 +16,8 @@
 
 import { log } from "../lib/log.ts";
 import type { CompletionInput, GatewayEvent } from "../model-gateway/types.ts";
+import type { RunnableCatalogPort } from "../runs/effect/ports.ts";
 import { resolveAgentModel } from "../runs/resolve-model.ts";
-import type { RunnableCatalog } from "../runs/symbolic.ts";
 
 // Fixed instruction. Kept terse — the model summarizes the conversation into a
 // short, plain title with no surrounding quotes or punctuation.
@@ -58,10 +58,9 @@ type AgentModelPrefsPort = {
 // ("latest") the same way the executor does (ADR-0015 S2 guard). Absent ⇒ a
 // symbolic default resolves against an empty catalog → `resolveAgentModel`
 // returns a typed failure → title-gen skips cleanly (no crash, no malformed
-// model call), which is the existing fail-soft behavior.
-type RunnableCatalogPort = {
-  snapshot(): RunnableCatalog;
-};
+// model call), which is the existing fail-soft behavior. Derived from the
+// canonical executor port (P2) — not re-spelled — so the two consumers can never
+// drift on the catalog snapshot contract.
 
 export type MaybeGenerateTitleDeps = {
   threads: ThreadsPort;

@@ -16,8 +16,8 @@ import type { Agent, Catalog } from "../catalog/types.ts";
 import { type AppConfig, AppearanceConfigSchema } from "../config/schema.ts";
 import type { Config } from "../config/types.ts";
 import { CapabilityKind } from "../lib/capability-types.ts";
-import { type ModelGateway, orderByRecency } from "../model-gateway/index.ts";
-import type { RunExecutor } from "../runs/index.ts";
+import type { ModelGateway } from "../model-gateway/index.ts";
+import type { RunExecutor, RunnableCatalogPort } from "../runs/index.ts";
 import type { Run } from "../runs/types.ts";
 import type { Secrets } from "../secrets/index.ts";
 import type { ConfiguredProvider } from "../secrets/types.ts";
@@ -57,6 +57,11 @@ export type RoutesDeps = {
   backendProbe: BackendProbeSvc;
   config: Config<AppConfig>;
   token: string;
+  // The ONE shared runnable-catalog port (P2). Built once at the composition
+  // root and threaded into both the executor and these routes; `GET /api/models`
+  // and the title-gen path read the same globally-ordered catalog `latest`
+  // resolves against.
+  runnableCatalog: RunnableCatalogPort;
 };
 
 function toCapabilityWire(c: Capability): CapabilityWire {
@@ -289,13 +294,14 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     });
   });
 
-  // Models the user can actually run: configured providers (have credentials)
-  // ∩ routable providers (the gateway has an adapter). The picker's data source.
-  // pi-ai stays imported only in its adapter — enumeration goes through the
-  // gateway seam (ADR-0005).
+  // Models the user can actually run: the SINGLE shared runnable catalog (P2) —
+  // configured providers (have credentials) ∩ routable providers (the gateway
+  // has an adapter), globally ordered (recency within a provider, PROVIDER_
+  // PREFERENCE across providers). The picker's data source returns exactly the
+  // catalog symbolic "latest" resolves against. pi-ai stays imported only in its
+  // adapter — enumeration goes through the gateway seam (ADR-0005).
   app.get("/api/models", (c) => {
-    const models = deps.secrets.list().flatMap((p) => deps.gateway.listModels(p.provider));
-    return c.json(models);
+    return c.json(deps.runnableCatalog.snapshot().models);
   });
 
   // Audit query — the durable answer to "what just happened" for any client
@@ -523,15 +529,10 @@ export function buildRoutes(deps: RoutesDeps): Hono {
             gateway: deps.gateway,
             secrets: deps.secrets,
             agentModelPrefs: deps.agentModelPrefs,
-            // Same runnable-catalog snapshot the executor uses, so title-gen
-            // resolves a symbolic default ("latest") identically (ADR-0015 S2).
-            runnableCatalog: {
-              snapshot: () => ({
-                models: orderByRecency(
-                  deps.secrets.list().flatMap((p) => deps.gateway.listModels(p.provider)),
-                ),
-              }),
-            },
+            // The ONE shared runnable-catalog port (P2) — the same instance the
+            // executor uses, so title-gen resolves a symbolic default ("latest")
+            // identically (ADR-0015 S2).
+            runnableCatalog: deps.runnableCatalog,
           },
           threadId,
         ).catch(() => {});
