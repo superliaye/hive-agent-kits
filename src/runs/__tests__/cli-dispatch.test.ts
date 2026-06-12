@@ -28,6 +28,7 @@ import type {
   FsCopyPort,
   ProjectableSkill,
   SkillProjectionPort,
+  SkillResolverPort,
 } from "../effect/ports.ts";
 import { createRunExecutor, type RunExecutor } from "../executor.ts";
 import { createRunsStore } from "../store.ts";
@@ -173,6 +174,7 @@ async function setup(opts: {
   agent?: Partial<Agent>;
   skillProjection?: SkillProjectionPort;
   fsCopy?: FsCopyPort;
+  skillResolver?: SkillResolverPort;
 }): Promise<Harness> {
   const db = openHiveDb(":memory:");
   const threads = createThreadsStore(db);
@@ -190,6 +192,7 @@ async function setup(opts: {
     ...(opts.cliSpawner ? { cliSpawner: opts.cliSpawner } : {}),
     ...(opts.skillProjection ? { skillProjection: opts.skillProjection } : {}),
     ...(opts.fsCopy ? { fsCopy: opts.fsCopy } : {}),
+    ...(opts.skillResolver ? { skillResolver: opts.skillResolver } : {}),
   });
   const threadId = threads.create({ agentId: agent.agentId }).id;
   return { threads, executor, threadId };
@@ -354,6 +357,75 @@ describe("cli-dispatch — codex arm", () => {
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
     expect(fake.lastInput()?.command).toEqual(["codex", "exec", "--json", "-"]);
     expect(fake.lastInput()?.stdin).toBe("be terse\n\ngo");
+  });
+});
+
+// ─── P1: N3 skill-listing is gated to the NATIVE arm only ────────────────────
+// The CLI path discloses its own skills over the projected `--add-dir`
+// (ADR-0016); Hive runs no N3 disclosure there. So even when an Agent binds BOTH
+// skills AND `load_skill`, the CLI's system prompt must be the authored
+// `promptBody` ALONE — never an N3 "Available skills" listing that names a
+// `load_skill` tool the CLI cannot call.
+describe("cli-dispatch — N3 listing gated to native (P1)", () => {
+  // A resolver that WOULD emit a listing if the CLI arm ever consulted it. The
+  // test proves it does not.
+  const listingResolver: SkillResolverPort = {
+    list: () => [{ name: "research", description: "deep web research" }],
+    load: () => undefined,
+  };
+
+  test("claude-code: system prompt is promptBody ALONE, no N3 listing even with load_skill bound", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "ok" }),
+      exitCode: 0,
+    });
+    const { executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      skillResolver: listingResolver,
+      agent: {
+        backend: "claude-code",
+        bindings: { skills: ["research"], snippets: [], tools: ["load_skill"], mcp: [] },
+        promptBody: "be terse",
+      },
+    });
+
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+
+    const cmd = fake.lastInput()?.command ?? [];
+    const apsIdx = cmd.indexOf("--append-system-prompt");
+    expect(apsIdx).toBeGreaterThan(-1);
+    // promptBody rides through verbatim — and ONLY promptBody.
+    expect(cmd[apsIdx + 1]).toBe("be terse");
+    // No N3 listing leaked: neither the "Available skills" header nor the
+    // uncallable `load_skill` advertisement.
+    expect(cmd[apsIdx + 1]).not.toContain("Available skills");
+    expect(cmd[apsIdx + 1]).not.toContain("load_skill");
+    expect(cmd[apsIdx + 1]).not.toContain("deep web research");
+  });
+
+  test("codex: stdin carries promptBody ALONE, no N3 listing even with load_skill bound", async () => {
+    const fake = makeFakeSpawner({
+      stdout: codexJsonl({ threadId: "thr-1", text: "done" }),
+      exitCode: 0,
+    });
+    const { executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      skillResolver: listingResolver,
+      agent: {
+        backend: "codex",
+        bindings: { skills: ["research"], snippets: [], tools: ["load_skill"], mcp: [] },
+        promptBody: "be terse",
+      },
+    });
+
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
+
+    // codex folds the system prompt into stdin (promptBody\n\nuserMessage). The
+    // listing must not appear anywhere in it.
+    const stdin = fake.lastInput()?.stdin ?? "";
+    expect(stdin).toBe("be terse\n\ngo");
+    expect(stdin).not.toContain("Available skills");
+    expect(stdin).not.toContain("load_skill");
   });
 });
 

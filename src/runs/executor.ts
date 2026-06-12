@@ -381,27 +381,31 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       inflight.set(run.id, { threadId, controller });
       yield { type: "run.started", runId: run.id, threadId, agentId, model, ts: now() };
 
-      // Progressive disclosure (N3): surface one-line descriptions of the
-      // Agent's bound skills at Run start (CONTEXT.md). The model then decides
-      // when to `load_skill`. Misses are non-fatal (F2 trace-logs them); no
-      // bound/resolvable skills ⇒ no block injected.
-      //
-      // The listing is suppressed unless `load_skill` is among the Agent's
-      // bound tools: advertising skill one-liners while withholding the tool
-      // that loads them would name an uncallable tool. Both conditions (skills
-      // bound AND load_skill bound) must hold for the block to appear.
       const boundSkills = agent.bindings.skills;
-      const canLoadSkill = agent.bindings.tools.includes(LOAD_SKILL_TOOL_NAME);
-      const skillListing = canLoadSkill ? skillResolver.list(boundSkills) : [];
-      const systemPrompt = buildSystemPrompt(agent.promptBody, skillListing);
       // Tools sent for this Run: registry filtered by the Agent's bound tools.
       const boundTools: ToolDef[] | undefined = toolsForBindings(registry, agent.bindings.tools);
 
       // Seam 3 — backend dispatch. F replaces the non-native arms.
       switch (backend) {
-        case "native":
+        case "native": {
           // auth is set above for the native branch (the gate ran); narrow it.
           if (!auth) throw new Error("runs/executor: native backend reached without auth");
+          // Progressive disclosure (N3) is a NATIVE-loop concern only. Surface
+          // one-line descriptions of the Agent's bound skills at Run start
+          // (CONTEXT.md); the model then decides when to `load_skill`. Misses are
+          // non-fatal (F2 trace-logs them); no bound/resolvable skills ⇒ no block.
+          //
+          // The listing is suppressed unless `load_skill` is among the Agent's
+          // bound tools: advertising skill one-liners while withholding the tool
+          // that loads them would name an uncallable tool. Both conditions (skills
+          // bound AND load_skill bound) must hold for the block to appear.
+          //
+          // The CLI arm never runs this — it discloses its own skills over the
+          // projected `--add-dir` (ADR-0016), so forwarding an N3 listing there
+          // would advertise a `load_skill` tool the CLI cannot call.
+          const canLoadSkill = agent.bindings.tools.includes(LOAD_SKILL_TOOL_NAME);
+          const skillListing = canLoadSkill ? skillResolver.list(boundSkills) : [];
+          const systemPrompt = buildSystemPrompt(agent.promptBody, skillListing);
           yield* runToolLoop({
             runId: run.id,
             threadId,
@@ -416,8 +420,13 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
             maxIterations: capConfig.maxIterations(),
           });
           return;
+        }
         case "claude-code":
-        case "codex":
+        case "codex": {
+          // CLI path uses the authored `promptBody` ALONE — no N3 skill-listing
+          // block. The CLI does its own progressive disclosure over the projected
+          // `--add-dir` skills (ADR-0016: Hive runs no skill disclosure here).
+          const systemPrompt = bareSystemPrompt(agent.promptBody);
           yield* runCliBackend({
             runId: run.id,
             threadId,
@@ -428,6 +437,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
             signal: controller.signal,
           });
           return;
+        }
       }
     } finally {
       threadsWithRun.delete(threadId);
@@ -925,6 +935,14 @@ function buildSystemPrompt(
       : "";
   const parts = [body, listing].filter((p) => p.length > 0);
   return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
+// CLI-path system prompt: the authored body ALONE, no N3 skill-listing (the CLI
+// discloses its own skills over `--add-dir`, ADR-0016). A blank/whitespace body
+// yields undefined, matching `buildSystemPrompt`'s empty-prompt semantics.
+function bareSystemPrompt(promptBody: string): string | undefined {
+  const body = promptBody.trim();
+  return body.length > 0 ? body : undefined;
 }
 
 // Narrow a stored Thread-scope effort (a free `string | null` column) to a
