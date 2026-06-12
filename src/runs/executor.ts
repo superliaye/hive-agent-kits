@@ -598,6 +598,14 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         projectionRoot = runtimePaths.projectedCliRoot(agentId, runId);
         addDir = projectionRoot;
       }
+    } else if (backend === "codex" && args.boundSkills.length > 0) {
+      // codex gets no skill projection in v1 (Q3 — awaits codex's own skills
+      // layout). Trace the silent skip so a user who bound skills to a codex
+      // Worker has a diagnostic signal rather than unexplained non-disclosure.
+      log().debug(
+        { module: "runs/cli", runId, agentId, backend, skillCount: args.boundSkills.length },
+        "codex backend: bound skills not projected (deferred to a later slice)",
+      );
     }
 
     const { command, stdin } = buildCliInvocation(backend, {
