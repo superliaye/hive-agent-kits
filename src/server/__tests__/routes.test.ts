@@ -484,6 +484,21 @@ describe("server routes", () => {
     expect(row?.payload).toMatchObject({ effort: "high" });
   });
 
+  test("a workingDir-only scope write reaches the persisted audit row", async () => {
+    const id = await createThread();
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workingDir: "/some/repo" }),
+      }),
+    );
+    const rows = await server.audit.query({ source: "thread" });
+    const row = rows.find((r) => r.event_type === "thread.scope_set");
+    expect(row).toBeDefined();
+    expect(row?.payload).toMatchObject({ workingDir: "/some/repo" });
+  });
+
   test("PUT /api/threads/:id/scope rejects an empty body with 400", async () => {
     const id = await createThread();
     const res = await server.app.fetch(

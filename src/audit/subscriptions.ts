@@ -160,12 +160,13 @@ const threadsNormalizer: Normalizer<ThreadEvents> = {
   "thread.scope_set": (event) => ({
     event_type: "thread.scope_set",
     agent_id: event.agentId,
-    // model id / effort level are non-secret identifiers (same as
-    // agent_pref.set); carry whichever axes the write touched.
+    // model id / effort level / working-dir path are non-secret identifiers
+    // (same class as agent_pref.set); carry whichever axes the write touched.
     payload: {
       thread_id: event.threadId,
       ...(event.model !== undefined ? { model: event.model } : {}),
       ...(event.effort !== undefined ? { effort: event.effort } : {}),
+      ...(event.workingDir !== undefined ? { workingDir: event.workingDir } : {}),
       ...(event.cleared !== undefined ? { cleared: event.cleared } : {}),
     },
   }),
