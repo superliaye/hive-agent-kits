@@ -611,8 +611,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     }
 
     // Capability projection (C3 / ADR-0016 "projecting spawn"). claude-code only:
-    // copy the Agent's bound skills into a Hive-owned per-Run dir (a sibling of
-    // cwd, never inside it) and add `--add-dir <root>` so the CLI's OWN loader
+    // copy the Agent's bound skills into a Hive-owned per-Run dir under the Hive
+    // runtime tier (`~/.hive/agents/<id>/cli-projection/<runId>`), never inside
+    // the resolved cwd, and add `--add-dir <root>` so the CLI's OWN loader
     // discloses them — Hive runs no N3 disclosure here. Skipped when no
     // projection is wired, the backend isn't claude-code, or no skills are bound.
     // codex gets no skill disclosure in v1 (its prompt rides stdin unchanged).

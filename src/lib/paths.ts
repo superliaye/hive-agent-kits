@@ -73,7 +73,9 @@ export const runtime = {
   // `claude --add-dir`, laid out as `<root>/.claude/skills/<name>/` so
   // claude-code's own loader discloses the projected skills. Keyed by runId so
   // concurrent/sequential Runs never race the same dir and a stale skill from a
-  // prior Run can't linger. A sibling of the workspace cwd, never inside it.
+  // prior Run can't linger. Lives under the Hive runtime tier
+  // (`~/.hive/agents/<id>/cli-projection/<runId>`), never inside the resolved
+  // working directory — so projection can't pollute an arbitrary user repo cwd.
   projectedCliRoot: (id: string, runId: string) =>
     join(runtimeRoot(), "agents", id, "cli-projection", runId),
   projectedCliSkillsDir: (id: string, runId: string) =>
