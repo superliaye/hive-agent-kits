@@ -232,6 +232,35 @@ describe("wireSubscriptions", () => {
     dispose();
   });
 
+  // Guard (ADR-0015 S1 / ADR-0016 C4): the thread.scope_set normalizer must
+  // project EVERY scope axis it carries into the audit row. The store's own
+  // tests cover EMISSION; this pins the AUDIT-NORMALIZER projection so a future
+  // axis added to emission but dropped at the normalizer fails here — the audit
+  // payload is an open Record, so the compiler cannot catch that omission.
+  test("thread.scope_set audits every scope axis (model/effort/workingDir)", async () => {
+    const audit = makeAudit();
+    const db = openHiveDb(":memory:");
+    const threads = createThreadsStore(db);
+    const dispose = wireSubscriptions(audit, { threads });
+
+    const t = threads.create({ agentId: "agent-a" });
+    await threads.setScope(t.id, {
+      model: "anthropic/claude-sonnet-4-6",
+      effort: "high",
+      workingDir: "/some/project",
+    });
+
+    const rows = await audit.query({ source: "thread" });
+    const row = rows.find((r) => r.event_type === "thread.scope_set");
+    expect(row?.payload).toMatchObject({
+      model: "anthropic/claude-sonnet-4-6",
+      effort: "high",
+      workingDir: "/some/project",
+    });
+
+    dispose();
+  });
+
   // F1: tool-use rows land on the `run` source; permission decisions on the
   // dedicated `permission` source (Q4) — both via wireSubscriptions, through
   // the executor's two emitters, with redaction (no raw args, no stdout).
