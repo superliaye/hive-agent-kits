@@ -46,6 +46,7 @@ import type {
   AgentModelPrefsPort,
   CapConfigPort,
   CatalogPort,
+  CliSpawnerPort,
   CompletionPort,
   FsRunnerPort,
   PermissionPort,
@@ -59,6 +60,7 @@ import type {
 import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
 import { type EffortDefault, isSymbolicEffort, isThinkingEffort } from "./symbolic.ts";
+import { createDefaultCliSpawner } from "./tools/cli-spawn.ts";
 import { createDefaultFsRunner } from "./tools/file-tools.ts";
 import { LOAD_SKILL_TOOL_NAME } from "./tools/names.ts";
 import {
@@ -151,6 +153,12 @@ export type CreateRunExecutorDeps = {
   permission?: PermissionPort;
   /** run_shell I/O edge. Default: node:child_process. */
   shell?: ShellRunnerPort;
+  /**
+   * CLI streaming-spawn I/O edge — the seam the non-native (CLI-backed) dispatch
+   * arm spawns through. Default: Bun.spawn. Optional and not yet consumed here;
+   * `cli-dispatch-arm` (C2b) reads it.
+   */
+  cliSpawner?: CliSpawnerPort;
   /** File-tools I/O edge (read/write/edit). Default: node:fs/promises. */
   fs?: FsRunnerPort;
   /**
@@ -176,6 +184,10 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     snapshot: () => ({ models: [] }),
   };
   const shell: ShellRunnerPort = deps.shell ?? createDefaultShellRunner();
+  // CLI streaming-spawn edge — wired now so the dep is provided once; the
+  // non-native dispatch arm (C2b) consumes it. Not read yet by design.
+  const cliSpawner: CliSpawnerPort = deps.cliSpawner ?? createDefaultCliSpawner();
+  void cliSpawner;
   const fs: FsRunnerPort = deps.fs ?? createDefaultFsRunner();
   // No-op resolver when no capabilities are wired: load_skill yields isError,
   // and the Run-start listing is empty (no block injected).

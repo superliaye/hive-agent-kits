@@ -11,6 +11,9 @@
 
 export { MODEL_FALLBACK } from "./defaults.ts";
 export type {
+  CliSpawnerPort,
+  CliSpawnInput,
+  CliSpawnResult,
   FsRunnerPort,
   RunnableCatalogPort,
   SkillListing,

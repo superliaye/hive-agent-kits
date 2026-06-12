@@ -144,6 +144,28 @@ export type FsRunnerPort = {
 };
 export class FsRunner extends Context.Service<FsRunner, FsRunnerPort>()("runs/FsRunner") {}
 
+// CLI streaming-spawn: the I/O edge a long-lived CLI backend (claude/codex)
+// spawns through. SHAPE deliberately aligned with C1's CommandRunner
+// (`src/backend-probe/probe.ts`): a string-vector command (`shell:false`), a
+// typed non-throwing spawn failure (`spawn_failed`, ENOENT as a value). Unlike
+// the short-lived probe it streams stdout incrementally and exposes the exit as
+// a separate Promise — a single resolved value can't say "stream now, exit
+// later". No `timeoutMs`: a long-lived stream has no single budget; the consumer
+// owns cancellation via `signal` (an aborted stream ends with a killed exit).
+export type CliSpawnInput = {
+  command: readonly string[];
+  cwd: string;
+  signal?: AbortSignal;
+  stdin?: string;
+};
+export type CliSpawnResult =
+  | { kind: "spawned"; stdout: AsyncIterable<string>; exit: Promise<{ exitCode: number }> }
+  | { kind: "spawn_failed"; message: string };
+export type CliSpawnerPort = {
+  spawn(input: CliSpawnInput): CliSpawnResult;
+};
+export class CliSpawner extends Context.Service<CliSpawner, CliSpawnerPort>()("runs/CliSpawner") {}
+
 // Skill resolver: the narrow, consumer-owned port `load_skill` + the Run-start
 // progressive-disclosure listing read. Shaped to the runs consumer — it never
 // imports capabilities concretes. The composition root adapts the F2
