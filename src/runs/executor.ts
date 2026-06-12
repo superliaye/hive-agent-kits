@@ -271,16 +271,21 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const { model } = resolved;
 
       if ("failure" in resolved) {
-        // resolved.failure.code/.message is deliberately reserved for the E
-        // (selection) lane to thread through; today the only failure source is
-        // the malformed-model parse, so we hardcode invalid_request here.
+        // Thread the resolver's typed failure verbatim (P1). It already carries
+        // the accurate GatewayErrorCode + message: `invalid_request` for a
+        // malformed-model parse, `model_not_found` for a symbolic "latest" that
+        // has no runnable (credentialed ∩ routable) model to resolve to. Both
+        // are GatewayErrorCodes already flowing through run.failed, so no cast.
+        // Previously this arm hardcoded `invalid_request` / "malformed model",
+        // mislabeling the zero-credentials case (E3 made root's config.model the
+        // symbolic "latest").
         const run = runs.create({ threadId, agentId, model });
         yield await emitFailed(
           run.id,
           threadId,
           agentId,
-          "invalid_request",
-          `agent ${agentId} has malformed model: ${JSON.stringify(model)}`,
+          resolved.failure.code,
+          resolved.failure.message,
         );
         return;
       }

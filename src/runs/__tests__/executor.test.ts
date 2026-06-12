@@ -634,6 +634,27 @@ describe("RunExecutor — typed gateway failures", () => {
       expect(failed.error.code).toBe("model_not_found");
     }
   });
+
+  test("symbolic 'latest' with no runnable catalog → run.failed carries the resolver's model_not_found code+message verbatim (P1), not a hardcoded malformed-model invalid_request", async () => {
+    // Agent's harness config.model is the symbolic "latest" (the E3 root case);
+    // no runnableCatalog is wired (empty snapshot ⇒ nothing to resolve to). The
+    // resolver returns a typed model_not_found; the executor must thread it
+    // through verbatim rather than relabeling it "invalid_request / malformed".
+    const { executor, threadId } = await setup({
+      fixtures: { "anthropic/claude-haiku-4-5": [{ type: "done", finishReason: "stop" }] },
+      agents: [makeAgent({ agentId: "test-agent", config: { model: "latest" } })],
+    });
+    const events = await collect(
+      executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }),
+    );
+    const failed = events.find((e) => e.type === "run.failed");
+    expect(failed).toBeDefined();
+    if (failed?.type === "run.failed") {
+      expect(failed.error.code).toBe("model_not_found");
+      expect(failed.error.message).toContain("no credentialed, routable provider is configured");
+      expect(failed.error.message).not.toContain("malformed model");
+    }
+  });
 });
 
 // ─── concurrency + cancellation ─────────────────────────────────────────────
