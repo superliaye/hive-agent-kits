@@ -245,7 +245,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     return { type: "run.cancelled", runId, ts: now() };
   }
 
-  async function emitFailed(
+  async function finalizeFailed(
     runId: string,
     threadId: string,
     agentId: string,
@@ -283,7 +283,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
           agentId,
           model: modelOverride ?? prefs.getModel(agentId) ?? MODEL_FALLBACK,
         });
-        yield await emitFailed(
+        yield await finalizeFailed(
           run.id,
           threadId,
           agentId,
@@ -326,7 +326,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         // mislabeling the zero-credentials case (E3 made root's config.model the
         // symbolic "latest").
         const run = runs.create({ threadId, agentId, model });
-        yield await emitFailed(
+        yield await finalizeFailed(
           run.id,
           threadId,
           agentId,
@@ -341,7 +341,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const auth = await secrets.getAuth(provider);
       if (!auth) {
         const run = runs.create({ threadId, agentId, model });
-        yield await emitFailed(
+        yield await finalizeFailed(
           run.id,
           threadId,
           agentId,
@@ -354,7 +354,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // Append the user message FIRST so on-disk history matches what we send.
       threads.append({ threadId, role: "user", content: userMessage });
 
-      // Insert the Run row, emit run.started (audit-first — see emitFailed note).
+      // Insert the Run row, emit run.started (audit-first — see finalizeFailed note).
       const runId = crypto.randomUUID();
       await events.emit("run.started", { runId, threadId, agentId, model });
       const run = runs.create({ id: runId, threadId, agentId, model });
@@ -465,7 +465,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         return;
       }
       if (outcome.kind === "error") {
-        yield await emitFailed(runId, threadId, agentId, outcome.code, outcome.message);
+        yield await finalizeFailed(runId, threadId, agentId, outcome.code, outcome.message);
         return;
       }
 
@@ -570,7 +570,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
     if (spawned.kind === "spawn_failed") {
       // ENOENT / binary-missing — a request-side problem, not a gateway error.
-      yield await emitFailed(
+      yield await finalizeFailed(
         runId,
         threadId,
         agentId,
@@ -614,7 +614,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     }
 
     if (exitCode !== 0) {
-      yield await emitFailed(
+      yield await finalizeFailed(
         runId,
         threadId,
         agentId,

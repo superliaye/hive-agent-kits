@@ -180,7 +180,7 @@ describe("cli-dispatch — happy path", () => {
     expect(assistant?.content).toEqual([{ type: "text", text: "hello" }]);
   });
 
-  test("the spawner is reached (not the old emitFailed arm)", async () => {
+  test("the spawner is reached (not the old finalizeFailed arm)", async () => {
     const fake = makeFakeSpawner({ stdout: ["ok"], exitCode: 0 });
     const { executor, threadId } = await setup({ cliSpawner: fake.spawner });
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));

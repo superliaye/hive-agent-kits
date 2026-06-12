@@ -333,7 +333,7 @@ describe("RunExecutor — failure paths", () => {
   });
 
   // run.failed differs: the gateway-error path runs runs.create BEFORE
-  // emitFailed, so a Run row exists in `running` when the emit throws. Per the
+  // finalizeFailed, so a Run row exists in `running` when the emit throws. Per the
   // plan's Tests §caveat that is the acceptable over-record (ADR-0004:172-174) —
   // this test asserts block-on-failure + that the row stays `running` (the emit
   // precedes runs.fail), NOT row-absence.
