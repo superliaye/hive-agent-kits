@@ -215,6 +215,36 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   const inflight = new Map<string, { threadId: string; controller: AbortController }>();
   const threadsWithRun = new Set<string>();
 
+  // The Run-finalize protocol lives behind these three verbs (one per terminal
+  // outcome): emit the audit event BEFORE the store mutation (ADR-0004 §Failure
+  // semantics — a persist failure must fail the originating op), mutate the
+  // store, then return the matching RunEvent to yield. Every backend (native
+  // tool-loop, CLI, and future seam-3 arms) finalizes through these so the
+  // audit-first ordering, the RunEvent shape, and the FinishReason convention
+  // have one home and one test surface.
+
+  async function finalizeCompleted(
+    runId: string,
+    threadId: string,
+    agentId: string,
+    finishReason: FinishReason,
+    finalMessage: ThreadMessage,
+  ): Promise<RunEvent> {
+    await events.emit("run.completed", { runId, threadId, agentId, finishReason });
+    runs.complete({ runId, finishReason });
+    return { type: "run.completed", runId, finishReason, finalMessage, ts: now() };
+  }
+
+  async function finalizeCancelled(
+    runId: string,
+    threadId: string,
+    agentId: string,
+  ): Promise<RunEvent> {
+    await events.emit("run.cancelled", { runId, threadId, agentId });
+    runs.cancel(runId);
+    return { type: "run.cancelled", runId, ts: now() };
+  }
+
   async function emitFailed(
     runId: string,
     threadId: string,
@@ -222,9 +252,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     code: NonNullable<Run["errorCode"]>,
     message: string,
   ): Promise<RunEvent> {
-    // Audit-first: the emit (audit row) must precede the hive.db Run mutation,
-    // and a persist failure must fail the originating op (ADR-0004 §Failure
-    // semantics).
     await events.emit("run.failed", { runId, threadId, agentId, code, message });
     runs.fail({ runId, code, message });
     return { type: "run.failed", runId, error: { code, message }, ts: now() };
@@ -434,9 +461,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const outcome = yield* runTurn(runId, completionInput);
 
       if (outcome.kind === "cancelled") {
-        await events.emit("run.cancelled", { runId, threadId, agentId });
-        runs.cancel(runId);
-        yield { type: "run.cancelled", runId, ts: now() };
+        yield await finalizeCancelled(runId, threadId, agentId);
         return;
       }
       if (outcome.kind === "error") {
@@ -460,20 +485,13 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
       // No tools wanted, or this was the grace turn → finalize.
       if (outcome.kind === "text" || graceTurn) {
-        await events.emit("run.completed", {
+        yield await finalizeCompleted(
           runId,
           threadId,
           agentId,
-          finishReason: outcome.finishReason,
-        });
-        runs.complete({ runId, finishReason: outcome.finishReason });
-        yield {
-          type: "run.completed",
-          runId,
-          finishReason: outcome.finishReason,
-          finalMessage: assistantMessage,
-          ts: now(),
-        };
+          outcome.finishReason,
+          assistantMessage,
+        );
         return;
       }
 
@@ -591,9 +609,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     // Cancellation precedence: a killed child exits nonzero, but an aborted
     // signal means cancel, not fail (mirrors run-shell's `killed` precedence).
     if (signal.aborted) {
-      await events.emit("run.cancelled", { runId, threadId, agentId });
-      runs.cancel(runId);
-      yield { type: "run.cancelled", runId, ts: now() };
+      yield await finalizeCancelled(runId, threadId, agentId);
       return;
     }
 
@@ -617,15 +633,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       role: "assistant",
       content: [{ type: "text", text: finalText }],
     });
-    await events.emit("run.completed", { runId, threadId, agentId, finishReason: "stop" });
-    runs.complete({ runId, finishReason: "stop" });
-    yield {
-      type: "run.completed",
-      runId,
-      finishReason: "stop",
-      finalMessage: assistantMessage,
-      ts: now(),
-    };
+    yield await finalizeCompleted(runId, threadId, agentId, "stop", assistantMessage);
   }
 
   // A single model turn: stream + accumulate, classify the outcome. Yields each
