@@ -295,6 +295,23 @@ describe("ThreadsStore.setScope (S1, ADR-0015)", () => {
     expect(seen[0]).toEqual({ agentId: "agent-a", model: "openai-codex/gpt-5.5" });
   });
 
+  test("a cleared axis is named in `cleared` so clear-model and clear-effort differ", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    const seen: Array<{ model?: string; effort?: string; cleared?: ("model" | "effort")[] }> = [];
+    store.events.on("thread.scope_set", (e) => {
+      seen.push({
+        ...(e.model ? { model: e.model } : {}),
+        ...(e.effort ? { effort: e.effort } : {}),
+        ...(e.cleared ? { cleared: e.cleared } : {}),
+      });
+    });
+    await store.setScope(t.id, { model: "openai-codex/gpt-5.5", effort: "minimal" });
+    await store.setScope(t.id, { model: null });
+    await store.setScope(t.id, { effort: null });
+    expect(seen[1]).toEqual({ cleared: ["model"] });
+    expect(seen[2]).toEqual({ cleared: ["effort"] });
+  });
+
   test("rejects a no-op patch (neither axis present)", async () => {
     const t = store.create({ agentId: "agent-a" });
     await expect(store.setScope(t.id, {})).rejects.toThrow(/at least one/);

@@ -54,6 +54,14 @@ export type ThreadEvents = {
   // A user's per-conversation model/effort pick (ADR-0015 S1) — a USER action,
   // so audited (ADR-0004). Carries whichever axes the write touched; the model
   // id / effort level are non-secret identifiers (same posture as
-  // `agent_pref.set`), safe in the payload.
-  "thread.scope_set": { threadId: string; agentId: string; model?: string; effort?: string };
+  // `agent_pref.set`), safe in the payload. A cleared axis (set to null) is
+  // named in `cleared` so clear-model and clear-effort stay distinguishable
+  // without widening the value fields to `string | null`.
+  "thread.scope_set": {
+    threadId: string;
+    agentId: string;
+    model?: string;
+    effort?: string;
+    cleared?: ("model" | "effort")[];
+  };
 };

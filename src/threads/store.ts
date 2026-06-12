@@ -292,15 +292,19 @@ export function createThreadsStore(
       const current = this.get(threadId);
       if (!current) return;
 
-      // Audit-first: emit BEFORE the write (ADR-0004). Carries the touched axes
-      // (a cleared field, set to null, is still a touch). null → omit from the
-      // payload (the event field is `string`, not nullable); the write still
-      // clears it.
+      // Audit-first: emit BEFORE the write (ADR-0004). A set carries its new
+      // value in `model`/`effort`; a clear (axis touched, value null) is named
+      // in `cleared` so clear-model and clear-effort are distinguishable in
+      // audit without making the value fields nullable. The write still clears.
+      const cleared: ("model" | "effort")[] = [];
+      if (hasModel && patch.model === null) cleared.push("model");
+      if (hasEffort && patch.effort === null) cleared.push("effort");
       await events.emit("thread.scope_set", {
         threadId,
         agentId: current.agentId,
         ...(hasModel && patch.model !== null ? { model: patch.model } : {}),
         ...(hasEffort && patch.effort !== null ? { effort: patch.effort } : {}),
+        ...(cleared.length > 0 ? { cleared } : {}),
       });
 
       // Merge: write only the touched columns (no updated_at bump). An omitted

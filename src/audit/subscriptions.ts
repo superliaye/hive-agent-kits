@@ -162,6 +162,7 @@ const threadsNormalizer: Normalizer<ThreadEvents> = {
       thread_id: event.threadId,
       ...(event.model !== undefined ? { model: event.model } : {}),
       ...(event.effort !== undefined ? { effort: event.effort } : {}),
+      ...(event.cleared !== undefined ? { cleared: event.cleared } : {}),
     },
   }),
 };
