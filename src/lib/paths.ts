@@ -69,6 +69,15 @@ export const runtime = {
   agent: (id: string) => join(runtimeRoot(), "agents", id),
   agentMemory: (id: string) => join(runtimeRoot(), "agents", id, "memory"),
   agentThreads: (id: string) => join(runtimeRoot(), "agents", id, "threads"),
+  // CLI capability projection (C3 / ADR-0016). Per-Run root passed to
+  // `claude --add-dir`, laid out as `<root>/.claude/skills/<name>/` so
+  // claude-code's own loader discloses the projected skills. Keyed by runId so
+  // concurrent/sequential Runs never race the same dir and a stale skill from a
+  // prior Run can't linger. A sibling of the workspace cwd, never inside it.
+  projectedCliRoot: (id: string, runId: string) =>
+    join(runtimeRoot(), "agents", id, "cli-projection", runId),
+  projectedCliSkillsDir: (id: string, runId: string) =>
+    join(runtimeRoot(), "agents", id, "cli-projection", runId, ".claude", "skills"),
 };
 
 // Files that live only in the runtime tier.
