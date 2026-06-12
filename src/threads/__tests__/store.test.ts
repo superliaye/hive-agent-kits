@@ -297,7 +297,11 @@ describe("ThreadsStore.setScope (S1, ADR-0015)", () => {
 
   test("a cleared axis is named in `cleared` so clear-model and clear-effort differ", async () => {
     const t = store.create({ agentId: "agent-a" });
-    const seen: Array<{ model?: string; effort?: string; cleared?: ("model" | "effort")[] }> = [];
+    const seen: Array<{
+      model?: string;
+      effort?: string;
+      cleared?: ("model" | "effort" | "workingDir")[];
+    }> = [];
     store.events.on("thread.scope_set", (e) => {
       seen.push({
         ...(e.model ? { model: e.model } : {}),
@@ -320,6 +324,56 @@ describe("ThreadsStore.setScope (S1, ADR-0015)", () => {
   test("no-op on a missing thread", async () => {
     await store.setScope("nope", { model: "anthropic/claude-haiku-4-5" });
     expect(store.get("nope")).toBeUndefined();
+  });
+
+  test("fresh thread has null workingDir (C4 tier 1)", () => {
+    const t = store.create({ agentId: "agent-a" });
+    expect(t.workingDir).toBeNull();
+  });
+
+  test("round-trips a workingDir pick (C4)", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setScope(t.id, { workingDir: "/some/project/path" });
+    expect(store.get(t.id)?.workingDir).toBe("/some/project/path");
+  });
+
+  test("workingDir is independent of model/effort (no clobber either way)", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setScope(t.id, { model: "anthropic/claude-sonnet-4-6", effort: "high" });
+    await store.setScope(t.id, { workingDir: "/some/project/path" });
+    let got = store.get(t.id);
+    expect(got?.modelPref).toBe("anthropic/claude-sonnet-4-6");
+    expect(got?.effortPref).toBe("high");
+    expect(got?.workingDir).toBe("/some/project/path");
+    // And setting model back does not touch the stored workingDir.
+    await store.setScope(t.id, { model: "anthropic/claude-haiku-4-5" });
+    got = store.get(t.id);
+    expect(got?.workingDir).toBe("/some/project/path");
+  });
+
+  test("null clears workingDir without touching the other axes", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    await store.setScope(t.id, { model: "anthropic/claude-sonnet-4-6", workingDir: "/p" });
+    await store.setScope(t.id, { workingDir: null });
+    const got = store.get(t.id);
+    expect(got?.workingDir).toBeNull();
+    expect(got?.modelPref).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  test("emits thread.scope_set with workingDir; a clear names it in `cleared`", async () => {
+    const t = store.create({ agentId: "agent-a" });
+    const seen: Array<{ workingDir?: string; cleared?: ("model" | "effort" | "workingDir")[] }> =
+      [];
+    store.events.on("thread.scope_set", (e) => {
+      seen.push({
+        ...(e.workingDir ? { workingDir: e.workingDir } : {}),
+        ...(e.cleared ? { cleared: e.cleared } : {}),
+      });
+    });
+    await store.setScope(t.id, { workingDir: "/p" });
+    await store.setScope(t.id, { workingDir: null });
+    expect(seen[0]).toEqual({ workingDir: "/p" });
+    expect(seen[1]).toEqual({ cleared: ["workingDir"] });
   });
 });
 

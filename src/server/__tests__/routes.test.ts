@@ -329,9 +329,78 @@ describe("server routes", () => {
       }),
     );
     expect(put.status).toBe(200);
-    expect(await put.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: "minimal" });
+    expect(await put.json()).toEqual({
+      model: "openai-codex/gpt-5.2",
+      effort: "minimal",
+      workingDir: null,
+    });
     const get = await server.app.fetch(authed(`/api/threads/${id}/scope`));
-    expect(await get.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: "minimal" });
+    expect(await get.json()).toEqual({
+      model: "openai-codex/gpt-5.2",
+      effort: "minimal",
+      workingDir: null,
+    });
+  });
+
+  test("PUT then GET /api/threads/:id/scope round-trips a workingDir pick (C4)", async () => {
+    const id = await createThread();
+    const put = await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workingDir: "/some/project/path" }),
+      }),
+    );
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({
+      model: null,
+      effort: null,
+      workingDir: "/some/project/path",
+    });
+    const get = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect(await get.json()).toEqual({
+      model: null,
+      effort: null,
+      workingDir: "/some/project/path",
+    });
+  });
+
+  test("setting workingDir does not clobber model/effort and vice versa", async () => {
+    const id = await createThread();
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai-codex/gpt-5.2", effort: "minimal" }),
+      }),
+    );
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workingDir: "/some/project/path" }),
+      }),
+    );
+    let scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect(await scope.json()).toEqual({
+      model: "openai-codex/gpt-5.2",
+      effort: "minimal",
+      workingDir: "/some/project/path",
+    });
+    // Changing model leaves workingDir intact.
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "latest" }),
+      }),
+    );
+    scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect(await scope.json()).toEqual({
+      model: "latest",
+      effort: "minimal",
+      workingDir: "/some/project/path",
+    });
   });
 
   test("a Thread-scope write does NOT touch the agent default", async () => {
@@ -369,7 +438,11 @@ describe("server routes", () => {
     expect(await def.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: null });
     // Thread scope unchanged by the promotion.
     const scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
-    expect(await scope.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: null });
+    expect(await scope.json()).toEqual({
+      model: "openai-codex/gpt-5.2",
+      effort: null,
+      workingDir: null,
+    });
   });
 
   test("Thread scope accepts symbolic values and clears with null", async () => {
@@ -382,7 +455,7 @@ describe("server routes", () => {
       }),
     );
     let scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
-    expect(await scope.json()).toEqual({ model: "latest", effort: "highest" });
+    expect(await scope.json()).toEqual({ model: "latest", effort: "highest", workingDir: null });
     // Clear the model axis only; effort untouched.
     await server.app.fetch(
       authed(`/api/threads/${id}/scope`, {
@@ -392,7 +465,7 @@ describe("server routes", () => {
       }),
     );
     scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
-    expect(await scope.json()).toEqual({ model: null, effort: "highest" });
+    expect(await scope.json()).toEqual({ model: null, effort: "highest", workingDir: null });
   });
 
   test("a Thread-scope write records a thread.scope_set audit row", async () => {

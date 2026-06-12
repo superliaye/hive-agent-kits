@@ -257,19 +257,22 @@ export const SetAgentModelPrefBody = z
   });
 export type SetAgentModelPrefBody = z.infer<typeof SetAgentModelPrefBody>;
 
-// PUT /api/threads/:id/scope body. Sets the conversation-scope model/effort
-// pick (ADR-0015 S1: use-here — applies to THIS Thread and sticks for its later
-// Runs, without touching the agent default). Both fields optional and
-// independent (merge semantics); a default may be symbolic. `null` clears an
-// axis (back to the agent default). At least one field must be present.
+// PUT /api/threads/:id/scope body. Sets the conversation-scope pick (ADR-0015
+// S1 + ADR-0016 C4: use-here — applies to THIS Thread and sticks for its later
+// Runs, without touching the agent default). `model`/`effort` may be symbolic;
+// `workingDir` is a plain filesystem path (not a model/effort token, so no
+// `DefaultModel`-style union). All fields optional and independent (merge
+// semantics); `null` clears an axis (back to the agent default). At least one
+// field must be present.
 export const SetThreadScopeBody = z
   .object({
     model: DefaultModel.nullable().optional(),
     effort: DefaultEffort.nullable().optional(),
+    workingDir: z.string().nullable().optional(),
   })
   .strict()
-  .refine((b) => b.model !== undefined || b.effort !== undefined, {
-    message: "at least one of { model, effort } is required",
+  .refine((b) => b.model !== undefined || b.effort !== undefined || b.workingDir !== undefined, {
+    message: "at least one of { model, effort, workingDir } is required",
   });
 export type SetThreadScopeBody = z.infer<typeof SetThreadScopeBody>;
 

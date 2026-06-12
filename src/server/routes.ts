@@ -393,7 +393,11 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     const id = c.req.param("id");
     const t = deps.threads.get(id);
     if (!t) return c.json({ error: "thread not found" }, 404);
-    return c.json({ model: t.modelPref ?? null, effort: t.effortPref ?? null });
+    return c.json({
+      model: t.modelPref ?? null,
+      effort: t.effortPref ?? null,
+      workingDir: t.workingDir ?? null,
+    });
   });
 
   app.put("/api/threads/:id/scope", async (c) => {
@@ -414,10 +418,15 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     await deps.threads.setScope(id, {
       ...(parsed.data.model !== undefined && { model: parsed.data.model }),
       ...(parsed.data.effort !== undefined && { effort: parsed.data.effort }),
+      ...(parsed.data.workingDir !== undefined && { workingDir: parsed.data.workingDir }),
     });
     const updated = deps.threads.get(id);
     if (!updated) return c.json({ error: "thread not found" }, 404);
-    return c.json({ model: updated.modelPref ?? null, effort: updated.effortPref ?? null });
+    return c.json({
+      model: updated.modelPref ?? null,
+      effort: updated.effortPref ?? null,
+      workingDir: updated.workingDir ?? null,
+    });
   });
 
   app.post("/api/threads/:id/archive", async (c) => {

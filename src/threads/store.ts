@@ -76,13 +76,14 @@ export type ThreadsStore = {
   archive(threadId: string, source: TitleSource): Promise<void>;
 
   /**
-   * Set a thread's conversation-scope model/effort pick (ADR-0015 S1). A field
-   * present in the patch is written (a `null` clears it); an OMITTED field is
-   * left unchanged — so the two axes stay independent (setting one never
-   * clobbers the other). Audit-first: emits `thread.scope_set` (carrying the
-   * touched axes) BEFORE the write (ADR-0004). Does NOT bump `updatedAt` (a
-   * metadata edit, not a message). No-op on a missing thread. A no-op patch
-   * (neither field present) is rejected as a caller bug.
+   * Set a thread's conversation-scope pick: model/effort (ADR-0015 S1) and/or
+   * the per-conversation Working Directory (ADR-0016 C4 tier 1). A field present
+   * in the patch is written (a `null` clears it); an OMITTED field is left
+   * unchanged — so the axes stay independent (setting one never clobbers
+   * another). Audit-first: emits `thread.scope_set` (carrying the touched axes)
+   * BEFORE the write (ADR-0004). Does NOT bump `updatedAt` (a metadata edit, not
+   * a message). No-op on a missing thread. A no-op patch (no field present) is
+   * rejected as a caller bug.
    *
    * The patch values are deliberately raw `string | null`, NOT narrowed to a
    * `ModelDefault | EffortDefault` (ADR-0015 §"Stored conversation-scope values
@@ -92,7 +93,7 @@ export type ThreadsStore = {
    */
   setScope(
     threadId: string,
-    patch: { model?: string | null; effort?: string | null },
+    patch: { model?: string | null; effort?: string | null; workingDir?: string | null },
   ): Promise<void>;
 
   /**
@@ -154,6 +155,7 @@ export function createThreadsStore(
       archivedAt: row.archived_at,
       modelPref: row.model_pref,
       effortPref: row.effort_pref,
+      workingDir: row.working_dir,
       cliSessionBackend: row.cli_session_backend,
       cliSessionId: row.cli_session_id,
     };
@@ -188,6 +190,7 @@ export function createThreadsStore(
         archivedAt: null,
         modelPref: null,
         effortPref: null,
+        workingDir: null,
         cliSessionBackend: null,
         cliSessionId: null,
       };
@@ -306,33 +309,39 @@ export function createThreadsStore(
     async setScope(threadId, patch) {
       const hasModel = patch.model !== undefined;
       const hasEffort = patch.effort !== undefined;
-      if (!hasModel && !hasEffort) {
-        throw new Error("threads/store: setScope requires at least one of { model, effort }");
+      const hasWorkingDir = patch.workingDir !== undefined;
+      if (!hasModel && !hasEffort && !hasWorkingDir) {
+        throw new Error(
+          "threads/store: setScope requires at least one of { model, effort, workingDir }",
+        );
       }
       const current = this.get(threadId);
       if (!current) return;
 
       // Audit-first: emit BEFORE the write (ADR-0004). A set carries its new
-      // value in `model`/`effort`; a clear (axis touched, value null) is named
-      // in `cleared` so clear-model and clear-effort are distinguishable in
-      // audit without making the value fields nullable. The write still clears.
-      const cleared: ("model" | "effort")[] = [];
+      // value in `model`/`effort`/`workingDir`; a clear (axis touched, value
+      // null) is named in `cleared` so clear-X stays distinguishable in audit
+      // without making the value fields nullable. The write still clears.
+      const cleared: ("model" | "effort" | "workingDir")[] = [];
       if (hasModel && patch.model === null) cleared.push("model");
       if (hasEffort && patch.effort === null) cleared.push("effort");
+      if (hasWorkingDir && patch.workingDir === null) cleared.push("workingDir");
       await events.emit("thread.scope_set", {
         threadId,
         agentId: current.agentId,
         ...(hasModel && patch.model !== null ? { model: patch.model } : {}),
         ...(hasEffort && patch.effort !== null ? { effort: patch.effort } : {}),
+        ...(hasWorkingDir && patch.workingDir !== null ? { workingDir: patch.workingDir } : {}),
         ...(cleared.length > 0 ? { cleared } : {}),
       });
 
       // Merge: write only the touched columns (no updated_at bump). An omitted
-      // axis keeps its stored value, so the two axes stay independent.
+      // axis keeps its stored value, so the axes stay independent.
       db.update(threads)
         .set({
           ...(hasModel ? { model_pref: patch.model } : {}),
           ...(hasEffort ? { effort_pref: patch.effort } : {}),
+          ...(hasWorkingDir ? { working_dir: patch.workingDir } : {}),
         })
         .where(eq(threads.id, threadId))
         .run();

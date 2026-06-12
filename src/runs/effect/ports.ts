@@ -78,11 +78,17 @@ export class AgentModelPrefsLookup extends Context.Service<
 // Threads: the three verbs the executor uses. `get` also surfaces the Thread's
 // conversation-scope model/effort pick (ADR-0015 S1) — null when unset; may be
 // a symbolic token. The resolver places it between the per-Run override and the
-// user agent default.
+// user agent default. `workingDir` is the per-conversation Working Directory
+// tier (ADR-0016 C4) — null when unset, fed to the cwd resolver at Run start.
 export type ThreadsPort = {
-  get(
-    threadId: string,
-  ): { agentId: string; modelPref?: string | null; effortPref?: string | null } | undefined;
+  get(threadId: string):
+    | {
+        agentId: string;
+        modelPref?: string | null;
+        effortPref?: string | null;
+        workingDir?: string | null;
+      }
+    | undefined;
   append(input: {
     threadId: string;
     role: "user" | "assistant";
