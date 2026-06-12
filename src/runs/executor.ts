@@ -31,6 +31,7 @@
 
 import { mkdirSync } from "node:fs";
 import { log } from "../lib/log.ts";
+import { runtime as runtimePaths } from "../lib/paths.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import {
   type CompletionInput,
@@ -50,12 +51,14 @@ import type {
   CatalogPort,
   CliSpawnerPort,
   CompletionPort,
+  FsCopyPort,
   FsRunnerPort,
   PermissionPort,
   RunnableCatalogPort,
   RunsStorePort,
   SecretsPort,
   ShellRunnerPort,
+  SkillProjectionPort,
   SkillResolverPort,
   ThreadsPort,
 } from "./effect/ports.ts";
@@ -63,6 +66,7 @@ import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
 import { type EffortDefault, isSymbolicEffort, isThinkingEffort } from "./symbolic.ts";
 import { buildCliInvocation, type CliInvocationMode } from "./tools/cli-invocation.ts";
+import { createDefaultFsCopy, projectSkillsForCli } from "./tools/cli-skill-projection.ts";
 import { createDefaultCliSpawner } from "./tools/cli-spawn.ts";
 import { parseCliStream } from "./tools/cli-stream.ts";
 import { createDefaultFsRunner } from "./tools/file-tools.ts";
@@ -177,6 +181,16 @@ export type CreateRunExecutorDeps = {
    * listing is injected (the executor stays runnable without capabilities).
    */
   skillResolver?: SkillResolverPort;
+  /**
+   * Skill projection for the CLI (claude-code) path: resolves bound skills to
+   * `{ name, path, origin }` so their dirs can be copied into a `--add-dir`
+   * location (C3). Optional: when absent no projection runs — the CLI gets no
+   * `--add-dir` and the executor stays runnable without capabilities (same
+   * discipline as the no-op skillResolver).
+   */
+  skillProjection?: SkillProjectionPort;
+  /** FS copy edge for CLI skill projection. Default: node:fs/promises cp/rm. */
+  fsCopy?: FsCopyPort;
   now?: () => number;
 };
 
@@ -203,6 +217,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     list: () => [],
     load: () => undefined,
   };
+  // No skill projection wired ⇒ the CLI path projects nothing (no --add-dir).
+  const skillProjection = deps.skillProjection;
+  const fsCopy: FsCopyPort = deps.fsCopy ?? createDefaultFsCopy();
   const permission: PermissionPort = deps.permission ?? createDefaultPermission(catalog);
   const now = deps.now ?? Date.now;
   const events = new TypedEmitter<RunModuleEvents>();
@@ -407,6 +424,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
             agentId,
             backend,
             ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+            boundSkills,
             signal: controller.signal,
           });
           return;
@@ -528,6 +546,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     agentId: string;
     backend: "claude-code" | "codex";
     systemPrompt?: string;
+    /** The Agent's bound skill names — projected into `--add-dir` (claude-code). */
+    boundSkills: readonly string[];
     signal: AbortSignal;
   };
 
@@ -547,12 +567,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         ? { kind: "resume", sessionId: stored.sessionId }
         : { kind: "create" };
 
-    const { command, stdin } = buildCliInvocation(backend, {
-      ...(args.systemPrompt !== undefined ? { systemPrompt: args.systemPrompt } : {}),
-      history: threads.getCompletionMessages(threadId),
-      mode,
-    });
-
     const cwd = resolveWorkingDir(agentId);
     // The shell runner mkdir's its cwd but the CLI spawner does not — ensure the
     // per-Agent workspace exists so spawn doesn't ENOENT on a never-used agent
@@ -563,101 +577,145 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // Best-effort — spawn surfaces a usable error if cwd is unusable.
     }
 
-    // Audit-first: record the spawn (redacted — binary name + arg COUNT only,
-    // never the prompt/systemPrompt/flags' values/auth) BEFORE spawning.
-    await backendEvents.emit("backend.spawn.requested", {
-      runId,
-      agentId,
-      backend,
-      binary: command[0] ?? backend,
-      argSummary: { count: Math.max(0, command.length - 1) },
-      hasStdin: stdin !== undefined,
-    });
-
-    const spawned = cliSpawner.spawn({
-      command,
-      cwd,
-      signal,
-      ...(stdin !== undefined ? { stdin } : {}),
-    });
-
-    if (spawned.kind === "spawn_failed") {
-      // ENOENT / binary-missing — the CLI isn't installed/spawnable: a Run-owned
-      // backend failure (Fix r1-ddd-1), not a gateway error.
-      yield await finalizeFailed(
-        id,
-        "backend_unavailable",
-        `${backend} spawn failed: ${spawned.message}`,
-      );
-      return;
-    }
-
-    // stderr sink: route each chunk to Trace (system diagnostics — AGENTS.md)
-    // and keep an O(1) bounded tail for the failure message. Started right after
-    // spawn; awaited before finalize so the tail is complete. The tail must
-    // survive the stream ending, so resolve it (a bare `.catch(()=>{})` would
-    // discard it).
-    const stderrDone: Promise<string> = (async () => {
-      let tail = "";
-      try {
-        for await (const chunk of spawned.stderr) {
-          log().debug({ module: "runs/cli", runId, backend }, chunk);
-          tail = (tail + chunk).slice(-STDERR_TAIL_CAP);
-        }
-      } catch {
-        // stream ended / cancelled — keep whatever tail accumulated.
+    // Capability projection (C3 / ADR-0016 "projecting spawn"). claude-code only:
+    // copy the Agent's bound skills into a Hive-owned per-Run dir (a sibling of
+    // cwd, never inside it) and add `--add-dir <root>` so the CLI's OWN loader
+    // discloses them — Hive runs no N3 disclosure here. Skipped when no
+    // projection is wired, the backend isn't claude-code, or no skills are bound.
+    // codex gets no skill disclosure in v1 (its prompt rides stdin unchanged).
+    let addDir: string | undefined;
+    let projectionRoot: string | undefined;
+    if (skillProjection && backend === "claude-code" && args.boundSkills.length > 0) {
+      const skills = skillProjection.resolve(args.boundSkills);
+      const skillsDir = runtimePaths.projectedCliSkillsDir(agentId, runId);
+      const projected = await projectSkillsForCli({
+        skills,
+        skillsDir,
+        copy: fsCopy.copy,
+        runId,
+      });
+      if (projected) {
+        projectionRoot = runtimePaths.projectedCliRoot(agentId, runId);
+        addDir = projectionRoot;
       }
-      return tail;
-    })();
-
-    // Parse the JSON event stream at the boundary: accumulate assistant text and
-    // capture the native session id. Unknown events are ignored (cli-stream.ts).
-    let out = "";
-    let sessionId: string | undefined;
-    for await (const fact of parseCliStream(backend, spawned.stdout)) {
-      if (fact.kind === "text") out += fact.text;
-      else sessionId = fact.sessionId;
     }
 
-    const { exitCode } = await spawned.exit;
-    const tail = await stderrDone;
-
-    // Cancellation precedence: a killed child exits nonzero, but an aborted
-    // signal means cancel, not fail (mirrors run-shell's `killed` precedence).
-    if (signal.aborted) {
-      yield await finalizeCancelled(id);
-      return;
-    }
-
-    if (exitCode !== 0) {
-      // A logged-out CLI / runtime error surfaces here as a nonzero exit — a
-      // Run-owned backend failure (Fix r1-ddd-1). The folded stderr tail carries
-      // the human detail.
-      yield await finalizeFailed(
-        id,
-        "backend_exited",
-        `${backend} exited ${exitCode}${tail ? `:\n${tail}` : ""}`,
-      );
-      return;
-    }
-
-    // Zero exit: persist the captured session id BEFORE finalizing so a follow-up
-    // turn on this Thread resumes it. Only on a create (a resume keeps the same
-    // id); internal continuity state, not audited.
-    if (mode.kind === "create" && sessionId !== undefined) {
-      threads.setCliSession(threadId, { backend, sessionId });
-    }
-
-    // Append the assistant message and complete, mirroring the native finalize. A
-    // CLI success has no gateway finish reason; "stop" is the FinishReason for
-    // normal completion.
-    const finalText = out.trim().length > 0 ? out : "[no output]";
-    const assistantMessage: ThreadMessage = threads.append({
-      threadId,
-      role: "assistant",
-      content: [{ type: "text", text: finalText }],
+    const { command, stdin } = buildCliInvocation(backend, {
+      ...(args.systemPrompt !== undefined ? { systemPrompt: args.systemPrompt } : {}),
+      history: threads.getCompletionMessages(threadId),
+      mode,
+      ...(addDir !== undefined ? { addDir } : {}),
     });
-    yield await finalizeCompleted(id, "stop", assistantMessage);
+
+    // Best-effort removal of the per-Run projection dir once the Run ends (any
+    // exit path). Swallowed: a failed rmdir leaves a stale dir for the next Run
+    // to overwrite (keyed by runId), never a Run failure.
+    const cleanupProjection = () => {
+      if (projectionRoot === undefined) return;
+      fsCopy.remove(projectionRoot).catch(() => {});
+    };
+
+    try {
+      // Audit-first: record the spawn (redacted — binary name + arg COUNT only,
+      // never the prompt/systemPrompt/flags' values/auth) BEFORE spawning.
+      await backendEvents.emit("backend.spawn.requested", {
+        runId,
+        agentId,
+        backend,
+        binary: command[0] ?? backend,
+        argSummary: { count: Math.max(0, command.length - 1) },
+        hasStdin: stdin !== undefined,
+      });
+
+      const spawned = cliSpawner.spawn({
+        command,
+        cwd,
+        signal,
+        ...(stdin !== undefined ? { stdin } : {}),
+      });
+
+      if (spawned.kind === "spawn_failed") {
+        // ENOENT / binary-missing — the CLI isn't installed/spawnable: a Run-owned
+        // backend failure (Fix r1-ddd-1), not a gateway error.
+        yield await finalizeFailed(
+          id,
+          "backend_unavailable",
+          `${backend} spawn failed: ${spawned.message}`,
+        );
+        return;
+      }
+
+      // stderr sink: route each chunk to Trace (system diagnostics — AGENTS.md)
+      // and keep an O(1) bounded tail for the failure message. Started right after
+      // spawn; awaited before finalize so the tail is complete. The tail must
+      // survive the stream ending, so resolve it (a bare `.catch(()=>{})` would
+      // discard it).
+      const stderrDone: Promise<string> = (async () => {
+        let tail = "";
+        try {
+          for await (const chunk of spawned.stderr) {
+            log().debug({ module: "runs/cli", runId, backend }, chunk);
+            tail = (tail + chunk).slice(-STDERR_TAIL_CAP);
+          }
+        } catch {
+          // stream ended / cancelled — keep whatever tail accumulated.
+        }
+        return tail;
+      })();
+
+      // Parse the JSON event stream at the boundary: accumulate assistant text and
+      // capture the native session id. Unknown events are ignored (cli-stream.ts).
+      let out = "";
+      let sessionId: string | undefined;
+      for await (const fact of parseCliStream(backend, spawned.stdout)) {
+        if (fact.kind === "text") out += fact.text;
+        else sessionId = fact.sessionId;
+      }
+
+      const { exitCode } = await spawned.exit;
+      const tail = await stderrDone;
+
+      // Cancellation precedence: a killed child exits nonzero, but an aborted
+      // signal means cancel, not fail (mirrors run-shell's `killed` precedence).
+      if (signal.aborted) {
+        yield await finalizeCancelled(id);
+        return;
+      }
+
+      if (exitCode !== 0) {
+        // A logged-out CLI / runtime error surfaces here as a nonzero exit — a
+        // Run-owned backend failure (Fix r1-ddd-1). The folded stderr tail carries
+        // the human detail.
+        yield await finalizeFailed(
+          id,
+          "backend_exited",
+          `${backend} exited ${exitCode}${tail ? `:\n${tail}` : ""}`,
+        );
+        return;
+      }
+
+      // Zero exit: persist the captured session id BEFORE finalizing so a follow-up
+      // turn on this Thread resumes it. Only on a create (a resume keeps the same
+      // id); internal continuity state, not audited.
+      if (mode.kind === "create" && sessionId !== undefined) {
+        threads.setCliSession(threadId, { backend, sessionId });
+      }
+
+      // Append the assistant message and complete, mirroring the native finalize. A
+      // CLI success has no gateway finish reason; "stop" is the FinishReason for
+      // normal completion.
+      const finalText = out.trim().length > 0 ? out : "[no output]";
+      const assistantMessage: ThreadMessage = threads.append({
+        threadId,
+        role: "assistant",
+        content: [{ type: "text", text: finalText }],
+      });
+      yield await finalizeCompleted(id, "stop", assistantMessage);
+    } finally {
+      // Best-effort cleanup on every exit path (success, failure, cancel, or an
+      // abandoned iterator). Fire-and-forget so a slow rmdir can't stall finalize.
+      cleanupProjection();
+    }
   }
 
   // A single model turn: stream + accumulate, classify the outcome. Yields each

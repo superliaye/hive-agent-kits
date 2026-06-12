@@ -34,6 +34,12 @@ export type BuildCliInvocationInput = {
   history: readonly Message[];
   /** Create a new native session, or resume a stored one. Default: create. */
   mode?: CliInvocationMode;
+  /**
+   * Hive-owned projection root holding `.claude/skills/<name>/` (C3). When set,
+   * the claude-code arm adds `--add-dir <addDir>` so the CLI's own loader
+   * discloses the projected skills. The codex arm ignores it in v1 (Q3).
+   */
+  addDir?: string;
 };
 
 // Flatten a user message's text blocks to a single string. Non-text blocks
@@ -69,6 +75,10 @@ export function buildCliInvocation(
       // stdin. No `--bare`: default mode lets the CLI use its own auth +
       // repo-local config (ADR-0016). RESUME appends `--resume <id>`.
       const command = ["claude", "-p", "--output-format", "stream-json", "--verbose"];
+      // Projected skills dir (C3): the CLI's own loader auto-loads
+      // `<addDir>/.claude/skills/`. Placed after the stream flags, before
+      // --resume/--append-system-prompt for deterministic argv-equality tests.
+      if (input.addDir !== undefined) command.push("--add-dir", input.addDir);
       if (mode.kind === "resume") command.push("--resume", mode.sessionId);
       if (systemPrompt !== undefined) command.push("--append-system-prompt", systemPrompt);
       return { command, stdin: promptText };

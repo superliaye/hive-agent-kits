@@ -4,11 +4,15 @@
 // spawn_failed → run.failed; redacted `backend` audit row.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ManagedRuntime } from "effect";
 import { AuditLive, type AuditSvc, Audit as AuditTag } from "../../audit/effect/audit-live.ts";
 import { wireSubscriptions } from "../../audit/subscriptions.ts";
 import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { openHiveDb } from "../../db/hive-db.ts";
+import { runtime } from "../../lib/paths.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
 import {
@@ -17,9 +21,17 @@ import {
   Secrets as SecretsTag,
 } from "../../secrets/effect/secrets-live.ts";
 import { createThreadsStore } from "../../threads/store.ts";
-import type { CliSpawnerPort, CliSpawnInput, CliSpawnResult } from "../effect/ports.ts";
+import type {
+  CliSpawnerPort,
+  CliSpawnInput,
+  CliSpawnResult,
+  FsCopyPort,
+  ProjectableSkill,
+  SkillProjectionPort,
+} from "../effect/ports.ts";
 import { createRunExecutor, type RunExecutor } from "../executor.ts";
 import { createRunsStore } from "../store.ts";
+import { createDefaultFsCopy } from "../tools/cli-skill-projection.ts";
 import { memoryCliSpawner } from "../tools/cli-spawn.ts";
 import type { RunEvent } from "../types.ts";
 
@@ -159,6 +171,8 @@ type Harness = {
 async function setup(opts: {
   cliSpawner?: CliSpawnerPort;
   agent?: Partial<Agent>;
+  skillProjection?: SkillProjectionPort;
+  fsCopy?: FsCopyPort;
 }): Promise<Harness> {
   const db = openHiveDb(":memory:");
   const threads = createThreadsStore(db);
@@ -174,6 +188,8 @@ async function setup(opts: {
     gateway: makeGateway(),
     secrets,
     ...(opts.cliSpawner ? { cliSpawner: opts.cliSpawner } : {}),
+    ...(opts.skillProjection ? { skillProjection: opts.skillProjection } : {}),
+    ...(opts.fsCopy ? { fsCopy: opts.fsCopy } : {}),
   });
   const threadId = threads.create({ agentId: agent.agentId }).id;
   return { threads, executor, threadId };
@@ -457,5 +473,188 @@ describe("cli-dispatch — backend audit (redacted)", () => {
     expect(JSON.stringify(row?.payload)).not.toContain("sk-test");
 
     dispose();
+  });
+});
+
+// ─── C3: CLI skill projection (--add-dir) ─────────────────────────────────────
+
+describe("cli-dispatch — skill projection (C3)", () => {
+  // A real-fs harness: a temp runtimeRoot + a temp bundled skill dir, the real
+  // copy edge. Proves the projected SKILL.md actually lands and --add-dir is
+  // passed. Env + dirs are restored/removed per test.
+  function withTempRoots(): {
+    runtimeRoot: string;
+    skillSrcDir: string;
+    skillMdPath: string;
+    cleanup: () => void;
+  } {
+    const base = mkdtempSync(join(tmpdir(), "hive-c3-"));
+    const prevRoot = process.env.HIVE_RUNTIME_ROOT;
+    const runtimeRootDir = join(base, "runtime");
+    process.env.HIVE_RUNTIME_ROOT = runtimeRootDir;
+
+    // A bundled skill dir with a SKILL.md (+ a supporting file to prove the
+    // whole DIR is copied, not just the manifest).
+    const skillSrcDir = join(base, "bundled", "skills", "research");
+    const skillMdPath = join(skillSrcDir, "SKILL.md");
+    mkdirSync(skillSrcDir, { recursive: true });
+    writeFileSync(skillMdPath, "# Research skill\n");
+    writeFileSync(join(skillSrcDir, "helper.md"), "supporting file\n");
+
+    return {
+      runtimeRoot: runtimeRootDir,
+      skillSrcDir,
+      skillMdPath,
+      cleanup: () => {
+        if (prevRoot === undefined) delete process.env.HIVE_RUNTIME_ROOT;
+        else process.env.HIVE_RUNTIME_ROOT = prevRoot;
+        rmSync(base, { recursive: true, force: true });
+      },
+    };
+  }
+
+  function projectionFor(skills: ProjectableSkill[]): SkillProjectionPort {
+    return { resolve: (names) => skills.filter((s) => names.includes(s.name)) };
+  }
+
+  test("bound resolvable skill → --add-dir + projected SKILL.md lands; prompt still rides --append-system-prompt", async () => {
+    const t = withTempRoots();
+    try {
+      const fake = makeFakeSpawner({
+        stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "ok" }),
+        exitCode: 0,
+      });
+      const projection = projectionFor([
+        { name: "research", path: t.skillMdPath, origin: "personal" },
+      ]);
+      // Spy the copy so we can assert the projected SKILL.md actually landed at
+      // spawn time, before the post-finalize best-effort cleanup removes it.
+      const realCopy = createDefaultFsCopy();
+      let landedSkillMd = false;
+      let landedHelper = false;
+      const fsCopy: FsCopyPort = {
+        copy: async (src, dest) => {
+          await realCopy.copy(src, dest);
+          landedSkillMd ||= existsSync(join(dest, "SKILL.md"));
+          landedHelper ||= existsSync(join(dest, "helper.md"));
+        },
+        remove: realCopy.remove,
+      };
+      const { executor, threadId } = await setup({
+        cliSpawner: fake.spawner,
+        fsCopy,
+        skillProjection: projection,
+        agent: {
+          bindings: { skills: ["research"], snippets: [], tools: [], mcp: [] },
+          promptBody: "be terse",
+        },
+      });
+
+      await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+
+      const cmd = fake.lastInput()?.command ?? [];
+      const runId = executor.listByThread(threadId)[0]?.id ?? "";
+      const projectionRoot = runtime.projectedCliRoot("test-agent", runId);
+      // --add-dir present, pointing at the per-Run projection root.
+      const addDirIdx = cmd.indexOf("--add-dir");
+      expect(addDirIdx).toBeGreaterThan(-1);
+      expect(cmd[addDirIdx + 1]).toBe(projectionRoot);
+      // The authored prompt still rides --append-system-prompt (unchanged by C3).
+      const apsIdx = cmd.indexOf("--append-system-prompt");
+      expect(apsIdx).toBeGreaterThan(-1);
+      expect(cmd[apsIdx + 1]).toBe("be terse");
+
+      // The whole skill DIR (SKILL.md + supporting file) landed under
+      // .claude/skills/<name>, and the projection root is outside the cwd.
+      expect(landedSkillMd).toBe(true);
+      expect(landedHelper).toBe(true);
+      expect(projectionRoot.startsWith(runtime.agent("test-agent"))).toBe(true);
+      expect(projectionRoot.includes("cli-projection")).toBe(true);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("unresolvable binding (absent from projection) → NO --add-dir, Run still completes", async () => {
+    const t = withTempRoots();
+    try {
+      const fake = makeFakeSpawner({
+        stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "ok" }),
+        exitCode: 0,
+      });
+      // The resolver returns nothing for "ghost" — a stale binding.
+      const projection = projectionFor([]);
+      const { executor, threadId } = await setup({
+        cliSpawner: fake.spawner,
+        fsCopy: createDefaultFsCopy(),
+        skillProjection: projection,
+        agent: { bindings: { skills: ["ghost"], snippets: [], tools: [], mcp: [] } },
+      });
+
+      const events = await collect(
+        executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }),
+      );
+      const last = events[events.length - 1];
+      expect(last?.type).toBe("run.completed");
+      expect(fake.lastInput()?.command).not.toContain("--add-dir");
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("no skillProjection wired → no --add-dir even with bound skills", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "ok" }),
+      exitCode: 0,
+    });
+    const { executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      agent: { bindings: { skills: ["research"], snippets: [], tools: [], mcp: [] } },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+    expect(fake.lastInput()?.command).not.toContain("--add-dir");
+  });
+
+  test("per-Run projection dir is removed after the Run (best-effort cleanup)", async () => {
+    const t = withTempRoots();
+    try {
+      const fake = makeFakeSpawner({
+        stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "ok" }),
+        exitCode: 0,
+      });
+      const removed: string[] = [];
+      // Real copy so the dir is created; spy remove so we assert it's targeted.
+      const realCopy = createDefaultFsCopy();
+      const fsCopy: FsCopyPort = {
+        copy: realCopy.copy,
+        remove: async (target) => {
+          removed.push(target);
+          await realCopy.remove(target);
+        },
+      };
+      const projection = projectionFor([
+        { name: "research", path: t.skillMdPath, origin: "personal" },
+      ]);
+      const { executor, threadId } = await setup({
+        cliSpawner: fake.spawner,
+        fsCopy,
+        skillProjection: projection,
+        agent: { bindings: { skills: ["research"], snippets: [], tools: [], mcp: [] } },
+      });
+
+      await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+      const runId = executor.listByThread(threadId)[0]?.id ?? "";
+      const projectionRoot = runtime.projectedCliRoot("test-agent", runId);
+
+      expect(removed).toContain(projectionRoot);
+      // The remove is fire-and-forget after finalize; poll until the real rm
+      // completes (best-effort cleanup is not awaited by the executor).
+      for (let i = 0; i < 50 && existsSync(projectionRoot); i++) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(existsSync(projectionRoot)).toBe(false);
+    } finally {
+      t.cleanup();
+    }
   });
 });

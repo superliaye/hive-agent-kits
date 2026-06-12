@@ -45,6 +45,44 @@ describe("buildCliInvocation — claude-code", () => {
     expect(inv.stdin).toBe("next");
   });
 
+  test("addDir: --add-dir after the stream flags, before --append-system-prompt", () => {
+    const inv = buildCliInvocation("claude-code", {
+      systemPrompt: "you are terse",
+      history: [userTurn("say hi")],
+      addDir: "/hive/proj/run-1",
+    });
+    expect(inv.command).toEqual([
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--add-dir",
+      "/hive/proj/run-1",
+      "--append-system-prompt",
+      "you are terse",
+    ]);
+  });
+
+  test("addDir + RESUME: --add-dir precedes --resume", () => {
+    const inv = buildCliInvocation("claude-code", {
+      history: [userTurn("next")],
+      mode: { kind: "resume", sessionId: "sess-abc" },
+      addDir: "/hive/proj/run-2",
+    });
+    expect(inv.command).toEqual([
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--add-dir",
+      "/hive/proj/run-2",
+      "--resume",
+      "sess-abc",
+    ]);
+  });
+
   test("uses the LATEST user message, flattening its text blocks", () => {
     const history: Message[] = [
       userTurn("first"),
@@ -90,6 +128,15 @@ describe("buildCliInvocation — codex", () => {
     });
     expect(inv.command).toEqual(["codex", "exec", "--json", "-"]);
     expect(inv.stdin).toBe("you are terse\n\nsay hi");
+  });
+
+  test("addDir is ignored (v1): codex argv carries no --add-dir", () => {
+    const inv = buildCliInvocation("codex", {
+      history: [userTurn("say hi")],
+      addDir: "/hive/proj/run-1",
+    });
+    expect(inv.command).toEqual(["codex", "exec", "--json", "-"]);
+    expect(inv.command).not.toContain("--add-dir");
   });
 
   test("RESUME: ['codex','exec','resume',<id>,'--json','-']", () => {
