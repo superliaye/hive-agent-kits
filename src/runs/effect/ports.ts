@@ -152,6 +152,15 @@ export class FsRunner extends Context.Service<FsRunner, FsRunnerPort>()("runs/Fs
 // a separate Promise — a single resolved value can't say "stream now, exit
 // later". No `timeoutMs`: a long-lived stream has no single budget; the consumer
 // owns cancellation via `signal` (an aborted stream ends with a killed exit).
+//
+// Stream contracts (two deliberate divergences from run-shell):
+// - `stdout`: NO 64 KiB cap. A stream's purpose is unbounded incremental
+//   delivery; the consumer (C2b) bounds what it forwards.
+// - `stderr`: exposed symmetric with `stdout` (same UTF-8 decode), but the
+//   ADAPTER actively drains it so a full stderr pipe can never block the child
+//   (the >64 KiB-stderr deadlock) regardless of when/whether the consumer reads.
+//   C2b iterates it to route diagnostics to Trace or fold them into a
+//   `run.failed` RunEvent. `stderr:"ignore"` is deliberately NOT used.
 export type CliSpawnInput = {
   command: readonly string[];
   cwd: string;
@@ -159,7 +168,12 @@ export type CliSpawnInput = {
   stdin?: string;
 };
 export type CliSpawnResult =
-  | { kind: "spawned"; stdout: AsyncIterable<string>; exit: Promise<{ exitCode: number }> }
+  | {
+      kind: "spawned";
+      stdout: AsyncIterable<string>;
+      stderr: AsyncIterable<string>;
+      exit: Promise<{ exitCode: number }>;
+    }
   | { kind: "spawn_failed"; message: string };
 export type CliSpawnerPort = {
   spawn(input: CliSpawnInput): CliSpawnResult;

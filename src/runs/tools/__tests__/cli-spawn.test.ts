@@ -70,6 +70,66 @@ describe("createDefaultCliSpawner", () => {
     expect(out).toContain("hello");
     expect(await result.exit).toEqual({ exitCode: 0 });
   });
+
+  test("stderr is exposed and drained (decoded UTF-8)", async () => {
+    const spawner = createDefaultCliSpawner();
+    const result = spawner.spawn({
+      command: [NODE, "-e", "process.stderr.write('DIAG'); process.stdout.write('OUT')"],
+      cwd: process.cwd(),
+    });
+    expect(result.kind).toBe("spawned");
+    if (result.kind !== "spawned") return;
+    const [out, err] = await Promise.all([collect(result.stdout), collect(result.stderr)]);
+    expect(out).toContain("OUT");
+    expect(err).toContain("DIAG");
+    expect(await result.exit).toEqual({ exitCode: 0 });
+  });
+
+  test("large stderr does not deadlock when only stdout is consumed", async () => {
+    // stderr is drained eagerly by the adapter, so a stderr write larger than the
+    // pipe buffer cannot block the child even if the consumer only reads stdout.
+    const spawner = createDefaultCliSpawner();
+    const result = spawner.spawn({
+      command: [
+        NODE,
+        "-e",
+        "process.stderr.write('x'.repeat(2 * 1024 * 1024)); process.stdout.write('DONE')",
+      ],
+      cwd: process.cwd(),
+    });
+    expect(result.kind).toBe("spawned");
+    if (result.kind !== "spawned") return;
+    const out = await collect(result.stdout);
+    expect(out).toContain("DONE");
+    expect(await result.exit).toEqual({ exitCode: 0 });
+  });
+
+  test("large stdin to a child that exits without reading does not crash", async () => {
+    // r1-general-0 regression: Bun FileSink write/end reject (EOF) when the child
+    // closes stdin early. Those rejections must be swallowed, not floated into an
+    // unhandled rejection that crashes the daemon.
+    let unhandled: unknown;
+    const onUnhandled = (err: unknown) => {
+      unhandled = err;
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const spawner = createDefaultCliSpawner();
+      const result = spawner.spawn({
+        command: [NODE, "-e", "process.exit(0)"],
+        cwd: process.cwd(),
+        stdin: "y".repeat(8 * 1024 * 1024),
+      });
+      expect(result.kind).toBe("spawned");
+      if (result.kind !== "spawned") return;
+      await result.exit;
+      // Give a microtask/macrotask window for any rejection to surface.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(unhandled).toBeUndefined();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });
 
 describe("memoryCliSpawner", () => {
