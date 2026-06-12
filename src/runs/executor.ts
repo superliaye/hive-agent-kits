@@ -29,6 +29,8 @@
 // same thread while one is active throws synchronously — caller bug, not
 // a Run failure (no Run row is created for the rejected request).
 
+import { mkdirSync } from "node:fs";
+import { log } from "../lib/log.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import {
   type CompletionInput,
@@ -60,6 +62,8 @@ import type {
 import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
 import { type EffortDefault, isSymbolicEffort, isThinkingEffort } from "./symbolic.ts";
+import { buildCliInvocation } from "./tools/cli-invocation.ts";
+import { createDefaultCliSpawner } from "./tools/cli-spawn.ts";
 import { createDefaultFsRunner } from "./tools/file-tools.ts";
 import { LOAD_SKILL_TOOL_NAME } from "./tools/names.ts";
 import {
@@ -69,7 +73,7 @@ import {
   toolsForBindings,
 } from "./tools/registry.ts";
 import { createDefaultShellRunner, resolveWorkingDir } from "./tools/run-shell.ts";
-import type { PermissionEvents, Run, RunEvent, RunModuleEvents } from "./types.ts";
+import type { BackendEvents, PermissionEvents, Run, RunEvent, RunModuleEvents } from "./types.ts";
 
 export type StartRunInput = {
   threadId: string;
@@ -122,6 +126,12 @@ export type RunExecutor = {
    * `permission` source, separate from `events` (the `run` source).
    */
   permissionEvents: TypedEmitter<PermissionEvents>;
+
+  /**
+   * Dedicated `backend` AuditSource stream. Audit attaches this to the
+   * `backend` source — the CLI-spawn audit, separate from `events`.
+   */
+  backendEvents: TypedEmitter<BackendEvents>;
 };
 
 export type CreateRunExecutorDeps = {
@@ -183,8 +193,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     snapshot: () => ({ models: [] }),
   };
   const shell: ShellRunnerPort = deps.shell ?? createDefaultShellRunner();
-  // CLI streaming-spawn edge stays an optional dep — NOT instantiated until its
-  // consumer (the non-native dispatch arm, C2b) exists. No eager default here.
+  // CLI streaming-spawn edge for the non-native (CLI-backed) dispatch arm.
+  const cliSpawner: CliSpawnerPort = deps.cliSpawner ?? createDefaultCliSpawner();
   const fs: FsRunnerPort = deps.fs ?? createDefaultFsRunner();
   // No-op resolver when no capabilities are wired: load_skill yields isError,
   // and the Run-start listing is empty (no block injected).
@@ -196,6 +206,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   const now = deps.now ?? Date.now;
   const events = new TypedEmitter<RunModuleEvents>();
   const permissionEvents = new TypedEmitter<PermissionEvents>();
+  const backendEvents = new TypedEmitter<BackendEvents>();
   const registry: ToolRegistry = buildToolRegistry({
     shell,
     fs,
@@ -359,13 +370,14 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
           return;
         case "claude-code":
         case "codex":
-          yield await emitFailed(
-            run.id,
+          yield* runCliBackend({
+            runId: run.id,
             threadId,
             agentId,
-            "invalid_request",
-            `backend not yet implemented: ${backend}`,
-          );
+            backend,
+            ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+            signal: controller.signal,
+          });
           return;
       }
     } finally {
@@ -480,6 +492,140 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       threads.append({ threadId, role: "user", content: resultBlocks });
       // Loop: re-invoke the model with the tool_results now in history.
     }
+  }
+
+  // ─── Seam 3: the CLI backend ──────────────────────────────────────────────
+  //
+  // One long-lived CLI process per Run (ADR-0016) — no multi-turn re-invoke.
+  // Spawn once, stream stdout as the assistant message, finalize through the
+  // same lifecycle as the native loop. v1 captures the CLI's default-text-mode
+  // stdout (no stream-json parsing); stderr → Trace + a bounded tail for the
+  // failure message.
+  type CliArgs = {
+    runId: string;
+    threadId: string;
+    agentId: string;
+    backend: "claude-code" | "codex";
+    systemPrompt?: string;
+    signal: AbortSignal;
+  };
+
+  // Bounded stderr tail for a `run.failed` message. O(1) regardless of total
+  // stderr volume: re-truncate on each chunk.
+  const STDERR_TAIL_CAP = 2048;
+
+  async function* runCliBackend(args: CliArgs): AsyncIterable<RunEvent> {
+    const { runId, threadId, agentId, backend, signal } = args;
+
+    const { command, stdin } = buildCliInvocation(backend, {
+      ...(args.systemPrompt !== undefined ? { systemPrompt: args.systemPrompt } : {}),
+      history: threads.getCompletionMessages(threadId),
+    });
+
+    const cwd = resolveWorkingDir(agentId);
+    // The shell runner mkdir's its cwd but the CLI spawner does not — ensure the
+    // per-Agent workspace exists so spawn doesn't ENOENT on a never-used agent
+    // (mirrors run-shell.ts:103-107, best-effort).
+    try {
+      mkdirSync(cwd, { recursive: true });
+    } catch {
+      // Best-effort — spawn surfaces a usable error if cwd is unusable.
+    }
+
+    // Audit-first: record the spawn (redacted — binary name + arg COUNT only,
+    // never the prompt/systemPrompt/flags' values/auth) BEFORE spawning.
+    await backendEvents.emit("backend.spawn.requested", {
+      runId,
+      agentId,
+      backend,
+      binary: command[0] ?? backend,
+      argSummary: { count: Math.max(0, command.length - 1) },
+      hasStdin: stdin !== undefined,
+    });
+
+    const spawned = cliSpawner.spawn({
+      command,
+      cwd,
+      signal,
+      ...(stdin !== undefined ? { stdin } : {}),
+    });
+
+    if (spawned.kind === "spawn_failed") {
+      // ENOENT / binary-missing — a request-side problem, not a gateway error.
+      yield await emitFailed(
+        runId,
+        threadId,
+        agentId,
+        "invalid_request",
+        `${backend} spawn failed: ${spawned.message}`,
+      );
+      return;
+    }
+
+    // stderr sink: route each chunk to Trace (system diagnostics — AGENTS.md)
+    // and keep an O(1) bounded tail for the failure message. Started right after
+    // spawn; awaited before finalize so the tail is complete. The tail must
+    // survive the stream ending, so resolve it (a bare `.catch(()=>{})` would
+    // discard it).
+    const stderrDone: Promise<string> = (async () => {
+      let tail = "";
+      try {
+        for await (const chunk of spawned.stderr) {
+          log().debug({ module: "runs/cli", runId, backend }, chunk);
+          tail = (tail + chunk).slice(-STDERR_TAIL_CAP);
+        }
+      } catch {
+        // stream ended / cancelled — keep whatever tail accumulated.
+      }
+      return tail;
+    })();
+
+    // Accumulate stdout. No cap: CLI text output is bounded by the model
+    // response (see open question Q-STDOUTCAP).
+    let out = "";
+    for await (const chunk of spawned.stdout) out += chunk;
+
+    const { exitCode } = await spawned.exit;
+    const tail = await stderrDone;
+
+    // Cancellation precedence: a killed child exits nonzero, but an aborted
+    // signal means cancel, not fail (mirrors run-shell's `killed` precedence).
+    if (signal.aborted) {
+      await events.emit("run.cancelled", { runId, threadId, agentId });
+      runs.cancel(runId);
+      yield { type: "run.cancelled", runId, ts: now() };
+      return;
+    }
+
+    if (exitCode !== 0) {
+      yield await emitFailed(
+        runId,
+        threadId,
+        agentId,
+        "invalid_request",
+        `${backend} exited ${exitCode}${tail ? `:\n${tail}` : ""}`,
+      );
+      return;
+    }
+
+    // Zero exit: append the assistant message and complete, mirroring the
+    // native finalize. A CLI success has no gateway finish reason; "stop" is the
+    // FinishReason for normal completion.
+    const finalText = out.trim().length > 0 ? out : "[no output]";
+    const assistantMessage: ThreadMessage = threads.append({
+      threadId,
+      role: "assistant",
+      content: [{ type: "text", text: finalText }],
+    });
+    await events.emit("run.completed", { runId, threadId, agentId, finishReason: "stop" });
+    runs.complete({ runId, finishReason: "stop" });
+    yield {
+      type: "run.completed",
+      runId,
+      finishReason: "stop",
+      finalMessage: assistantMessage,
+      ts: now(),
+    };
   }
 
   // A single model turn: stream + accumulate, classify the outcome. Yields each
@@ -633,6 +779,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   return {
     events,
     permissionEvents,
+    backendEvents,
     startRun,
     getRun(runId) {
       return runs.get(runId);

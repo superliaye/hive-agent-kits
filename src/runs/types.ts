@@ -1,3 +1,4 @@
+import type { AgentBackend } from "../lib/capability-types.ts";
 import type { FinishReason, GatewayErrorCode, GatewayEvent } from "../model-gateway/types.ts";
 import type { ThreadMessage } from "../threads/types.ts";
 import type { RunStatus } from "./schema.ts";
@@ -98,6 +99,29 @@ export type RunModuleEvents = {
     runId: string;
     agentId: string;
     skill: string;
+  };
+};
+
+/**
+ * Dedicated `backend` AuditSource event map (ADR-0004; audit/types.ts source
+ * `"backend"`). A CLI-backed Run spawns one long-lived process; this records
+ * THAT spawn (not a tool dispatch — no toolUseId, no permission gate). Emitted
+ * on a SEPARATE TypedEmitter (the executor's `backendEvents`), audit-first
+ * before `cliSpawner.spawn(...)`. Payload carries REFS only — the binary NAME +
+ * an arg COUNT (never the prompt, the systemPrompt, the flags' values, or auth),
+ * mirroring `run.tool_use.requested`'s redaction.
+ */
+export type BackendEvents = {
+  "backend.spawn.requested": {
+    runId: string;
+    agentId: string;
+    backend: AgentBackend;
+    /** command[0] — the binary name, a ref (e.g. "claude"). */
+    binary: string;
+    /** Redacted arg summary — count only, never the values. */
+    argSummary: { count: number };
+    /** Whether a prompt rode stdin. No content — a presence flag. */
+    hasStdin: boolean;
   };
 };
 

@@ -283,6 +283,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // Dedicated `permission` audit source (Q4) — the executor's separate
     // permission emitter, distinct from its `events` (run source).
     permission: { events: runs.permissionEvents },
+    // Dedicated `backend` audit source — the executor's CLI-spawn emitter.
+    backend: { events: runs.backendEvents },
   });
 
   await registry.start();

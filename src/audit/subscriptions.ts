@@ -13,7 +13,7 @@ import type { Config, ConfigEvents } from "../config/types.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { ModelGateway } from "../model-gateway/index.ts";
 import type { RunExecutor } from "../runs/index.ts";
-import type { PermissionEvents, RunModuleEvents } from "../runs/types.ts";
+import type { BackendEvents, PermissionEvents, RunModuleEvents } from "../runs/types.ts";
 import type { SecretEvents } from "../secrets/types.ts";
 import type { ThreadEvents } from "../threads/index.ts";
 import type { AuditSvc } from "./effect/audit-live.ts";
@@ -40,6 +40,10 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   // event stream is read here. Satisfied by the Run executor's
   // `permissionEvents` emitter (separate from its `events`/run source).
   permission?: { events: TypedEmitter<PermissionEvents> };
+  // Dedicated `backend` source: the CLI-spawn audit. Consumer-owned port: only
+  // the event stream is read here. Satisfied by the Run executor's
+  // `backendEvents` emitter (separate from `events`/`permissionEvents`).
+  backend?: { events: TypedEmitter<BackendEvents> };
   // Future:
   //   mcp?:        { events: TypedEmitter<McpLifecycleEvents> }
   //   memory?:     { events: TypedEmitter<MemoryEvents> }
@@ -209,6 +213,10 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
     disposers.push(audit.attach("permission", sources.permission.events, permissionNormalizer));
   }
 
+  if (sources.backend) {
+    disposers.push(audit.attach("backend", sources.backend.events, backendNormalizer));
+  }
+
   return () => {
     for (const d of disposers) d();
   };
@@ -295,6 +303,24 @@ const permissionNormalizer: Normalizer<PermissionEvents> = {
       ...(event.command !== undefined && { command: event.command }),
       outcome: event.outcome,
       ...(event.reason !== undefined && { reason: event.reason }),
+    },
+  }),
+};
+
+// Backend: the dedicated `backend` AuditSource — a CLI-backed Run's spawn.
+// Payload carries the binary NAME (a ref) + an arg COUNT + a stdin presence
+// flag. Never the prompt, the systemPrompt, the flags' values, or auth — same
+// redaction posture as `run.tool_use.requested`.
+const backendNormalizer: Normalizer<BackendEvents> = {
+  "backend.spawn.requested": (event) => ({
+    event_type: "backend.spawn.requested",
+    run_id: event.runId,
+    agent_id: event.agentId,
+    payload: {
+      backend: event.backend,
+      binary: event.binary,
+      arg_count: event.argSummary.count,
+      has_stdin: event.hasStdin,
     },
   }),
 };
