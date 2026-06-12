@@ -12,7 +12,7 @@ import { AuditLive, type AuditSvc, Audit as AuditTag } from "../../audit/effect/
 import { wireSubscriptions } from "../../audit/subscriptions.ts";
 import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { openHiveDb } from "../../db/hive-db.ts";
-import { runtime } from "../../lib/paths.ts";
+import { runtime, runtimeRoot } from "../../lib/paths.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
 import {
@@ -545,6 +545,56 @@ describe("cli-dispatch — backend audit (redacted)", () => {
     expect(JSON.stringify(row?.payload)).not.toContain("sk-test");
 
     dispose();
+  });
+});
+
+// ─── C4: CLI spawn cwd resolution (same resolver as native) ──────────────────
+// The CLI spawn cwd must come from the SAME three-tier resolver as native
+// run_shell (ADR-0016 C4), so `claude --resume` stays cwd-stable across a
+// Thread's Runs. Asserted via the fake spawner's recorded `cwd`.
+describe("cli-dispatch — C4 Working Directory (spawn cwd)", () => {
+  test("no thread/agent default → spawn cwd is the tier-3 per-Agent workspace", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "ok" }),
+      exitCode: 0,
+    });
+    const { executor, threadId } = await setup({ cliSpawner: fake.spawner });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+    expect(fake.lastInput()?.cwd).toBe(join(runtimeRoot(), "agents", "test-agent", "workspace"));
+  });
+
+  test("agent config.workingDir (tier 2) drives the spawn cwd", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "ok" }),
+      exitCode: 0,
+    });
+    const { executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      agent: { config: { workingDir: "/agent/default/dir" } },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+    expect(fake.lastInput()?.cwd).toBe("/agent/default/dir");
+  });
+
+  test("Thread workingDir (tier 1) wins; resume reuses the SAME cwd across turns", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "sess-abc", text: "first" }),
+      exitCode: 0,
+    });
+    const { threads, executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      agent: { config: { workingDir: "/agent/default/dir" } },
+    });
+    await threads.setScope(threadId, { workingDir: "/thread/pick" });
+
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "t1" }] }));
+    const cwd1 = fake.lastInput()?.cwd;
+    expect(cwd1).toBe("/thread/pick");
+
+    // Turn 2 RESUMEs — the cwd must be identical (claude --resume is cwd-scoped).
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "t2" }] }));
+    expect(fake.lastInput()?.command).toContain("--resume");
+    expect(fake.lastInput()?.cwd).toBe(cwd1);
   });
 });
 

@@ -315,6 +315,17 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const threadModel = thread?.modelPref ?? undefined;
       const threadEffort = effortDefaultOrUndefined(thread?.effortPref);
 
+      // Working Directory (ADR-0016 C4): resolved ONCE here — the only scope
+      // holding both thread + agent — then threaded to both backends so native
+      // run_shell and the CLI spawn share a cwd (keeps `claude --resume` stable).
+      const agentDefaultWorkingDir =
+        typeof agent.config.workingDir === "string" ? agent.config.workingDir : undefined;
+      const cwd = resolveWorkingDir({
+        agentId,
+        threadWorkingDir: thread?.workingDir ?? null,
+        ...(agentDefaultWorkingDir !== undefined ? { agentDefaultWorkingDir } : {}),
+      });
+
       // Seam 2 — resolve model + effort + backend. The runnable catalog feeds
       // the symbolic-default resolver (S2): a "latest"/"highest" default
       // resolves to a credentialed+routable concrete model/effort here.
@@ -411,6 +422,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
             threadId,
             agentId,
             model,
+            cwd,
             ...(systemPrompt !== undefined ? { systemPrompt } : {}),
             ...(effort !== undefined ? { effort } : {}),
             auth,
@@ -432,6 +444,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
             threadId,
             agentId,
             backend,
+            cwd,
             ...(systemPrompt !== undefined ? { systemPrompt } : {}),
             boundSkills,
             signal: controller.signal,
@@ -457,6 +470,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     threadId: string;
     agentId: string;
     model: string;
+    /** Resolved Working Directory for this Run (ADR-0016 C4) — native tool cwd. */
+    cwd: string;
     systemPrompt?: string;
     effort?: ThinkingEffort;
     auth: CompletionInput["auth"];
@@ -526,7 +541,14 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // call, then feed the tool_results back as a single user message.
       const resultBlocks: ContentBlock[] = [];
       for (const call of outcome.calls) {
-        const result = await dispatchToolCall(runId, agentId, call, args.boundSkills, args.signal);
+        const result = await dispatchToolCall(
+          runId,
+          agentId,
+          args.cwd,
+          call,
+          args.boundSkills,
+          args.signal,
+        );
         resultBlocks.push({
           type: "tool_result",
           tool_use_id: call.id,
@@ -555,6 +577,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     threadId: string;
     agentId: string;
     backend: "claude-code" | "codex";
+    /** Resolved Working Directory for this Run (ADR-0016 C4) — CLI spawn cwd. */
+    cwd: string;
     systemPrompt?: string;
     /** The Agent's bound skill names — projected into `--add-dir` (claude-code). */
     boundSkills: readonly string[];
@@ -566,7 +590,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   const STDERR_TAIL_CAP = 2048;
 
   async function* runCliBackend(args: CliArgs): AsyncIterable<RunEvent> {
-    const { runId, threadId, agentId, backend, signal } = args;
+    const { runId, threadId, agentId, backend, cwd, signal } = args;
     const id: RunIdentity = { runId, threadId, agentId };
 
     // Create-vs-resume: resume only when the Thread carries a session id for THIS
@@ -577,7 +601,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         ? { kind: "resume", sessionId: stored.sessionId }
         : { kind: "create" };
 
-    const cwd = resolveWorkingDir(agentId);
     // The shell runner mkdir's its cwd but the CLI spawner does not — ensure the
     // per-Agent workspace exists so spawn doesn't ENOENT on a never-used agent
     // (mirrors run-shell.ts:103-107, best-effort).
@@ -802,6 +825,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   async function dispatchToolCall(
     runId: string,
     agentId: string,
+    cwd: string,
     call: { id: string; name: string; input: unknown },
     boundSkills: readonly string[],
     signal: AbortSignal,
@@ -863,7 +887,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     const ctx: ToolContext = {
       agentId,
       runId,
-      cwd: resolveWorkingDir(agentId),
+      cwd,
       boundSkills,
       signal,
     };

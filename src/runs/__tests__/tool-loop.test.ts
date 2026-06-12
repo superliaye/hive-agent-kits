@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { ManagedRuntime } from "effect";
 import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
+import { runtimeRoot } from "../../lib/paths.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
 import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
@@ -657,6 +659,71 @@ describe("tool-loop — D-1 file tools (write then read round-trip)", () => {
       .find((b) => b.type === "tool_result");
     if (result?.type === "tool_result") expect(result.is_error).toBe(true);
     expect(files.size).toBe(0);
+  });
+});
+
+// ─── C4: native ToolContext.cwd resolution ──────────────────────────────────
+
+describe("tool-loop — C4 Working Directory (native ctx.cwd)", () => {
+  test("no thread/agent default → ctx.cwd is the tier-3 per-Agent workspace (no regression)", async () => {
+    const seenCwd: string[] = [];
+    const { executor, threadId } = await build({
+      script: toolThenTextScript({
+        toolName: "run_shell",
+        toolInput: { command: "node", args: [] },
+        toolTurns: 1,
+      }),
+      shell: {
+        run: async ({ cwd }) => {
+          seenCwd.push(cwd);
+          return { stdout: "OK", stderr: "", exitCode: 0 };
+        },
+      },
+      // makeAgent default config is { model: MODEL } — no workingDir.
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
+    expect(seenCwd).toEqual([join(runtimeRoot(), "agents", "test-agent", "workspace")]);
+  });
+
+  test("agent config.workingDir (tier 2) drives ctx.cwd", async () => {
+    const seenCwd: string[] = [];
+    const { executor, threadId } = await build({
+      script: toolThenTextScript({
+        toolName: "run_shell",
+        toolInput: { command: "node", args: [] },
+        toolTurns: 1,
+      }),
+      shell: {
+        run: async ({ cwd }) => {
+          seenCwd.push(cwd);
+          return { stdout: "OK", stderr: "", exitCode: 0 };
+        },
+      },
+      agent: { config: { model: MODEL, workingDir: "/agent/default/dir" } },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
+    expect(seenCwd).toEqual(["/agent/default/dir"]);
+  });
+
+  test("Thread workingDir (tier 1) wins over the agent default", async () => {
+    const seenCwd: string[] = [];
+    const { threads, executor, threadId } = await build({
+      script: toolThenTextScript({
+        toolName: "run_shell",
+        toolInput: { command: "node", args: [] },
+        toolTurns: 1,
+      }),
+      shell: {
+        run: async ({ cwd }) => {
+          seenCwd.push(cwd);
+          return { stdout: "OK", stderr: "", exitCode: 0 };
+        },
+      },
+      agent: { config: { model: MODEL, workingDir: "/agent/default/dir" } },
+    });
+    await threads.setScope(threadId, { workingDir: "/thread/pick" });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
+    expect(seenCwd).toEqual(["/thread/pick"]);
   });
 });
 

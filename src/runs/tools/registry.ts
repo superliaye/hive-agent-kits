@@ -22,8 +22,9 @@ export type ToolResult = { content: string; isError: boolean; loadedSkill?: stri
 export type ToolContext = {
   agentId: string;
   runId: string;
-  // The working directory the tool runs in. F1 defaults this via
-  // resolveWorkingDir(); F/C4 owns the three-tier Working Directory resolution.
+  // The working directory the tool runs in. Resolved once per Run by the
+  // executor via resolveWorkingDir()'s three tiers (ADR-0016 C4): Thread pick →
+  // agent default → per-Agent ~/.hive workspace. File tools confine to this cwd.
   cwd: string;
   // The Agent's spawn-time bound skill names for this Run. `load_skill` resolves
   // only names in this set — skill loading is scoped to the frozen Harness

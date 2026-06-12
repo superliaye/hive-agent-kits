@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
+import { runtimeRoot } from "../../../lib/paths.ts";
 import type { FsRunnerPort, ShellRunnerPort, SkillResolverPort } from "../../effect/ports.ts";
 import { type BuildRegistryDeps, buildToolRegistry, toolsForBindings } from "../registry.ts";
 import { createDefaultShellRunner, makeRunShellTool, resolveWorkingDir } from "../run-shell.ts";
@@ -61,10 +63,49 @@ describe("run_shell tool", () => {
     expect(invoked).toBe(false);
   });
 
-  test("resolveWorkingDir stub returns a per-Agent workspace default", () => {
-    const dir = resolveWorkingDir("my-agent");
-    expect(dir).toContain("my-agent");
-    expect(dir).toContain("workspace");
+  describe("resolveWorkingDir three-tier (ADR-0016 C4)", () => {
+    test("tier 1 — Thread workingDir wins over agent default + fallback", () => {
+      const dir = resolveWorkingDir({
+        agentId: "my-agent",
+        threadWorkingDir: "/thread/dir",
+        agentDefaultWorkingDir: "/agent/dir",
+      });
+      expect(dir).toBe("/thread/dir");
+    });
+
+    test("tier 2 — agent default wins when no Thread pick", () => {
+      const dir = resolveWorkingDir({
+        agentId: "my-agent",
+        threadWorkingDir: null,
+        agentDefaultWorkingDir: "/agent/dir",
+      });
+      expect(dir).toBe("/agent/dir");
+    });
+
+    test("tier 3 — fallback equals the old per-Agent workspace path (no regression)", () => {
+      const dir = resolveWorkingDir({ agentId: "my-agent" });
+      expect(dir).toBe(join(runtimeRoot(), "agents", "my-agent", "workspace"));
+      expect(dir).toContain("my-agent");
+      expect(dir).toContain("workspace");
+    });
+
+    test("empty strings fall through to the next tier", () => {
+      const dir = resolveWorkingDir({
+        agentId: "my-agent",
+        threadWorkingDir: "",
+        agentDefaultWorkingDir: "",
+      });
+      expect(dir).toBe(join(runtimeRoot(), "agents", "my-agent", "workspace"));
+    });
+
+    test("determinism — same inputs yield the same output across calls", () => {
+      const input = {
+        agentId: "my-agent",
+        threadWorkingDir: null,
+        agentDefaultWorkingDir: "/agent/dir",
+      };
+      expect(resolveWorkingDir(input)).toBe(resolveWorkingDir(input));
+    });
   });
 
   test("default ShellRunner actually runs node -e cross-platform", async () => {

@@ -79,11 +79,28 @@ export function makeRunShellTool(shell: ShellRunnerPort): ToolHandler {
   };
 }
 
-// Working-directory resolution seam (Q7). F1 defaults `cwd` to a per-Agent
-// `~/.hive` workspace dir. F/C4 owns the real three-tier Working Directory
-// resolution and replaces this stub body — keep the signature stable.
-export function resolveWorkingDir(agentId: string): string {
-  return join(runtimeRoot(), "agents", agentId, "workspace");
+// Three-tier Working Directory resolution (ADR-0016 C4). Pure + deterministic
+// for a given (thread, agent) so `claude --resume` (cwd-scoped) stays stable
+// across a Thread's Runs — reads no clock/random/PWD. Tiers, in precedence:
+//   1. per-conversation — the Thread's `working_dir` pick
+//   2. agent default    — the Agent's `config.workingDir`
+//   3. per-Agent `~/.hive` workspace fallback
+// Empty/absent values fall through. Resolved ONCE by the executor (the only
+// scope holding both thread + agent) and threaded to both backends.
+export function resolveWorkingDir(input: {
+  agentId: string;
+  threadWorkingDir?: string | null;
+  agentDefaultWorkingDir?: string;
+}): string {
+  const tier1 =
+    typeof input.threadWorkingDir === "string" && input.threadWorkingDir.length > 0
+      ? input.threadWorkingDir
+      : undefined;
+  const tier2 =
+    typeof input.agentDefaultWorkingDir === "string" && input.agentDefaultWorkingDir.length > 0
+      ? input.agentDefaultWorkingDir
+      : undefined;
+  return tier1 ?? tier2 ?? join(runtimeRoot(), "agents", input.agentId, "workspace");
 }
 
 // Per-stream capture cap. Bounds accumulation at the runner so a runaway

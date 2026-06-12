@@ -55,7 +55,7 @@ describe("projectSkillsForCli", () => {
     expect(skillsDir.endsWith(join(".claude", "skills"))).toBe(true);
 
     // Provably outside the Agent's workspace cwd — the relative path escapes.
-    const cwd = resolveWorkingDir(AGENT);
+    const cwd = resolveWorkingDir({ agentId: AGENT });
     const rel = relative(cwd, dest);
     expect(rel.startsWith("..")).toBe(true);
   });
