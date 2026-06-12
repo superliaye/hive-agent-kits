@@ -14,7 +14,13 @@ export type Run = {
   startedAt: number;
   endedAt?: number;
   finishReason?: FinishReason;
-  errorCode?: GatewayErrorCode | "daemon_restart" | "no_credentials" | "agent_not_found";
+  errorCode?:
+    | GatewayErrorCode
+    | "daemon_restart"
+    | "no_credentials"
+    | "agent_not_found"
+    | "backend_unavailable"
+    | "backend_exited";
   errorMessage?: string;
 };
 

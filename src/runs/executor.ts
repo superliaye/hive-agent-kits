@@ -62,8 +62,9 @@ import type {
 import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
 import { type EffortDefault, isSymbolicEffort, isThinkingEffort } from "./symbolic.ts";
-import { buildCliInvocation } from "./tools/cli-invocation.ts";
+import { buildCliInvocation, type CliInvocationMode } from "./tools/cli-invocation.ts";
 import { createDefaultCliSpawner } from "./tools/cli-spawn.ts";
+import { parseCliStream } from "./tools/cli-stream.ts";
 import { createDefaultFsRunner } from "./tools/file-tools.ts";
 import { LOAD_SKILL_TOOL_NAME } from "./tools/names.ts";
 import {
@@ -223,35 +224,35 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   // audit-first ordering, the RunEvent shape, and the FinishReason convention
   // have one home and one test surface.
 
+  // The Run's identity triad. Bundled into one object (Fix r2-ddd-1) so the
+  // three same-typed ids can't be transposed across the audit/event path; the
+  // interim object-param fix ahead of project-wide branded ids.
+  type RunIdentity = { runId: string; threadId: string; agentId: string };
+
   async function finalizeCompleted(
-    runId: string,
-    threadId: string,
-    agentId: string,
+    id: RunIdentity,
     finishReason: FinishReason,
     finalMessage: ThreadMessage,
   ): Promise<RunEvent> {
+    const { runId, threadId, agentId } = id;
     await events.emit("run.completed", { runId, threadId, agentId, finishReason });
     runs.complete({ runId, finishReason });
     return { type: "run.completed", runId, finishReason, finalMessage, ts: now() };
   }
 
-  async function finalizeCancelled(
-    runId: string,
-    threadId: string,
-    agentId: string,
-  ): Promise<RunEvent> {
+  async function finalizeCancelled(id: RunIdentity): Promise<RunEvent> {
+    const { runId, threadId, agentId } = id;
     await events.emit("run.cancelled", { runId, threadId, agentId });
     runs.cancel(runId);
     return { type: "run.cancelled", runId, ts: now() };
   }
 
   async function finalizeFailed(
-    runId: string,
-    threadId: string,
-    agentId: string,
+    id: RunIdentity,
     code: NonNullable<Run["errorCode"]>,
     message: string,
   ): Promise<RunEvent> {
+    const { runId, threadId, agentId } = id;
     await events.emit("run.failed", { runId, threadId, agentId, code, message });
     runs.fail({ runId, code, message });
     return { type: "run.failed", runId, error: { code, message }, ts: now() };
@@ -284,9 +285,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
           model: modelOverride ?? prefs.getModel(agentId) ?? MODEL_FALLBACK,
         });
         yield await finalizeFailed(
-          run.id,
-          threadId,
-          agentId,
+          { runId: run.id, threadId, agentId },
           "agent_not_found",
           `unknown agent: ${agentId}`,
         );
@@ -327,9 +326,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         // symbolic "latest").
         const run = runs.create({ threadId, agentId, model });
         yield await finalizeFailed(
-          run.id,
-          threadId,
-          agentId,
+          { runId: run.id, threadId, agentId },
           resolved.failure.code,
           resolved.failure.message,
         );
@@ -337,18 +334,23 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       }
       const { provider, effort, backend } = resolved;
 
-      // Auth lookup.
-      const auth = await secrets.getAuth(provider);
-      if (!auth) {
-        const run = runs.create({ threadId, agentId, model });
-        yield await finalizeFailed(
-          run.id,
-          threadId,
-          agentId,
-          "no_credentials",
-          `no secret stored for provider "${provider}" — add it in Settings`,
-        );
-        return;
+      // Auth lookup. ONLY the native backend authenticates through a Hive secret
+      // (Fix r1-general-0). The CLI backends (claude-code/codex) authenticate via
+      // their OWN login (claude login / codex OAuth), so they skip this gate
+      // entirely — a CLI that isn't logged in fails truthfully through its own
+      // nonzero exit (→ backend_exited). runCliBackend never receives Hive auth.
+      let auth: CompletionInput["auth"] | undefined;
+      if (backend === "native") {
+        auth = await secrets.getAuth(provider);
+        if (!auth) {
+          const run = runs.create({ threadId, agentId, model });
+          yield await finalizeFailed(
+            { runId: run.id, threadId, agentId },
+            "no_credentials",
+            `no secret stored for provider "${provider}" — add it in Settings`,
+          );
+          return;
+        }
       }
 
       // Append the user message FIRST so on-disk history matches what we send.
@@ -381,6 +383,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // Seam 3 — backend dispatch. F replaces the non-native arms.
       switch (backend) {
         case "native":
+          // auth is set above for the native branch (the gate ran); narrow it.
+          if (!auth) throw new Error("runs/executor: native backend reached without auth");
           yield* runToolLoop({
             runId: run.id,
             threadId,
@@ -438,6 +442,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
   async function* runToolLoop(args: LoopArgs): AsyncIterable<RunEvent> {
     const { runId, threadId, agentId, model, maxIterations } = args;
+    const id: RunIdentity = { runId, threadId, agentId };
     const finite = maxIterations > 0;
     let turns = 0;
 
@@ -461,11 +466,11 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const outcome = yield* runTurn(runId, completionInput);
 
       if (outcome.kind === "cancelled") {
-        yield await finalizeCancelled(runId, threadId, agentId);
+        yield await finalizeCancelled(id);
         return;
       }
       if (outcome.kind === "error") {
-        yield await finalizeFailed(runId, threadId, agentId, outcome.code, outcome.message);
+        yield await finalizeFailed(id, outcome.code, outcome.message);
         return;
       }
 
@@ -485,13 +490,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
       // No tools wanted, or this was the grace turn → finalize.
       if (outcome.kind === "text" || graceTurn) {
-        yield await finalizeCompleted(
-          runId,
-          threadId,
-          agentId,
-          outcome.finishReason,
-          assistantMessage,
-        );
+        yield await finalizeCompleted(id, outcome.finishReason, assistantMessage);
         return;
       }
 
@@ -514,10 +513,14 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
   // ─── Seam 3: the CLI backend ──────────────────────────────────────────────
   //
-  // One long-lived CLI process per Run (ADR-0016) — no multi-turn re-invoke.
-  // Spawn once, stream stdout as the assistant message, finalize through the
-  // same lifecycle as the native loop. v1 captures the CLI's default-text-mode
-  // stdout (no stream-json parsing); stderr → Trace + a bounded tail for the
+  // One long-lived CLI process per Run (ADR-0016) — no multi-turn re-invoke
+  // within a Run. Conversation continuity ACROSS Runs rides the CLI's OWN native
+  // session (Fix r1-architecture-1): each CLI runs in JSON-STREAM mode, we
+  // capture its session id and persist it on the Thread, and the next turn
+  // RESUMEs that session — sending ONLY the latest user message, since the CLI
+  // replays its own on-disk history. The JSON event stream is parsed at the
+  // boundary (cli-stream.ts) into assistant text (→ the assistant message) +
+  // the session id (→ persisted). stderr → Trace + a bounded tail for the
   // failure message.
   type CliArgs = {
     runId: string;
@@ -534,10 +537,20 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
   async function* runCliBackend(args: CliArgs): AsyncIterable<RunEvent> {
     const { runId, threadId, agentId, backend, signal } = args;
+    const id: RunIdentity = { runId, threadId, agentId };
+
+    // Create-vs-resume: resume only when the Thread carries a session id for THIS
+    // backend. A stale id from a different backend is ignored (create fresh).
+    const stored = threads.getCliSession(threadId);
+    const mode: CliInvocationMode =
+      stored && stored.backend === backend
+        ? { kind: "resume", sessionId: stored.sessionId }
+        : { kind: "create" };
 
     const { command, stdin } = buildCliInvocation(backend, {
       ...(args.systemPrompt !== undefined ? { systemPrompt: args.systemPrompt } : {}),
       history: threads.getCompletionMessages(threadId),
+      mode,
     });
 
     const cwd = resolveWorkingDir(agentId);
@@ -569,12 +582,11 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     });
 
     if (spawned.kind === "spawn_failed") {
-      // ENOENT / binary-missing — a request-side problem, not a gateway error.
+      // ENOENT / binary-missing — the CLI isn't installed/spawnable: a Run-owned
+      // backend failure (Fix r1-ddd-1), not a gateway error.
       yield await finalizeFailed(
-        runId,
-        threadId,
-        agentId,
-        "invalid_request",
+        id,
+        "backend_unavailable",
         `${backend} spawn failed: ${spawned.message}`,
       );
       return;
@@ -598,10 +610,14 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       return tail;
     })();
 
-    // Accumulate stdout. No cap: CLI text output is bounded by the model
-    // response (see open question Q-STDOUTCAP).
+    // Parse the JSON event stream at the boundary: accumulate assistant text and
+    // capture the native session id. Unknown events are ignored (cli-stream.ts).
     let out = "";
-    for await (const chunk of spawned.stdout) out += chunk;
+    let sessionId: string | undefined;
+    for await (const fact of parseCliStream(backend, spawned.stdout)) {
+      if (fact.kind === "text") out += fact.text;
+      else sessionId = fact.sessionId;
+    }
 
     const { exitCode } = await spawned.exit;
     const tail = await stderrDone;
@@ -609,31 +625,39 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     // Cancellation precedence: a killed child exits nonzero, but an aborted
     // signal means cancel, not fail (mirrors run-shell's `killed` precedence).
     if (signal.aborted) {
-      yield await finalizeCancelled(runId, threadId, agentId);
+      yield await finalizeCancelled(id);
       return;
     }
 
     if (exitCode !== 0) {
+      // A logged-out CLI / runtime error surfaces here as a nonzero exit — a
+      // Run-owned backend failure (Fix r1-ddd-1). The folded stderr tail carries
+      // the human detail.
       yield await finalizeFailed(
-        runId,
-        threadId,
-        agentId,
-        "invalid_request",
+        id,
+        "backend_exited",
         `${backend} exited ${exitCode}${tail ? `:\n${tail}` : ""}`,
       );
       return;
     }
 
-    // Zero exit: append the assistant message and complete, mirroring the
-    // native finalize. A CLI success has no gateway finish reason; "stop" is the
-    // FinishReason for normal completion.
+    // Zero exit: persist the captured session id BEFORE finalizing so a follow-up
+    // turn on this Thread resumes it. Only on a create (a resume keeps the same
+    // id); internal continuity state, not audited.
+    if (mode.kind === "create" && sessionId !== undefined) {
+      threads.setCliSession(threadId, { backend, sessionId });
+    }
+
+    // Append the assistant message and complete, mirroring the native finalize. A
+    // CLI success has no gateway finish reason; "stop" is the FinishReason for
+    // normal completion.
     const finalText = out.trim().length > 0 ? out : "[no output]";
     const assistantMessage: ThreadMessage = threads.append({
       threadId,
       role: "assistant",
       content: [{ type: "text", text: finalText }],
     });
-    yield await finalizeCompleted(runId, threadId, agentId, "stop", assistantMessage);
+    yield await finalizeCompleted(id, "stop", assistantMessage);
   }
 
   // A single model turn: stream + accumulate, classify the outcome. Yields each

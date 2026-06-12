@@ -322,3 +322,39 @@ describe("ThreadsStore.setScope (S1, ADR-0015)", () => {
     expect(store.get("nope")).toBeUndefined();
   });
 });
+
+describe("ThreadsStore.getCliSession / setCliSession (CLI continuity, ADR-0016)", () => {
+  test("fresh thread has no CLI session", () => {
+    const t = store.create({ agentId: "agent-a" });
+    expect(t.cliSessionBackend).toBeNull();
+    expect(t.cliSessionId).toBeNull();
+    expect(store.getCliSession(t.id)).toBeUndefined();
+  });
+
+  test("set then get round-trips the backend + session id", () => {
+    const t = store.create({ agentId: "agent-a" });
+    store.setCliSession(t.id, { backend: "claude-code", sessionId: "sess-abc" });
+    expect(store.getCliSession(t.id)).toEqual({ backend: "claude-code", sessionId: "sess-abc" });
+    const got = store.get(t.id);
+    expect(got?.cliSessionBackend).toBe("claude-code");
+    expect(got?.cliSessionId).toBe("sess-abc");
+  });
+
+  test("a later set overwrites the stored token", () => {
+    const t = store.create({ agentId: "agent-a" });
+    store.setCliSession(t.id, { backend: "claude-code", sessionId: "sess-1" });
+    store.setCliSession(t.id, { backend: "codex", sessionId: "thr-2" });
+    expect(store.getCliSession(t.id)).toEqual({ backend: "codex", sessionId: "thr-2" });
+  });
+
+  test("does not bump updatedAt (internal continuity state, not a message)", () => {
+    const t = store.create({ agentId: "agent-a" });
+    const before = store.get(t.id)?.updatedAt;
+    store.setCliSession(t.id, { backend: "claude-code", sessionId: "sess-abc" });
+    expect(store.get(t.id)?.updatedAt).toBe(before);
+  });
+
+  test("getCliSession returns undefined on a missing thread", () => {
+    expect(store.getCliSession("nope")).toBeUndefined();
+  });
+});

@@ -5,19 +5,44 @@ import { buildCliInvocation } from "../cli-invocation.ts";
 const userTurn = (text: string): Message => ({ role: "user", content: [{ type: "text", text }] });
 
 describe("buildCliInvocation — claude-code", () => {
-  test("no systemPrompt: command is ['claude','-p'], prompt on stdin", () => {
+  test("CREATE (default): JSON-stream argv, prompt on stdin", () => {
     const inv = buildCliInvocation("claude-code", { history: [userTurn("say hi")] });
-    expect(inv.command).toEqual(["claude", "-p"]);
+    expect(inv.command).toEqual(["claude", "-p", "--output-format", "stream-json", "--verbose"]);
     expect(inv.stdin).toBe("say hi");
   });
 
-  test("with systemPrompt: --append-system-prompt + the body, prompt on stdin", () => {
+  test("CREATE with systemPrompt: --append-system-prompt after the stream flags", () => {
     const inv = buildCliInvocation("claude-code", {
       systemPrompt: "you are terse",
       history: [userTurn("say hi")],
     });
-    expect(inv.command).toEqual(["claude", "-p", "--append-system-prompt", "you are terse"]);
+    expect(inv.command).toEqual([
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--append-system-prompt",
+      "you are terse",
+    ]);
     expect(inv.stdin).toBe("say hi");
+  });
+
+  test("RESUME: adds --resume <sessionId>", () => {
+    const inv = buildCliInvocation("claude-code", {
+      history: [userTurn("next")],
+      mode: { kind: "resume", sessionId: "sess-abc" },
+    });
+    expect(inv.command).toEqual([
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--resume",
+      "sess-abc",
+    ]);
+    expect(inv.stdin).toBe("next");
   });
 
   test("uses the LATEST user message, flattening its text blocks", () => {
@@ -52,19 +77,28 @@ describe("buildCliInvocation — claude-code", () => {
 });
 
 describe("buildCliInvocation — codex", () => {
-  test("no systemPrompt: ['codex','exec','-'], prompt on stdin", () => {
+  test("CREATE (default): ['codex','exec','--json','-'], prompt on stdin", () => {
     const inv = buildCliInvocation("codex", { history: [userTurn("say hi")] });
-    expect(inv.command).toEqual(["codex", "exec", "-"]);
+    expect(inv.command).toEqual(["codex", "exec", "--json", "-"]);
     expect(inv.stdin).toBe("say hi");
   });
 
-  test("with systemPrompt: folded into stdin (no flag)", () => {
+  test("CREATE with systemPrompt: folded into stdin (no flag)", () => {
     const inv = buildCliInvocation("codex", {
       systemPrompt: "you are terse",
       history: [userTurn("say hi")],
     });
-    expect(inv.command).toEqual(["codex", "exec", "-"]);
+    expect(inv.command).toEqual(["codex", "exec", "--json", "-"]);
     expect(inv.stdin).toBe("you are terse\n\nsay hi");
+  });
+
+  test("RESUME: ['codex','exec','resume',<id>,'--json','-']", () => {
+    const inv = buildCliInvocation("codex", {
+      history: [userTurn("next")],
+      mode: { kind: "resume", sessionId: "thr-xyz" },
+    });
+    expect(inv.command).toEqual(["codex", "exec", "resume", "thr-xyz", "--json", "-"]);
+    expect(inv.stdin).toBe("next");
   });
 });
 

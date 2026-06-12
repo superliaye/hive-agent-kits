@@ -43,6 +43,14 @@ export const threads = sqliteTable("threads", {
   // point at Run start and fails soft.
   model_pref: text("model_pref"),
   effort_pref: text("effort_pref"),
+  // Per-Thread CLI native-session continuity (ADR-0016). When a CLI backend
+  // (claude-code/codex) creates a session, its session id is persisted here
+  // alongside the backend it belongs to, so the next turn RESUMEs the CLI's own
+  // on-disk history instead of re-sending the transcript. NULL = no session yet.
+  // `cli_session_backend` guards against resuming a stale id after the Thread's
+  // backend changed. Internal continuity state — not a user action, not audited.
+  cli_session_backend: text("cli_session_backend"),
+  cli_session_id: text("cli_session_id"),
 });
 
 export const messages = sqliteTable(
@@ -72,6 +80,8 @@ const THREADS_ADDED_COLUMNS: ReadonlyArray<{ name: string; ddl: string }> = [
   { name: "archived_at", ddl: "archived_at INTEGER" },
   { name: "model_pref", ddl: "model_pref TEXT" },
   { name: "effort_pref", ddl: "effort_pref TEXT" },
+  { name: "cli_session_backend", ddl: "cli_session_backend TEXT" },
+  { name: "cli_session_id", ddl: "cli_session_id TEXT" },
 ];
 
 // Minimal handle shape: `run` for DDL writes, `$client` (the bun:sqlite
@@ -97,7 +107,9 @@ export function ensureThreadsSchema(db: EnsureHandle): void {
       last_read_at INTEGER,
       archived_at INTEGER,
       model_pref TEXT,
-      effort_pref TEXT
+      effort_pref TEXT,
+      cli_session_backend TEXT,
+      cli_session_id TEXT
     )
   `);
   db.run(sql`

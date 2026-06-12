@@ -24,9 +24,23 @@ export type Thread = {
   // independent — setting one never clobbers the other.
   modelPref: string | null;
   effortPref: string | null;
+  // CLI native-session continuity (ADR-0016). The backend the stored session id
+  // belongs to + the CLI's own session id (claude `session_id` / codex
+  // `thread_id`). Both null until a CLI backend creates a session. The resolver
+  // resumes only when `cliSessionBackend` matches the Run's resolved backend.
+  cliSessionBackend: string | null;
+  cliSessionId: string | null;
 };
 
 export type TitleSource = "auto" | "manual";
+
+// A Thread's stored CLI native-session token (ADR-0016): the backend it belongs
+// to + the CLI's own session id. The executor reads this to decide create-vs-
+// resume and writes it after a successful create.
+export type CliSession = {
+  backend: string;
+  sessionId: string;
+};
 
 export type ThreadMessage = {
   id: string;

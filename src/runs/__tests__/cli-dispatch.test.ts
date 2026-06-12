@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { ManagedRuntime } from "effect";
 import { AuditLive, type AuditSvc, Audit as AuditTag } from "../../audit/effect/audit-live.ts";
 import { wireSubscriptions } from "../../audit/subscriptions.ts";
-import type { Agent, Catalog } from "../../catalog/index.ts";
+import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { openHiveDb } from "../../db/hive-db.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
@@ -41,11 +41,9 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 }
 
 function makeCatalogStub(agents: Agent[]): Catalog {
-  const events = new TypedEmitter<{
-    "agent.created": never;
-    "agent.destroyed": never;
-    "harness.updated": never;
-  }>();
+  // Typed to the Catalog's own event map — no casts. The executor doesn't read
+  // catalog events, but a correctly-typed emitter satisfies the interface.
+  const events = new TypedEmitter<CatalogEvents>();
   return {
     list: () => agents,
     get: (id) => agents.find((a) => a.agentId === id),
@@ -57,8 +55,7 @@ function makeCatalogStub(agents: Agent[]): Catalog {
     },
     start: async () => {},
     rescan: async () => {},
-    // biome-ignore lint/suspicious/noExplicitAny: stub event emitter; executor doesn't read catalog events.
-    events: events as any,
+    events,
     dispose: () => {},
   };
 }
@@ -76,6 +73,31 @@ async function collect(stream: AsyncIterable<RunEvent>): Promise<RunEvent[]> {
 
 async function* fromChunks(chunks: readonly string[]): AsyncIterable<string> {
   for (const c of chunks) yield c;
+}
+
+// Representative claude `--output-format stream-json` JSONL: an init event
+// carrying session_id, an assistant message with text blocks, then a result.
+function claudeStreamJsonl(opts: { sessionId: string; text: string }): string[] {
+  return [
+    `${JSON.stringify({ type: "system", subtype: "init", session_id: opts.sessionId })}\n`,
+    `${JSON.stringify({
+      type: "assistant",
+      message: { content: [{ type: "text", text: opts.text }] },
+    })}\n`,
+    `${JSON.stringify({ type: "result", subtype: "success" })}\n`,
+  ];
+}
+
+// Representative codex `exec --json` JSONL: thread.started carrying thread_id,
+// then an item.completed agent_message.
+function codexJsonl(opts: { threadId: string; text: string }): string[] {
+  return [
+    `${JSON.stringify({ type: "thread.started", thread_id: opts.threadId })}\n`,
+    `${JSON.stringify({
+      type: "item.completed",
+      item: { type: "agent_message", text: opts.text },
+    })}\n`,
+  ];
 }
 
 type FakeSpawnConfig = {
@@ -160,8 +182,11 @@ async function setup(opts: {
 // ─── tests ──────────────────────────────────────────────────────────────────
 
 describe("cli-dispatch — happy path", () => {
-  test("streamed stdout → assistant message + run.completed + completed Run row", async () => {
-    const { spawner } = makeFakeSpawner({ stdout: ["hel", "lo"], exitCode: 0 });
+  test("parsed stream-json → assistant message + run.completed + completed Run row", async () => {
+    const { spawner } = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "hello" }),
+      exitCode: 0,
+    });
     const { threads, executor, threadId } = await setup({ cliSpawner: spawner });
 
     const events = await collect(
@@ -180,11 +205,20 @@ describe("cli-dispatch — happy path", () => {
     expect(assistant?.content).toEqual([{ type: "text", text: "hello" }]);
   });
 
-  test("the spawner is reached (not the old finalizeFailed arm)", async () => {
-    const fake = makeFakeSpawner({ stdout: ["ok"], exitCode: 0 });
+  test("the spawner is reached with JSON-stream argv (not the old finalizeFailed arm)", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "ok" }),
+      exitCode: 0,
+    });
     const { executor, threadId } = await setup({ cliSpawner: fake.spawner });
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
-    expect(fake.lastInput()?.command).toEqual(["claude", "-p"]);
+    expect(fake.lastInput()?.command).toEqual([
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+    ]);
     expect(fake.lastInput()?.stdin).toBe("hi");
   });
 
@@ -195,17 +229,114 @@ describe("cli-dispatch — happy path", () => {
     const assistant = threads.listMessages(threadId).find((m) => m.role === "assistant");
     expect(assistant?.content).toEqual([{ type: "text", text: "[no output]" }]);
   });
+
+  test("CLI run with NO stored Hive secret reaches the spawner + completes (Fix 1)", async () => {
+    // The CLI backends skip the no_credentials gate — they auth via their own
+    // login. Prove a Run completes even with no provider secret stored.
+    const db = openHiveDb(":memory:");
+    const threads = createThreadsStore(db);
+    const runs = createRunsStore(db);
+    const secrets = makeSecrets(); // NO setApiKey — zero stored credentials.
+    const agent = makeAgent();
+    const catalog = makeCatalogStub([agent]);
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "sess-1", text: "hi there" }),
+      exitCode: 0,
+    });
+    const executor = createRunExecutor({
+      threads,
+      runs,
+      catalog,
+      gateway: makeGateway(),
+      secrets,
+      cliSpawner: fake.spawner,
+    });
+    const threadId = threads.create({ agentId: agent.agentId }).id;
+
+    const events = await collect(
+      executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }),
+    );
+    const last = events[events.length - 1];
+    expect(last?.type).toBe("run.completed");
+    expect(fake.lastInput()?.command?.[0]).toBe("claude");
+  });
+});
+
+describe("cli-dispatch — session continuity (Fix 4)", () => {
+  test("claude turn 2 RESUMEs with the id captured on turn 1", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "sess-abc", text: "first" }),
+      exitCode: 0,
+    });
+    const { threads, executor, threadId } = await setup({ cliSpawner: fake.spawner });
+
+    // Turn 1 — CREATE. The session id is captured + persisted.
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "t1" }] }));
+    expect(fake.lastInput()?.command).toEqual([
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+    ]);
+    expect(threads.getCliSession(threadId)).toEqual({
+      backend: "claude-code",
+      sessionId: "sess-abc",
+    });
+
+    // Turn 2 — RESUME with the stored id.
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "t2" }] }));
+    expect(fake.lastInput()?.command).toEqual([
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--resume",
+      "sess-abc",
+    ]);
+    // Only the latest user turn rides stdin — the CLI replays its own history.
+    expect(fake.lastInput()?.stdin).toBe("t2");
+  });
+
+  test("codex turn 2 RESUMEs via `exec resume <thread_id>` with the captured id", async () => {
+    const fake = makeFakeSpawner({
+      stdout: codexJsonl({ threadId: "thr-xyz", text: "done" }),
+      exitCode: 0,
+    });
+    const { threads, executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      agent: { backend: "codex" },
+    });
+
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "t1" }] }));
+    expect(threads.getCliSession(threadId)).toEqual({ backend: "codex", sessionId: "thr-xyz" });
+    expect(fake.lastInput()?.command).toEqual(["codex", "exec", "--json", "-"]);
+
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "t2" }] }));
+    expect(fake.lastInput()?.command).toEqual([
+      "codex",
+      "exec",
+      "resume",
+      "thr-xyz",
+      "--json",
+      "-",
+    ]);
+  });
 });
 
 describe("cli-dispatch — codex arm", () => {
-  test("codex invocation = ['codex','exec','-'] with systemPrompt folded into stdin", async () => {
-    const fake = makeFakeSpawner({ stdout: ["done"], exitCode: 0 });
+  test("codex CREATE = ['codex','exec','--json','-'] with systemPrompt folded into stdin", async () => {
+    const fake = makeFakeSpawner({
+      stdout: codexJsonl({ threadId: "thr-1", text: "done" }),
+      exitCode: 0,
+    });
     const { executor, threadId } = await setup({
       cliSpawner: fake.spawner,
       agent: { backend: "codex", promptBody: "be terse" },
     });
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
-    expect(fake.lastInput()?.command).toEqual(["codex", "exec", "-"]);
+    expect(fake.lastInput()?.command).toEqual(["codex", "exec", "--json", "-"]);
     expect(fake.lastInput()?.stdin).toBe("be terse\n\ngo");
   });
 });
@@ -220,7 +351,7 @@ describe("cli-dispatch — failure paths", () => {
     const last = events[events.length - 1];
     expect(last?.type).toBe("run.failed");
     if (last?.type === "run.failed") {
-      expect(last.error.code).toBe("invalid_request");
+      expect(last.error.code).toBe("backend_exited");
       expect(last.error.message).toContain("boom");
       expect(executor.getRun(last.runId)?.status).toBe("failed");
     }
@@ -244,7 +375,7 @@ describe("cli-dispatch — failure paths", () => {
     }
   });
 
-  test("spawn_failed → run.failed (invalid_request)", async () => {
+  test("spawn_failed → run.failed (backend_unavailable)", async () => {
     const { spawner } = makeFakeSpawner({ spawnFailed: "ENOENT: claude not found" });
     const { executor, threadId } = await setup({ cliSpawner: spawner });
     const events = await collect(
@@ -253,7 +384,7 @@ describe("cli-dispatch — failure paths", () => {
     const last = events[events.length - 1];
     expect(last?.type).toBe("run.failed");
     if (last?.type === "run.failed") {
-      expect(last.error.code).toBe("invalid_request");
+      expect(last.error.code).toBe("backend_unavailable");
       expect(last.error.message).toContain("spawn failed");
       expect(executor.getRun(last.runId)?.status).toBe("failed");
     }

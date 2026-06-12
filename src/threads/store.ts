@@ -8,7 +8,7 @@ import type { HiveDb } from "../db/hive-db.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { ContentBlock, Message } from "../model-gateway/types.ts";
 import { messages, threads } from "./schema.ts";
-import type { Thread, ThreadEvents, ThreadMessage, TitleSource } from "./types.ts";
+import type { CliSession, Thread, ThreadEvents, ThreadMessage, TitleSource } from "./types.ts";
 
 export type CreateThreadInput = {
   id?: string;
@@ -95,6 +95,22 @@ export type ThreadsStore = {
     patch: { model?: string | null; effort?: string | null },
   ): Promise<void>;
 
+  /**
+   * Read a thread's stored CLI native-session token (ADR-0016), or undefined
+   * when none is stored (or the thread is missing). The executor uses this to
+   * decide create-vs-resume; a stale token (backend mismatch) is the caller's to
+   * ignore.
+   */
+  getCliSession(threadId: string): CliSession | undefined;
+
+  /**
+   * Persist a thread's CLI native-session token (ADR-0016) after a successful
+   * CLI create. Internal continuity state, NOT a user action — deliberately not
+   * audited (kept off the audit subscribe path) and does NOT bump `updatedAt`.
+   * No-op on a missing thread.
+   */
+  setCliSession(threadId: string, session: CliSession): void;
+
   /** Mark a thread read at `at`. Sets `last_read_at`. Not audited. Sync. */
   markRead(threadId: string, at: number): void;
 
@@ -138,6 +154,8 @@ export function createThreadsStore(
       archivedAt: row.archived_at,
       modelPref: row.model_pref,
       effortPref: row.effort_pref,
+      cliSessionBackend: row.cli_session_backend,
+      cliSessionId: row.cli_session_id,
     };
   }
 
@@ -170,6 +188,8 @@ export function createThreadsStore(
         archivedAt: null,
         modelPref: null,
         effortPref: null,
+        cliSessionBackend: null,
+        cliSessionId: null,
       };
     },
 
@@ -314,6 +334,22 @@ export function createThreadsStore(
           ...(hasModel ? { model_pref: patch.model } : {}),
           ...(hasEffort ? { effort_pref: patch.effort } : {}),
         })
+        .where(eq(threads.id, threadId))
+        .run();
+    },
+
+    getCliSession(threadId) {
+      const current = this.get(threadId);
+      if (!current || current.cliSessionBackend === null || current.cliSessionId === null) {
+        return undefined;
+      }
+      return { backend: current.cliSessionBackend, sessionId: current.cliSessionId };
+    },
+
+    setCliSession(threadId, session) {
+      // Internal continuity state — not audited, no updated_at bump.
+      db.update(threads)
+        .set({ cli_session_backend: session.backend, cli_session_id: session.sessionId })
         .where(eq(threads.id, threadId))
         .run();
     },

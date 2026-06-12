@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ManagedRuntime } from "effect";
-import type { Agent, Catalog } from "../../catalog/index.ts";
+import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
@@ -35,11 +35,9 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 }
 
 function makeCatalogStub(agents: Agent[]): Catalog {
-  const events = new TypedEmitter<{
-    "agent.created": never;
-    "agent.destroyed": never;
-    "harness.updated": never;
-  }>();
+  // Typed to the Catalog's own event map — no casts. The executor doesn't read
+  // catalog events, but a correctly-typed emitter satisfies the interface.
+  const events = new TypedEmitter<CatalogEvents>();
   return {
     list: () => agents,
     get: (id) => agents.find((a) => a.agentId === id),
@@ -51,8 +49,7 @@ function makeCatalogStub(agents: Agent[]): Catalog {
     },
     start: async () => {},
     rescan: async () => {},
-    // biome-ignore lint/suspicious/noExplicitAny: stub event emitter has different generic; the executor doesn't read events on catalog.
-    events: events as any,
+    events,
     dispose: () => {},
   };
 }

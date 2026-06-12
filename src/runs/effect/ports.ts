@@ -88,6 +88,10 @@ export type ThreadsPort = {
     content: ContentBlock[];
   }): ThreadMessage;
   getCompletionMessages(threadId: string): Message[];
+  /** Read the Thread's stored CLI native-session token (ADR-0016), if any. */
+  getCliSession(threadId: string): { backend: string; sessionId: string } | undefined;
+  /** Persist the Thread's CLI native-session token after a successful create. */
+  setCliSession(threadId: string, session: { backend: string; sessionId: string }): void;
 };
 export class ThreadHistory extends Context.Service<ThreadHistory, ThreadsPort>()(
   "runs/ThreadHistory",
