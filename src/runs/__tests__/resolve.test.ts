@@ -24,6 +24,9 @@ function catalog(): RunnableCatalog {
 // is pinned independently per tier.
 function base() {
   return {
+    // A Worker agent by default (any id other than root/agent-manager), so the
+    // backend-tier tests below exercise the passthrough, not the worker-only gate.
+    agentId: "worker-1",
     configuredModel: undefined,
     configuredEffort: undefined,
     userModelDefault: undefined,
@@ -243,5 +246,37 @@ describe("resolve — backend tier (Thread pick > user default > harness, OQ-1)"
   test("harness backend is the terminal fallback", () => {
     const r = resolve({ ...base(), backend: "claude-code" });
     if (!("failure" in r)) expect(r.backend).toBe("claude-code");
+  });
+});
+
+describe("resolve — worker-only backend invariant (authoritative guard, ADR-0015 §27)", () => {
+  test("a non-native Thread pick on a non-Worker agent is neutralized to native", () => {
+    const r = resolve({ ...base(), agentId: "root", backend: "native", threadBackend: "codex" });
+    if (!("failure" in r)) expect(r.backend).toBe("native");
+  });
+
+  test("a non-native user default on a non-Worker agent is neutralized to native", () => {
+    const r = resolve({
+      ...base(),
+      agentId: "agent-manager",
+      backend: "native",
+      userBackendDefault: "claude-code",
+    });
+    if (!("failure" in r)) expect(r.backend).toBe("native");
+  });
+
+  test("a non-native harness backend on a non-Worker agent is neutralized to native", () => {
+    const r = resolve({ ...base(), agentId: "root", backend: "claude-code" });
+    if (!("failure" in r)) expect(r.backend).toBe("native");
+  });
+
+  test("a Worker agent keeps its non-native pick", () => {
+    const r = resolve({
+      ...base(),
+      agentId: "worker-9",
+      backend: "native",
+      threadBackend: "codex",
+    });
+    if (!("failure" in r)) expect(r.backend).toBe("codex");
   });
 });

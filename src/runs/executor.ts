@@ -338,6 +338,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // the symbolic-default resolver (S2): a "latest"/"highest" default
       // resolves to a credentialed+routable concrete model/effort here.
       const resolved = resolve({
+        agentId,
         configuredModel: typeof agent.config.model === "string" ? agent.config.model : undefined,
         configuredEffort: agent.config.thinkingEffort,
         userModelDefault: prefs.getModel(agentId),

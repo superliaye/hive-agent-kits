@@ -19,6 +19,7 @@
 // tool-loop or the backend-dispatch switch. Keep this file the only place those
 // tiers live.
 
+import { backendAllowedForAgent } from "../catalog/role.ts";
 import type { AgentBackend } from "../lib/capability-types.ts";
 import type { GatewayFailure } from "../model-gateway/effect/failure.ts";
 import type { ThinkingEffort } from "../model-gateway/types.ts";
@@ -32,6 +33,13 @@ import {
 } from "./symbolic.ts";
 
 export type ResolveInput = {
+  /**
+   * The Agent this Run is for. The authoritative gate for the worker-only
+   * backend invariant (ADR-0015 §27): a non-native backend resolved for a
+   * non-Worker agent is neutralized to `native` here, regardless of how it
+   * entered the axis stores (the route 409s are fast feedback only).
+   */
+  agentId: string;
   /** Agent's harness `config.model`, when a string; else undefined. */
   configuredModel: string | undefined;
   /** Agent's harness `config.thinkingEffort` (raw `unknown` from open config). */
@@ -125,7 +133,14 @@ export function resolve(input: ResolveInput): ResolveResult {
   // authored backend. No per-Run backend override exists today (no symbolic
   // backend either — a concrete discriminator). Same precedence shape as model/
   // effort, with the harness backend as the terminal fallback.
-  const backend: AgentBackend = input.threadBackend ?? input.userBackendDefault ?? input.backend;
+  const backendWinner: AgentBackend =
+    input.threadBackend ?? input.userBackendDefault ?? input.backend;
+  // Authoritative worker-only guard (ADR-0015 §27): the axis stores stay dumb;
+  // `resolve()` is where the invariant is enforced. A non-native backend that
+  // reached a non-Worker agent — by any path — is neutralized to `native`.
+  const backend: AgentBackend = backendAllowedForAgent(input.agentId, backendWinner)
+    ? backendWinner
+    : "native";
 
   return {
     model: modelResult.model,

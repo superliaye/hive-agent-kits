@@ -12,7 +12,7 @@ import { BackendStatus, ProbeableBackend } from "../backend-probe/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Capability } from "../capabilities/types.ts";
 import { AgentNotFoundError } from "../catalog/index.ts";
-import { isWorkerAgent } from "../catalog/role.ts";
+import { backendAllowedForAgent, isWorkerAgent } from "../catalog/role.ts";
 import type { Agent, Catalog } from "../catalog/types.ts";
 import { type AppConfig, AppearanceConfigSchema } from "../config/schema.ts";
 import type { Config } from "../config/types.ts";
@@ -310,13 +310,11 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       return c.json({ error: "invalid body", issues: zodIssues(parsed.error) }, 400);
     }
     // Worker-only invariant (ADR-0015): only Worker agents may have a non-native
-    // backend default. A clear (null) or `native` is always allowed.
-    if (
-      parsed.data.backend !== undefined &&
-      parsed.data.backend !== null &&
-      parsed.data.backend !== "native" &&
-      !isWorkerAgent(id)
-    ) {
+    // backend default. A clear (null) or `native` is always allowed. The decision
+    // lives behind `backendAllowedForAgent` (next to the role derivation); the
+    // 409/reason JSON stays here (HTTP concern). Fast feedback only — `resolve()`
+    // is the authoritative guard (ADR-0015 §27).
+    if (!backendAllowedForAgent(id, parsed.data.backend)) {
       return c.json(
         { error: "non-native backend is only allowed for Worker agents", reason: "worker_only" },
         409,
@@ -457,14 +455,11 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     const existing = deps.threads.get(id);
     if (!existing) return c.json({ error: "thread not found" }, 404);
     // Worker-only invariant (ADR-0015): only Worker agents may pick a non-native
-    // backend. Root / Agent Manager are always native. This is the REAL guard
-    // (the UI gate is UX only). A clear (null) or `native` is always allowed.
-    if (
-      parsed.data.backend !== undefined &&
-      parsed.data.backend !== null &&
-      parsed.data.backend !== "native" &&
-      !isWorkerAgent(existing.agentId)
-    ) {
+    // backend. Root / Agent Manager are always native. A clear (null) or `native`
+    // is always allowed. Same predicate as the model-pref route, narrowed on the
+    // Thread's own agentId. Fast feedback only — `resolve()` is the authoritative
+    // guard (ADR-0015 §27).
+    if (!backendAllowedForAgent(existing.agentId, parsed.data.backend)) {
       return c.json(
         { error: "non-native backend is only allowed for Worker agents", reason: "worker_only" },
         409,
