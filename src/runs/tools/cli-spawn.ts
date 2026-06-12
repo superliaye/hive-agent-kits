@@ -19,11 +19,15 @@
 // >64 KiB-stderr deadlock — no matter when the consumer reads it. C2b iterates
 // the exposed stderr to route diagnostics. `stderr:"ignore"` is NOT used.
 //
-// The RETAINED stderr is bounded at 64 KiB (can't OOM the daemon — the
-// run-shell stance) via a HEAD+TAIL window: the first 32 KiB + a dropped-middle
-// marker + the last 32 KiB. Plain head-only truncate (run-shell) would discard
-// the tail, where the actual error usually is. The bound is on RETAINED bytes,
-// NOT CONSUMED bytes: the pump keeps reading-and-discarding past the cap so the
+// The RETAINED stderr is bounded to a ~64 Ki UTF-16-code-unit HEAD+TAIL window
+// (not a hard byte ceiling — String.length/.slice, the run-shell stance): the
+// first 32 Ki units + a dropped-middle marker + the last 32 Ki units. For
+// multibyte stderr the retained string is up to ~2x that figure in bytes; the
+// marker (~38 chars) is additive on top. Bounded by a small constant factor is
+// all the "can't OOM the daemon" argument needs — it rests on boundedness, not
+// on a literal byte count. Plain head-only truncate (run-shell) would discard
+// the tail, where the actual error usually is. The bound is on RETAINED content,
+// NOT CONSUMED content: the pump keeps reading-and-discarding past the cap so the
 // child never blocks on a full pipe — the eager-drain that fixes the deadlock
 // stays intact.
 

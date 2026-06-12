@@ -161,12 +161,14 @@ export class FsRunner extends Context.Service<FsRunner, FsRunnerPort>()("runs/Fs
 //   (the >64 KiB-stderr deadlock) regardless of when/whether the consumer reads.
 //   C2b iterates it to route diagnostics to Trace or fold them into a
 //   `run.failed` RunEvent. `stderr:"ignore"` is deliberately NOT used.
-//   RETAINED stderr is bounded to a 64 KiB HEAD+TAIL window (first 32 KiB +
-//   dropped-middle marker + last 32 KiB) so it can't OOM the daemon (run-shell's
-//   stance) while still keeping the tail, where the error usually is. The cap
-//   bounds RETAINED bytes, not CONSUMED bytes — the drain reads past it so the
-//   child never blocks. Part of the contract: a consumer must not assume stderr
-//   is verbatim-complete.
+//   RETAINED stderr is bounded to a ~64 Ki UTF-16-code-unit HEAD+TAIL window
+//   (first 32 Ki units + an additive dropped-middle marker + last 32 Ki units) —
+//   units, not a hard byte ceiling (multibyte stderr retains up to ~2x in bytes),
+//   so it stays bounded by a small constant factor and can't OOM the daemon
+//   (run-shell's stance) while still keeping the tail, where the error usually
+//   is. The cap bounds RETAINED content, not CONSUMED content — the drain reads
+//   past it so the child never blocks. Part of the contract: a consumer must not
+//   assume stderr is verbatim-complete.
 export type CliSpawnInput = {
   command: readonly string[];
   cwd: string;
