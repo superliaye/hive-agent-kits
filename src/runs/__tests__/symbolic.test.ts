@@ -115,6 +115,27 @@ describe("runnableCatalog — single shared credentialed ∩ routable + ordered 
       PROVIDER_PREFERENCE.indexOf("openai-codex"),
     );
   });
+
+  test("unlisted providers tie-break by localeCompare, not by secrets.list() incoming order (P5)", () => {
+    // Both providers are absent from PROVIDER_PREFERENCE (equal rank). Their
+    // cross-provider order must be self-contained (localeCompare), independent
+    // of the order secrets.list() hands them in.
+    const gw = gateway({
+      zebra: [model("zebra/m1")],
+      alpha: [model("alpha/m1")],
+    });
+    const incomingZebraFirst = runnableCatalog(
+      { list: () => [{ provider: "zebra" }, { provider: "alpha" }] },
+      gw,
+    );
+    const incomingAlphaFirst = runnableCatalog(
+      { list: () => [{ provider: "alpha" }, { provider: "zebra" }] },
+      gw,
+    );
+    const expected = ["alpha/m1", "zebra/m1"];
+    expect(incomingZebraFirst.models.map((m) => m.model)).toEqual(expected);
+    expect(incomingAlphaFirst.models.map((m) => m.model)).toEqual(expected);
+  });
 });
 
 describe('resolveHighestEffort — "highest" picks the strongest supported level', () => {

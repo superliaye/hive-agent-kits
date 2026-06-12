@@ -72,8 +72,10 @@ export function resolveLatestModel(catalog: RunnableCatalog): AvailableModel | u
 // would let an "openai-codex/gpt-9" outrank an "anthropic/claude-opus" purely on
 // the id string). A symbolic "latest" therefore prefers the strongest provider
 // that is actually credentialed: anthropic when present, else openai-codex.
-// Providers absent from this list sort after the listed ones (stable, in their
-// incoming order). Seeded per ADR-0015; extend as providers are added.
+// Providers absent from this list sort after the listed ones, and tie-break
+// among themselves by `provider.localeCompare` so the catalog's ordering is
+// self-contained (NOT silently coupled to `secrets.list()`'s incoming order).
+// Seeded per ADR-0015; extend as providers are added.
 export const PROVIDER_PREFERENCE: readonly string[] = ["anthropic", "openai-codex"];
 
 // Narrow, consumer-owned ports for the shared catalog builder — only the two
@@ -102,7 +104,7 @@ export function runnableCatalog(
     const i = PROVIDER_PREFERENCE.indexOf(provider);
     return i === -1 ? PROVIDER_PREFERENCE.length : i;
   };
-  const ordered = [...credentialed].sort((a, b) => rank(a) - rank(b));
+  const ordered = [...credentialed].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
   const models = ordered.flatMap((provider) => orderByRecency(gateway.listModels(provider)));
   return { models };
 }
