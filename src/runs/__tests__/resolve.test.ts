@@ -218,3 +218,30 @@ describe("resolve — backend passthrough", () => {
     if (!("failure" in r)) expect(r.backend).toBe("codex");
   });
 });
+
+describe("resolve — backend tier (Thread pick > user default > harness, OQ-1)", () => {
+  test("Thread backend beats the harness backend", () => {
+    const r = resolve({ ...base(), backend: "native", threadBackend: "claude-code" });
+    if (!("failure" in r)) expect(r.backend).toBe("claude-code");
+  });
+
+  test("Thread backend beats the user agent default", () => {
+    const r = resolve({
+      ...base(),
+      backend: "native",
+      userBackendDefault: "codex",
+      threadBackend: "claude-code",
+    });
+    if (!("failure" in r)) expect(r.backend).toBe("claude-code");
+  });
+
+  test("user agent default beats the harness backend when no Thread pick", () => {
+    const r = resolve({ ...base(), backend: "native", userBackendDefault: "codex" });
+    if (!("failure" in r)) expect(r.backend).toBe("codex");
+  });
+
+  test("harness backend is the terminal fallback", () => {
+    const r = resolve({ ...base(), backend: "claude-code" });
+    if (!("failure" in r)) expect(r.backend).toBe("claude-code");
+  });
+});

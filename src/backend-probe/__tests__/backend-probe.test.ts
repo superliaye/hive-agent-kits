@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { ManagedRuntime } from "effect";
 import { BackendProbe, BackendProbeLive } from "../effect/backend-probe-live.ts";
-import { type CommandResult, type CommandRunner, parseVersion, probeBackend } from "../probe.ts";
+import {
+  type CommandResult,
+  type CommandRunner,
+  parseVersion,
+  probeBackend,
+  updateBackend,
+} from "../probe.ts";
+import type { BackendUpdateEvents } from "../types.ts";
 
 // A runner that returns canned results keyed by binary name.
 function fakeRunner(byBinary: Record<string, CommandResult>): CommandRunner {
@@ -91,6 +98,58 @@ describe("BackendProbeLive", () => {
     expect(statuses.map((s) => s.backend).sort()).toEqual(["claude-code", "codex"]);
     expect(statuses.find((s) => s.backend === "claude-code")?.reason).toBe("ok");
     expect(statuses.find((s) => s.backend === "codex")?.reason).toBe("not_installed");
+    rt.dispose();
+  });
+});
+
+describe("updateBackend (delegated self-update, OQ-3/OQ-5)", () => {
+  test("ok: updater exits 0 → re-probes and returns the fresh status", async () => {
+    const runner = fakeRunner({
+      claude: { kind: "exited", exitCode: 0, stdout: "2.1.0", stderr: "" },
+    });
+    const result = await updateBackend("claude-code", runner, opts);
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.status.reason).toBe("ok");
+      expect(result.status.version).toBe("2.1.0");
+    }
+  });
+
+  test("update_failed: updater exits non-zero → typed failure (no throw)", async () => {
+    const runner = fakeRunner({
+      codex: { kind: "exited", exitCode: 1, stdout: "", stderr: "boom" },
+    });
+    const result = await updateBackend("codex", runner, opts);
+    expect(result.kind).toBe("update_failed");
+  });
+
+  test("spawn_failed: updater binary missing → typed failure", async () => {
+    const result = await updateBackend("codex", fakeRunner({}), opts);
+    expect(result.kind).toBe("spawn_failed");
+  });
+
+  test("timeout: updater runs past budget → typed failure", async () => {
+    const runner: CommandRunner = async () => ({ kind: "timeout" });
+    const result = await updateBackend("claude-code", runner, opts);
+    expect(result.kind).toBe("timeout");
+  });
+});
+
+describe("BackendProbeLive.upgrade (audit-first delegated update, OQ-6)", () => {
+  test("emits backend.update.requested BEFORE running the updater, then re-probes", async () => {
+    const runner = fakeRunner({
+      claude: { kind: "exited", exitCode: 0, stdout: "2.1.0", stderr: "" },
+    });
+    const rt = ManagedRuntime.make(BackendProbeLive({ runner }));
+    const svc = rt.runSync(BackendProbe);
+    const seen: BackendUpdateEvents["backend.update.requested"][] = [];
+    svc.events.on("backend.update.requested", (e) => {
+      seen.push(e);
+    });
+    const result = await svc.upgrade("claude-code");
+    expect(result.kind).toBe("ok");
+    // Audit-first: the event fired, carrying the backend id + the binary ref.
+    expect(seen).toEqual([{ backend: "claude-code", binary: "claude" }]);
     rt.dispose();
   });
 });

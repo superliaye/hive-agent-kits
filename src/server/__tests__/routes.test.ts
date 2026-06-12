@@ -147,6 +147,24 @@ describe("server routes", () => {
     expect(body.commandAllowlist).toEqual(["node", "git"]);
   });
 
+  test("GET /api/agents summary + detail carry isWorker (OQ-4)", async () => {
+    const list = (await (await server.app.fetch(authed("/api/agents"))).json()) as Array<{
+      agentId: string;
+      isWorker: boolean;
+    }>;
+    expect(list.find((a) => a.agentId === "root")?.isWorker).toBe(false);
+    expect(list.find((a) => a.agentId === "gated")?.isWorker).toBe(true);
+
+    const rootDetail = (await (await server.app.fetch(authed("/api/agents/root"))).json()) as {
+      isWorker: boolean;
+    };
+    expect(rootDetail.isWorker).toBe(false);
+    const gatedDetail = (await (await server.app.fetch(authed("/api/agents/gated"))).json()) as {
+      isWorker: boolean;
+    };
+    expect(gatedDetail.isWorker).toBe(true);
+  });
+
   test("GET /api/agents/:id omits commandAllowlist when absent", async () => {
     const res = await server.app.fetch(authed("/api/agents/root"));
     expect(res.status).toBe(200);
@@ -350,12 +368,12 @@ describe("server routes", () => {
     expect((row?.payload as Record<string, unknown>).model).toBeUndefined();
   });
 
-  async function createThread(): Promise<string> {
+  async function createThread(agentId = "root"): Promise<string> {
     const res = await server.app.fetch(
       authed("/api/threads", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ agentId: "root" }),
+        body: JSON.stringify({ agentId }),
       }),
     );
     const body = (await res.json()) as { id: string };
@@ -530,6 +548,104 @@ describe("server routes", () => {
       workingDir: null,
       backend: null,
     });
+  });
+
+  test("a Worker-agent thread round-trips a backend pick and sticks (OQ-1)", async () => {
+    const id = await createThread("gated");
+    const put = await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend: "claude-code" }),
+      }),
+    );
+    expect(put.status).toBe(200);
+    expect((await put.json()) as Record<string, unknown>).toMatchObject({ backend: "claude-code" });
+    const get = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect((await get.json()) as Record<string, unknown>).toMatchObject({ backend: "claude-code" });
+    // Clear the axis (back to the agent default).
+    await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend: null }),
+      }),
+    );
+    const cleared = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect((await cleared.json()) as Record<string, unknown>).toMatchObject({ backend: null });
+  });
+
+  test("a non-native backend scope write for a non-Worker is rejected at the daemon (OQ-4)", async () => {
+    const id = await createThread("root");
+    const res = await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend: "claude-code" }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    expect((await res.json()) as { reason?: string }).toMatchObject({ reason: "worker_only" });
+    // The scope stays unset — the rejected write never landed.
+    const get = await server.app.fetch(authed(`/api/threads/${id}/scope`));
+    expect((await get.json()) as Record<string, unknown>).toMatchObject({ backend: null });
+  });
+
+  test("native backend scope is allowed even for a non-Worker", async () => {
+    const id = await createThread("root");
+    const res = await server.app.fetch(
+      authed(`/api/threads/${id}/scope`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend: "native" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toMatchObject({ backend: "native" });
+  });
+
+  test("apply-to-default carries backend for a Worker; rejected for a non-Worker (OQ-2/OQ-4)", async () => {
+    // Worker: backend default round-trips.
+    const put = await server.app.fetch(
+      authed("/api/agents/gated/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend: "codex" }),
+      }),
+    );
+    expect(put.status).toBe(200);
+    expect((await put.json()) as Record<string, unknown>).toMatchObject({ backend: "codex" });
+    const get = await server.app.fetch(authed("/api/agents/gated/model-pref"));
+    expect((await get.json()) as Record<string, unknown>).toMatchObject({ backend: "codex" });
+
+    // Non-Worker: a non-native backend default is rejected.
+    const rejected = await server.app.fetch(
+      authed("/api/agents/root/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend: "codex" }),
+      }),
+    );
+    expect(rejected.status).toBe(409);
+  });
+
+  test("apply-to-default with backend records the axis in the agent_pref.set audit row (OQ-2)", async () => {
+    await server.app.fetch(
+      authed("/api/agents/gated/model-pref", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ backend: "claude-code" }),
+      }),
+    );
+    const rows = await server.audit.query({ source: "agent-prefs" });
+    const row = rows.find((r) => r.event_type === "agent_pref.set");
+    expect(row?.agent_id).toBe("gated");
+    expect(row?.payload).toMatchObject({ backend: "claude-code" });
+  });
+
+  test("POST /api/backends/:backend/upgrade rejects an unknown backend with 400", async () => {
+    const res = await server.app.fetch(authed("/api/backends/ollama/upgrade", { method: "POST" }));
+    expect(res.status).toBe(400);
   });
 
   test("a Thread-scope write records a thread.scope_set audit row", async () => {

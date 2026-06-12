@@ -237,7 +237,7 @@ describe("wireSubscriptions", () => {
   // tests cover EMISSION; this pins the AUDIT-NORMALIZER projection so a future
   // axis added to emission but dropped at the normalizer fails here — the audit
   // payload is an open Record, so the compiler cannot catch that omission.
-  test("thread.scope_set audits every scope axis (model/effort/workingDir)", async () => {
+  test("thread.scope_set audits every scope axis (model/effort/workingDir/backend)", async () => {
     const audit = makeAudit();
     const db = openHiveDb(":memory:");
     const threads = createThreadsStore(db);
@@ -248,6 +248,7 @@ describe("wireSubscriptions", () => {
       model: "anthropic/claude-sonnet-4-6",
       effort: "high",
       workingDir: "/some/project",
+      backend: "claude-code",
     });
 
     const rows = await audit.query({ source: "thread" });
@@ -256,6 +257,7 @@ describe("wireSubscriptions", () => {
       model: "anthropic/claude-sonnet-4-6",
       effort: "high",
       workingDir: "/some/project",
+      backend: "claude-code",
     });
 
     dispose();

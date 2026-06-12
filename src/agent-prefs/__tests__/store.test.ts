@@ -69,6 +69,46 @@ describe("agent-prefs store", () => {
     ]);
   });
 
+  test("backend round-trips as an id and is independent of model/effort (OQ-2)", async () => {
+    const store = createAgentPrefsStore({ ...EMPTY });
+    await store.set("worker", { model: "anthropic/claude-opus-4-7" });
+    await store.set("worker", { backend: "claude-code" });
+    expect(store.getBackend("worker")).toBe("claude-code");
+    // The backend write must NOT clobber the prior model.
+    expect(store.getModel("worker")).toBe("anthropic/claude-opus-4-7");
+    expect(store.list()).toHaveLength(1);
+  });
+
+  test("emits agent_pref.set carrying the backend axis when touched (OQ-2)", async () => {
+    const store = createAgentPrefsStore({ ...EMPTY });
+    const seen: AgentPrefEvents["agent_pref.set"][] = [];
+    store.events.on("agent_pref.set", (e) => {
+      seen.push(e);
+    });
+    await store.set("worker", { backend: "codex" });
+    expect(seen).toEqual([{ agentId: "worker", backend: "codex" }]);
+  });
+
+  test("backend: null clears the stored default (no audit value)", async () => {
+    const store = createAgentPrefsStore({ ...EMPTY });
+    await store.set("worker", { backend: "codex" });
+    const seen: AgentPrefEvents["agent_pref.set"][] = [];
+    store.events.on("agent_pref.set", (e) => {
+      seen.push(e);
+    });
+    await store.set("worker", { backend: null });
+    expect(store.getBackend("worker")).toBeUndefined();
+    // A clear is a touched axis with no value — not surfaced in the payload.
+    expect(seen).toEqual([{ agentId: "worker" }]);
+  });
+
+  test("rejects an invalid backend id before mutating", async () => {
+    const store = createAgentPrefsStore({ ...EMPTY });
+    // @ts-expect-error — "ollama" is not an AgentBackend; the Zod parse rejects it.
+    await expect(store.set("a", { backend: "ollama" })).rejects.toThrow();
+    expect(store.getBackend("a")).toBeUndefined();
+  });
+
   test("rejects a malformed model string before mutating", async () => {
     const store = createAgentPrefsStore({ ...EMPTY });
     await expect(store.set("a", { model: "no-slash" })).rejects.toThrow();
