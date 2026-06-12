@@ -16,7 +16,11 @@ import { createServer, type ServerHandles } from "../index.ts";
 
 const TOKEN = "test-token";
 
-function harness(agentId: string, withSkill = "alpha"): string {
+function harness(agentId: string, withSkill = "alpha", commandAllowlist?: string[]): string {
+  const allowlistBlock =
+    commandAllowlist !== undefined
+      ? `commandAllowlist:\n${commandAllowlist.map((c) => `  - ${c}`).join("\n")}\n`
+      : "";
   return `---
 agentId: ${agentId}
 backend: native
@@ -30,7 +34,7 @@ bindings:
   mcp: []
 config:
   model: claude-opus-4-7
----
+${allowlistBlock}---
 
 # ${agentId}
 
@@ -81,6 +85,11 @@ describe("server routes", () => {
     );
     mkdirSync(join(bundledRoot, "agents", "root"), { recursive: true });
     writeFileSync(join(bundledRoot, "agents", "root", "HARNESS.md"), harness("root"));
+    mkdirSync(join(bundledRoot, "agents", "gated"), { recursive: true });
+    writeFileSync(
+      join(bundledRoot, "agents", "gated", "HARNESS.md"),
+      harness("gated", "alpha", ["node", "git"]),
+    );
 
     server = await createServer({ mode: "memory", token: TOKEN });
   });
@@ -118,9 +127,9 @@ describe("server routes", () => {
       agentId: string;
       bindingCounts: { skills: number };
     }>;
-    expect(body).toHaveLength(1);
-    expect(body[0]?.agentId).toBe("root");
-    expect(body[0]?.bindingCounts.skills).toBe(1);
+    expect(body).toHaveLength(2);
+    const root = body.find((a) => a.agentId === "root");
+    expect(root?.bindingCounts.skills).toBe(1);
   });
 
   test("GET /api/agents/:id returns detail with bindings + body", async () => {
@@ -129,6 +138,20 @@ describe("server routes", () => {
     const body = (await res.json()) as { bindings: { skills: string[] }; promptBody: string };
     expect(body.bindings.skills).toEqual(["alpha"]);
     expect(body.promptBody).toContain("# root");
+  });
+
+  test("GET /api/agents/:id surfaces commandAllowlist when present", async () => {
+    const res = await server.app.fetch(authed("/api/agents/gated"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { commandAllowlist?: string[] };
+    expect(body.commandAllowlist).toEqual(["node", "git"]);
+  });
+
+  test("GET /api/agents/:id omits commandAllowlist when absent", async () => {
+    const res = await server.app.fetch(authed("/api/agents/root"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { commandAllowlist?: string[] };
+    expect(body.commandAllowlist).toBeUndefined();
   });
 
   test("GET /api/agents/unknown returns 404", async () => {

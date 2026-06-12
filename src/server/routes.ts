@@ -107,6 +107,7 @@ function toAgentDetail(a: Agent): AgentDetailWire {
     bindings: a.bindings,
     config: a.config,
     promptBody: a.promptBody,
+    commandAllowlist: a.commandAllowlist,
     forkError: a.forkError,
   };
 }
