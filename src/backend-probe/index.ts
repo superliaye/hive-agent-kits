@@ -10,7 +10,9 @@ export type {
   CreateBackendProbeOptions,
 } from "./effect/backend-probe-live.ts";
 export { BackendProbe, BackendProbeLive } from "./effect/backend-probe-live.ts";
+export type { UpdateResult } from "./probe.ts";
 export { notInstalledRunner } from "./probe.ts";
+export type { BackendUpdateEvents } from "./types.ts";
 export {
   BackendStatus,
   PROBEABLE_BACKENDS,

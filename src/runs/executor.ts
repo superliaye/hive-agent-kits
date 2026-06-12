@@ -30,6 +30,7 @@
 // a Run failure (no Run row is created for the rejected request).
 
 import { mkdirSync } from "node:fs";
+import { AgentBackend } from "../lib/capability-types.ts";
 import { log } from "../lib/log.ts";
 import { runtime as runtimePaths } from "../lib/paths.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
@@ -199,6 +200,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   const prefs: AgentModelPrefsPort = deps.prefs ?? {
     getModel: () => undefined,
     getEffort: () => undefined,
+    getBackend: () => undefined,
   };
   // cap=0 default ⇒ unlimited (Q5). Snapshot once per Run inside runIterator.
   const capConfig: CapConfigPort = deps.capConfig ?? { maxIterations: () => 0 };
@@ -314,6 +316,12 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       const thread = threads.get(threadId);
       const threadModel = thread?.modelPref ?? undefined;
       const threadEffort = effortDefaultOrUndefined(thread?.effortPref);
+      // Agent-Backend tier (ADR-0015): the Thread pick > user agent default >
+      // harness backend. Both stored values are open strings; narrow to a known
+      // AgentBackend on the way INTO resolve (a stale/unknown value is ignored,
+      // falling through to the next tier).
+      const threadBackend = backendOrUndefined(thread?.backend);
+      const userBackendDefault = backendOrUndefined(prefs.getBackend(agentId));
 
       // Working Directory (ADR-0016 C4): resolved ONCE here — the only scope
       // holding both thread + agent — then threaded to both backends so native
@@ -339,6 +347,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         ...(modelOverride !== undefined ? { modelOverride } : {}),
         ...(effortOverride !== undefined ? { effortOverride } : {}),
         backend: agent.backend,
+        ...(threadBackend !== undefined ? { threadBackend } : {}),
+        ...(userBackendDefault !== undefined ? { userBackendDefault } : {}),
         runnableCatalog: runnableCatalog.snapshot(),
       });
       const { model } = resolved;
@@ -980,6 +990,14 @@ function effortDefaultOrUndefined(raw: string | null | undefined): EffortDefault
   if (raw === null || raw === undefined) return undefined;
   if (isThinkingEffort(raw)) return raw;
   return isSymbolicEffort(raw) ? "highest" : undefined;
+}
+
+// Narrow a stored backend value (open `string | null` from the Thread scope or
+// the agent default) to a known AgentBackend on the way INTO resolve(). An
+// unknown/stale value is ignored (undefined), falling through to the next tier.
+function backendOrUndefined(raw: string | null | undefined): AgentBackend | undefined {
+  const parsed = AgentBackend.safeParse(raw);
+  return parsed.success ? parsed.data : undefined;
 }
 
 // Grace-turn finalize: keep only text/thinking blocks, dropping dangling

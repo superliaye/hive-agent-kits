@@ -16,6 +16,7 @@ import {
   type AgentPrefEvents,
   type AgentPrefPatch,
   type AgentPrefsFile,
+  type Backend,
   type ConfiguredAgentPref,
   type Effort,
 } from "../types.ts";
@@ -27,6 +28,7 @@ export type CreateAgentPrefsOptions =
 export type AgentModelPrefsSvc = {
   getModel(agentId: string): string | undefined;
   getEffort(agentId: string): Effort | undefined;
+  getBackend(agentId: string): Backend | undefined;
   set(agentId: string, patch: AgentPrefPatch): Promise<void>;
   list(): ConfiguredAgentPref[];
   events: TypedEmitter<AgentPrefEvents>;
@@ -49,6 +51,7 @@ function buildSvc(store: AgentPrefsStore): AgentModelPrefsSvc {
     events: store.events,
     getModel: (agentId) => store.getModel(agentId),
     getEffort: (agentId) => store.getEffort(agentId),
+    getBackend: (agentId) => store.getBackend(agentId),
     set: (agentId, patch) => store.set(agentId, patch),
     list: () => store.list(),
   };

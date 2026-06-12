@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { ManagedRuntime } from "effect";
 import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
+import type { AgentBackend } from "../../lib/capability-types.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
 import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
@@ -98,6 +99,7 @@ async function setup(opts: {
   prefs?: {
     getModel(agentId: string): string | undefined;
     getEffort(agentId: string): ThinkingEffort | undefined;
+    getBackend(agentId: string): AgentBackend | undefined;
   };
 }): Promise<Harness> {
   const db = openHiveDb(":memory:");
@@ -399,7 +401,11 @@ describe("RunExecutor — model resolution", () => {
     const { executor, threadId } = await setup({
       fixtures: { "anthropic/claude-opus-4-7": [{ type: "done", finishReason: "stop" }] },
       agents: [makeAgent({ config: { model: "anthropic/claude-haiku-4-5" } })],
-      prefs: { getModel: () => "anthropic/claude-opus-4-7", getEffort: () => undefined },
+      prefs: {
+        getModel: () => "anthropic/claude-opus-4-7",
+        getEffort: () => undefined,
+        getBackend: () => undefined,
+      },
     });
     const events = await collect(
       executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }),
@@ -414,7 +420,11 @@ describe("RunExecutor — model resolution", () => {
     const { executor, threadId } = await setup({
       fixtures: { "anthropic/claude-opus-4-7": [{ type: "done", finishReason: "stop" }] },
       agents: [makeAgent({ config: { model: "anthropic/claude-haiku-4-5" } })],
-      prefs: { getModel: () => "anthropic/claude-sonnet-4-6", getEffort: () => undefined },
+      prefs: {
+        getModel: () => "anthropic/claude-sonnet-4-6",
+        getEffort: () => undefined,
+        getBackend: () => undefined,
+      },
     });
     const events = await collect(
       executor.startRun({
@@ -456,6 +466,7 @@ async function runEffortCase(opts: {
   prefs?: {
     getModel(agentId: string): string | undefined;
     getEffort(agentId: string): ThinkingEffort | undefined;
+    getBackend(agentId: string): AgentBackend | undefined;
   };
   effortOverride?: ThinkingEffort;
 }): Promise<CompletionInput | undefined> {
@@ -509,7 +520,7 @@ describe("RunExecutor — effort resolution", () => {
   test("user per-agent effort default beats harness config.thinkingEffort", async () => {
     const input = await runEffortCase({
       agentConfig: { thinkingEffort: "low" },
-      prefs: { getModel: () => undefined, getEffort: () => "high" },
+      prefs: { getModel: () => undefined, getEffort: () => "high", getBackend: () => undefined },
     });
     expect(input?.thinking).toEqual({ effort: "high" });
   });
@@ -517,7 +528,7 @@ describe("RunExecutor — effort resolution", () => {
   test("per-Run effortOverride beats the user per-agent default", async () => {
     const input = await runEffortCase({
       agentConfig: { thinkingEffort: "low" },
-      prefs: { getModel: () => undefined, getEffort: () => "high" },
+      prefs: { getModel: () => undefined, getEffort: () => "high", getBackend: () => undefined },
       effortOverride: "xhigh",
     });
     expect(input?.thinking).toEqual({ effort: "xhigh" });

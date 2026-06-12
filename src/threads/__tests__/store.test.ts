@@ -300,7 +300,7 @@ describe("ThreadsStore.setScope (S1, ADR-0015)", () => {
     const seen: Array<{
       model?: string;
       effort?: string;
-      cleared?: ("model" | "effort" | "workingDir")[];
+      cleared?: ("model" | "effort" | "workingDir" | "backend")[];
     }> = [];
     store.events.on("thread.scope_set", (e) => {
       seen.push({
@@ -362,8 +362,10 @@ describe("ThreadsStore.setScope (S1, ADR-0015)", () => {
 
   test("emits thread.scope_set with workingDir; a clear names it in `cleared`", async () => {
     const t = store.create({ agentId: "agent-a" });
-    const seen: Array<{ workingDir?: string; cleared?: ("model" | "effort" | "workingDir")[] }> =
-      [];
+    const seen: Array<{
+      workingDir?: string;
+      cleared?: ("model" | "effort" | "workingDir" | "backend")[];
+    }> = [];
     store.events.on("thread.scope_set", (e) => {
       seen.push({
         ...(e.workingDir ? { workingDir: e.workingDir } : {}),

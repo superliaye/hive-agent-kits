@@ -10,7 +10,7 @@
 
 import { Context, type Stream } from "effect";
 import type { Agent } from "../../catalog/types.ts";
-import type { Origin } from "../../lib/capability-types.ts";
+import type { AgentBackend, Origin } from "../../lib/capability-types.ts";
 import type { GatewayFailure } from "../../model-gateway/effect/failure.ts";
 import type {
   AuthInput,
@@ -69,6 +69,9 @@ export class RunnableCatalogLookup extends Context.Service<
 export type AgentModelPrefsPort = {
   getModel(agentId: string): string | undefined;
   getEffort(agentId: string): ThinkingEffort | "highest" | undefined;
+  // The user's per-agent Agent-Backend default (apply-to-default, ADR-0015).
+  // A concrete backend id (no symbolic backend); undefined when unset.
+  getBackend(agentId: string): AgentBackend | undefined;
 };
 export class AgentModelPrefsLookup extends Context.Service<
   AgentModelPrefsLookup,
@@ -80,6 +83,8 @@ export class AgentModelPrefsLookup extends Context.Service<
 // a symbolic token. The resolver places it between the per-Run override and the
 // user agent default. `workingDir` is the per-conversation Working Directory
 // tier (ADR-0016 C4) — null when unset, fed to the cwd resolver at Run start.
+// `backend` is the per-conversation Agent-Backend pick (ADR-0015) — null when
+// unset; the resolver places it above the user agent default and harness backend.
 export type ThreadsPort = {
   get(threadId: string):
     | {
@@ -87,6 +92,7 @@ export type ThreadsPort = {
         modelPref?: string | null;
         effortPref?: string | null;
         workingDir?: string | null;
+        backend?: string | null;
       }
     | undefined;
   append(input: {

@@ -21,6 +21,7 @@
 // other. Zod-validated at the disk boundary (AGENTS.md).
 
 import { z } from "zod";
+import { AgentBackend } from "../lib/capability-types.ts";
 import { EFFORT_ORDER, type ThinkingEffort } from "../model-gateway/types.ts";
 import { SYMBOLIC_EFFORT_HIGHEST, SYMBOLIC_MODEL_LATEST } from "../runs/symbolic.ts";
 
@@ -46,11 +47,17 @@ export type Effort = z.infer<typeof EffortSchema>;
 const _effortMatches: Effort = "off" satisfies ThinkingEffort;
 void _effortMatches;
 
-// A single agent's stored preference. Both fields optional and independent;
-// the store merges on write so setting one never clobbers the other.
+// The Agent-Backend default (apply-to-default target, ADR-0015). An id ONLY —
+// a backend carries no stored config block (the CLI invocation is assembled at
+// Run start, ADR-0016). Not symbolic: backend is a concrete discriminator.
+export const BackendSchema = AgentBackend;
+
+// A single agent's stored preference. All fields optional and independent; the
+// store merges on write so setting one never clobbers the others.
 export const AgentPrefSchema = z.object({
   model: ModelStringSchema.optional(),
   effort: EffortSchema.optional(),
+  backend: BackendSchema.optional(),
   updatedAt: z.number(),
 });
 export type AgentPref = z.infer<typeof AgentPrefSchema>;
@@ -63,15 +70,19 @@ export const AgentPrefsFileSchema = z.object({
 });
 export type AgentPrefsFile = z.infer<typeof AgentPrefsFileSchema>;
 
+export type Backend = z.infer<typeof BackendSchema>;
+
 // The patch a `set` accepts. Omitting a field leaves the stored value
-// unchanged (merge semantics).
-export type AgentPrefPatch = { model?: string; effort?: Effort };
+// unchanged (merge semantics). `backend: null` clears the stored backend
+// default (back to the Harness-authored backend).
+export type AgentPrefPatch = { model?: string; effort?: Effort; backend?: Backend | null };
 
 // Events emitted by the module. Audit subscribes via the standard pattern
-// (ADR-0004). agentId + model id + effort level are non-secret identifiers —
-// safe in the payload. The event carries whichever fields the write touched.
+// (ADR-0004). agentId + model id + effort level + backend id are non-secret
+// identifiers — safe in the payload. The event carries whichever fields the
+// write touched.
 export type AgentPrefEvents = {
-  "agent_pref.set": { agentId: string; model?: string; effort?: Effort };
+  "agent_pref.set": { agentId: string; model?: string; effort?: Effort; backend?: Backend };
 };
 
 // Public shape for listing (diagnostics / round-trip).
@@ -79,5 +90,6 @@ export type ConfiguredAgentPref = {
   agentId: string;
   model?: string;
   effort?: Effort;
+  backend?: Backend;
   updatedAt: number;
 };

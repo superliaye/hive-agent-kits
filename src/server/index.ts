@@ -301,6 +301,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     permission: { events: runs.permissionEvents },
     // Dedicated `backend` audit source — the executor's CLI-spawn emitter.
     backend: { events: runs.backendEvents },
+    // Same `backend` source, second emitter — the user-triggered delegated
+    // CLI-update action (BackendProbe service).
+    backendUpdate: { events: backendProbe.events },
   });
 
   await registry.start();

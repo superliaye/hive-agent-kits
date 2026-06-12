@@ -6,6 +6,7 @@
 // the full graph of who feeds the audit log.
 
 import type { AgentPrefEvents } from "../agent-prefs/index.ts";
+import type { BackendUpdateEvents } from "../backend-probe/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Catalog } from "../catalog/index.ts";
 import type { CatalogEvents } from "../catalog/types.ts";
@@ -44,6 +45,10 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   // the event stream is read here. Satisfied by the Run executor's
   // `backendEvents` emitter (separate from `events`/`permissionEvents`).
   backend?: { events: TypedEmitter<BackendEvents> };
+  // Same dedicated `backend` source, second emitter: the user-triggered
+  // delegated CLI-update action. Satisfied by the BackendProbe service's
+  // `events`. Distinct event map from the spawn audit, attached separately.
+  backendUpdate?: { events: TypedEmitter<BackendUpdateEvents> };
   // Future:
   //   mcp?:        { events: TypedEmitter<McpLifecycleEvents> }
   //   memory?:     { events: TypedEmitter<MemoryEvents> }
@@ -127,6 +132,7 @@ const agentPrefsNormalizer: Normalizer<AgentPrefEvents> = {
     payload: {
       ...(event.model !== undefined && { model: event.model }),
       ...(event.effort !== undefined && { effort: event.effort }),
+      ...(event.backend !== undefined && { backend: event.backend }),
     },
   }),
 };
@@ -160,13 +166,15 @@ const threadsNormalizer: Normalizer<ThreadEvents> = {
   "thread.scope_set": (event) => ({
     event_type: "thread.scope_set",
     agent_id: event.agentId,
-    // model id / effort level / working-dir path are non-secret identifiers
-    // (same class as agent_pref.set); carry whichever axes the write touched.
+    // model id / effort level / working-dir path / backend id are non-secret
+    // identifiers (same class as agent_pref.set); carry whichever axes the write
+    // touched.
     payload: {
       thread_id: event.threadId,
       ...(event.model !== undefined ? { model: event.model } : {}),
       ...(event.effort !== undefined ? { effort: event.effort } : {}),
       ...(event.workingDir !== undefined ? { workingDir: event.workingDir } : {}),
+      ...(event.backend !== undefined ? { backend: event.backend } : {}),
       ...(event.cleared !== undefined ? { cleared: event.cleared } : {}),
     },
   }),
@@ -216,6 +224,10 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
 
   if (sources.backend) {
     disposers.push(audit.attach("backend", sources.backend.events, backendNormalizer));
+  }
+
+  if (sources.backendUpdate) {
+    disposers.push(audit.attach("backend", sources.backendUpdate.events, backendUpdateNormalizer));
   }
 
   return () => {
@@ -323,5 +335,15 @@ const backendNormalizer: Normalizer<BackendEvents> = {
       arg_count: event.argSummary.count,
       has_stdin: event.hasStdin,
     },
+  }),
+};
+
+// Backend (update action): the user-triggered delegated CLI self-update, on the
+// same `backend` AuditSource as the spawn audit. Payload carries REFS only — the
+// backend id + the binary NAME invoked (never the full arg vector / env / auth).
+const backendUpdateNormalizer: Normalizer<BackendUpdateEvents> = {
+  "backend.update.requested": (event) => ({
+    event_type: "backend.update.requested",
+    payload: { backend: event.backend, binary: event.binary },
   }),
 };

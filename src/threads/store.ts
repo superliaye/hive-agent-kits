@@ -93,7 +93,12 @@ export type ThreadsStore = {
    */
   setScope(
     threadId: string,
-    patch: { model?: string | null; effort?: string | null; workingDir?: string | null },
+    patch: {
+      model?: string | null;
+      effort?: string | null;
+      workingDir?: string | null;
+      backend?: string | null;
+    },
   ): Promise<void>;
 
   /**
@@ -156,6 +161,7 @@ export function createThreadsStore(
       modelPref: row.model_pref,
       effortPref: row.effort_pref,
       workingDir: row.working_dir,
+      backend: row.backend,
       cliSessionBackend: row.cli_session_backend,
       cliSessionId: row.cli_session_id,
     };
@@ -191,6 +197,7 @@ export function createThreadsStore(
         modelPref: null,
         effortPref: null,
         workingDir: null,
+        backend: null,
         cliSessionBackend: null,
         cliSessionId: null,
       };
@@ -310,28 +317,31 @@ export function createThreadsStore(
       const hasModel = patch.model !== undefined;
       const hasEffort = patch.effort !== undefined;
       const hasWorkingDir = patch.workingDir !== undefined;
-      if (!hasModel && !hasEffort && !hasWorkingDir) {
+      const hasBackend = patch.backend !== undefined;
+      if (!hasModel && !hasEffort && !hasWorkingDir && !hasBackend) {
         throw new Error(
-          "threads/store: setScope requires at least one of { model, effort, workingDir }",
+          "threads/store: setScope requires at least one of { model, effort, workingDir, backend }",
         );
       }
       const current = this.get(threadId);
       if (!current) return;
 
       // Audit-first: emit BEFORE the write (ADR-0004). A set carries its new
-      // value in `model`/`effort`/`workingDir`; a clear (axis touched, value
-      // null) is named in `cleared` so clear-X stays distinguishable in audit
-      // without making the value fields nullable. The write still clears.
-      const cleared: ("model" | "effort" | "workingDir")[] = [];
+      // value in `model`/`effort`/`workingDir`/`backend`; a clear (axis touched,
+      // value null) is named in `cleared` so clear-X stays distinguishable in
+      // audit without making the value fields nullable. The write still clears.
+      const cleared: ("model" | "effort" | "workingDir" | "backend")[] = [];
       if (hasModel && patch.model === null) cleared.push("model");
       if (hasEffort && patch.effort === null) cleared.push("effort");
       if (hasWorkingDir && patch.workingDir === null) cleared.push("workingDir");
+      if (hasBackend && patch.backend === null) cleared.push("backend");
       await events.emit("thread.scope_set", {
         threadId,
         agentId: current.agentId,
         ...(hasModel && patch.model !== null ? { model: patch.model } : {}),
         ...(hasEffort && patch.effort !== null ? { effort: patch.effort } : {}),
         ...(hasWorkingDir && patch.workingDir !== null ? { workingDir: patch.workingDir } : {}),
+        ...(hasBackend && patch.backend !== null ? { backend: patch.backend } : {}),
         ...(cleared.length > 0 ? { cleared } : {}),
       });
 
@@ -342,6 +352,7 @@ export function createThreadsStore(
           ...(hasModel ? { model_pref: patch.model } : {}),
           ...(hasEffort ? { effort_pref: patch.effort } : {}),
           ...(hasWorkingDir ? { working_dir: patch.workingDir } : {}),
+          ...(hasBackend ? { backend: patch.backend } : {}),
         })
         .where(eq(threads.id, threadId))
         .run();

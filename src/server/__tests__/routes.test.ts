@@ -220,7 +220,7 @@ describe("server routes", () => {
   test("GET /api/agents/:id/model-pref returns nulls when unset", async () => {
     const res = await server.app.fetch(authed("/api/agents/root/model-pref"));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ model: null, effort: null });
+    expect(await res.json()).toEqual({ model: null, effort: null, backend: null });
   });
 
   test("PUT then GET /api/agents/:id/model-pref round-trips the model choice", async () => {
@@ -232,10 +232,18 @@ describe("server routes", () => {
       }),
     );
     expect(put.status).toBe(200);
-    expect(await put.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: null });
+    expect(await put.json()).toEqual({
+      model: "openai-codex/gpt-5.2",
+      effort: null,
+      backend: null,
+    });
 
     const get = await server.app.fetch(authed("/api/agents/root/model-pref"));
-    expect(await get.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: null });
+    expect(await get.json()).toEqual({
+      model: "openai-codex/gpt-5.2",
+      effort: null,
+      backend: null,
+    });
   });
 
   test("PUT effort round-trips and is independent of model", async () => {
@@ -256,10 +264,18 @@ describe("server routes", () => {
       }),
     );
     expect(put.status).toBe(200);
-    expect(await put.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: "high" });
+    expect(await put.json()).toEqual({
+      model: "openai-codex/gpt-5.2",
+      effort: "high",
+      backend: null,
+    });
 
     const get = await server.app.fetch(authed("/api/agents/root/model-pref"));
-    expect(await get.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: "high" });
+    expect(await get.json()).toEqual({
+      model: "openai-codex/gpt-5.2",
+      effort: "high",
+      backend: null,
+    });
   });
 
   test("PUT model only leaves a previously-set effort untouched", async () => {
@@ -277,7 +293,11 @@ describe("server routes", () => {
         body: JSON.stringify({ model: "anthropic/claude-opus-4-7" }),
       }),
     );
-    expect(await put.json()).toEqual({ model: "anthropic/claude-opus-4-7", effort: "low" });
+    expect(await put.json()).toEqual({
+      model: "anthropic/claude-opus-4-7",
+      effort: "low",
+      backend: null,
+    });
   });
 
   test("PUT /api/agents/:id/model-pref rejects a malformed model with 400", async () => {
@@ -356,12 +376,14 @@ describe("server routes", () => {
       model: "openai-codex/gpt-5.2",
       effort: "minimal",
       workingDir: null,
+      backend: null,
     });
     const get = await server.app.fetch(authed(`/api/threads/${id}/scope`));
     expect(await get.json()).toEqual({
       model: "openai-codex/gpt-5.2",
       effort: "minimal",
       workingDir: null,
+      backend: null,
     });
   });
 
@@ -379,12 +401,14 @@ describe("server routes", () => {
       model: null,
       effort: null,
       workingDir: "/some/project/path",
+      backend: null,
     });
     const get = await server.app.fetch(authed(`/api/threads/${id}/scope`));
     expect(await get.json()).toEqual({
       model: null,
       effort: null,
       workingDir: "/some/project/path",
+      backend: null,
     });
   });
 
@@ -409,6 +433,7 @@ describe("server routes", () => {
       model: "openai-codex/gpt-5.2",
       effort: "minimal",
       workingDir: "/some/project/path",
+      backend: null,
     });
     // Changing model leaves workingDir intact.
     await server.app.fetch(
@@ -423,6 +448,7 @@ describe("server routes", () => {
       model: "latest",
       effort: "minimal",
       workingDir: "/some/project/path",
+      backend: null,
     });
   });
 
@@ -437,7 +463,7 @@ describe("server routes", () => {
     );
     // The agent default is still unset — use-here did not promote.
     const def = await server.app.fetch(authed("/api/agents/root/model-pref"));
-    expect(await def.json()).toEqual({ model: null, effort: null });
+    expect(await def.json()).toEqual({ model: null, effort: null, backend: null });
   });
 
   test("apply-to-default (model-pref) promotes independently of Thread scope", async () => {
@@ -458,13 +484,18 @@ describe("server routes", () => {
       }),
     );
     const def = await server.app.fetch(authed("/api/agents/root/model-pref"));
-    expect(await def.json()).toEqual({ model: "openai-codex/gpt-5.2", effort: null });
+    expect(await def.json()).toEqual({
+      model: "openai-codex/gpt-5.2",
+      effort: null,
+      backend: null,
+    });
     // Thread scope unchanged by the promotion.
     const scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
     expect(await scope.json()).toEqual({
       model: "openai-codex/gpt-5.2",
       effort: null,
       workingDir: null,
+      backend: null,
     });
   });
 
@@ -478,7 +509,12 @@ describe("server routes", () => {
       }),
     );
     let scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
-    expect(await scope.json()).toEqual({ model: "latest", effort: "highest", workingDir: null });
+    expect(await scope.json()).toEqual({
+      model: "latest",
+      effort: "highest",
+      workingDir: null,
+      backend: null,
+    });
     // Clear the model axis only; effort untouched.
     await server.app.fetch(
       authed(`/api/threads/${id}/scope`, {
@@ -488,7 +524,12 @@ describe("server routes", () => {
       }),
     );
     scope = await server.app.fetch(authed(`/api/threads/${id}/scope`));
-    expect(await scope.json()).toEqual({ model: null, effort: "highest", workingDir: null });
+    expect(await scope.json()).toEqual({
+      model: null,
+      effort: "highest",
+      workingDir: null,
+      backend: null,
+    });
   });
 
   test("a Thread-scope write records a thread.scope_set audit row", async () => {

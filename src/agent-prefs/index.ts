@@ -15,6 +15,7 @@ export type {
   AgentPref,
   AgentPrefEvents,
   AgentPrefPatch,
+  Backend,
   ConfiguredAgentPref,
   Effort,
 } from "./types.ts";

@@ -8,10 +8,11 @@ import { ZodError } from "zod";
 import type { AgentModelPrefsSvc } from "../agent-prefs/index.ts";
 import type { Audit } from "../audit/index.ts";
 import type { BackendProbeSvc } from "../backend-probe/index.ts";
-import { BackendStatus } from "../backend-probe/index.ts";
+import { BackendStatus, ProbeableBackend } from "../backend-probe/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Capability } from "../capabilities/types.ts";
 import { AgentNotFoundError } from "../catalog/index.ts";
+import { isWorkerAgent } from "../catalog/role.ts";
 import type { Agent, Catalog } from "../catalog/types.ts";
 import { type AppConfig, AppearanceConfigSchema } from "../config/schema.ts";
 import type { Config } from "../config/types.ts";
@@ -92,6 +93,7 @@ function toAgentSummary(a: Agent): AgentSummaryWire {
     domain: a.domain,
     layer: a.layer,
     hasFork: a.hasFork,
+    isWorker: isWorkerAgent(a.agentId),
     bindingCounts: {
       skills: a.bindings.skills.length,
       snippets: a.bindings.snippets.length,
@@ -212,6 +214,28 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     return c.json(BackendStatus.array().parse(statuses));
   });
 
+  // Delegated CLI self-update (ADR-0016: Hive detects + delegates, never
+  // installs/manages packages). Runs the backend's OWN updater, then re-probes
+  // and returns the fresh BackendStatus. A self-update failure maps to a typed
+  // JSON error; an unknown backend → 400.
+  app.post("/api/backends/:backend/upgrade", async (c) => {
+    const parsed = ProbeableBackend.safeParse(c.req.param("backend"));
+    if (!parsed.success) {
+      return c.json({ error: "unknown backend" }, 400);
+    }
+    const result = await deps.backendProbe.upgrade(parsed.data);
+    switch (result.kind) {
+      case "ok":
+        return c.json(BackendStatus.parse(result.status));
+      case "spawn_failed":
+        return c.json({ error: "updater not available", reason: "not_installed" }, 502);
+      case "update_failed":
+        return c.json({ error: "updater exited non-zero", reason: "update_failed" }, 502);
+      case "timeout":
+        return c.json({ error: "updater timed out", reason: "timeout" }, 502);
+    }
+  });
+
   app.get("/api/agents", (c) => {
     return c.json(deps.catalog.list().map(toAgentSummary));
   });
@@ -268,6 +292,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     return c.json({
       model: deps.agentModelPrefs.getModel(id) ?? null,
       effort: deps.agentModelPrefs.getEffort(id) ?? null,
+      backend: deps.agentModelPrefs.getBackend(id) ?? null,
     });
   });
 
@@ -284,14 +309,29 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: "invalid body", issues: zodIssues(parsed.error) }, 400);
     }
+    // Worker-only invariant (ADR-0015): only Worker agents may have a non-native
+    // backend default. A clear (null) or `native` is always allowed.
+    if (
+      parsed.data.backend !== undefined &&
+      parsed.data.backend !== null &&
+      parsed.data.backend !== "native" &&
+      !isWorkerAgent(id)
+    ) {
+      return c.json(
+        { error: "non-native backend is only allowed for Worker agents", reason: "worker_only" },
+        409,
+      );
+    }
     // Merge semantics: the store keeps any field the patch omits.
     await deps.agentModelPrefs.set(id, {
       ...(parsed.data.model !== undefined && { model: parsed.data.model }),
       ...(parsed.data.effort !== undefined && { effort: parsed.data.effort }),
+      ...(parsed.data.backend !== undefined && { backend: parsed.data.backend }),
     });
     return c.json({
       model: deps.agentModelPrefs.getModel(id) ?? null,
       effort: deps.agentModelPrefs.getEffort(id) ?? null,
+      backend: deps.agentModelPrefs.getBackend(id) ?? null,
     });
   });
 
@@ -398,6 +438,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       model: t.modelPref ?? null,
       effort: t.effortPref ?? null,
       workingDir: t.workingDir ?? null,
+      backend: t.backend ?? null,
     });
   });
 
@@ -413,13 +454,29 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: "invalid scope body", issues: zodIssues(parsed.error) }, 400);
     }
-    if (!deps.threads.get(id)) return c.json({ error: "thread not found" }, 404);
+    const existing = deps.threads.get(id);
+    if (!existing) return c.json({ error: "thread not found" }, 404);
+    // Worker-only invariant (ADR-0015): only Worker agents may pick a non-native
+    // backend. Root / Agent Manager are always native. This is the REAL guard
+    // (the UI gate is UX only). A clear (null) or `native` is always allowed.
+    if (
+      parsed.data.backend !== undefined &&
+      parsed.data.backend !== null &&
+      parsed.data.backend !== "native" &&
+      !isWorkerAgent(existing.agentId)
+    ) {
+      return c.json(
+        { error: "non-native backend is only allowed for Worker agents", reason: "worker_only" },
+        409,
+      );
+    }
     // Merge semantics: pass only the present axes (a `null` clears, an omitted
-    // axis is untouched), so the two axes stay independent.
+    // axis is untouched), so the axes stay independent.
     await deps.threads.setScope(id, {
       ...(parsed.data.model !== undefined && { model: parsed.data.model }),
       ...(parsed.data.effort !== undefined && { effort: parsed.data.effort }),
       ...(parsed.data.workingDir !== undefined && { workingDir: parsed.data.workingDir }),
+      ...(parsed.data.backend !== undefined && { backend: parsed.data.backend }),
     });
     const updated = deps.threads.get(id);
     if (!updated) return c.json({ error: "thread not found" }, 404);
@@ -427,6 +484,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       model: updated.modelPref ?? null,
       effort: updated.effortPref ?? null,
       workingDir: updated.workingDir ?? null,
+      backend: updated.backend ?? null,
     });
   });
 

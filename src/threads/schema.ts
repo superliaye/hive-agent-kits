@@ -47,6 +47,10 @@ export const threads = sqliteTable("threads", {
   // (fall through to the agent default, then the per-Agent ~/.hive workspace).
   // An open `text` path — the resolver is the single concretization point.
   working_dir: text("working_dir"),
+  // Per-conversation Agent-Backend pick (ADR-0015). NULL = unset (fall through
+  // to the agent default). An open `text` backend id (native/claude-code/codex);
+  // the resolver's `threadBackend` tier is the single resolution point.
+  backend: text("backend"),
   // Per-Thread CLI native-session continuity (ADR-0016). When a CLI backend
   // (claude-code/codex) creates a session, its session id is persisted here
   // alongside the backend it belongs to, so the next turn RESUMEs the CLI's own
@@ -85,6 +89,7 @@ const THREADS_ADDED_COLUMNS: ReadonlyArray<{ name: string; ddl: string }> = [
   { name: "model_pref", ddl: "model_pref TEXT" },
   { name: "effort_pref", ddl: "effort_pref TEXT" },
   { name: "working_dir", ddl: "working_dir TEXT" },
+  { name: "backend", ddl: "backend TEXT" },
   { name: "cli_session_backend", ddl: "cli_session_backend TEXT" },
   { name: "cli_session_id", ddl: "cli_session_id TEXT" },
 ];
@@ -114,6 +119,7 @@ export function ensureThreadsSchema(db: EnsureHandle): void {
       model_pref TEXT,
       effort_pref TEXT,
       working_dir TEXT,
+      backend TEXT,
       cli_session_backend TEXT,
       cli_session_id TEXT
     )

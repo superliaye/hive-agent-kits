@@ -16,6 +16,21 @@ const BACKEND_COMMANDS: Record<ProbeableBackend, readonly string[]> = {
   codex: ["codex", "--version"],
 };
 
+// The self-update invocation per backend (ADR-0016 "detect, don't manage" —
+// Hive delegates to each CLI's OWN updater, it never installs/manages packages).
+// One backend-keyed table so the exact invocation is changed in a single place;
+// the UI copy never advertises a specific flag (OQ-3).
+const BACKEND_UPDATE_COMMANDS: Record<ProbeableBackend, readonly string[]> = {
+  "claude-code": ["claude", "update"],
+  codex: ["codex", "--upgrade"],
+};
+
+// The binary name the update invocation runs — a ref for the audit payload
+// (never the full arg vector). command[0] of the backend's self-update command.
+export function updateBinary(backend: ProbeableBackend): string {
+  return BACKEND_UPDATE_COMMANDS[backend][0] ?? backend;
+}
+
 // First semver-ish token in the output. Tolerant on purpose: CLIs decorate
 // their version string differently (`2.0.13 (Claude Code)`, `codex-cli 0.5.0`),
 // so we extract rather than match a fixed format.
@@ -80,6 +95,37 @@ export const notInstalledRunner: CommandRunner = async () => ({
   kind: "spawn_failed",
   message: "backend probe disabled",
 });
+
+// A delegated-update outcome. `ok` re-probes and returns the fresh status; a
+// failure is a TYPED value (never a thrown untyped error) — `spawn_failed` =
+// binary not on PATH, `update_failed` = the updater exited non-zero, `timeout` =
+// the updater ran past its budget. The route maps these to a JSON error.
+export type UpdateResult =
+  | { kind: "ok"; status: BackendStatus }
+  | { kind: "spawn_failed"; message: string }
+  | { kind: "update_failed"; exitCode: number }
+  | { kind: "timeout" };
+
+// Run a backend's OWN self-update command, then re-probe. Pure given a
+// CommandRunner — the live service injects the real runner; tests inject a fake.
+// Hive never installs/manages the CLI itself (ADR-0016): it delegates to the
+// CLI's updater and reports the re-probed status.
+export async function updateBackend(
+  backend: ProbeableBackend,
+  runner: CommandRunner,
+  opts: { timeoutMs: number },
+): Promise<UpdateResult> {
+  const result = await runner(BACKEND_UPDATE_COMMANDS[backend], { timeoutMs: opts.timeoutMs });
+  switch (result.kind) {
+    case "spawn_failed":
+      return { kind: "spawn_failed", message: result.message };
+    case "timeout":
+      return { kind: "timeout" };
+    case "exited":
+      if (result.exitCode !== 0) return { kind: "update_failed", exitCode: result.exitCode };
+      return { kind: "ok", status: await probeBackend(backend, runner, opts) };
+  }
+}
 
 export async function probeBackend(
   backend: ProbeableBackend,

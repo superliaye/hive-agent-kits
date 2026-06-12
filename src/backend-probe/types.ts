@@ -38,3 +38,16 @@ export const BackendStatus = z.object({
   checkedAt: z.number(),
 });
 export type BackendStatus = z.infer<typeof BackendStatus>;
+
+// Audit event for a USER-triggered delegated update (ADR-0004). The probe
+// itself is a system diagnostic (trace, not audit); only the user action of
+// asking a CLI to self-update is audited. Emitted on the dedicated `backend`
+// AuditSource. Payload carries REFS only — the backend id + the binary NAME
+// invoked (never the full arg vector / env / auth), matching ADR-0004 redaction.
+export type BackendUpdateEvents = {
+  "backend.update.requested": {
+    backend: ProbeableBackend;
+    /** command[0] of the self-update invocation — a ref (e.g. "claude"). */
+    binary: string;
+  };
+};

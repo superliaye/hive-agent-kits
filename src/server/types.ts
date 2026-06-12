@@ -97,6 +97,11 @@ export type AgentSummaryWire = {
   domain: string;
   layer: z.infer<typeof CapabilityLayer>;
   hasFork: boolean;
+  // True iff a Worker Agent (not Root / Agent Manager). The UI gates the
+  // per-conversation Agent-Backend axis on this — only Workers may switch
+  // backend (ADR-0015 §"Backend joins the axes for Worker Agents only"). Derived
+  // daemon-side from the kernel role; the UI never hardcodes the kernel ids.
+  isWorker: boolean;
   bindingCounts: {
     skills: number;
     snippets: number;
@@ -255,10 +260,16 @@ export const SetAgentModelPrefBody = z
   .object({
     model: DefaultModel.optional(),
     effort: DefaultEffort.optional(),
+    // Apply-to-default for the Agent-Backend axis (ADR-0015 §"Backend joins the
+    // axes for Worker Agents only"). An id ONLY — a backend carries NO stored
+    // config block. `null` clears the stored default (back to the Harness-
+    // authored backend). Worker-only: a non-native backend for a non-Worker is
+    // rejected at the route.
+    backend: AgentBackend.nullable().optional(),
   })
   .strict()
-  .refine((b) => b.model !== undefined || b.effort !== undefined, {
-    message: "at least one of { model, effort } is required",
+  .refine((b) => b.model !== undefined || b.effort !== undefined || b.backend !== undefined, {
+    message: "at least one of { model, effort, backend } is required",
   });
 export type SetAgentModelPrefBody = z.infer<typeof SetAgentModelPrefBody>;
 
@@ -274,11 +285,21 @@ export const SetThreadScopeBody = z
     model: DefaultModel.nullable().optional(),
     effort: DefaultEffort.nullable().optional(),
     workingDir: z.string().nullable().optional(),
+    // Per-conversation Agent-Backend pick (ADR-0015 axis: per-conversation >
+    // agent default). A backend id only (no config block); `null` clears the
+    // axis (back to the agent default). Worker-only: a non-native backend for a
+    // non-Worker agent is rejected at the route.
+    backend: AgentBackend.nullable().optional(),
   })
   .strict()
-  .refine((b) => b.model !== undefined || b.effort !== undefined || b.workingDir !== undefined, {
-    message: "at least one of { model, effort, workingDir } is required",
-  });
+  .refine(
+    (b) =>
+      b.model !== undefined ||
+      b.effort !== undefined ||
+      b.workingDir !== undefined ||
+      b.backend !== undefined,
+    { message: "at least one of { model, effort, workingDir, backend } is required" },
+  );
 export type SetThreadScopeBody = z.infer<typeof SetThreadScopeBody>;
 
 // Wire shapes returned by GET endpoints.

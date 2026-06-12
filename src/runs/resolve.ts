@@ -9,7 +9,9 @@
 //                fallback" is preserved (ADR-0013): `undefined` means the loop
 //                omits the `thinking` block and the provider applies its own
 //                default.
-//   - backend  : passed straight through from the Agent (ADR-0009).
+//   - backend  : Thread-scope pick > user per-agent default > harness-authored
+//                backend (ADR-0015). No per-Run backend override / symbolic
+//                backend — a concrete discriminator.
 //
 // The SIGNATURE + return shape are the contract Wave-2's selection lane (E)
 // hangs off — E later replaces the tier bodies (conversation scope,
@@ -46,8 +48,19 @@ export type ResolveInput = {
   modelOverride?: string;
   /** Per-Run effort override, when present; else undefined. Always concrete. */
   effortOverride?: ThinkingEffort;
-  /** The Agent's backend (native | claude-code | codex). */
+  /** The Agent's harness-authored backend (native | claude-code | codex). */
   backend: AgentBackend;
+  /**
+   * Thread-scope Agent-Backend pick, when set; else undefined. Wins over the
+   * user agent default and the harness backend (ADR-0015: per-conversation >
+   * agent default). A concrete id (no symbolic backend).
+   */
+  threadBackend?: AgentBackend;
+  /**
+   * User's sticky per-agent Agent-Backend default (apply-to-default), when set;
+   * else undefined. Sits between the Thread pick and the harness backend.
+   */
+  userBackendDefault?: AgentBackend;
   /**
    * Runnable model catalog (credentialed ∩ routable, newest-first). Supplies
    * the symbolic resolver: "latest" → catalog head, "highest" → strongest
@@ -108,10 +121,16 @@ export function resolve(input: ResolveInput): ResolveResult {
     effort = effortWinner;
   }
 
+  // Backend tier (ADR-0015): Thread-scope pick > user agent default > harness-
+  // authored backend. No per-Run backend override exists today (no symbolic
+  // backend either — a concrete discriminator). Same precedence shape as model/
+  // effort, with the harness backend as the terminal fallback.
+  const backend: AgentBackend = input.threadBackend ?? input.userBackendDefault ?? input.backend;
+
   return {
     model: modelResult.model,
     provider: modelResult.provider,
     ...(effort !== undefined ? { effort } : {}),
-    backend: input.backend,
+    backend,
   };
 }

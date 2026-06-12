@@ -28,6 +28,10 @@ export type Thread = {
   // (fall through to the agent default, then the per-Agent ~/.hive workspace).
   // An open path string; the executor's resolver is the single resolution point.
   workingDir: string | null;
+  // Per-conversation Agent-Backend pick (ADR-0015). null = unset (fall through
+  // to the agent default). An open backend id; the resolver's `threadBackend`
+  // tier is the single resolution point.
+  backend: string | null;
   // CLI native-session continuity (ADR-0016). The backend the stored session id
   // belongs to + the CLI's own session id (claude `session_id` / codex
   // `thread_id`). Both null until a CLI backend creates a session. The resolver
@@ -81,6 +85,7 @@ export type ThreadEvents = {
     model?: string;
     effort?: string;
     workingDir?: string;
-    cleared?: ("model" | "effort" | "workingDir")[];
+    backend?: string;
+    cleared?: ("model" | "effort" | "workingDir" | "backend")[];
   };
 };

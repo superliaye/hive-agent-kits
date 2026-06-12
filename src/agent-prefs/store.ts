@@ -11,6 +11,8 @@ import {
   type AgentPrefEvents,
   type AgentPrefPatch,
   type AgentPrefsFile,
+  type Backend,
+  BackendSchema,
   type ConfiguredAgentPref,
   type Effort,
   EffortSchema,
@@ -28,6 +30,9 @@ export type AgentPrefsStore = {
 
   /** The user's chosen thinking effort for an agent, or undefined. Sync read. */
   getEffort(agentId: string): Effort | undefined;
+
+  /** The user's chosen Agent Backend for an agent, or undefined. Sync read. */
+  getBackend(agentId: string): Backend | undefined;
 
   /**
    * Merge a model/effort patch into an agent's preference. Omitting a field
@@ -71,23 +76,33 @@ export function createAgentPrefsStore(
       return map.get(agentId)?.effort;
     },
 
+    getBackend(agentId) {
+      return map.get(agentId)?.backend;
+    },
+
     async set(agentId, patch) {
       // Reject malformed/empty before any emit/mutation, so a bad value can
-      // never land in memory or on disk.
-      if (patch.model === undefined && patch.effort === undefined) {
-        throw new Error("agent-prefs: set requires at least one of { model, effort }");
+      // never land in memory or on disk. `backend: null` is a CLEAR (valid).
+      if (patch.model === undefined && patch.effort === undefined && patch.backend === undefined) {
+        throw new Error("agent-prefs: set requires at least one of { model, effort, backend }");
       }
       if (patch.model !== undefined) ModelStringSchema.parse(patch.model);
       if (patch.effort !== undefined) EffortSchema.parse(patch.effort);
+      if (patch.backend !== undefined && patch.backend !== null) BackendSchema.parse(patch.backend);
 
+      // A non-null backend write carries the id; a clear (null) is a touched
+      // axis with no value, so it is not surfaced in the audit payload (the
+      // event keeps refs/values only for sets — same posture as a model write).
       const event: AgentPrefEvents["agent_pref.set"] = {
         agentId,
         ...(patch.model !== undefined && { model: patch.model }),
         ...(patch.effort !== undefined && { effort: patch.effort }),
+        ...(patch.backend !== undefined && patch.backend !== null && { backend: patch.backend }),
       };
       await events.emit("agent_pref.set", event);
 
-      // Merge: keep the prior value for any field the patch omits.
+      // Merge: keep the prior value for any field the patch omits. `backend:
+      // null` clears the stored default (drops the field).
       const prev = map.get(agentId);
       const next: AgentPref = {
         ...(patch.model !== undefined
@@ -99,6 +114,13 @@ export function createAgentPrefsStore(
           ? { effort: patch.effort }
           : prev?.effort !== undefined
             ? { effort: prev.effort }
+            : {}),
+        ...(patch.backend !== undefined
+          ? patch.backend !== null
+            ? { backend: patch.backend }
+            : {}
+          : prev?.backend !== undefined
+            ? { backend: prev.backend }
             : {}),
         updatedAt: now(),
       };
@@ -113,6 +135,7 @@ export function createAgentPrefsStore(
           agentId,
           ...(pref.model !== undefined && { model: pref.model }),
           ...(pref.effort !== undefined && { effort: pref.effort }),
+          ...(pref.backend !== undefined && { backend: pref.backend }),
           updatedAt: pref.updatedAt,
         });
       }
