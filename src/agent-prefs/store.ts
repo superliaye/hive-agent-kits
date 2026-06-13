@@ -90,14 +90,17 @@ export function createAgentPrefsStore(
       if (patch.effort !== undefined) EffortSchema.parse(patch.effort);
       if (patch.backend !== undefined && patch.backend !== null) BackendSchema.parse(patch.backend);
 
-      // A non-null backend write carries the id; a clear (null) is a touched
-      // axis with no value, so it is not surfaced in the audit payload (the
-      // event keeps refs/values only for sets — same posture as a model write).
+      // A non-null backend write carries the id; a clear (backend: null) is a
+      // touched axis with no value — named in `cleared` so a backend-default
+      // clear stays distinguishable from a no-touch in audit (mirrors
+      // thread.scope_set's `cleared`). Backend is the only clearable axis here.
+      const cleared: "backend"[] = patch.backend === null ? ["backend"] : [];
       const event: AgentPrefEvents["agent_pref.set"] = {
         agentId,
         ...(patch.model !== undefined && { model: patch.model }),
         ...(patch.effort !== undefined && { effort: patch.effort }),
         ...(patch.backend !== undefined && patch.backend !== null && { backend: patch.backend }),
+        ...(cleared.length > 0 && { cleared }),
       };
       await events.emit("agent_pref.set", event);
 

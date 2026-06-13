@@ -82,7 +82,15 @@ export type AgentPrefPatch = { model?: string; effort?: Effort; backend?: Backen
 // identifiers — safe in the payload. The event carries whichever fields the
 // write touched.
 export type AgentPrefEvents = {
-  "agent_pref.set": { agentId: string; model?: string; effort?: Effort; backend?: Backend };
+  "agent_pref.set": {
+    agentId: string;
+    model?: string;
+    effort?: Effort;
+    backend?: Backend;
+    // A cleared backend default (patch.backend === null) is named here so it
+    // stays distinguishable from a no-touch in audit (mirrors thread.scope_set).
+    cleared?: "backend"[];
+  };
 };
 
 // Public shape for listing (diagnostics / round-trip).

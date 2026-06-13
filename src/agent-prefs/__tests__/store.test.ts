@@ -89,7 +89,7 @@ describe("agent-prefs store", () => {
     expect(seen).toEqual([{ agentId: "worker", backend: "codex" }]);
   });
 
-  test("backend: null clears the stored default (no audit value)", async () => {
+  test("backend: null clears the stored default and names the cleared axis", async () => {
     const store = createAgentPrefsStore({ ...EMPTY });
     await store.set("worker", { backend: "codex" });
     const seen: AgentPrefEvents["agent_pref.set"][] = [];
@@ -98,8 +98,9 @@ describe("agent-prefs store", () => {
     });
     await store.set("worker", { backend: null });
     expect(store.getBackend("worker")).toBeUndefined();
-    // A clear is a touched axis with no value — not surfaced in the payload.
-    expect(seen).toEqual([{ agentId: "worker" }]);
+    // A clear carries no value but names the axis in `cleared`, so it stays
+    // distinguishable from a no-touch in audit (mirrors thread.scope_set).
+    expect(seen).toEqual([{ agentId: "worker", cleared: ["backend"] }]);
   });
 
   test("rejects an invalid backend id before mutating", async () => {

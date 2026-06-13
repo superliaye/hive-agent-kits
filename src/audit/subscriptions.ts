@@ -133,6 +133,7 @@ const agentPrefsNormalizer: Normalizer<AgentPrefEvents> = {
       ...(event.model !== undefined && { model: event.model }),
       ...(event.effort !== undefined && { effort: event.effort }),
       ...(event.backend !== undefined && { backend: event.backend }),
+      ...(event.cleared !== undefined && { cleared: event.cleared }),
     },
   }),
 };
