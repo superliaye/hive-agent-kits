@@ -17,6 +17,7 @@ import {
   isAgentBackend,
   isThinkingEffort,
 } from "../api.ts";
+import { resolveAxis } from "../axis-precedence.ts";
 import { InlineTitle } from "../components/InlineTitle.tsx";
 import { type BackendOption, MessageComposer } from "../components/MessageComposer.tsx";
 import { MessageList } from "../components/MessageList.tsx";
@@ -59,22 +60,45 @@ function loadCollapsed(): Record<string, boolean> {
 // parameterised by axis, rather than copy-pasted per axis.
 type ApplyAxis = "model" | "effort" | "backend";
 
-type ApplyRow = {
+// A promotable axis row, GENERIC over its concrete value type V (P10): model
+// carries `string`, effort `ThinkingEffort`, backend `AgentBackend`. Each axis
+// brings its own typed `setDefault`, so promoting a pick to the agent default
+// needs NO `as`-cast at the seam.
+type ApplyRow<V extends string> = {
   axis: ApplyAxis;
   noun: string;
-  value: string | null;
+  value: V | null;
   defaultLabel: string;
   // The per-axis guard: the row renders only when the conversation pick differs
   // from the agent default. Kept explicit so per-axis promotability survives.
   enabled: boolean;
-  commit: (value: string) => void;
+  // Promote this axis's pick to the agent default on the daemon (typed per axis,
+  // so the API patch field carries V at its own concrete type — no cast).
+  write: (agentId: string, value: V) => Promise<unknown>;
+  // Update the local agent-default state for this axis (typed per axis — the
+  // cast that previously narrowed `string` back to V is gone).
+  setDefault: (value: V) => void;
   testId: string;
+};
+
+// The display-side view of a row: the generic `ApplyRow<V>` collapsed to its
+// render fields plus a pre-bound zero-arg apply thunk. The thunk is built at the
+// row's construction site where V is still concrete (see `makeApplyView`), so
+// the heterogeneous rows can be iterated uniformly without a discriminated
+// union and without re-widening V at the render site.
+type ApplyRowView = {
+  axis: ApplyAxis;
+  noun: string;
+  value: string;
+  defaultLabel: string;
+  testId: string;
+  onApply: () => void;
 };
 
 // One axis-parameterised apply-to-default row (P8/P9). Standardized copy across
 // all three axes; the button is a ghost "Update" (P9). Outcomes land on the
 // page's list-error channel — this row carries no local status line.
-function ApplyToDefault({ row, onApply }: { row: ApplyRow; onApply: () => void }): JSX.Element {
+function ApplyToDefault({ row }: { row: ApplyRowView }): JSX.Element {
   return (
     <div className="composer-apply-default">
       <span className="meta">
@@ -84,7 +108,7 @@ function ApplyToDefault({ row, onApply }: { row: ApplyRow; onApply: () => void }
       <button
         type="button"
         className="button ghost small"
-        onClick={onApply}
+        onClick={row.onApply}
         data-testid={row.testId}
       >
         Update
@@ -140,11 +164,18 @@ export function ChatPage({
   const [backendDefault, setBackendDefault] = useState<AgentBackend | null>(null);
   const [backendPick, setBackendPick] = useState<AgentBackend | null>(null);
 
-  const selectedModel: string | null =
-    userPick ??
-    (agentDefault && models.some((m) => m.model === agentDefault)
-      ? agentDefault
-      : (models[0]?.model ?? agentDefault));
+  // Effective selection per axis follows ONE pick > default > fallback ordering
+  // (P11), shared via `resolveAxis`; each axis supplies its own offerability and
+  // fallback. Model: the pick is taken unconditionally; the stored default holds
+  // only if runnable; else the latest runnable model (so a new conversation never
+  // starts on an unavailable model when runnable ones exist).
+  const selectedModel: string | null = resolveAxis<string>({
+    pick: userPick,
+    pickValid: () => true,
+    def: agentDefault,
+    defOfferable: (m) => models.some((x) => x.model === m),
+    fallback: models[0]?.model ?? agentDefault,
+  });
 
   // The supported effort levels for the currently-selected model (the picker's
   // options). Empty when the selection isn't a known/runnable model.
@@ -155,10 +186,13 @@ export function ChatPage({
   // else the agent default if valid, else the model's first supported level —
   // so switching to a model that doesn't support the stored effort never leaves
   // an invalid level selected. null only when the model exposes no efforts.
-  const selectedEffort: ThinkingEffort | null =
-    (effortPick && selectedModelEfforts.includes(effortPick) ? effortPick : null) ??
-    (effortDefault && selectedModelEfforts.includes(effortDefault) ? effortDefault : null) ??
-    (selectedModelEfforts[0] ?? null);
+  const selectedEffort: ThinkingEffort | null = resolveAxis<ThinkingEffort>({
+    pick: effortPick,
+    pickValid: (e) => selectedModelEfforts.includes(e),
+    def: effortDefault,
+    defOfferable: (e) => selectedModelEfforts.includes(e),
+    fallback: selectedModelEfforts[0] ?? null,
+  });
 
   // The composer hides the effort picker for a model whose only level is "off"
   // (no real reasoning choice). Match that here so the send carries no
@@ -181,52 +215,56 @@ export function ChatPage({
 
   // Effective backend selection: the in-session pick, else the agent default if
   // offerable, else `native` (always available). Mirrors the model tier.
-  const selectedBackend: AgentBackend | null =
-    backendPick ??
-    (backendDefault && backendOptions.some((b) => b.backend === backendDefault)
-      ? backendDefault
-      : "native");
+  const selectedBackend: AgentBackend | null = resolveAxis<AgentBackend>({
+    pick: backendPick,
+    pickValid: () => true,
+    def: backendDefault,
+    defOfferable: (b) => backendOptions.some((o) => o.backend === b),
+    fallback: "native",
+  });
 
   // Apply-to-default affordances (ADR-0015:22, P8/P9): all three axes
   // (model + effort + backend) are promotable, expressed as ONE axis-parameterised
-  // table. Each row carries its own `enabled` guard (the pick differs from the
-  // agent default) so per-axis promotability is preserved — no "Apply all".
-  const applyRows: ApplyRow[] = [
-    {
-      axis: "model",
-      noun: "model",
-      value: selectedModel,
-      defaultLabel: agentDefault ?? "none",
-      enabled:
-        selectedModel !== null &&
-        selectedModel !== agentDefault &&
-        models.some((m) => m.model === selectedModel),
-      commit: (v) => setAgentDefault(v),
-      testId: "apply-model-default",
-    },
-    {
-      axis: "effort",
-      noun: "effort",
-      value: effortToSend,
-      defaultLabel: effortDefault ?? "none",
-      enabled: hasRealEffort && effortToSend !== null && effortToSend !== effortDefault,
-      commit: (v) => setEffortDefault(v as ThinkingEffort),
-      testId: "apply-effort-default",
-    },
-    {
-      axis: "backend",
-      noun: "backend",
-      value: selectedBackend,
-      // Backend always resolves to native, so the default fallback is native
-      // (not "none") — intentional, kept distinct from the model/effort fallback.
-      defaultLabel: backendDefault ?? "native",
-      enabled:
-        isWorker && selectedBackend !== null && selectedBackend !== (backendDefault ?? "native"),
-      commit: (v) => setBackendDefault(v as AgentBackend),
-      testId: "apply-backend-default",
-    },
-  ];
-  const visibleApplyRows = applyRows.filter((r) => r.enabled);
+  // row component fed by a generic `ApplyRow<V>` per axis. Each row carries its own
+  // `enabled` guard (the pick differs from the agent default) so per-axis
+  // promotability is preserved — no "Apply all". Each row is typed at its own
+  // concrete V, so `setDefault` needs NO cast (P10).
+  const modelRow: ApplyRow<string> = {
+    axis: "model",
+    noun: "model",
+    value: selectedModel,
+    defaultLabel: agentDefault ?? "none",
+    enabled:
+      selectedModel !== null &&
+      selectedModel !== agentDefault &&
+      models.some((m) => m.model === selectedModel),
+    write: (id, v) => api.setAgentModelPref(apiConfig, id, { model: v }),
+    setDefault: (v) => setAgentDefault(v),
+    testId: "apply-model-default",
+  };
+  const effortRow: ApplyRow<ThinkingEffort> = {
+    axis: "effort",
+    noun: "effort",
+    value: effortToSend,
+    defaultLabel: effortDefault ?? "none",
+    enabled: hasRealEffort && effortToSend !== null && effortToSend !== effortDefault,
+    write: (id, v) => api.setAgentModelPref(apiConfig, id, { effort: v }),
+    setDefault: (v) => setEffortDefault(v),
+    testId: "apply-effort-default",
+  };
+  const backendRow: ApplyRow<AgentBackend> = {
+    axis: "backend",
+    noun: "backend",
+    value: selectedBackend,
+    // Backend always resolves to native, so the default fallback is native
+    // (not "none") — intentional, kept distinct from the model/effort fallback.
+    defaultLabel: backendDefault ?? "native",
+    enabled:
+      isWorker && selectedBackend !== null && selectedBackend !== (backendDefault ?? "native"),
+    write: (id, v) => api.setAgentModelPref(apiConfig, id, { backend: v }),
+    setDefault: (v) => setBackendDefault(v),
+    testId: "apply-backend-default",
+  };
 
   // Keep activeId stable across live refetches: only auto-select when nothing
   // is selected, or when the selected thread has disappeared.
@@ -531,20 +569,41 @@ export function ChatPage({
     }
   }
 
-  // Single axis-parameterised promote (P8): one helper writes the picked axis
-  // to the agent default and updates the local default state. Outcomes land on
-  // the established list-error channel — no composer-local status line (P9).
-  async function applyAxisToDefault(axis: ApplyAxis): Promise<void> {
-    if (!agentId) return;
-    const row = applyRows.find((r) => r.axis === axis);
-    if (!row || row.value === null) return;
+  // Single GENERIC promote helper (P8/P10): writes the picked axis to the agent
+  // default and updates the local default state. Generic over the row's concrete
+  // value type V, so the row is passed directly with no `as`-cast at the seam.
+  // Outcomes land on the established list-error channel — no composer-local
+  // status line (P9).
+  async function applyToDefault<V extends string>(row: ApplyRow<V>): Promise<void> {
+    if (!agentId || row.value === null) return;
+    const value = row.value;
     try {
-      await api.setAgentModelPref(apiConfig, agentId, { [axis]: row.value });
-      row.commit(row.value);
+      await row.write(agentId, value);
+      row.setDefault(value);
     } catch (err) {
       setListError((err as Error).message);
     }
   }
+
+  // Collapse a generic row to its display view (P10): the apply thunk is bound
+  // here, where V is still concrete, so the heterogeneous rows render uniformly
+  // without re-widening V or a discriminated union. null-value rows are dropped.
+  function makeApplyView<V extends string>(row: ApplyRow<V>): ApplyRowView | null {
+    if (!row.enabled || row.value === null) return null;
+    return {
+      axis: row.axis,
+      noun: row.noun,
+      value: row.value,
+      defaultLabel: row.defaultLabel,
+      testId: row.testId,
+      onApply: () => void applyToDefault(row),
+    };
+  }
+  const applyViews: ApplyRowView[] = [
+    makeApplyView(modelRow),
+    makeApplyView(effortRow),
+    makeApplyView(backendRow),
+  ].filter((v): v is ApplyRowView => v !== null);
 
   async function onSend(text: string): Promise<void> {
     const content: ContentBlock[] = [{ type: "text", text }];
@@ -757,14 +816,10 @@ export function ChatPage({
               pending={thread.pending}
               runError={thread.runError}
             />
-            {visibleApplyRows.length > 0 && (
+            {applyViews.length > 0 && (
               <div className="composer-apply-default-group">
-                {visibleApplyRows.map((row) => (
-                  <ApplyToDefault
-                    key={row.axis}
-                    row={row}
-                    onApply={() => void applyAxisToDefault(row.axis)}
-                  />
+                {applyViews.map((row) => (
+                  <ApplyToDefault key={row.axis} row={row} />
                 ))}
               </div>
             )}
