@@ -7,7 +7,7 @@ import { streamSSE } from "hono/streaming";
 import { ZodError } from "zod";
 import type { AgentModelPrefsSvc } from "../agent-prefs/index.ts";
 import type { Audit } from "../audit/index.ts";
-import type { BackendProbeSvc } from "../backend-probe/index.ts";
+import type { BackendProbeSvc, BackendUpdaterSvc } from "../backend-probe/index.ts";
 import { BackendStatus, ProbeableBackend } from "../backend-probe/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Capability } from "../capabilities/types.ts";
@@ -56,6 +56,7 @@ export type RoutesDeps = {
   gateway: ModelGateway;
   agentModelPrefs: AgentModelPrefsSvc;
   backendProbe: BackendProbeSvc;
+  backendUpdater: BackendUpdaterSvc;
   config: Config<AppConfig>;
   token: string;
   // The ONE shared runnable-catalog port (P2). Built once at the composition
@@ -223,7 +224,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: "unknown backend" }, 400);
     }
-    const result = await deps.backendProbe.upgrade(parsed.data);
+    const result = await deps.backendUpdater.upgrade(parsed.data);
     switch (result.kind) {
       case "ok":
         return c.json(BackendStatus.parse(result.status));

@@ -20,6 +20,9 @@ import {
   BackendProbeLive,
   type BackendProbeSvc,
   BackendProbe as BackendProbeTag,
+  BackendUpdaterLive,
+  type BackendUpdaterSvc,
+  BackendUpdater as BackendUpdaterTag,
   notInstalledRunner,
 } from "../backend-probe/index.ts";
 import {
@@ -133,6 +136,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const registry = createRegistry({ watch: opts.mode === "file" });
 
   const dataLayer = HiveDbLive(dbPath);
+  // Memory mode (tests/fast-iter) reports every backend as not installed so
+  // booting a server never spawns `claude`/`codex`. File mode uses the real
+  // Bun.spawn runner (the module default). The probe and the sibling updater
+  // (OQ-5) share the SAME runner option so a memory-mode probe and updater agree.
+  const backendRunnerOpts = opts.mode === "memory" ? ({ runner: notInstalledRunner } as const) : {};
+  const backendProbeLayer = BackendProbeLive(backendRunnerOpts);
   const rootLayer = Layer.mergeAll(
     dataLayer,
     SecretsLive(secretsOpts),
@@ -141,10 +150,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     CatalogLive(),
     AuditLive(auditOpts),
     ThreadsLive().pipe(Layer.provide(dataLayer)),
-    // Memory mode (tests/fast-iter) reports every backend as not installed so
-    // booting a server never spawns `claude`/`codex`. File mode uses the real
-    // Bun.spawn runner (the module default).
-    BackendProbeLive(opts.mode === "memory" ? { runner: notInstalledRunner } : {}),
+    backendProbeLayer,
+    // The delegated-update verb lives on this sibling service (OQ-5), depending
+    // on `BackendProbe` for the re-probe. Provide the probe layer so the
+    // dependency is discharged at the module boundary, not leaked to the root.
+    BackendUpdaterLive(backendRunnerOpts).pipe(Layer.provide(backendProbeLayer)),
     // F2 binding resolver over the in-memory Registry — one composition-root
     // runtime owns it (P-3), not a second ManagedRuntime.
     BindingResolverLive(registry),
@@ -179,6 +189,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   };
   const agentModelPrefs: AgentModelPrefsSvc = runtime.runSync(AgentModelPrefsTag);
   const backendProbe: BackendProbeSvc = runtime.runSync(BackendProbeTag);
+  const backendUpdater: BackendUpdaterSvc = runtime.runSync(BackendUpdaterTag);
   // AuditSvc is exactly the legacy `Audit` surface (attach/query/subscriptions);
   // the DB handle is closed by the layer's release, not exposed on the value.
   const audit: Audit = runtime.runSync(AuditTag);
@@ -302,8 +313,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // Dedicated `backend` audit source — the executor's CLI-spawn emitter.
     backend: { events: runs.backendEvents },
     // Same `backend` source, second emitter — the user-triggered delegated
-    // CLI-update action (BackendProbe service).
-    backendUpdate: { events: backendProbe.events },
+    // CLI-update action (the sibling BackendUpdater service, OQ-5).
+    backendUpdate: { events: backendUpdater.events },
   });
 
   await registry.start();
@@ -322,6 +333,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     gateway,
     agentModelPrefs,
     backendProbe,
+    backendUpdater,
     config,
     token,
     runnableCatalog: runnableCatalogPort,

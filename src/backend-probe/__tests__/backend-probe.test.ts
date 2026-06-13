@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { ManagedRuntime } from "effect";
+import { Layer, ManagedRuntime } from "effect";
 import { BackendProbe, BackendProbeLive } from "../effect/backend-probe-live.ts";
+import { BackendUpdater, BackendUpdaterLive } from "../effect/backend-updater-live.ts";
 import {
   BACKEND_UPDATE_COMMANDS,
   type CommandResult,
@@ -148,19 +149,27 @@ describe("updateBackend (delegated self-update, OQ-3/OQ-5)", () => {
   });
 });
 
-describe("BackendProbeLive.upgrade (audit-first delegated update, OQ-6)", () => {
+describe("BackendUpdaterLive.upgrade (audit-first delegated update, OQ-5/OQ-6)", () => {
   test("emits backend.update.requested BEFORE running the updater, then re-probes", async () => {
     const runner = fakeRunner({
       claude: { kind: "exited", exitCode: 0, stdout: "2.1.0", stderr: "" },
     });
-    const rt = ManagedRuntime.make(BackendProbeLive({ runner }));
-    const svc = rt.runSync(BackendProbe);
+    // The sibling updater (OQ-5) depends on BackendProbe for the re-probe.
+    const probeLayer = BackendProbeLive({ runner });
+    const rt = ManagedRuntime.make(
+      Layer.mergeAll(probeLayer, BackendUpdaterLive({ runner }).pipe(Layer.provide(probeLayer))),
+    );
+    const svc = rt.runSync(BackendUpdater);
     const seen: BackendUpdateEvents["backend.update.requested"][] = [];
     svc.events.on("backend.update.requested", (e) => {
       seen.push(e);
     });
     const result = await svc.upgrade("claude-code");
     expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      // Re-probe was delegated to BackendProbe.probeOne — fresh version returned.
+      expect(result.status.version).toBe("2.1.0");
+    }
     // Audit-first: the event fired, carrying the backend id + the binary ref.
     expect(seen).toEqual([{ backend: "claude-code", binary: "claude" }]);
     rt.dispose();

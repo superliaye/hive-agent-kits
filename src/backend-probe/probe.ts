@@ -106,6 +106,36 @@ export type UpdateResult =
   | { kind: "update_failed"; exitCode: number }
   | { kind: "timeout" };
 
+// The non-ok arms of a delegated update: a clean exit is signalled by `ok` and
+// the caller re-probes (the re-probe is the probe service's responsibility, not
+// this command runner's — OQ-5). Failures are TYPED values, never thrown.
+export type UpdateCommandOutcome =
+  | { kind: "ok" }
+  | { kind: "spawn_failed"; message: string }
+  | { kind: "update_failed"; exitCode: number }
+  | { kind: "timeout" };
+
+// Run a backend's OWN self-update command and classify the raw outcome WITHOUT
+// re-probing. Pure given a CommandRunner. The service composes this with the
+// probe service's `probeOne` to produce the final `UpdateResult` (OQ-5: the
+// re-probe is delegated to `BackendProbe`, not duplicated here).
+export async function runUpdateCommand(
+  backend: ProbeableBackend,
+  runner: CommandRunner,
+  opts: { timeoutMs: number },
+): Promise<UpdateCommandOutcome> {
+  const result = await runner(BACKEND_UPDATE_COMMANDS[backend], { timeoutMs: opts.timeoutMs });
+  switch (result.kind) {
+    case "spawn_failed":
+      return { kind: "spawn_failed", message: result.message };
+    case "timeout":
+      return { kind: "timeout" };
+    case "exited":
+      if (result.exitCode !== 0) return { kind: "update_failed", exitCode: result.exitCode };
+      return { kind: "ok" };
+  }
+}
+
 // Run a backend's OWN self-update command, then re-probe. Pure given a
 // CommandRunner — the live service injects the real runner; tests inject a fake.
 // Hive never installs/manages the CLI itself (ADR-0016): it delegates to the
@@ -115,16 +145,9 @@ export async function updateBackend(
   runner: CommandRunner,
   opts: { timeoutMs: number },
 ): Promise<UpdateResult> {
-  const result = await runner(BACKEND_UPDATE_COMMANDS[backend], { timeoutMs: opts.timeoutMs });
-  switch (result.kind) {
-    case "spawn_failed":
-      return { kind: "spawn_failed", message: result.message };
-    case "timeout":
-      return { kind: "timeout" };
-    case "exited":
-      if (result.exitCode !== 0) return { kind: "update_failed", exitCode: result.exitCode };
-      return { kind: "ok", status: await probeBackend(backend, runner, opts) };
-  }
+  const outcome = await runUpdateCommand(backend, runner, opts);
+  if (outcome.kind !== "ok") return outcome;
+  return { kind: "ok", status: await probeBackend(backend, runner, opts) };
 }
 
 export async function probeBackend(

@@ -10,6 +10,11 @@ export type {
   CreateBackendProbeOptions,
 } from "./effect/backend-probe-live.ts";
 export { BackendProbe, BackendProbeLive } from "./effect/backend-probe-live.ts";
+export type {
+  BackendUpdaterSvc,
+  CreateBackendUpdaterOptions,
+} from "./effect/backend-updater-live.ts";
+export { BackendUpdater, BackendUpdaterLive } from "./effect/backend-updater-live.ts";
 export type { UpdateResult } from "./probe.ts";
 export { notInstalledRunner } from "./probe.ts";
 export type { BackendUpdateEvents } from "./types.ts";
