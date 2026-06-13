@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { ManagedRuntime } from "effect";
+import pino from "pino";
 import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
 import type { AgentBackend } from "../../lib/capability-types.ts";
+import { setLogger, silentLogger } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
 import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
@@ -204,6 +206,71 @@ describe("RunExecutor — happy path", () => {
     );
     const modelEventCount = events.filter((e) => e.type === "model.event").length;
     expect(modelEventCount).toBe(4); // text_start, text_delta, text_end, done
+  });
+});
+
+// ─── worker-only backend neutralization — TRACE warning at the call site ──────
+
+describe("RunExecutor — backend neutralization emits a TRACE warning (P8)", () => {
+  // Capture the trace logger's JSONL output into a buffer. `resolve()` stays
+  // pure (asserted in resolve.test.ts); the warning is emitted at the executor's
+  // I/O edge when the resolved backend was neutralized for a non-Worker agent.
+  function captureLog(): { lines: () => string[] } {
+    const chunks: string[] = [];
+    const stream = { write: (s: string) => chunks.push(s) };
+    setLogger(pino({ level: "warn" }, stream));
+    return { lines: () => chunks };
+  }
+
+  afterEach(() => setLogger(silentLogger()));
+
+  const textFixture = {
+    "anthropic/claude-haiku-4-5": [
+      { type: "text_start" as const, blockIndex: 0 },
+      { type: "text_delta" as const, blockIndex: 0, delta: "ok" },
+      { type: "text_end" as const, blockIndex: 0 },
+      { type: "done" as const, finishReason: "stop" as const },
+    ],
+  };
+
+  test("fires when a non-native backend is neutralized for a non-Worker agent", async () => {
+    const cap = captureLog();
+    // `root` is a non-Worker; its harness backend is non-native → neutralized.
+    const { executor, threadId } = await setup({
+      fixtures: textFixture,
+      agentId: "root",
+      agents: [makeAgent({ agentId: "root", backend: "claude-code" })],
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+
+    const warning = cap
+      .lines()
+      .map((l) => JSON.parse(l))
+      .find((o) => o.msg === "neutralized non-native backend for non-Worker agent");
+    expect(warning).toBeDefined();
+    expect(warning.agentId).toBe("root");
+    expect(warning.backend).toBe("claude-code");
+    expect(warning.module).toBe("runs/resolve");
+  });
+
+  test("does NOT fire when no backend is neutralized (native, allowed path)", async () => {
+    const cap = captureLog();
+    // A native-backend agent: nothing to neutralize → no warning. (A Worker
+    // keeping a non-native backend would dispatch to the real CLI, out of scope
+    // for this call-site assertion; the pure non-neutralization is pinned in
+    // resolve.test.ts.)
+    const { executor, threadId } = await setup({
+      fixtures: textFixture,
+      agentId: "worker-7",
+      agents: [makeAgent({ agentId: "worker-7", backend: "native" })],
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+
+    const warning = cap
+      .lines()
+      .map((l) => JSON.parse(l))
+      .find((o) => o.msg === "neutralized non-native backend for non-Worker agent");
+    expect(warning).toBeUndefined();
   });
 });
 

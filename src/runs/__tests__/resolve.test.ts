@@ -279,4 +279,20 @@ describe("resolve — worker-only backend invariant (authoritative guard, ADR-00
     });
     if (!("failure" in r)) expect(r.backend).toBe("codex");
   });
+
+  test("neutralization surfaces a `neutralizedBackend` flag (pure, no logger)", () => {
+    const r = resolve({ ...base(), agentId: "root", backend: "native", threadBackend: "codex" });
+    expect("failure" in r).toBe(false);
+    if (!("failure" in r)) {
+      expect(r.backend).toBe("native");
+      expect(r.neutralizedBackend).toBe(true);
+    }
+  });
+
+  test("no `neutralizedBackend` flag when nothing is neutralized", () => {
+    const worker = resolve({ ...base(), agentId: "worker-9", backend: "codex" });
+    if (!("failure" in worker)) expect(worker.neutralizedBackend).toBeUndefined();
+    const nativeOnRoot = resolve({ ...base(), agentId: "root", backend: "native" });
+    if (!("failure" in nativeOnRoot)) expect(nativeOnRoot.neutralizedBackend).toBeUndefined();
+  });
 });

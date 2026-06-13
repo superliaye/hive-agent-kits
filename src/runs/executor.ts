@@ -354,6 +354,17 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       });
       const { model } = resolved;
 
+      // TRACE (not audit): the daemon observed an invalid stored backend axis
+      // during normal resolution and fail-softed it to `native` (ADR-0015 §27).
+      // The proximate cause is the system, not a fresh user action — so it goes
+      // to trace. `resolve()` stays pure; the warning fires here, at the I/O edge.
+      if (!("failure" in resolved) && resolved.neutralizedBackend) {
+        log().warn(
+          { module: "runs/resolve", agentId, backend: agent.backend },
+          "neutralized non-native backend for non-Worker agent",
+        );
+      }
+
       if ("failure" in resolved) {
         // Thread the resolver's typed failure verbatim (P1). It already carries
         // the accurate GatewayErrorCode + message: `invalid_request` for a

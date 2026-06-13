@@ -79,7 +79,19 @@ export type ResolveInput = {
 };
 
 export type ResolveResult =
-  | { model: string; provider: string; effort?: ThinkingEffort; backend: AgentBackend }
+  | {
+      model: string;
+      provider: string;
+      effort?: ThinkingEffort;
+      backend: AgentBackend;
+      /**
+       * True iff the worker-only guard (ADR-0015 §27) neutralized a non-native
+       * backend to `native` for a non-Worker agent. Carried out of the PURE
+       * computation so the call site (a thin I/O edge) can emit a TRACE warning
+       * without `resolve()` taking a logger dependency. Absent ⇒ not neutralized.
+       */
+      neutralizedBackend?: true;
+    }
   | { model: string; failure: GatewayFailure };
 
 // Narrow an Agent's harness `config.thinkingEffort` (an `unknown` from the open
@@ -137,15 +149,19 @@ export function resolve(input: ResolveInput): ResolveResult {
     input.threadBackend ?? input.userBackendDefault ?? input.backend;
   // Authoritative worker-only guard (ADR-0015 §27): the axis stores stay dumb;
   // `resolve()` is where the invariant is enforced. A non-native backend that
-  // reached a non-Worker agent — by any path — is neutralized to `native`.
-  const backend: AgentBackend = backendAllowedForAgent(input.agentId, backendWinner)
-    ? backendWinner
-    : "native";
+  // reached a non-Worker agent — by any path — is neutralized to `native`. The
+  // computation stays PURE: it returns a `neutralizedBackend` flag so the thin
+  // I/O edge that invokes `resolve()` can emit a TRACE warning (r2-architecture-2)
+  // — no logger is threaded into the core.
+  const allowed = backendAllowedForAgent(input.agentId, backendWinner);
+  const backend: AgentBackend = allowed ? backendWinner : "native";
+  const neutralizedBackend = !allowed;
 
   return {
     model: modelResult.model,
     provider: modelResult.provider,
     ...(effort !== undefined ? { effort } : {}),
     backend,
+    ...(neutralizedBackend ? { neutralizedBackend: true as const } : {}),
   };
 }
