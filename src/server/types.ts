@@ -9,6 +9,7 @@ import {
   KebabName,
   Origin,
 } from "../lib/capability-types.ts";
+import type { AgentId, RunId, ThreadId } from "../lib/ids.ts";
 import { SYMBOLIC_EFFORT_HIGHEST, SYMBOLIC_MODEL_LATEST } from "../runs/symbolic.ts";
 
 // Mirrors the ModuleSource union in src/audit/types.ts. Kept here so the
@@ -305,8 +306,8 @@ export type SetThreadScopeBody = z.infer<typeof SetThreadScopeBody>;
 // Wire shapes returned by GET endpoints.
 
 export type ThreadSummaryWire = {
-  id: string;
-  agentId: string;
+  id: ThreadId;
+  agentId: AgentId;
   createdAt: number;
   updatedAt: number;
   title: string | null;
@@ -326,9 +327,9 @@ export type ThreadDetailWire = ThreadSummaryWire & {
 };
 
 export type RunWire = {
-  id: string;
-  threadId: string;
-  agentId: string;
+  id: RunId;
+  threadId: ThreadId;
+  agentId: AgentId;
   model: string;
   status: "running" | "completed" | "failed" | "cancelled";
   startedAt: number;
