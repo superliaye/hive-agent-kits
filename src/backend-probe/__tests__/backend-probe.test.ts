@@ -8,7 +8,7 @@ import {
   type CommandRunner,
   parseVersion,
   probeBackend,
-  updateBackend,
+  runUpdateCommand,
 } from "../probe.ts";
 import type { BackendUpdateEvents } from "../types.ts";
 
@@ -116,36 +116,36 @@ describe("BACKEND_UPDATE_COMMANDS (pinned self-update argv, P5)", () => {
   });
 });
 
-describe("updateBackend (delegated self-update, OQ-3/OQ-5)", () => {
-  test("ok: updater exits 0 → re-probes and returns the fresh status", async () => {
+describe("runUpdateCommand (pure run+classify, no re-probe — OQ-5)", () => {
+  // The pure verb the live BackendUpdaterSvc composes with probeOne. The re-probe
+  // is the probe service's job (see BackendUpdaterLive.upgrade below), so this
+  // verb classifies the raw command outcome only — its non-ok arms are the typed
+  // failure channel the route maps to JSON.
+  test("ok: updater exits 0 → ok (caller re-probes)", async () => {
     const runner = fakeRunner({
       claude: { kind: "exited", exitCode: 0, stdout: "2.1.0", stderr: "" },
     });
-    const result = await updateBackend("claude-code", runner, opts);
-    expect(result.kind).toBe("ok");
-    if (result.kind === "ok") {
-      expect(result.status.reason).toBe("ok");
-      expect(result.status.version).toBe("2.1.0");
-    }
+    const outcome = await runUpdateCommand("claude-code", runner, opts);
+    expect(outcome.kind).toBe("ok");
   });
 
   test("update_failed: updater exits non-zero → typed failure (no throw)", async () => {
     const runner = fakeRunner({
       codex: { kind: "exited", exitCode: 1, stdout: "", stderr: "boom" },
     });
-    const result = await updateBackend("codex", runner, opts);
-    expect(result.kind).toBe("update_failed");
+    const outcome = await runUpdateCommand("codex", runner, opts);
+    expect(outcome.kind).toBe("update_failed");
   });
 
   test("spawn_failed: updater binary missing → typed failure", async () => {
-    const result = await updateBackend("codex", fakeRunner({}), opts);
-    expect(result.kind).toBe("spawn_failed");
+    const outcome = await runUpdateCommand("codex", fakeRunner({}), opts);
+    expect(outcome.kind).toBe("spawn_failed");
   });
 
   test("timeout: updater runs past budget → typed failure", async () => {
     const runner: CommandRunner = async () => ({ kind: "timeout" });
-    const result = await updateBackend("claude-code", runner, opts);
-    expect(result.kind).toBe("timeout");
+    const outcome = await runUpdateCommand("claude-code", runner, opts);
+    expect(outcome.kind).toBe("timeout");
   });
 });
 

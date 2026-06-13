@@ -136,20 +136,6 @@ export async function runUpdateCommand(
   }
 }
 
-// Run a backend's OWN self-update command, then re-probe. Pure given a
-// CommandRunner — the live service injects the real runner; tests inject a fake.
-// Hive never installs/manages the CLI itself (ADR-0016): it delegates to the
-// CLI's updater and reports the re-probed status.
-export async function updateBackend(
-  backend: ProbeableBackend,
-  runner: CommandRunner,
-  opts: { timeoutMs: number },
-): Promise<UpdateResult> {
-  const outcome = await runUpdateCommand(backend, runner, opts);
-  if (outcome.kind !== "ok") return outcome;
-  return { kind: "ok", status: await probeBackend(backend, runner, opts) };
-}
-
 export async function probeBackend(
   backend: ProbeableBackend,
   runner: CommandRunner,
