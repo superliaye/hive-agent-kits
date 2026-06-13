@@ -15,7 +15,7 @@ import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import {
   bunCommandRunner,
   type CommandRunner,
-  DEFAULT_PROBE_TIMEOUT_MS,
+  DEFAULT_UPDATE_TIMEOUT_MS,
   runUpdateCommand,
   type UpdateResult,
   updateBinary,
@@ -75,7 +75,7 @@ export function BackendUpdaterLive(
       const probe = yield* BackendProbe;
       return buildSvc(
         opts.runner ?? bunCommandRunner,
-        opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+        opts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS,
         probe,
       );
     }),

@@ -6,6 +6,7 @@ import {
   BACKEND_UPDATE_COMMANDS,
   type CommandResult,
   type CommandRunner,
+  DEFAULT_UPDATE_TIMEOUT_MS,
   parseVersion,
   probeBackend,
   runUpdateCommand,
@@ -172,6 +173,25 @@ describe("BackendUpdaterLive.upgrade (audit-first delegated update, OQ-5/OQ-6)",
     }
     // Audit-first: the event fired, carrying the backend id + the binary ref.
     expect(seen).toEqual([{ backend: "claude-code", binary: "claude" }]);
+    rt.dispose();
+  });
+
+  test("default timeout is the generous update budget, not the 5s probe timeout", async () => {
+    let updateTimeout: number | undefined;
+    const runner: CommandRunner = async (command, o) => {
+      // Capture the budget passed to the UPDATE invocation specifically (the
+      // re-probe reuses this runner with the shorter probe timeout).
+      if (command[1] === "update") updateTimeout = o.timeoutMs;
+      return { kind: "exited", exitCode: 0, stdout: "2.1.0", stderr: "" };
+    };
+    const probeLayer = BackendProbeLive({ runner });
+    const rt = ManagedRuntime.make(
+      Layer.mergeAll(probeLayer, BackendUpdaterLive({ runner }).pipe(Layer.provide(probeLayer))),
+    );
+    // No timeoutMs override → the updater must default to the UPDATE budget; the
+    // 5s probe timeout makes a healthy network `claude update` look like a failure.
+    await rt.runSync(BackendUpdater).upgrade("claude-code");
+    expect(updateTimeout).toBe(DEFAULT_UPDATE_TIMEOUT_MS);
     rt.dispose();
   });
 });

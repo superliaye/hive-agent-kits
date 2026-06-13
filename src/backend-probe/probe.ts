@@ -9,6 +9,11 @@ import type { BackendStatus, ProbeableBackend } from "./types.ts";
 
 export const DEFAULT_PROBE_TIMEOUT_MS = 5000;
 
+// A delegated self-update does a network round-trip and may download + install a
+// new release, so it needs a far larger ceiling than the version probe's 5s —
+// reusing the probe timeout makes a healthy `claude update` look like a failure.
+export const DEFAULT_UPDATE_TIMEOUT_MS = 120_000;
+
 // The version-detection invocation per backend. `claude-code` ships the
 // `claude` binary; `codex` ships `codex` (ADR-0016, capability-types.ts).
 const BACKEND_COMMANDS: Record<ProbeableBackend, readonly string[]> = {
