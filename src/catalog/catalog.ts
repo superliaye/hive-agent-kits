@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { HarnessManifest } from "../capabilities/schemas.ts";
+import { AgentId } from "../lib/ids.ts";
 import { log } from "../lib/log.ts";
 import { bundledRoot, runtime, runtimeRoot } from "../lib/paths.ts";
 import { createTieredManifestStore } from "../lib/tiered-store.ts";
@@ -155,7 +156,11 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
       // Re-read from disk so the cached Agent matches what's persisted —
       // catches any subtle YAML round-trip drift.
       const refreshed = await refreshOne(agentId);
-      await events.emit("harness.updated", { agentId, source, diff: patches });
+      await events.emit("harness.updated", {
+        agentId: AgentId.parse(agentId),
+        source,
+        diff: patches,
+      });
       return refreshed;
     },
     async resetToBundled(agentId) {
@@ -167,7 +172,7 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
       }
       const refreshed = await refreshOne(agentId);
       await events.emit("harness.updated", {
-        agentId,
+        agentId: AgentId.parse(agentId),
         source: "reset",
         diff: { kind: "reset" },
       });

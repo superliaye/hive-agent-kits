@@ -72,7 +72,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     });
     await catalog.start();
 
-    expect(created.map((e) => e.agentId).sort()).toEqual(["agent-manager", "root"]);
+    expect(created.map((e): string => e.agentId).sort()).toEqual(["agent-manager", "root"]);
     expect(catalog.list()).toHaveLength(2);
     expect(catalog.get("root")?.layer).toBe("bundled");
     expect(catalog.get("root")?.hasFork).toBe(false);

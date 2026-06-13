@@ -12,6 +12,7 @@ import { AuditLive, type AuditSvc, Audit as AuditTag } from "../../audit/effect/
 import { wireSubscriptions } from "../../audit/subscriptions.ts";
 import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { openHiveDb } from "../../db/hive-db.ts";
+import { AgentId } from "../../lib/ids.ts";
 import { runtime, runtimeRoot } from "../../lib/paths.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { createGateway, type ModelGateway } from "../../model-gateway/index.ts";
@@ -38,9 +39,10 @@ import type { RunEvent } from "../types.ts";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function makeAgent(overrides: Partial<Agent> = {}): Agent {
+function makeAgent(overrides: Partial<Omit<Agent, "agentId">> & { agentId?: string } = {}): Agent {
+  const { agentId, ...rest } = overrides;
   return {
-    agentId: "test-agent",
+    agentId: AgentId.parse(agentId ?? "test-agent"),
     backend: "claude-code",
     domain: "Test",
     bindings: { skills: [], snippets: [], tools: [], mcp: [] },
@@ -49,7 +51,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     layer: "bundled",
     hasFork: false,
     path: "/test/fake-path/HARNESS.md",
-    ...overrides,
+    ...rest,
   };
 }
 

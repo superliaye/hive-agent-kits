@@ -3,9 +3,10 @@ import type { Agent, Catalog } from "../../catalog/index.ts";
 import { AgentId, RunId } from "../../lib/ids.ts";
 import { createDefaultPermission } from "../permission.ts";
 
-function makeAgent(overrides: Partial<Agent> = {}): Agent {
+function makeAgent(overrides: Partial<Omit<Agent, "agentId">> & { agentId?: string } = {}): Agent {
+  const { agentId, ...rest } = overrides;
   return {
-    agentId: "a",
+    agentId: AgentId.parse(agentId ?? "a"),
     backend: "native",
     domain: "t",
     bindings: { skills: [], snippets: [], tools: ["run_shell"], mcp: [] },
@@ -14,7 +15,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     layer: "bundled",
     hasFork: false,
     path: "/p",
-    ...overrides,
+    ...rest,
   };
 }
 

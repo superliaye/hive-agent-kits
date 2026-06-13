@@ -16,6 +16,7 @@ import { CatalogLive, Catalog as CatalogTag } from "../../catalog/effect/catalog
 import type { Agent } from "../../catalog/types.ts";
 import { configRuntime } from "../../config/effect/config-live.ts";
 import { openHiveDb } from "../../db/hive-db.ts";
+import { AgentId } from "../../lib/ids.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
 import { createGateway } from "../../model-gateway/index.ts";
@@ -163,7 +164,7 @@ describe("wireSubscriptions", () => {
   test("catalog.start() (scan) is NOT audited; only user/agent actions are", async () => {
     const audit = makeAudit();
     const fakeAgent: Agent = {
-      agentId: "root",
+      agentId: AgentId.parse("root"),
       backend: "native",
       domain: "orchestration",
       bindings: { skills: [], snippets: [], tools: [], mcp: [] },
@@ -276,7 +277,7 @@ describe("wireSubscriptions", () => {
     const runsStore = createRunsStore(db);
 
     const agent: Agent = {
-      agentId: "tool-agent",
+      agentId: AgentId.parse("tool-agent"),
       backend: "native",
       domain: "t",
       bindings: { skills: [], snippets: [], tools: ["run_shell"], mcp: [] },

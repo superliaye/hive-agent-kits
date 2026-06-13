@@ -6,6 +6,7 @@
 
 import type { HarnessManifest } from "../capabilities/schemas.ts";
 import type { AgentBackend, CapabilityLayer } from "../lib/capability-types.ts";
+import type { AgentId } from "../lib/ids.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
 
 // The four binding slots a HarnessManifest carries. Singular kind values
@@ -29,7 +30,7 @@ export type BindingPatch = {
 // the resolver falls back to the bundled file and surfaces the failure so
 // the Settings UI can show a banner rather than silently ignoring edits.
 export type Agent = {
-  agentId: string;
+  agentId: AgentId;
   backend: AgentBackend;
   domain: string;
   bindings: HarnessManifest["bindings"];
@@ -47,10 +48,10 @@ export type Agent = {
 };
 
 export type CatalogEvents = {
-  "agent.created": { agentId: string; path: string };
-  "agent.destroyed": { agentId: string };
+  "agent.created": { agentId: AgentId; path: string };
+  "agent.destroyed": { agentId: AgentId };
   "harness.updated": {
-    agentId: string;
+    agentId: AgentId;
     source: "ui" | "agent-manager" | "reset";
     diff: BindingPatch[] | { kind: "reset" };
   };

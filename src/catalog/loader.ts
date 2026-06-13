@@ -4,6 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { HarnessManifest } from "../capabilities/schemas.ts";
+import { AgentId } from "../lib/ids.ts";
 import { bundled, runtime } from "../lib/paths.ts";
 import type { Agent } from "./types.ts";
 
@@ -52,7 +53,7 @@ function loadAgent(
       return { path, message: `agentId '${result.data.agentId}' != folder '${agentId}'` };
     }
     return {
-      agentId: result.data.agentId,
+      agentId: AgentId.parse(result.data.agentId),
       backend: result.data.backend,
       domain: result.data.domain,
       bindings: result.data.bindings,

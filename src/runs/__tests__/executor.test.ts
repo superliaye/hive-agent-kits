@@ -4,6 +4,7 @@ import pino from "pino";
 import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
 import type { AgentBackend } from "../../lib/capability-types.ts";
+import { AgentId } from "../../lib/ids.ts";
 import { setLogger, silentLogger } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
@@ -22,9 +23,10 @@ import type { RunEvent } from "../types.ts";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function makeAgent(overrides: Partial<Agent> = {}): Agent {
+function makeAgent(overrides: Partial<Omit<Agent, "agentId">> & { agentId?: string } = {}): Agent {
+  const { agentId, ...rest } = overrides;
   return {
-    agentId: "test-agent",
+    agentId: AgentId.parse(agentId ?? "test-agent"),
     backend: "native",
     domain: "Test",
     bindings: { skills: [], snippets: [], tools: [], mcp: [] },
@@ -33,7 +35,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     layer: "bundled",
     hasFork: false,
     path: "/test/fake-path/HARNESS.md",
-    ...overrides,
+    ...rest,
   };
 }
 

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { ManagedRuntime } from "effect";
 import type { Agent, Catalog, CatalogEvents } from "../../catalog/index.ts";
 import { type HiveDb, openHiveDb } from "../../db/hive-db.ts";
+import { AgentId } from "../../lib/ids.ts";
 import { runtimeRoot } from "../../lib/paths.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { makeFakeAdapter } from "../../model-gateway/adapters/fake.ts";
@@ -27,9 +28,10 @@ import type { RunEvent, RunModuleEvents } from "../types.ts";
 
 const MODEL = "anthropic/claude-haiku-4-5";
 
-function makeAgent(overrides: Partial<Agent> = {}): Agent {
+function makeAgent(overrides: Partial<Omit<Agent, "agentId">> & { agentId?: string } = {}): Agent {
+  const { agentId, ...rest } = overrides;
   return {
-    agentId: "test-agent",
+    agentId: AgentId.parse(agentId ?? "test-agent"),
     backend: "native",
     domain: "Test",
     bindings: { skills: [], snippets: [], tools: [], mcp: [] },
@@ -38,7 +40,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     layer: "bundled",
     hasFork: false,
     path: "/p/HARNESS.md",
-    ...overrides,
+    ...rest,
   };
 }
 
