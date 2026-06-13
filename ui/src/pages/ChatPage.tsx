@@ -149,8 +149,13 @@ export function ChatPage({
       ? backendDefault
       : "native");
 
-  // The apply-to-default affordance surfaces only when the conversation's
-  // backend pick differs from the agent default (ADR-0015:22).
+  // Apply-to-default affordances (ADR-0015:22): each axis surfaces its own
+  // promote control only when the conversation's pick differs from the agent
+  // default. All three axes (model + effort + backend) are promotable.
+  const modelDiffersFromDefault =
+    selectedModel !== null && selectedModel !== agentDefault && models.some((m) => m.model === selectedModel);
+  const effortDiffersFromDefault =
+    hasRealEffort && effortToSend !== null && effortToSend !== effortDefault;
   const backendDiffersFromDefault =
     isWorker &&
     selectedBackend !== null &&
@@ -459,6 +464,30 @@ export function ChatPage({
     }
   }
 
+  async function applyModelToDefault(): Promise<void> {
+    if (!agentId || selectedModel === null) return;
+    // Apply-to-default (ADR-0015): promote the conversation model pick to the
+    // agent default. A SEPARATE act from use-here.
+    try {
+      await api.setAgentModelPref(apiConfig, agentId, { model: selectedModel });
+      setAgentDefault(selectedModel);
+    } catch (err) {
+      setListError((err as Error).message);
+    }
+  }
+
+  async function applyEffortToDefault(): Promise<void> {
+    if (!agentId || effortToSend === null) return;
+    // Apply-to-default (ADR-0015): promote the conversation effort pick to the
+    // agent default. A SEPARATE act from use-here.
+    try {
+      await api.setAgentModelPref(apiConfig, agentId, { effort: effortToSend });
+      setEffortDefault(effortToSend);
+    } catch (err) {
+      setListError((err as Error).message);
+    }
+  }
+
   async function applyBackendToDefault(): Promise<void> {
     if (!agentId || selectedBackend === null) return;
     // Apply-to-default (ADR-0015): promote the conversation backend pick to the
@@ -682,6 +711,38 @@ export function ChatPage({
               pending={thread.pending}
               runError={thread.runError}
             />
+            {modelDiffersFromDefault && (
+              <div className="composer-apply-default">
+                <span className="meta">
+                  This conversation uses model <strong>{selectedModel}</strong> (agent default:{" "}
+                  {agentDefault ?? "none"}).
+                </span>
+                <button
+                  type="button"
+                  className="button ghost small"
+                  onClick={() => void applyModelToDefault()}
+                  data-testid="apply-model-default"
+                >
+                  Apply model to agent default
+                </button>
+              </div>
+            )}
+            {effortDiffersFromDefault && (
+              <div className="composer-apply-default">
+                <span className="meta">
+                  This conversation uses effort <strong>{effortToSend}</strong> (agent default:{" "}
+                  {effortDefault ?? "none"}).
+                </span>
+                <button
+                  type="button"
+                  className="button ghost small"
+                  onClick={() => void applyEffortToDefault()}
+                  data-testid="apply-effort-default"
+                >
+                  Apply effort to agent default
+                </button>
+              </div>
+            )}
             {backendDiffersFromDefault && (
               <div className="composer-apply-default">
                 <span className="meta">

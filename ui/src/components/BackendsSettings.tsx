@@ -71,6 +71,12 @@ export function BackendsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
 
   async function recheck(backend: "claude-code" | "codex"): Promise<void> {
     setBusy((b) => ({ ...b, [backend]: { kind: "rechecking" } }));
+    // Mirror update(): drop any stale per-row error so a now-healthy re-probe
+    // clears the banner a prior failed Update left behind.
+    setRowError((e) => {
+      const { [backend]: _drop, ...rest } = e;
+      return rest;
+    });
     try {
       await refresh();
     } finally {

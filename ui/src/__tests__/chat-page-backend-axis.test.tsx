@@ -17,6 +17,11 @@ let writes: Array<{ method: string; path: string; body: Body }>;
 // Per-agent config: isWorker + the stored scope backend the daemon would echo.
 let agentIsWorker: boolean;
 let scopeBackend: string | null;
+// Model/effort apply-to-default fixtures (P4). When set, the daemon echoes them
+// as the Thread scope and offers a matching model in /api/models.
+let scopeModel: string | null = null;
+let scopeEffort: string | null = null;
+let modelsFixture: unknown[] = [];
 
 function json(data: unknown): Response {
   return new Response(JSON.stringify(data), {
@@ -66,7 +71,7 @@ function installStubs(): void {
         messages: [],
       });
     }
-    if (method === "GET" && path === "/api/models") return json([]);
+    if (method === "GET" && path === "/api/models") return json(modelsFixture);
     if (method === "GET" && path === "/api/backends") {
       return json([
         { backend: "claude-code", installed: true, version: "2.0.13", reason: "ok", checkedAt: 1 },
@@ -74,7 +79,12 @@ function installStubs(): void {
       ]);
     }
     if (method === "GET" && path.endsWith("/scope")) {
-      return json({ model: null, effort: null, workingDir: null, backend: scopeBackend });
+      return json({
+        model: scopeModel,
+        effort: scopeEffort,
+        workingDir: null,
+        backend: scopeBackend,
+      });
     }
     if (method === "GET" && path.endsWith("/model-pref")) {
       return json({ model: null, effort: null, backend: null });
@@ -83,7 +93,11 @@ function installStubs(): void {
       return json({ model: null, effort: null, workingDir: null, backend: body.backend ?? null });
     }
     if (method === "PUT" && path.endsWith("/model-pref")) {
-      return json({ model: null, effort: null, backend: body.backend ?? null });
+      return json({
+        model: body.model ?? null,
+        effort: body.effort ?? null,
+        backend: body.backend ?? null,
+      });
     }
     if (method === "GET" && parts[1] === "agents") {
       return json({ agentId: "worker", backend: "native", isWorker: agentIsWorker, config: {} });
@@ -124,6 +138,10 @@ afterEach(async () => {
     });
     activeRoot = null;
   }
+  // Reset the optional fixtures so they don't leak between tests.
+  scopeModel = null;
+  scopeEffort = null;
+  modelsFixture = [];
 });
 
 describe("ChatPage — Agent-Backend axis", () => {
@@ -180,6 +198,43 @@ describe("ChatPage — Agent-Backend axis", () => {
       | HTMLSelectElement
       | null;
     expect(picker2?.value).toBe("claude-code");
+  });
+
+  test("apply-model-to-default surfaces when the model pick differs and writes the agent default (P4)", async () => {
+    agentIsWorker = true;
+    scopeBackend = null;
+    scopeModel = "openai/gpt-5"; // a runnable model, differs from the (null) default
+    modelsFixture = [{ provider: "openai", modelId: "gpt-5", model: "openai/gpt-5", efforts: ["off"] }];
+    installStubs();
+    const host = await render();
+    const apply = host.querySelector('[data-testid="apply-model-default"]');
+    expect(apply).not.toBeNull();
+    await act(async () => {
+      apply?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    const prefWrite = writes.find((w) => w.method === "PUT" && w.path.endsWith("/model-pref"));
+    expect(prefWrite?.body).toMatchObject({ model: "openai/gpt-5" });
+  });
+
+  test("apply-effort-to-default surfaces when the effort pick differs and writes the agent default (P4)", async () => {
+    agentIsWorker = true;
+    scopeBackend = null;
+    scopeModel = "openai/gpt-5";
+    scopeEffort = "high";
+    modelsFixture = [
+      { provider: "openai", modelId: "gpt-5", model: "openai/gpt-5", efforts: ["low", "high"] },
+    ];
+    installStubs();
+    const host = await render();
+    const apply = host.querySelector('[data-testid="apply-effort-default"]');
+    expect(apply).not.toBeNull();
+    await act(async () => {
+      apply?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    const prefWrite = writes.find((w) => w.method === "PUT" && w.path.endsWith("/model-pref"));
+    expect(prefWrite?.body).toMatchObject({ effort: "high" });
   });
 
   test("apply-to-default surfaces when the pick differs and writes the agent default (OQ-2)", async () => {

@@ -12,6 +12,7 @@ type Call = { method: string; path: string };
 let calls: Call[];
 let backendsSeq: unknown[][];
 let upgradeResponse: unknown;
+let upgradeStatus: number;
 let allowlistFixture: string[] | undefined;
 
 function json(data: unknown, status = 200): Response {
@@ -23,6 +24,7 @@ function json(data: unknown, status = 200): Response {
 
 function installStubs(): void {
   calls = [];
+  upgradeStatus = 200;
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
@@ -35,7 +37,7 @@ function installStubs(): void {
       return json(next);
     }
     if (method === "POST" && path.endsWith("/upgrade")) {
-      return json(upgradeResponse);
+      return json(upgradeResponse, upgradeStatus);
     }
     if (method === "GET" && path === "/api/agents") return json([{ agentId: "gated" }]);
     if (method === "GET" && path === "/api/agents/gated") {
@@ -133,6 +135,35 @@ describe("BackendsSettings", () => {
       .some((c) => c.method === "GET" && c.path === "/api/backends");
     expect(reprobe).toBe(true);
     expect(host.textContent).toContain("2.1.0");
+  });
+
+  test("Re-check clears a stale per-row error left by a failed Update (P2)", async () => {
+    installStubs();
+    backendsSeq = [
+      // initial probe
+      [{ backend: "claude-code", installed: true, version: "2.0.13", reason: "ok", checkedAt: 1 }],
+      // healthy re-probe after Re-check
+      [{ backend: "claude-code", installed: true, version: "2.0.13", reason: "ok", checkedAt: 2 }],
+    ];
+    upgradeStatus = 500;
+    upgradeResponse = { error: "updater failed", reason: "probe_failed" };
+    const host = await render();
+
+    // A failed Update sets the per-row error banner.
+    const upd = host.querySelector('[data-testid="backend-update-claude-code"]');
+    await act(async () => {
+      upd?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="backend-error-claude-code"]')).not.toBeNull();
+
+    // Re-check with a now-healthy probe must clear the stale banner.
+    const recheck = host.querySelector('[data-testid="backend-recheck-claude-code"]');
+    await act(async () => {
+      recheck?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flush();
+    expect(host.querySelector('[data-testid="backend-error-claude-code"]')).toBeNull();
   });
 
   test("renders an agent's commandAllowlist read-only (OQ-7)", async () => {
