@@ -55,6 +55,44 @@ function loadCollapsed(): Record<string, boolean> {
   return {};
 }
 
+// The three promotable picker axes (P8): apply-to-default is expressed once,
+// parameterised by axis, rather than copy-pasted per axis.
+type ApplyAxis = "model" | "effort" | "backend";
+
+type ApplyRow = {
+  axis: ApplyAxis;
+  noun: string;
+  value: string | null;
+  defaultLabel: string;
+  // The per-axis guard: the row renders only when the conversation pick differs
+  // from the agent default. Kept explicit so per-axis promotability survives.
+  enabled: boolean;
+  commit: (value: string) => void;
+  testId: string;
+};
+
+// One axis-parameterised apply-to-default row (P8/P9). Standardized copy across
+// all three axes; the button is a ghost "Update" (P9). Outcomes land on the
+// page's list-error channel — this row carries no local status line.
+function ApplyToDefault({ row, onApply }: { row: ApplyRow; onApply: () => void }): JSX.Element {
+  return (
+    <div className="composer-apply-default">
+      <span className="meta">
+        This conversation uses {row.noun} <strong>{row.value}</strong> (agent default:{" "}
+        {row.defaultLabel}).
+      </span>
+      <button
+        type="button"
+        className="button ghost small"
+        onClick={onApply}
+        data-testid={row.testId}
+      >
+        Update
+      </button>
+    </div>
+  );
+}
+
 export function ChatPage({
   apiConfig,
   onNavigateToSecrets,
@@ -149,17 +187,46 @@ export function ChatPage({
       ? backendDefault
       : "native");
 
-  // Apply-to-default affordances (ADR-0015:22): each axis surfaces its own
-  // promote control only when the conversation's pick differs from the agent
-  // default. All three axes (model + effort + backend) are promotable.
-  const modelDiffersFromDefault =
-    selectedModel !== null && selectedModel !== agentDefault && models.some((m) => m.model === selectedModel);
-  const effortDiffersFromDefault =
-    hasRealEffort && effortToSend !== null && effortToSend !== effortDefault;
-  const backendDiffersFromDefault =
-    isWorker &&
-    selectedBackend !== null &&
-    selectedBackend !== (backendDefault ?? "native");
+  // Apply-to-default affordances (ADR-0015:22, P8/P9): all three axes
+  // (model + effort + backend) are promotable, expressed as ONE axis-parameterised
+  // table. Each row carries its own `enabled` guard (the pick differs from the
+  // agent default) so per-axis promotability is preserved — no "Apply all".
+  const applyRows: ApplyRow[] = [
+    {
+      axis: "model",
+      noun: "model",
+      value: selectedModel,
+      defaultLabel: agentDefault ?? "none",
+      enabled:
+        selectedModel !== null &&
+        selectedModel !== agentDefault &&
+        models.some((m) => m.model === selectedModel),
+      commit: (v) => setAgentDefault(v),
+      testId: "apply-model-default",
+    },
+    {
+      axis: "effort",
+      noun: "effort",
+      value: effortToSend,
+      defaultLabel: effortDefault ?? "none",
+      enabled: hasRealEffort && effortToSend !== null && effortToSend !== effortDefault,
+      commit: (v) => setEffortDefault(v as ThinkingEffort),
+      testId: "apply-effort-default",
+    },
+    {
+      axis: "backend",
+      noun: "backend",
+      value: selectedBackend,
+      // Backend always resolves to native, so the default fallback is native
+      // (not "none") — intentional, kept distinct from the model/effort fallback.
+      defaultLabel: backendDefault ?? "native",
+      enabled:
+        isWorker && selectedBackend !== null && selectedBackend !== (backendDefault ?? "native"),
+      commit: (v) => setBackendDefault(v as AgentBackend),
+      testId: "apply-backend-default",
+    },
+  ];
+  const visibleApplyRows = applyRows.filter((r) => r.enabled);
 
   // Keep activeId stable across live refetches: only auto-select when nothing
   // is selected, or when the selected thread has disappeared.
@@ -464,37 +531,16 @@ export function ChatPage({
     }
   }
 
-  async function applyModelToDefault(): Promise<void> {
-    if (!agentId || selectedModel === null) return;
-    // Apply-to-default (ADR-0015): promote the conversation model pick to the
-    // agent default. A SEPARATE act from use-here.
+  // Single axis-parameterised promote (P8): one helper writes the picked axis
+  // to the agent default and updates the local default state. Outcomes land on
+  // the established list-error channel — no composer-local status line (P9).
+  async function applyAxisToDefault(axis: ApplyAxis): Promise<void> {
+    if (!agentId) return;
+    const row = applyRows.find((r) => r.axis === axis);
+    if (!row || row.value === null) return;
     try {
-      await api.setAgentModelPref(apiConfig, agentId, { model: selectedModel });
-      setAgentDefault(selectedModel);
-    } catch (err) {
-      setListError((err as Error).message);
-    }
-  }
-
-  async function applyEffortToDefault(): Promise<void> {
-    if (!agentId || effortToSend === null) return;
-    // Apply-to-default (ADR-0015): promote the conversation effort pick to the
-    // agent default. A SEPARATE act from use-here.
-    try {
-      await api.setAgentModelPref(apiConfig, agentId, { effort: effortToSend });
-      setEffortDefault(effortToSend);
-    } catch (err) {
-      setListError((err as Error).message);
-    }
-  }
-
-  async function applyBackendToDefault(): Promise<void> {
-    if (!agentId || selectedBackend === null) return;
-    // Apply-to-default (ADR-0015): promote the conversation backend pick to the
-    // agent default. A SEPARATE act from use-here.
-    try {
-      await api.setAgentModelPref(apiConfig, agentId, { backend: selectedBackend });
-      setBackendDefault(selectedBackend);
+      await api.setAgentModelPref(apiConfig, agentId, { [axis]: row.value });
+      row.commit(row.value);
     } catch (err) {
       setListError((err as Error).message);
     }
@@ -711,52 +757,15 @@ export function ChatPage({
               pending={thread.pending}
               runError={thread.runError}
             />
-            {modelDiffersFromDefault && (
-              <div className="composer-apply-default">
-                <span className="meta">
-                  This conversation uses model <strong>{selectedModel}</strong> (agent default:{" "}
-                  {agentDefault ?? "none"}).
-                </span>
-                <button
-                  type="button"
-                  className="button ghost small"
-                  onClick={() => void applyModelToDefault()}
-                  data-testid="apply-model-default"
-                >
-                  Apply model to agent default
-                </button>
-              </div>
-            )}
-            {effortDiffersFromDefault && (
-              <div className="composer-apply-default">
-                <span className="meta">
-                  This conversation uses effort <strong>{effortToSend}</strong> (agent default:{" "}
-                  {effortDefault ?? "none"}).
-                </span>
-                <button
-                  type="button"
-                  className="button ghost small"
-                  onClick={() => void applyEffortToDefault()}
-                  data-testid="apply-effort-default"
-                >
-                  Apply effort to agent default
-                </button>
-              </div>
-            )}
-            {backendDiffersFromDefault && (
-              <div className="composer-apply-default">
-                <span className="meta">
-                  This conversation uses <strong>{selectedBackend}</strong> (agent default:{" "}
-                  {backendDefault ?? "native"}).
-                </span>
-                <button
-                  type="button"
-                  className="button ghost small"
-                  onClick={() => void applyBackendToDefault()}
-                  data-testid="apply-backend-default"
-                >
-                  Apply backend to agent default
-                </button>
+            {visibleApplyRows.length > 0 && (
+              <div className="composer-apply-default-group">
+                {visibleApplyRows.map((row) => (
+                  <ApplyToDefault
+                    key={row.axis}
+                    row={row}
+                    onApply={() => void applyAxisToDefault(row.axis)}
+                  />
+                ))}
               </div>
             )}
             <MessageComposer

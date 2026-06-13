@@ -251,4 +251,30 @@ describe("ChatPage — Agent-Backend axis", () => {
     const prefWrite = writes.find((w) => w.method === "PUT" && w.path.endsWith("/model-pref"));
     expect(prefWrite?.body).toMatchObject({ backend: "claude-code" });
   });
+
+  test("apply rows are grouped, named per axis, and the button reads Update (P8/P9)", async () => {
+    agentIsWorker = true;
+    scopeBackend = "claude-code"; // backend pick differs from the native default
+    scopeModel = "openai/gpt-5"; // model pick differs from the (null) default
+    scopeEffort = "high"; // effort pick differs from the (null) default
+    modelsFixture = [
+      { provider: "openai", modelId: "gpt-5", model: "openai/gpt-5", efforts: ["low", "high"] },
+    ];
+    installStubs();
+    const host = await render();
+    // All three rows live inside ONE bounded group (P9).
+    const group = host.querySelector(".composer-apply-default-group");
+    expect(group).not.toBeNull();
+    expect(group?.querySelectorAll(".composer-apply-default").length).toBe(3);
+    // Standardized copy: each row names its axis noun.
+    expect(group?.textContent).toContain("uses model");
+    expect(group?.textContent).toContain("uses effort");
+    expect(group?.textContent).toContain("uses backend");
+    // Buttons are demoted ghost "Update" (P9), not the old verbose labels.
+    for (const id of ["apply-model-default", "apply-effort-default", "apply-backend-default"]) {
+      const btn = host.querySelector(`[data-testid="${id}"]`);
+      expect(btn?.textContent).toBe("Update");
+      expect(btn?.className).toContain("ghost");
+    }
+  });
 });
