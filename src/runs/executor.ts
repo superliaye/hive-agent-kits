@@ -360,7 +360,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // to trace. `resolve()` stays pure; the warning fires here, at the I/O edge.
       if (!("failure" in resolved) && resolved.neutralizedBackend) {
         log().warn(
-          { module: "runs/resolve", agentId, backend: agent.backend },
+          { module: "runs/resolve", agentId, backend: resolved.neutralizedBackend },
           "neutralized non-native backend for non-Worker agent",
         );
       }

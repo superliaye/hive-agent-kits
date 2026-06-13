@@ -253,6 +253,30 @@ describe("RunExecutor — backend neutralization emits a TRACE warning (P8)", ()
     expect(warning.module).toBe("runs/resolve");
   });
 
+  test("reports the THREAD-scope offender, not the harness backend (P13/P14/P15)", async () => {
+    const cap = captureLog();
+    // `root` is a non-Worker whose harness backend is `native` (always allowed);
+    // the non-native offender enters via the higher-precedence Thread pick. The
+    // warning must carry `codex` (the value actually neutralized), NOT the
+    // lowest-precedence `agent.backend === "native"` — which is impossible to
+    // neutralize and would mislead the diagnostic.
+    const { executor, threads, threadId } = await setup({
+      fixtures: textFixture,
+      agentId: "root",
+      agents: [makeAgent({ agentId: "root", backend: "native" })],
+    });
+    await threads.setScope(threadId, { backend: "codex" });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+
+    const warning = cap
+      .lines()
+      .map((l) => JSON.parse(l))
+      .find((o) => o.msg === "neutralized non-native backend for non-Worker agent");
+    expect(warning).toBeDefined();
+    expect(warning.agentId).toBe("root");
+    expect(warning.backend).toBe("codex");
+  });
+
   test("does NOT fire when no backend is neutralized (native, allowed path)", async () => {
     const cap = captureLog();
     // A native-backend agent: nothing to neutralize → no warning. (A Worker

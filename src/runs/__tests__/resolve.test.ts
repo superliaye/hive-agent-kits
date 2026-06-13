@@ -280,12 +280,15 @@ describe("resolve — worker-only backend invariant (authoritative guard, ADR-00
     if (!("failure" in r)) expect(r.backend).toBe("codex");
   });
 
-  test("neutralization surfaces a `neutralizedBackend` flag (pure, no logger)", () => {
+  test("neutralization surfaces the offending backend (pure, no logger)", () => {
+    // The offender is the higher-precedence `threadBackend` (`codex`), NOT the
+    // lowest-precedence harness `backend` (`native`) — the flag must carry the
+    // value actually rejected so the call-site TRACE is accurate (P13/P14/P15).
     const r = resolve({ ...base(), agentId: "root", backend: "native", threadBackend: "codex" });
     expect("failure" in r).toBe(false);
     if (!("failure" in r)) {
       expect(r.backend).toBe("native");
-      expect(r.neutralizedBackend).toBe(true);
+      expect(r.neutralizedBackend).toBe("codex");
     }
   });
 

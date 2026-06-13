@@ -85,12 +85,15 @@ export type ResolveResult =
       effort?: ThinkingEffort;
       backend: AgentBackend;
       /**
-       * True iff the worker-only guard (ADR-0015 §27) neutralized a non-native
-       * backend to `native` for a non-Worker agent. Carried out of the PURE
-       * computation so the call site (a thin I/O edge) can emit a TRACE warning
-       * without `resolve()` taking a logger dependency. Absent ⇒ not neutralized.
+       * The non-native backend the worker-only guard (ADR-0015 §27) neutralized
+       * to `native` for a non-Worker agent — i.e. the OFFENDING `backendWinner`
+       * (the highest-precedence resolved value: Thread pick > user default >
+       * harness backend), NOT the lowest-precedence harness backend. Carried out
+       * of the PURE computation so the call site (a thin I/O edge) can emit an
+       * accurate TRACE warning without `resolve()` taking a logger dependency.
+       * Absent ⇒ not neutralized.
        */
-      neutralizedBackend?: true;
+      neutralizedBackend?: AgentBackend;
     }
   | { model: string; failure: GatewayFailure };
 
@@ -150,18 +153,19 @@ export function resolve(input: ResolveInput): ResolveResult {
   // Authoritative worker-only guard (ADR-0015 §27): the axis stores stay dumb;
   // `resolve()` is where the invariant is enforced. A non-native backend that
   // reached a non-Worker agent — by any path — is neutralized to `native`. The
-  // computation stays PURE: it returns a `neutralizedBackend` flag so the thin
-  // I/O edge that invokes `resolve()` can emit a TRACE warning (r2-architecture-2)
-  // — no logger is threaded into the core.
+  // computation stays PURE: it returns the offending backend in
+  // `neutralizedBackend` so the thin I/O edge that invokes `resolve()` can emit
+  // an accurate TRACE warning (r2-architecture-2) — no logger in the core.
   const allowed = backendAllowedForAgent(input.agentId, backendWinner);
   const backend: AgentBackend = allowed ? backendWinner : "native";
-  const neutralizedBackend = !allowed;
 
   return {
     model: modelResult.model,
     provider: modelResult.provider,
     ...(effort !== undefined ? { effort } : {}),
     backend,
-    ...(neutralizedBackend ? { neutralizedBackend: true as const } : {}),
+    // Carry the OFFENDING value (`backendWinner`), not a bare boolean, so the
+    // call site logs the backend actually rejected (P13/P14/P15).
+    ...(allowed ? {} : { neutralizedBackend: backendWinner }),
   };
 }
