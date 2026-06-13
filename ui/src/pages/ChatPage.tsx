@@ -13,6 +13,9 @@ import {
   type ContentBlock,
   type ThinkingEffort,
   type ThreadSummary,
+  SYMBOLIC_EFFORT_HIGHEST,
+  SYMBOLIC_MODEL_LATEST,
+  THINKING_EFFORTS,
   api,
   isAgentBackend,
   isThinkingEffort,
@@ -151,8 +154,11 @@ export function ChatPage({
   // Effort selection mirrors the model: agent default (saved pref, else harness
   // config.thinkingEffort) and an explicit in-session pick. The effective effort
   // (below) is derived against the *selected model's* supported levels, so an
-  // incompatible stored effort is dropped when the model changes.
-  const [effortDefault, setEffortDefault] = useState<ThinkingEffort | null>(null);
+  // incompatible stored effort is dropped when the model changes. The default may
+  // carry the symbolic "highest" token (ADR-0015 S2), mirroring model's "latest".
+  const [effortDefault, setEffortDefault] = useState<
+    ThinkingEffort | typeof SYMBOLIC_EFFORT_HIGHEST | null
+  >(null);
   const [effortPick, setEffortPick] = useState<ThinkingEffort | null>(null);
   // Agent-Backend axis (ADR-0015), Worker-only. `backendStatuses` is the daemon
   // probe (which CLI backends are installed + healthy); `isWorker` gates the
@@ -189,7 +195,10 @@ export function ChatPage({
   const selectedEffort: ThinkingEffort | null = resolveAxis<ThinkingEffort>({
     pick: effortPick,
     pickValid: (e) => selectedModelEfforts.includes(e),
-    def: effortDefault,
+    // A symbolic "highest" default is never directly offerable as a concrete
+    // level; drop it here so the resolver falls through to the model's strongest
+    // supported level (the daemon resolves "highest" the same way at Run start).
+    def: isThinkingEffort(effortDefault) ? effortDefault : null,
     defOfferable: (e) => selectedModelEfforts.includes(e),
     fallback: selectedModelEfforts[0] ?? null,
   });
@@ -199,6 +208,33 @@ export function ChatPage({
   // effortOverride for such models — a bare "off" would be a meaningless no-op.
   const hasRealEffort = selectedModelEfforts.some((eff) => eff !== "off");
   const effortToSend: ThinkingEffort | null = hasRealEffort ? selectedEffort : null;
+
+  // Resolve a SYMBOLIC agent default (ADR-0015 S2) the same way the daemon does
+  // at Run start, so the UI can both gate the apply-to-default rows against the
+  // RESOLVED default and surface "<token> → <resolved>" in the label. "latest"
+  // resolves to the head of the runnable catalog (GET /api/models is that list,
+  // newest-first), and "highest" to the strongest level the SELECTED model
+  // supports, by THINKING_EFFORTS index. Backend is never symbolic.
+  const resolvedDefaultModel: string | null =
+    agentDefault === SYMBOLIC_MODEL_LATEST ? (models[0]?.model ?? null) : agentDefault;
+  const resolvedDefaultEffort: ThinkingEffort | null =
+    effortDefault === SYMBOLIC_EFFORT_HIGHEST
+      ? (selectedModelEfforts.reduce<ThinkingEffort | null>(
+          (best, e) =>
+            best === null || THINKING_EFFORTS.indexOf(e) > THINKING_EFFORTS.indexOf(best)
+              ? e
+              : best,
+          null,
+        ) ?? null)
+      : effortDefault;
+  const modelDefaultLabel: string =
+    agentDefault === SYMBOLIC_MODEL_LATEST && resolvedDefaultModel
+      ? `${agentDefault} → ${resolvedDefaultModel}`
+      : (agentDefault ?? "none");
+  const effortDefaultLabel: string =
+    effortDefault === SYMBOLIC_EFFORT_HIGHEST && resolvedDefaultEffort
+      ? `${effortDefault} → ${resolvedDefaultEffort}`
+      : (effortDefault ?? "none");
 
   // Offerable backends: the synthetic `native` (always available, in-process)
   // plus each installed + healthy CLI backend, labelled with its detected
@@ -229,15 +265,19 @@ export function ChatPage({
   // `enabled` guard (the pick differs from the agent default) so per-axis
   // promotability is preserved — no "Apply all". Each row is typed at its own
   // concrete V, so `setDefault` needs NO cast (P10).
+  // A row renders ONLY when the user made an explicit per-conversation pick
+  // (userPick/effortPick/backendPick non-null) that differs from the RESOLVED
+  // default — so a fresh, uncustomized conversation (all picks null) shows no
+  // apply-to-default rows even when the agent default is symbolic.
   const modelRow: ApplyRow<string> = {
     axis: "model",
     noun: "model",
     value: selectedModel,
-    defaultLabel: agentDefault ?? "none",
+    defaultLabel: modelDefaultLabel,
     enabled:
-      selectedModel !== null &&
-      selectedModel !== agentDefault &&
-      models.some((m) => m.model === selectedModel),
+      userPick !== null &&
+      userPick !== resolvedDefaultModel &&
+      models.some((m) => m.model === userPick),
     write: (id, v) => api.setAgentModelPref(apiConfig, id, { model: v }),
     setDefault: (v) => setAgentDefault(v),
     testId: "apply-model-default",
@@ -246,8 +286,8 @@ export function ChatPage({
     axis: "effort",
     noun: "effort",
     value: effortToSend,
-    defaultLabel: effortDefault ?? "none",
-    enabled: hasRealEffort && effortToSend !== null && effortToSend !== effortDefault,
+    defaultLabel: effortDefaultLabel,
+    enabled: effortPick !== null && hasRealEffort && effortPick !== resolvedDefaultEffort,
     write: (id, v) => api.setAgentModelPref(apiConfig, id, { effort: v }),
     setDefault: (v) => setEffortDefault(v),
     testId: "apply-effort-default",
@@ -258,9 +298,10 @@ export function ChatPage({
     value: selectedBackend,
     // Backend always resolves to native, so the default fallback is native
     // (not "none") — intentional, kept distinct from the model/effort fallback.
+    // Backend is never symbolic, so the label stays the raw default.
     defaultLabel: backendDefault ?? "native",
     enabled:
-      isWorker && selectedBackend !== null && selectedBackend !== (backendDefault ?? "native"),
+      isWorker && backendPick !== null && backendPick !== (backendDefault ?? "native"),
     write: (id, v) => api.setAgentModelPref(apiConfig, id, { backend: v }),
     setDefault: (v) => setBackendDefault(v),
     testId: "apply-backend-default",
@@ -366,11 +407,16 @@ export function ChatPage({
           api.getAgent(apiConfig, agentId),
         ]);
         if (cancelled) return;
+        // The model/effort defaults may be a concrete id OR a symbolic token
+        // ("latest"/"highest", ADR-0015 S2) resolved by the daemon at Run start;
+        // both are surfaced so the display can show "<token> → <resolved>".
         const harnessModel = typeof agent.config.model === "string" ? agent.config.model : null;
         setAgentDefault(pref.model ?? harnessModel);
-        const harnessEffort = isThinkingEffort(agent.config.thinkingEffort)
-          ? agent.config.thinkingEffort
-          : null;
+        const harnessEffort =
+          isThinkingEffort(agent.config.thinkingEffort) ||
+          agent.config.thinkingEffort === SYMBOLIC_EFFORT_HIGHEST
+            ? agent.config.thinkingEffort
+            : null;
         setEffortDefault(pref.effort ?? harnessEffort);
         // Backend default: the saved pref, else the harness-authored backend.
         // The Worker gate is daemon-supplied (no hardcoded kernel ids).
@@ -394,8 +440,9 @@ export function ChatPage({
   // Load the active Thread's conversation-scope pick (ADR-0015 S1) into the
   // in-session pick state, so a per-conversation choice persists across reloads
   // and layers above the agent default. A symbolic stored scope ("latest"/
-  // "highest") is not surfaced in the concrete picker (deferred to Lane F C5):
-  // it is left for the resolver and the display falls through to the default.
+  // "highest") is left for the daemon resolver — only concrete picks become a
+  // per-conversation selection here; a symbolic AGENT default is resolved for
+  // display via resolvedDefaultModel/Effort and shown as "<token> → <resolved>".
   useEffect(() => {
     setUserPick(null);
     setEffortPick(null);

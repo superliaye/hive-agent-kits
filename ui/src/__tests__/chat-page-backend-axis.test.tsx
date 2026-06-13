@@ -22,6 +22,9 @@ let scopeBackend: string | null;
 let scopeModel: string | null = null;
 let scopeEffort: string | null = null;
 let modelsFixture: unknown[] = [];
+// The agent's harness config the daemon echoes from GET /api/agents/:id. A
+// symbolic default ("latest"/"highest") lives here (it is not a saved pref).
+let agentConfig: Record<string, unknown> = {};
 
 function json(data: unknown): Response {
   return new Response(JSON.stringify(data), {
@@ -100,7 +103,12 @@ function installStubs(): void {
       });
     }
     if (method === "GET" && parts[1] === "agents") {
-      return json({ agentId: "worker", backend: "native", isWorker: agentIsWorker, config: {} });
+      return json({
+        agentId: "worker",
+        backend: "native",
+        isWorker: agentIsWorker,
+        config: agentConfig,
+      });
     }
     return json({});
   }) as typeof fetch;
@@ -142,6 +150,7 @@ afterEach(async () => {
   scopeModel = null;
   scopeEffort = null;
   modelsFixture = [];
+  agentConfig = {};
 });
 
 describe("ChatPage — Agent-Backend axis", () => {
@@ -276,5 +285,44 @@ describe("ChatPage — Agent-Backend axis", () => {
       expect(btn?.textContent).toBe("Update");
       expect(btn?.className).toContain("ghost");
     }
+  });
+
+  test("fresh conversation with a symbolic agent default and no pick shows NO apply rows", async () => {
+    agentIsWorker = true;
+    scopeBackend = null; // no per-conversation pick on any axis
+    scopeModel = null;
+    scopeEffort = null;
+    // Symbolic agent default — resolves to the catalog head, but the user picked
+    // nothing, so no apply-to-default affordance may render.
+    agentConfig = { model: "latest", thinkingEffort: "highest" };
+    modelsFixture = [
+      { provider: "openai", modelId: "gpt-5", model: "openai/gpt-5", efforts: ["low", "high"] },
+    ];
+    installStubs();
+    const host = await render();
+    expect(host.querySelector('[data-testid="apply-model-default"]')).toBeNull();
+    expect(host.querySelector('[data-testid="apply-effort-default"]')).toBeNull();
+    expect(host.querySelector('[data-testid="apply-backend-default"]')).toBeNull();
+    expect(host.querySelector(".composer-apply-default-group")).toBeNull();
+  });
+
+  test("symbolic 'latest' default renders as 'latest → <catalog head>' once a row surfaces", async () => {
+    agentIsWorker = true;
+    scopeBackend = null;
+    // Symbolic model default; user picks a DIFFERENT runnable model → the model
+    // apply row surfaces and shows the resolved default in its label.
+    agentConfig = { model: "latest" };
+    scopeModel = "openai/gpt-4";
+    modelsFixture = [
+      { provider: "openai", modelId: "gpt-5", model: "openai/gpt-5", efforts: ["off"] },
+      { provider: "openai", modelId: "gpt-4", model: "openai/gpt-4", efforts: ["off"] },
+    ];
+    installStubs();
+    const host = await render();
+    const apply = host.querySelector('[data-testid="apply-model-default"]');
+    expect(apply).not.toBeNull();
+    const row = apply?.closest(".composer-apply-default");
+    // The catalog head (models[0]) is openai/gpt-5, so "latest" resolves to it.
+    expect(row?.textContent).toContain("latest → openai/gpt-5");
   });
 });

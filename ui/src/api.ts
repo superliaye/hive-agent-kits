@@ -101,7 +101,7 @@ export type OAuthProvider = {
 // update this list to match.
 export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
-const THINKING_EFFORTS: readonly ThinkingEffort[] = [
+export const THINKING_EFFORTS: readonly ThinkingEffort[] = [
   "off",
   "minimal",
   "low",
@@ -109,6 +109,13 @@ const THINKING_EFFORTS: readonly ThinkingEffort[] = [
   "high",
   "xhigh",
 ];
+
+// Symbolic default tokens (ADR-0015 S2). A default tier (harness config, agent
+// default, or Thread scope) may carry one of these rule-tokens instead of a
+// pinned id; the daemon resolves them at Run start. Kept in sync with
+// src/runs/symbolic.ts by hand (the UI is a separate Vite bundle).
+export const SYMBOLIC_MODEL_LATEST = "latest";
+export const SYMBOLIC_EFFORT_HIGHEST = "highest";
 
 // Narrow an `unknown` (e.g. an Agent's harness `config.thinkingEffort`) to a
 // ThinkingEffort, cast-free.
