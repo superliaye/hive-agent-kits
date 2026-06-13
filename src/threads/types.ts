@@ -2,6 +2,7 @@
 // from `model-gateway/types.ts` — same canonical Anthropic-flavored
 // shape end-to-end. No translation between API layer and storage.
 
+import type { AgentId, ThreadId } from "../lib/ids.ts";
 import type { ContentBlock } from "../model-gateway/types.ts";
 
 // `titleSource` records whether `title` was set automatically (the future
@@ -10,8 +11,8 @@ import type { ContentBlock } from "../model-gateway/types.ts";
 // marker: null = active, non-null = archived. `lastReadAt` drives unread
 // derivation (see status.ts). `updatedAt` stays the sort key (last message).
 export type Thread = {
-  id: string;
-  agentId: string;
+  id: ThreadId;
+  agentId: AgentId;
   createdAt: number;
   updatedAt: number;
   title: string | null;
@@ -52,7 +53,7 @@ export type CliSession = {
 
 export type ThreadMessage = {
   id: string;
-  threadId: string;
+  threadId: ThreadId;
   idx: number;
   role: "user" | "assistant";
   content: ContentBlock[];
@@ -69,10 +70,10 @@ export type ThreadWithMessages = Thread & {
 // emit: auto-archive and the future auto-title generator do NOT go through
 // this emitter (they are system-initiated → trace, not audit).
 export type ThreadEvents = {
-  "thread.archived": { threadId: string; agentId: string };
-  "thread.deleted": { threadId: string; agentId: string };
-  "thread.title_set": { threadId: string; agentId: string; titleSource: "manual" };
-  "thread.marked_unread": { threadId: string; agentId: string };
+  "thread.archived": { threadId: ThreadId; agentId: AgentId };
+  "thread.deleted": { threadId: ThreadId; agentId: AgentId };
+  "thread.title_set": { threadId: ThreadId; agentId: AgentId; titleSource: "manual" };
+  "thread.marked_unread": { threadId: ThreadId; agentId: AgentId };
   // A user's per-conversation model/effort pick (ADR-0015 S1) — a USER action,
   // so audited (ADR-0004). Carries whichever axes the write touched; the model
   // id / effort level are non-secret identifiers (same posture as
@@ -80,8 +81,8 @@ export type ThreadEvents = {
   // named in `cleared` so clear-model and clear-effort stay distinguishable
   // without widening the value fields to `string | null`.
   "thread.scope_set": {
-    threadId: string;
-    agentId: string;
+    threadId: ThreadId;
+    agentId: AgentId;
     model?: string;
     effort?: string;
     workingDir?: string;

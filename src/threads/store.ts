@@ -5,6 +5,7 @@
 
 import { and, asc, eq, isNull, lt, max } from "drizzle-orm";
 import type { HiveDb } from "../db/hive-db.ts";
+import { AgentId, ThreadId } from "../lib/ids.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { ContentBlock, Message } from "../model-gateway/types.ts";
 import { messages, threads } from "./schema.ts";
@@ -150,8 +151,8 @@ export function createThreadsStore(
 
   function rowToThread(row: typeof threads.$inferSelect): Thread {
     return {
-      id: row.id,
-      agentId: row.agent_id,
+      id: ThreadId.parse(row.id),
+      agentId: AgentId.parse(row.agent_id),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       title: row.title,
@@ -170,7 +171,7 @@ export function createThreadsStore(
   function rowToMessage(row: typeof messages.$inferSelect): ThreadMessage {
     return {
       id: row.id,
-      threadId: row.thread_id,
+      threadId: ThreadId.parse(row.thread_id),
       idx: row.idx,
       role: row.role,
       content: row.content,
@@ -186,8 +187,8 @@ export function createThreadsStore(
         .values({ id, agent_id: input.agentId, created_at: t, updated_at: t })
         .run();
       return {
-        id,
-        agentId: input.agentId,
+        id: ThreadId.parse(id),
+        agentId: AgentId.parse(input.agentId),
         createdAt: t,
         updatedAt: t,
         title: null,
@@ -290,7 +291,7 @@ export function createThreadsStore(
         // Audit-first: emit BEFORE the write (ADR-0004). Refs only — the title
         // string is NOT in the payload.
         await events.emit("thread.title_set", {
-          threadId,
+          threadId: current.id,
           agentId: current.agentId,
           titleSource: "manual",
         });
@@ -307,7 +308,7 @@ export function createThreadsStore(
       if (current.archivedAt !== null) return;
 
       if (source === "manual") {
-        await events.emit("thread.archived", { threadId, agentId: current.agentId });
+        await events.emit("thread.archived", { threadId: current.id, agentId: current.agentId });
       }
       // No updated_at bump.
       db.update(threads).set({ archived_at: now() }).where(eq(threads.id, threadId)).run();
@@ -336,7 +337,7 @@ export function createThreadsStore(
       if (hasWorkingDir && patch.workingDir === null) cleared.push("workingDir");
       if (hasBackend && patch.backend === null) cleared.push("backend");
       await events.emit("thread.scope_set", {
-        threadId,
+        threadId: current.id,
         agentId: current.agentId,
         ...(hasModel && patch.model !== null ? { model: patch.model } : {}),
         ...(hasEffort && patch.effort !== null ? { effort: patch.effort } : {}),
@@ -382,7 +383,7 @@ export function createThreadsStore(
     async markUnread(threadId) {
       const current = this.get(threadId);
       if (!current) return;
-      await events.emit("thread.marked_unread", { threadId, agentId: current.agentId });
+      await events.emit("thread.marked_unread", { threadId: current.id, agentId: current.agentId });
       db.update(threads).set({ last_read_at: null }).where(eq(threads.id, threadId)).run();
     },
 
@@ -399,7 +400,7 @@ export function createThreadsStore(
       const current = this.get(threadId);
       if (!current) return;
       // Audit-first: emit BEFORE the delete.
-      await events.emit("thread.deleted", { threadId, agentId: current.agentId });
+      await events.emit("thread.deleted", { threadId: current.id, agentId: current.agentId });
       // Cascading FK deletes messages.
       db.delete(threads).where(eq(threads.id, threadId)).run();
     },

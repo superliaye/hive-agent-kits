@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { openHiveDb } from "../../db/hive-db.ts";
+import { AgentId } from "../../lib/ids.ts";
 import { createThreadsStore, type ThreadsStore } from "../store.ts";
 import type { ThreadEvents } from "../types.ts";
 
@@ -30,14 +31,16 @@ describe("Threads emitter — emits on explicit/manual actions (Item 3)", () => 
     const archived = capture("thread.archived");
     const t = store.create({ agentId: "agent-a" });
     await store.archive(t.id, "manual");
-    expect(archived).toEqual([{ threadId: t.id, agentId: "agent-a" }]);
+    expect(archived).toEqual([{ threadId: t.id, agentId: AgentId.parse("agent-a") }]);
   });
 
   test("manual rename emits thread.title_set carrying titleSource, NOT the title", async () => {
     const titleSet = capture("thread.title_set");
     const t = store.create({ agentId: "agent-a" });
     await store.setTitle(t.id, "secret title", "manual");
-    expect(titleSet).toEqual([{ threadId: t.id, agentId: "agent-a", titleSource: "manual" }]);
+    expect(titleSet).toEqual([
+      { threadId: t.id, agentId: AgentId.parse("agent-a"), titleSource: "manual" },
+    ]);
     // The title string must never ride the event payload (refs not values).
     expect(JSON.stringify(titleSet)).not.toContain("secret title");
   });
@@ -46,14 +49,14 @@ describe("Threads emitter — emits on explicit/manual actions (Item 3)", () => 
     const unread = capture("thread.marked_unread");
     const t = store.create({ agentId: "agent-a" });
     await store.markUnread(t.id);
-    expect(unread).toEqual([{ threadId: t.id, agentId: "agent-a" }]);
+    expect(unread).toEqual([{ threadId: t.id, agentId: AgentId.parse("agent-a") }]);
   });
 
   test("remove emits thread.deleted", async () => {
     const deleted = capture("thread.deleted");
     const t = store.create({ agentId: "agent-a" });
     await store.remove(t.id);
-    expect(deleted).toEqual([{ threadId: t.id, agentId: "agent-a" }]);
+    expect(deleted).toEqual([{ threadId: t.id, agentId: AgentId.parse("agent-a") }]);
   });
 });
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { openHiveDb } from "../../db/hive-db.ts";
+import { AgentId, ThreadId } from "../../lib/ids.ts";
 import { createThreadsStore, ThreadNotFoundError, type ThreadsStore } from "../store.ts";
 
 let store: ThreadsStore;
@@ -20,15 +21,15 @@ beforeEach(() => {
 describe("ThreadsStore.create + get", () => {
   test("create returns a row with generated id and timestamps", () => {
     const t = store.create({ agentId: "agent-a" });
-    expect(t.id).toBe("id-1");
-    expect(t.agentId).toBe("agent-a");
+    expect(t.id).toBe(ThreadId.parse("id-1"));
+    expect(t.agentId).toBe(AgentId.parse("agent-a"));
     expect(t.createdAt).toBe(1_001);
     expect(t.updatedAt).toBe(1_001);
   });
 
   test("create accepts an explicit id", () => {
     const t = store.create({ id: "thread-explicit", agentId: "agent-a" });
-    expect(t.id).toBe("thread-explicit");
+    expect(t.id).toBe(ThreadId.parse("thread-explicit"));
   });
 
   test("get returns undefined when thread is missing", () => {
