@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ManagedRuntime } from "effect";
 import { BackendProbe, BackendProbeLive } from "../effect/backend-probe-live.ts";
 import {
+  BACKEND_UPDATE_COMMANDS,
   type CommandResult,
   type CommandRunner,
   parseVersion,
@@ -99,6 +100,18 @@ describe("BackendProbeLive", () => {
     expect(statuses.find((s) => s.backend === "claude-code")?.reason).toBe("ok");
     expect(statuses.find((s) => s.backend === "codex")?.reason).toBe("not_installed");
     rt.dispose();
+  });
+});
+
+describe("BACKEND_UPDATE_COMMANDS (pinned self-update argv, P5)", () => {
+  // Pin the exact argv so a copy-edit to the table is caught. The codex CLI's
+  // self-update is the `update` subcommand (the `--upgrade` flag was removed).
+  test("codex self-update is the `update` subcommand, not a flag", () => {
+    expect(BACKEND_UPDATE_COMMANDS.codex).toEqual(["codex", "update"]);
+  });
+
+  test("claude-code self-update is `claude update`", () => {
+    expect(BACKEND_UPDATE_COMMANDS["claude-code"]).toEqual(["claude", "update"]);
   });
 });
 

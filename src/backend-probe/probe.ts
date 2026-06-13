@@ -20,9 +20,9 @@ const BACKEND_COMMANDS: Record<ProbeableBackend, readonly string[]> = {
 // Hive delegates to each CLI's OWN updater, it never installs/manages packages).
 // One backend-keyed table so the exact invocation is changed in a single place;
 // the UI copy never advertises a specific flag (OQ-3).
-const BACKEND_UPDATE_COMMANDS: Record<ProbeableBackend, readonly string[]> = {
+export const BACKEND_UPDATE_COMMANDS: Record<ProbeableBackend, readonly string[]> = {
   "claude-code": ["claude", "update"],
-  codex: ["codex", "--upgrade"],
+  codex: ["codex", "update"],
 };
 
 // The binary name the update invocation runs — a ref for the audit payload
