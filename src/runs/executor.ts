@@ -31,6 +31,7 @@
 
 import { mkdirSync } from "node:fs";
 import { AgentBackend } from "../lib/capability-types.ts";
+import { type AgentId, RunId, ThreadId } from "../lib/ids.ts";
 import { log } from "../lib/log.ts";
 import { runtime as runtimePaths } from "../lib/paths.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
@@ -246,7 +247,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   // The Run's identity triad. Bundled into one object (Fix r2-ddd-1) so the
   // three same-typed ids can't be transposed across the audit/event path; the
   // interim object-param fix ahead of project-wide branded ids.
-  type RunIdentity = { runId: string; threadId: string; agentId: string };
+  type RunIdentity = { runId: RunId; threadId: ThreadId; agentId: AgentId };
 
   async function finalizeCompleted(
     id: RunIdentity,
@@ -292,8 +293,12 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     return runIterator(input, thread.agentId);
   }
 
-  async function* runIterator(input: StartRunInput, agentId: string): AsyncIterable<RunEvent> {
-    const { threadId, userMessage, modelOverride, effortOverride } = input;
+  async function* runIterator(input: StartRunInput, agentId: AgentId): AsyncIterable<RunEvent> {
+    const { userMessage, modelOverride, effortOverride } = input;
+    // Single boundary parse: StartRunInput.threadId is external (route/test)
+    // string entering the branded run identity surface — mirrors the row-mapper
+    // discipline. Every downstream threadId use below is branded.
+    const threadId = ThreadId.parse(input.threadId);
     try {
       // Agent lookup.
       const agent = catalog.get(agentId);
@@ -407,7 +412,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       threads.append({ threadId, role: "user", content: userMessage });
 
       // Insert the Run row, emit run.started (audit-first — see finalizeFailed note).
-      const runId = crypto.randomUUID();
+      const runId = RunId.parse(crypto.randomUUID());
       await events.emit("run.started", { runId, threadId, agentId, model });
       const run = runs.create({ id: runId, threadId, agentId, model });
       const controller = new AbortController();
@@ -488,9 +493,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   // ─── Seam 1: the tool-loop ────────────────────────────────────────────────
 
   type LoopArgs = {
-    runId: string;
-    threadId: string;
-    agentId: string;
+    runId: RunId;
+    threadId: ThreadId;
+    agentId: AgentId;
     model: string;
     /** Resolved Working Directory for this Run (ADR-0016 C4) — native tool cwd. */
     cwd: string;
@@ -595,9 +600,9 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   // the session id (→ persisted). stderr → Trace + a bounded tail for the
   // failure message.
   type CliArgs = {
-    runId: string;
-    threadId: string;
-    agentId: string;
+    runId: RunId;
+    threadId: ThreadId;
+    agentId: AgentId;
     backend: "claude-code" | "codex";
     /** Resolved Working Directory for this Run (ADR-0016 C4) — CLI spawn cwd. */
     cwd: string;
@@ -796,7 +801,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     | { kind: "error"; code: GatewayErrorCode | "unknown"; message: string };
 
   async function* runTurn(
-    runId: string,
+    runId: RunId,
     completionInput: CompletionInput,
   ): AsyncGenerator<RunEvent, TurnOutcome, void> {
     const accumulator = new AssistantAccumulator();
@@ -846,8 +851,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   // audit source) a single tool_use call. Audit-first throughout: every emit is
   // awaited BEFORE its side effect.
   async function dispatchToolCall(
-    runId: string,
-    agentId: string,
+    runId: RunId,
+    agentId: AgentId,
     cwd: string,
     call: { id: string; name: string; input: unknown },
     boundSkills: readonly string[],

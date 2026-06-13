@@ -4,6 +4,7 @@
 
 import { and, asc, eq } from "drizzle-orm";
 import type { HiveDb } from "../db/hive-db.ts";
+import { AgentId, RunId, ThreadId } from "../lib/ids.ts";
 import type { FinishReason } from "../model-gateway/types.ts";
 import { type RunStatus, runs } from "./schema.ts";
 import type { Run } from "./types.ts";
@@ -59,9 +60,9 @@ export type RunsStore = {
 export function createRunsStore(db: HiveDb, now: () => number = Date.now): RunsStore {
   function rowToRun(row: typeof runs.$inferSelect): Run {
     const out: Run = {
-      id: row.id,
-      threadId: row.thread_id,
-      agentId: row.agent_id,
+      id: RunId.parse(row.id),
+      threadId: ThreadId.parse(row.thread_id),
+      agentId: AgentId.parse(row.agent_id),
       model: row.model,
       status: row.status,
       startedAt: row.started_at,

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { AgentId, RunId } from "../../../lib/ids.ts";
 import type { FsRunnerPort } from "../../effect/ports.ts";
 import { makeEditTool, makeReadTool, makeWriteTool } from "../file-tools.ts";
 import type { ToolContext } from "../registry.ts";
@@ -7,8 +8,8 @@ const CWD = process.platform === "win32" ? "C:\\hive\\ws" : "/hive/ws";
 
 function ctx(): ToolContext {
   return {
-    agentId: "a",
-    runId: "r",
+    agentId: AgentId.parse("a"),
+    runId: RunId.parse("r"),
     cwd: CWD,
     boundSkills: [],
     signal: new AbortController().signal,

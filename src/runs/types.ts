@@ -1,4 +1,5 @@
 import type { AgentBackend } from "../lib/capability-types.ts";
+import type { AgentId, RunId, ThreadId } from "../lib/ids.ts";
 import type { FinishReason, GatewayErrorCode, GatewayEvent } from "../model-gateway/types.ts";
 import type { ThreadMessage } from "../threads/types.ts";
 import type { RunStatus } from "./schema.ts";
@@ -6,9 +7,9 @@ import type { RunStatus } from "./schema.ts";
 export type { RunStatus } from "./schema.ts";
 
 export type Run = {
-  id: string;
-  threadId: string;
-  agentId: string;
+  id: RunId;
+  threadId: ThreadId;
+  agentId: AgentId;
   model: string;
   status: RunStatus;
   startedAt: number;
@@ -35,27 +36,27 @@ export type Run = {
 export type RunEvent =
   | {
       type: "run.started";
-      runId: string;
-      threadId: string;
-      agentId: string;
+      runId: RunId;
+      threadId: ThreadId;
+      agentId: AgentId;
       model: string;
       ts: number;
     }
-  | { type: "model.event"; runId: string; event: GatewayEvent }
+  | { type: "model.event"; runId: RunId; event: GatewayEvent }
   | {
       type: "run.completed";
-      runId: string;
+      runId: RunId;
       finishReason: FinishReason;
       finalMessage: ThreadMessage;
       ts: number;
     }
   | {
       type: "run.failed";
-      runId: string;
+      runId: RunId;
       error: { code: NonNullable<Run["errorCode"]>; message: string };
       ts: number;
     }
-  | { type: "run.cancelled"; runId: string; ts: number };
+  | { type: "run.cancelled"; runId: RunId; ts: number };
 
 /**
  * Module-level event stream for Audit. The audit subscriber attaches here.
@@ -64,22 +65,27 @@ export type RunEvent =
  * audit-vs-trace boundary.
  */
 export type RunModuleEvents = {
-  "run.started": { runId: string; threadId: string; agentId: string; model: string };
-  "run.completed": { runId: string; threadId: string; agentId: string; finishReason: FinishReason };
+  "run.started": { runId: RunId; threadId: ThreadId; agentId: AgentId; model: string };
+  "run.completed": {
+    runId: RunId;
+    threadId: ThreadId;
+    agentId: AgentId;
+    finishReason: FinishReason;
+  };
   "run.failed": {
-    runId: string;
-    threadId: string;
-    agentId: string;
+    runId: RunId;
+    threadId: ThreadId;
+    agentId: AgentId;
     code: NonNullable<Run["errorCode"]>;
     message: string;
   };
-  "run.cancelled": { runId: string; threadId: string; agentId: string };
+  "run.cancelled": { runId: RunId; threadId: ThreadId; agentId: AgentId };
   // Tool dispatch (ADR-0004:83). `requested` is emitted (audit-first) BEFORE the
   // side effect; `executed` after it returns. Payloads carry REFS + a redacted
   // arg summary only — never raw arg strings, never stdout (ADR-0004:141, Q6).
   "run.tool_use.requested": {
-    runId: string;
-    agentId: string;
+    runId: RunId;
+    agentId: AgentId;
     tool: string;
     toolUseId: string;
     /** Command-bearing tools only: the command name (a ref, not an arg). */
@@ -92,8 +98,8 @@ export type RunModuleEvents = {
     editSummary?: { oldLen: number; newLen: number };
   };
   "run.tool_use.executed": {
-    runId: string;
-    agentId: string;
+    runId: RunId;
+    agentId: AgentId;
     tool: string;
     toolUseId: string;
     isError: boolean;
@@ -102,8 +108,8 @@ export type RunModuleEvents = {
   // `load_skill`. The skill NAME is a ref — the body NEVER enters the payload
   // (ADR-0004 redaction). Emitted audit-first, before the body returns.
   "run.skill_loaded": {
-    runId: string;
-    agentId: string;
+    runId: RunId;
+    agentId: AgentId;
     skill: string;
   };
 };
@@ -119,8 +125,8 @@ export type RunModuleEvents = {
  */
 export type BackendEvents = {
   "backend.spawn.requested": {
-    runId: string;
-    agentId: string;
+    runId: RunId;
+    agentId: AgentId;
     backend: AgentBackend;
     /** command[0] — the binary name, a ref (e.g. "claude"). */
     binary: string;
@@ -139,15 +145,15 @@ export type BackendEvents = {
  */
 export type PermissionEvents = {
   "permission.requested": {
-    runId: string;
-    agentId: string;
+    runId: RunId;
+    agentId: AgentId;
     tool: string;
     /** Command-bearing tools only: command name (ref). Never raw args. */
     command?: string;
   };
   "permission.decided": {
-    runId: string;
-    agentId: string;
+    runId: RunId;
+    agentId: AgentId;
     tool: string;
     command?: string;
     outcome: "allow" | "deny";

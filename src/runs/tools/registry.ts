@@ -7,6 +7,7 @@
 // CONTEXT-correct model): a registry entry is sent ONLY when its name is in
 // `bindings.tools`. This is the exact seam N2 extends for file tools.
 
+import type { AgentId, RunId } from "../../lib/ids.ts";
 import type { ToolDef } from "../../model-gateway/types.ts";
 import type { FsRunnerPort, ShellRunnerPort, SkillResolverPort } from "../effect/ports.ts";
 import { makeEditTool, makeReadTool, makeWriteTool } from "./file-tools.ts";
@@ -20,8 +21,8 @@ export type ToolResult = { content: string; isError: boolean; loadedSkill?: stri
 
 // Per-call execution context handed to a tool's `run`.
 export type ToolContext = {
-  agentId: string;
-  runId: string;
+  agentId: AgentId;
+  runId: RunId;
   // The working directory the tool runs in. Resolved once per Run by the
   // executor via resolveWorkingDir()'s three tiers (ADR-0016 C4): Thread pick →
   // agent default → per-Agent ~/.hive workspace. File tools confine to this cwd.

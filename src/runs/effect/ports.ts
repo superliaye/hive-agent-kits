@@ -11,6 +11,7 @@
 import { Context, type Stream } from "effect";
 import type { Agent } from "../../catalog/types.ts";
 import type { AgentBackend, Origin } from "../../lib/capability-types.ts";
+import type { AgentId, RunId } from "../../lib/ids.ts";
 import type { GatewayFailure } from "../../model-gateway/effect/failure.ts";
 import type {
   AuthInput,
@@ -88,7 +89,7 @@ export class AgentModelPrefsLookup extends Context.Service<
 export type ThreadsPort = {
   get(threadId: string):
     | {
-        agentId: string;
+        agentId: AgentId;
         modelPref?: string | null;
         effortPref?: string | null;
         workingDir?: string | null;
@@ -125,8 +126,8 @@ export class CapConfig extends Context.Service<CapConfig, CapConfigPort>()("runs
 export type PermissionDecision = { outcome: "allow" | "deny"; reason?: string };
 export type PermissionPort = {
   decide(input: {
-    agentId: string;
-    runId: string;
+    agentId: AgentId;
+    runId: RunId;
     tool: string;
     command?: string;
   }): Promise<PermissionDecision>;

@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { AgentId, RunId } from "../../../lib/ids.ts";
 import { runtimeRoot } from "../../../lib/paths.ts";
 import type { FsRunnerPort, ShellRunnerPort, SkillResolverPort } from "../../effect/ports.ts";
 import { type BuildRegistryDeps, buildToolRegistry, toolsForBindings } from "../registry.ts";
 import { createDefaultShellRunner, makeRunShellTool, resolveWorkingDir } from "../run-shell.ts";
 
 const ctx = {
-  agentId: "a",
-  runId: "r",
+  agentId: AgentId.parse("a"),
+  runId: RunId.parse("r"),
   cwd: process.cwd(),
   boundSkills: [],
   signal: new AbortController().signal,

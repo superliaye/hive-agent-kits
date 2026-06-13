@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Agent, Catalog } from "../../catalog/index.ts";
+import { AgentId, RunId } from "../../lib/ids.ts";
 import { createDefaultPermission } from "../permission.ts";
 
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
@@ -22,8 +23,8 @@ function catalogWith(agent: Agent): Pick<Catalog, "get"> {
 }
 
 const req = (command: string) => ({
-  agentId: "a",
-  runId: "r",
+  agentId: AgentId.parse("a"),
+  runId: RunId.parse("r"),
   tool: "run_shell",
   command,
 });
@@ -63,11 +64,20 @@ describe("default PermissionPort — run_shell (deny-by-default)", () => {
 
   test("command-less tool is allowed (no command → no allowlist semantics)", async () => {
     const perm = createDefaultPermission(catalogWith(makeAgent({})));
-    expect((await perm.decide({ agentId: "a", runId: "r", tool: "read" })).outcome).toBe("allow");
+    expect(
+      (await perm.decide({ agentId: AgentId.parse("a"), runId: RunId.parse("r"), tool: "read" }))
+        .outcome,
+    ).toBe("allow");
     // Even a run_shell call that projects no command is allowed (gate is
     // command-presence-driven, not tool-name-driven).
-    expect((await perm.decide({ agentId: "a", runId: "r", tool: "run_shell" })).outcome).toBe(
-      "allow",
-    );
+    expect(
+      (
+        await perm.decide({
+          agentId: AgentId.parse("a"),
+          runId: RunId.parse("r"),
+          tool: "run_shell",
+        })
+      ).outcome,
+    ).toBe("allow");
   });
 });
