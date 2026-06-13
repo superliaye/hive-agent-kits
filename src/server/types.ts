@@ -93,7 +93,7 @@ export type CapabilityWire = {
 };
 
 export type AgentSummaryWire = {
-  agentId: string;
+  agentId: AgentId;
   backend: z.infer<typeof AgentBackend>;
   domain: string;
   layer: z.infer<typeof CapabilityLayer>;
