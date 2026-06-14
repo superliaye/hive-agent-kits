@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "../../../model-gateway/types.ts";
-import { buildCliInvocation } from "../cli-invocation.ts";
+import { buildCliInvocation, claudeModelEffort } from "../cli-invocation.ts";
 
 const userTurn = (text: string): Message => ({ role: "user", content: [{ type: "text", text }] });
 
@@ -146,6 +146,120 @@ describe("buildCliInvocation — codex", () => {
     });
     expect(inv.command).toEqual(["codex", "exec", "resume", "thr-xyz", "--json", "-"]);
     expect(inv.stdin).toBe("next");
+  });
+});
+
+// ─── P1.1: the pure model/effort transform (Q1) ──────────────────────────────
+describe("claudeModelEffort — model transform (provider-matched, bare id)", () => {
+  test("anthropic provider → bare id, provider/ prefix stripped", () => {
+    expect(
+      claudeModelEffort({ provider: "anthropic", model: "anthropic/claude-sonnet-4-6" }),
+    ).toEqual({ model: "claude-sonnet-4-6" });
+  });
+
+  test("non-anthropic provider → NO --model (cross-provider id is meaningless to claude)", () => {
+    expect(claudeModelEffort({ provider: "openai", model: "openai/gpt-5" })).toEqual({});
+  });
+
+  test("absent model → NO --model even for anthropic", () => {
+    expect(claudeModelEffort({ provider: "anthropic" })).toEqual({});
+  });
+});
+
+describe("claudeModelEffort — effort transform (intersection map, per-level guard)", () => {
+  test("intersection levels map 1:1: low/medium/high/xhigh", () => {
+    expect(claudeModelEffort({ effort: "low" })).toEqual({ effort: "low" });
+    expect(claudeModelEffort({ effort: "medium" })).toEqual({ effort: "medium" });
+    expect(claudeModelEffort({ effort: "high" })).toEqual({ effort: "high" });
+    expect(claudeModelEffort({ effort: "xhigh" })).toEqual({ effort: "xhigh" });
+  });
+
+  test("off/minimal have no claude equivalent → NO --effort (CLI default)", () => {
+    expect(claudeModelEffort({ effort: "off" })).toEqual({});
+    expect(claudeModelEffort({ effort: "minimal" })).toEqual({});
+  });
+
+  test("absent effort → NO --effort", () => {
+    expect(claudeModelEffort({})).toEqual({});
+  });
+
+  test("model + effort together (anthropic, high)", () => {
+    expect(
+      claudeModelEffort({
+        provider: "anthropic",
+        model: "anthropic/claude-opus-4-8",
+        effort: "high",
+      }),
+    ).toEqual({ model: "claude-opus-4-8", effort: "high" });
+  });
+});
+
+// ─── P1.1/P1.2: the claude arm emits --model/--effort/--permission-mode/--allowedTools
+describe("buildCliInvocation — claude-code model/effort/permission flags", () => {
+  test("--model + --effort follow the stream flags, before --append-system-prompt", () => {
+    const inv = buildCliInvocation("claude-code", {
+      systemPrompt: "sys",
+      history: [userTurn("hi")],
+      model: "claude-sonnet-4-6",
+      effort: "high",
+    });
+    expect(inv.command).toEqual([
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--model",
+      "claude-sonnet-4-6",
+      "--effort",
+      "high",
+      "--append-system-prompt",
+      "sys",
+    ]);
+  });
+
+  test("--permission-mode default + --allowedTools with the LOAD-BEARING space", () => {
+    const inv = buildCliInvocation("claude-code", {
+      history: [userTurn("hi")],
+      permissionMode: "default",
+      allowedTools: ["Bash(node *)", "Bash(git *)"],
+    });
+    expect(inv.command).toEqual([
+      "claude",
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--permission-mode",
+      "default",
+      "--allowedTools",
+      "Bash(node *)",
+      "Bash(git *)",
+    ]);
+    // The space before * is preserved per tool token (not Bash(node*)).
+    expect(inv.command).toContain("Bash(node *)");
+    expect(inv.command).not.toContain("Bash(node*)");
+  });
+
+  test("empty allowedTools → NO --allowedTools (no silent widening)", () => {
+    const inv = buildCliInvocation("claude-code", {
+      history: [userTurn("hi")],
+      permissionMode: "default",
+      allowedTools: [],
+    });
+    expect(inv.command).toContain("--permission-mode");
+    expect(inv.command).not.toContain("--allowedTools");
+  });
+
+  test("codex ignores model/effort/permission flags in v1", () => {
+    const inv = buildCliInvocation("codex", {
+      history: [userTurn("hi")],
+      model: "claude-sonnet-4-6",
+      effort: "high",
+      permissionMode: "default",
+      allowedTools: ["Bash(node *)"],
+    });
+    expect(inv.command).toEqual(["codex", "exec", "--json", "-"]);
   });
 });
 

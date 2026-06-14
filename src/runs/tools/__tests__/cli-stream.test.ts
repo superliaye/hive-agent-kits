@@ -55,6 +55,79 @@ describe("parseCliStream — claude-code", () => {
   });
 });
 
+// ─── P1.3 (Q3): tool_use → tool_result matching, observed tool facts ──────────
+describe("parseCliStream — claude tool observation", () => {
+  test("matches assistant tool_use to its user tool_result by tool_use_id (cross-message)", async () => {
+    const lines = [
+      `${JSON.stringify({ type: "system", subtype: "init", session_id: "s1" })}\n`,
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "let me check" },
+            { type: "tool_use", id: "tu-1", name: "Bash", input: { command: "ls" } },
+          ],
+        },
+      })}\n`,
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "tu-1", content: "file.txt" }],
+        },
+      })}\n`,
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "done" }] },
+      })}\n`,
+      `${JSON.stringify({ type: "result", subtype: "success" })}\n`,
+    ];
+    const facts = await collect(parseCliStream("claude-code", fromChunks(lines)));
+    expect(facts).toEqual([
+      { kind: "session", sessionId: "s1" },
+      { kind: "text", text: "let me check" },
+      { kind: "tool", tool: "Bash" },
+      { kind: "text", text: "done" },
+    ]);
+  });
+
+  test("a tool_use with NO matching tool_result emits no tool fact", async () => {
+    const lines = [
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", id: "tu-9", name: "Edit", input: {} }],
+        },
+      })}\n`,
+      // No matching user tool_result for tu-9.
+      `${JSON.stringify({ type: "result", subtype: "success" })}\n`,
+    ];
+    const facts = await collect(parseCliStream("claude-code", fromChunks(lines)));
+    expect(facts.filter((f) => f.kind === "tool")).toEqual([]);
+  });
+
+  test("the observed fact carries the tool NAME only — no args/output (ADR-0004 refs)", async () => {
+    const lines = [
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{ type: "tool_use", id: "tu-2", name: "Bash", input: { command: "SECRET" } }],
+        },
+      })}\n`,
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: "tu-2", content: "SECRET-OUTPUT" }],
+        },
+      })}\n`,
+    ];
+    const facts = await collect(parseCliStream("claude-code", fromChunks(lines)));
+    const serialized = JSON.stringify(facts);
+    expect(facts).toContainEqual({ kind: "tool", tool: "Bash" });
+    expect(serialized).not.toContain("SECRET");
+    expect(serialized).not.toContain("SECRET-OUTPUT");
+  });
+});
+
 describe("parseCliStream — codex", () => {
   test("captures thread_id from thread.started + agent_message text", async () => {
     const lines = [

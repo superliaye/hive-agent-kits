@@ -67,7 +67,11 @@ import type {
 import { createDefaultPermission } from "./permission.ts";
 import { resolve } from "./resolve.ts";
 import { type EffortDefault, isSymbolicEffort, isThinkingEffort } from "./symbolic.ts";
-import { buildCliInvocation, type CliInvocationMode } from "./tools/cli-invocation.ts";
+import {
+  buildCliInvocation,
+  type CliInvocationMode,
+  claudeModelEffort,
+} from "./tools/cli-invocation.ts";
 import { createDefaultFsCopy, projectSkillsForCli } from "./tools/cli-skill-projection.ts";
 import { createDefaultCliSpawner } from "./tools/cli-spawn.ts";
 import { parseCliStream } from "./tools/cli-stream.ts";
@@ -464,16 +468,22 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         case "codex": {
           // CLI path uses the authored `promptBody` ALONE — no N3 skill-listing
           // block. The CLI does its own progressive disclosure over the projected
-          // `--add-dir` skills (ADR-0016: Hive runs no skill disclosure here).
-          const systemPrompt = bareSystemPrompt(agent.promptBody);
+          // `--add-dir` skills (ADR-0016: Hive runs no skill disclosure here). A
+          // fixed BACKEND-CONTEXT preamble (P1.4) is prepended for non-native
+          // backends, naming the native-only tools as unavailable under the CLI.
+          const systemPrompt = cliSystemPrompt(agent.promptBody);
           yield* runCliBackend({
             runId: run.id,
             threadId,
             agentId,
             backend,
             cwd,
-            ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+            systemPrompt,
             boundSkills,
+            model,
+            provider,
+            ...(effort !== undefined ? { effort } : {}),
+            commandAllowlist: agent.commandAllowlist ?? [],
             signal: controller.signal,
           });
           return;
@@ -609,6 +619,14 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
     systemPrompt?: string;
     /** The Agent's bound skill names — projected into `--add-dir` (claude-code). */
     boundSkills: readonly string[];
+    /** Resolved model as `provider/model` (P1.1). Provider-stripped for `--model`. */
+    model: string;
+    /** Resolved model's provider (P1.1). `--model` is forwarded only for anthropic. */
+    provider: string;
+    /** Resolved thinking effort (P1.1). Mapped onto claude's intersection set. */
+    effort?: ThinkingEffort;
+    /** The Agent's `run_shell` command allowlist — projected to `--allowedTools` (P1.2). */
+    commandAllowlist: readonly string[];
     signal: AbortSignal;
   };
 
@@ -619,6 +637,25 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
   async function* runCliBackend(args: CliArgs): AsyncIterable<RunEvent> {
     const { runId, threadId, agentId, backend, cwd, signal } = args;
     const id: RunIdentity = { runId, threadId, agentId };
+
+    // P1.1 transform (claude-code only): bare `--model` (anthropic-only) +
+    // intersection-mapped `--effort`. A pure helper; codex ignores both in v1.
+    const modelEffort =
+      backend === "claude-code"
+        ? claudeModelEffort({
+            provider: args.provider,
+            model: args.model,
+            ...(args.effort !== undefined ? { effort: args.effort } : {}),
+          })
+        : {};
+    // P1.2 permission contract (claude-code only): the `--permission-mode
+    // default` floor + each `commandAllowlist` entry projected to a
+    // `Bash(<cmd> *)` allowed-tool (the space before `*` is load-bearing). An
+    // empty allowlist projects no `--allowedTools` (no silent widening). codex
+    // gets neither in v1.
+    const permissionMode = backend === "claude-code" ? "default" : undefined;
+    const allowedTools =
+      backend === "claude-code" ? args.commandAllowlist.map(toBashAllowedTool) : [];
 
     // Create-vs-resume: resume only when the Thread carries a session id for THIS
     // backend. A stale id from a different backend is ignored (create fresh).
@@ -674,6 +711,10 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       history: threads.getCompletionMessages(threadId),
       mode,
       ...(addDir !== undefined ? { addDir } : {}),
+      ...(modelEffort.model !== undefined ? { model: modelEffort.model } : {}),
+      ...(modelEffort.effort !== undefined ? { effort: modelEffort.effort } : {}),
+      ...(permissionMode !== undefined ? { permissionMode } : {}),
+      ...(allowedTools.length > 0 ? { allowedTools } : {}),
     });
 
     // Best-effort removal of the per-Run projection dir once the Run ends (any
@@ -732,13 +773,22 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         return tail;
       })();
 
-      // Parse the JSON event stream at the boundary: accumulate assistant text and
-      // capture the native session id. Unknown events are ignored (cli-stream.ts).
+      // Parse the JSON event stream at the boundary: accumulate assistant text,
+      // capture the native session id, and emit an OBSERVED audit event for each
+      // tool the CLI ran (P1.3 — REFS only, the tool NAME). Unknown events are
+      // ignored (cli-stream.ts).
       let out = "";
       let sessionId: string | undefined;
       for await (const fact of parseCliStream(backend, spawned.stdout)) {
         if (fact.kind === "text") out += fact.text;
-        else sessionId = fact.sessionId;
+        else if (fact.kind === "tool") {
+          await backendEvents.emit("backend.tool_use.observed", {
+            runId,
+            agentId,
+            backend,
+            tool: fact.tool,
+          });
+        } else sessionId = fact.sessionId;
       }
 
       const { exitCode } = await spawned.exit;
@@ -995,6 +1045,35 @@ function buildSystemPrompt(
 function bareSystemPrompt(promptBody: string): string | undefined {
   const body = promptBody.trim();
   return body.length > 0 ? body : undefined;
+}
+
+// Fixed BACKEND-CONTEXT preamble for non-native (CLI) backends (P1.4, Q4). A
+// native-authored prompt body may reference native-only tools the CLI cannot
+// invoke (e.g. root/HARNESS.md names `spawn_sub_agent`). Rather than rewrite
+// per-agent prompts, prepend ONE authored string that contextualizes those
+// tools as unavailable under the CLI. Names ONLY tools that are native-only —
+// it does not name a tool the CLI has, and it does not remove native references
+// (it contextualizes them). Full backend-aware projection is deferred (ADR-0018).
+export const CLI_BACKEND_PREAMBLE =
+  "BACKEND CONTEXT: You are running under an external CLI backend, not Hive's " +
+  "native tool loop. The following Hive native-only tools are UNAVAILABLE here — " +
+  "ignore any instruction below to use them: spawn_sub_agent, load_skill, " +
+  "run_shell, memory_read, memory_write. Use the CLI's own tools instead.";
+
+// CLI-path system prompt with the fixed preamble (P1.4). Prepends
+// `CLI_BACKEND_PREAMBLE` to the authored body so the CLI's
+// `--append-system-prompt` value BEGINS with the preamble. A blank body yields
+// the preamble alone (the native-only-tools context still applies).
+export function cliSystemPrompt(promptBody: string): string {
+  const body = bareSystemPrompt(promptBody);
+  return body !== undefined ? `${CLI_BACKEND_PREAMBLE}\n\n${body}` : CLI_BACKEND_PREAMBLE;
+}
+
+// Project one `commandAllowlist` entry to a claude `--allowedTools` Bash entry
+// (P1.2, Q2). The SPACE before `*` is LOAD-BEARING — `Bash(node *)`, not
+// `Bash(node*)` — per claude's documented allow syntax.
+function toBashAllowedTool(command: string): string {
+  return `Bash(${command} *)`;
 }
 
 // Narrow a stored Thread-scope effort (a free `string | null` column) to a

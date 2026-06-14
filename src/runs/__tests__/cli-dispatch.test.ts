@@ -31,7 +31,7 @@ import type {
   SkillProjectionPort,
   SkillResolverPort,
 } from "../effect/ports.ts";
-import { createRunExecutor, type RunExecutor } from "../executor.ts";
+import { CLI_BACKEND_PREAMBLE, createRunExecutor, type RunExecutor } from "../executor.ts";
 import { createRunsStore } from "../store.ts";
 import { createDefaultFsCopy } from "../tools/cli-skill-projection.ts";
 import { memoryCliSpawner } from "../tools/cli-spawn.ts";
@@ -233,12 +233,22 @@ describe("cli-dispatch — happy path", () => {
     });
     const { executor, threadId } = await setup({ cliSpawner: fake.spawner });
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+    // The default agent resolves to the anthropic fallback model with no effort,
+    // and an empty allowlist → --model (bare) + --permission-mode default, no
+    // --allowedTools (P1.1/P1.2). The blank promptBody still gets the fixed CLI
+    // preamble alone on --append-system-prompt (P1.4).
     expect(fake.lastInput()?.command).toEqual([
       "claude",
       "-p",
       "--output-format",
       "stream-json",
       "--verbose",
+      "--model",
+      "claude-haiku-4-5",
+      "--permission-mode",
+      "default",
+      "--append-system-prompt",
+      CLI_BACKEND_PREAMBLE,
     ]);
     expect(fake.lastInput()?.stdin).toBe("hi");
   });
@@ -291,7 +301,8 @@ describe("cli-dispatch — session continuity (Fix 4)", () => {
     });
     const { threads, executor, threadId } = await setup({ cliSpawner: fake.spawner });
 
-    // Turn 1 — CREATE. The session id is captured + persisted.
+    // Turn 1 — CREATE. The session id is captured + persisted. --model +
+    // --permission-mode default + the CLI preamble ride along (P1.1/P1.2/P1.4).
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "t1" }] }));
     expect(fake.lastInput()?.command).toEqual([
       "claude",
@@ -299,13 +310,20 @@ describe("cli-dispatch — session continuity (Fix 4)", () => {
       "--output-format",
       "stream-json",
       "--verbose",
+      "--model",
+      "claude-haiku-4-5",
+      "--permission-mode",
+      "default",
+      "--append-system-prompt",
+      CLI_BACKEND_PREAMBLE,
     ]);
     expect(threads.getCliSession(threadId)).toEqual({
       backend: "claude-code",
       sessionId: "sess-abc",
     });
 
-    // Turn 2 — RESUME with the stored id.
+    // Turn 2 — RESUME with the stored id. --resume follows the model/permission
+    // flags and precedes --append-system-prompt (deterministic ordering).
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "t2" }] }));
     expect(fake.lastInput()?.command).toEqual([
       "claude",
@@ -313,8 +331,14 @@ describe("cli-dispatch — session continuity (Fix 4)", () => {
       "--output-format",
       "stream-json",
       "--verbose",
+      "--model",
+      "claude-haiku-4-5",
+      "--permission-mode",
+      "default",
       "--resume",
       "sess-abc",
+      "--append-system-prompt",
+      CLI_BACKEND_PREAMBLE,
     ]);
     // Only the latest user turn rides stdin — the CLI replays its own history.
     expect(fake.lastInput()?.stdin).toBe("t2");
@@ -358,7 +382,10 @@ describe("cli-dispatch — codex arm", () => {
     });
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
     expect(fake.lastInput()?.command).toEqual(["codex", "exec", "--json", "-"]);
-    expect(fake.lastInput()?.stdin).toBe("be terse\n\ngo");
+    // The fixed CLI preamble (P1.4) is folded ahead of the body, then the user msg.
+    const stdin = fake.lastInput()?.stdin ?? "";
+    expect(stdin.startsWith("BACKEND CONTEXT")).toBe(true);
+    expect(stdin.endsWith("be terse\n\ngo")).toBe(true);
   });
 });
 
@@ -396,13 +423,16 @@ describe("cli-dispatch — N3 listing gated to native (P1)", () => {
     const cmd = fake.lastInput()?.command ?? [];
     const apsIdx = cmd.indexOf("--append-system-prompt");
     expect(apsIdx).toBeGreaterThan(-1);
-    // promptBody rides through verbatim — and ONLY promptBody.
-    expect(cmd[apsIdx + 1]).toBe("be terse");
-    // No N3 listing leaked: neither the "Available skills" header nor the
-    // uncallable `load_skill` advertisement.
-    expect(cmd[apsIdx + 1]).not.toContain("Available skills");
-    expect(cmd[apsIdx + 1]).not.toContain("load_skill");
-    expect(cmd[apsIdx + 1]).not.toContain("deep web research");
+    // promptBody rides through — preceded by the fixed CLI preamble (P1.4), and
+    // ONLY promptBody after it (no N3 listing).
+    const aps = cmd[apsIdx + 1] ?? "";
+    expect(aps.endsWith("be terse")).toBe(true);
+    // No N3 listing leaked: neither the "Available skills" header nor an
+    // uncallable `load_skill` ADVERTISEMENT. The preamble names load_skill as
+    // unavailable, so check the N3 listing phrase specifically, not the bare word.
+    expect(aps).not.toContain("Available skills");
+    expect(aps).not.toContain("call load_skill to load one");
+    expect(aps).not.toContain("deep web research");
   });
 
   test("codex: stdin carries promptBody ALONE, no N3 listing even with load_skill bound", async () => {
@@ -422,12 +452,231 @@ describe("cli-dispatch — N3 listing gated to native (P1)", () => {
 
     await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
 
-    // codex folds the system prompt into stdin (promptBody\n\nuserMessage). The
-    // listing must not appear anywhere in it.
+    // codex folds the system prompt into stdin: the fixed CLI preamble (P1.4) +
+    // promptBody, then the user message. The N3 listing must not appear anywhere.
     const stdin = fake.lastInput()?.stdin ?? "";
-    expect(stdin).toBe("be terse\n\ngo");
+    expect(stdin.endsWith("be terse\n\ngo")).toBe(true);
+    expect(stdin.startsWith("BACKEND CONTEXT")).toBe(true);
     expect(stdin).not.toContain("Available skills");
-    expect(stdin).not.toContain("load_skill");
+    expect(stdin).not.toContain("call load_skill to load one");
+  });
+});
+
+// ─── P1.1: resolved model/effort forwarded to claude (Q1) ─────────────────────
+describe("cli-dispatch — model/effort forwarding (P1.1)", () => {
+  test("anthropic model → --model with the BARE id (no provider/ prefix)", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "s1", text: "ok" }),
+      exitCode: 0,
+    });
+    // Empty config → MODEL_FALLBACK (anthropic/claude-haiku-4-5).
+    const { executor, threadId } = await setup({ cliSpawner: fake.spawner });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+    const cmd = fake.lastInput()?.command ?? [];
+    const mi = cmd.indexOf("--model");
+    expect(mi).toBeGreaterThan(-1);
+    expect(cmd[mi + 1]).toBe("claude-haiku-4-5");
+    // No provider/ prefix leaked.
+    expect(cmd.join(" ")).not.toContain("anthropic/");
+  });
+
+  test("non-anthropic configured model → NO --model", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "s1", text: "ok" }),
+      exitCode: 0,
+    });
+    const { executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      agent: { config: { model: "openai/gpt-5" } },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+    expect(fake.lastInput()?.command).not.toContain("--model");
+  });
+
+  test("configured effort high → --effort high; off → no --effort", async () => {
+    const fakeHigh = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "s1", text: "ok" }),
+      exitCode: 0,
+    });
+    const high = await setup({
+      cliSpawner: fakeHigh.spawner,
+      agent: { config: { thinkingEffort: "high" } },
+    });
+    await collect(
+      high.executor.startRun({
+        threadId: high.threadId,
+        userMessage: [{ type: "text", text: "hi" }],
+      }),
+    );
+    const cmdH = fakeHigh.lastInput()?.command ?? [];
+    const ei = cmdH.indexOf("--effort");
+    expect(ei).toBeGreaterThan(-1);
+    expect(cmdH[ei + 1]).toBe("high");
+
+    const fakeOff = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "s1", text: "ok" }),
+      exitCode: 0,
+    });
+    const off = await setup({
+      cliSpawner: fakeOff.spawner,
+      agent: { config: { thinkingEffort: "off" } },
+    });
+    await collect(
+      off.executor.startRun({
+        threadId: off.threadId,
+        userMessage: [{ type: "text", text: "hi" }],
+      }),
+    );
+    expect(fakeOff.lastInput()?.command).not.toContain("--effort");
+  });
+});
+
+// ─── P1.2: permission contract forwarded to claude (Q2) ───────────────────────
+describe("cli-dispatch — permission contract (P1.2)", () => {
+  test("commandAllowlist [node] → --permission-mode default + Bash(node *) (load-bearing space)", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "s1", text: "ok" }),
+      exitCode: 0,
+    });
+    const { executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      agent: { commandAllowlist: ["node"] },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+    const cmd = fake.lastInput()?.command ?? [];
+    expect(cmd).toContain("--permission-mode");
+    expect(cmd[cmd.indexOf("--permission-mode") + 1]).toBe("default");
+    expect(cmd).toContain("--allowedTools");
+    expect(cmd).toContain("Bash(node *)");
+    expect(cmd).not.toContain("Bash(node*)");
+  });
+
+  test("empty allowlist → --permission-mode default present, NO --allowedTools", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "s1", text: "ok" }),
+      exitCode: 0,
+    });
+    // Default agent has no commandAllowlist.
+    const { executor, threadId } = await setup({ cliSpawner: fake.spawner });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+    const cmd = fake.lastInput()?.command ?? [];
+    expect(cmd).toContain("--permission-mode");
+    expect(cmd).not.toContain("--allowedTools");
+  });
+
+  test("codex gets neither --permission-mode nor --allowedTools (v1)", async () => {
+    const fake = makeFakeSpawner({
+      stdout: codexJsonl({ threadId: "t1", text: "done" }),
+      exitCode: 0,
+    });
+    const { executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      agent: { backend: "codex", commandAllowlist: ["node"] },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "go" }] }));
+    const cmd = fake.lastInput()?.command ?? [];
+    expect(cmd).not.toContain("--permission-mode");
+    expect(cmd).not.toContain("--allowedTools");
+  });
+});
+
+// ─── P1.4: the fixed CLI preamble prepends the authored body (Q4) ─────────────
+describe("cli-dispatch — CLI preamble (P1.4)", () => {
+  test("claude --append-system-prompt BEGINS with the preamble, then the body", async () => {
+    const fake = makeFakeSpawner({
+      stdout: claudeStreamJsonl({ sessionId: "s1", text: "ok" }),
+      exitCode: 0,
+    });
+    const { executor, threadId } = await setup({
+      cliSpawner: fake.spawner,
+      agent: { promptBody: "be terse" },
+    });
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+    const cmd = fake.lastInput()?.command ?? [];
+    const apsIdx = cmd.indexOf("--append-system-prompt");
+    expect(apsIdx).toBeGreaterThan(-1);
+    const value = cmd[apsIdx + 1] ?? "";
+    expect(value.startsWith("BACKEND CONTEXT")).toBe(true);
+    expect(value).toContain("spawn_sub_agent");
+    expect(value.endsWith("be terse")).toBe(true);
+  });
+});
+
+// ─── P1.3: observed tool_use audit on the backend source (Q3) ─────────────────
+describe("cli-dispatch — observed tool audit (P1.3)", () => {
+  function claudeToolStream(opts: {
+    sessionId: string;
+    toolUseId: string;
+    toolName: string;
+  }): string[] {
+    return [
+      `${JSON.stringify({ type: "system", subtype: "init", session_id: opts.sessionId })}\n`,
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: opts.toolUseId,
+              name: opts.toolName,
+              input: { command: "SECRET-ARG" },
+            },
+          ],
+        },
+      })}\n`,
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [{ type: "tool_result", tool_use_id: opts.toolUseId, content: "SECRET-OUTPUT" }],
+        },
+      })}\n`,
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "done" }] },
+      })}\n`,
+      `${JSON.stringify({ type: "result", subtype: "success" })}\n`,
+    ];
+  }
+
+  test("a tool_use+tool_result pair → backend.tool_use.observed row carrying the tool NAME, no args", async () => {
+    const { spawner } = makeFakeSpawner({
+      stdout: claudeToolStream({ sessionId: "s1", toolUseId: "tu-1", toolName: "Bash" }),
+      exitCode: 0,
+    });
+    const audit = makeAudit();
+    const { executor, threadId } = await setup({ cliSpawner: spawner });
+    const dispose = wireSubscriptions(audit, { backend: { events: executor.backendEvents } });
+
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+
+    const rows = await audit.query({ source: "backend" });
+    const observed = rows.filter((r) => r.event_type === "backend.tool_use.observed");
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.payload.tool).toBe("Bash");
+    expect(observed[0]?.payload.backend).toBe("claude-code");
+    // Redaction: no command arg / output in the payload (ADR-0004 refs).
+    expect(JSON.stringify(observed[0]?.payload)).not.toContain("SECRET-ARG");
+    expect(JSON.stringify(observed[0]?.payload)).not.toContain("SECRET-OUTPUT");
+    dispose();
+  });
+
+  test("an unknown stream event does NOT fail the Run (non-fatal)", async () => {
+    const stdout = [
+      `${JSON.stringify({ type: "system", subtype: "init", session_id: "s1" })}\n`,
+      `${JSON.stringify({ type: "some_future_event", data: { foo: 1 } })}\n`,
+      "not json at all\n",
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "ok" }] },
+      })}\n`,
+      `${JSON.stringify({ type: "result", subtype: "success" })}\n`,
+    ];
+    const { spawner } = makeFakeSpawner({ stdout, exitCode: 0 });
+    const { executor, threadId } = await setup({ cliSpawner: spawner });
+    const events = await collect(
+      executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }),
+    );
+    expect(events[events.length - 1]?.type).toBe("run.completed");
   });
 });
 
@@ -683,10 +932,11 @@ describe("cli-dispatch — skill projection (C3)", () => {
       const addDirIdx = cmd.indexOf("--add-dir");
       expect(addDirIdx).toBeGreaterThan(-1);
       expect(cmd[addDirIdx + 1]).toBe(projectionRoot);
-      // The authored prompt still rides --append-system-prompt (unchanged by C3).
+      // The authored prompt still rides --append-system-prompt (unchanged by C3),
+      // now preceded by the fixed CLI preamble (P1.4).
       const apsIdx = cmd.indexOf("--append-system-prompt");
       expect(apsIdx).toBeGreaterThan(-1);
-      expect(cmd[apsIdx + 1]).toBe("be terse");
+      expect(cmd[apsIdx + 1]?.endsWith("be terse")).toBe(true);
 
       // The whole skill DIR (SKILL.md + supporting file) landed under
       // .claude/skills/<name>, and the projection root is outside the cwd.

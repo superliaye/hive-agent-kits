@@ -135,6 +135,18 @@ export type BackendEvents = {
     /** Whether a prompt rode stdin. No content — a presence flag. */
     hasStdin: boolean;
   };
+  // A tool the CLI backend ran, recovered from its JSON event stream (P1.3, Q3).
+  // OBSERVED-after-the-fact — the CLI ran it and owns the permission gate (P1.2
+  // floor); this is NOT a permission decision. REFS only: the tool NAME, never
+  // args/output (ADR-0004 redaction). The CLI exposes no per-decision permission
+  // event to parse — end-of-run `permission_denials[]` is the only signal.
+  "backend.tool_use.observed": {
+    runId: RunId;
+    agentId: AgentId;
+    backend: AgentBackend;
+    /** The tool name (a ref). Never the tool's args or output. */
+    tool: string;
+  };
 };
 
 /**

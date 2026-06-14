@@ -337,6 +337,15 @@ const backendNormalizer: Normalizer<BackendEvents> = {
       has_stdin: event.hasStdin,
     },
   }),
+  // A tool the CLI backend ran, recovered from its event stream (P1.3, Q3).
+  // OBSERVED-after-the-fact (the CLI owns the gate) — NOT a permission decision.
+  // Payload carries the tool NAME (a ref) only, never args/output.
+  "backend.tool_use.observed": (event) => ({
+    event_type: "backend.tool_use.observed",
+    run_id: event.runId,
+    agent_id: event.agentId,
+    payload: { backend: event.backend, tool: event.tool },
+  }),
 };
 
 // Backend (update action): the user-triggered delegated CLI self-update, on the
