@@ -339,12 +339,13 @@ const backendNormalizer: Normalizer<BackendEvents> = {
   }),
   // A tool the CLI backend ran, recovered from its event stream (P1.3, Q3).
   // OBSERVED-after-the-fact (the CLI owns the gate) — NOT a permission decision.
-  // Payload carries the tool NAME (a ref) only, never args/output.
+  // Payload carries the tool NAME + the `is_error` flag (both refs), never
+  // args/output. `is_error` mirrors `run.tool_use.executed`'s redaction posture.
   "backend.tool_use.observed": (event) => ({
     event_type: "backend.tool_use.observed",
     run_id: event.runId,
     agent_id: event.agentId,
-    payload: { backend: event.backend, tool: event.tool },
+    payload: { backend: event.backend, tool: event.tool, is_error: event.isError },
   }),
 };
 

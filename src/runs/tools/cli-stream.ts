@@ -25,12 +25,14 @@ export type CliBackend = "claude-code" | "codex";
 // A normalized fact extracted from one CLI event. The dispatch arm folds these:
 // `text` accumulates into the assistant message; `sessionId` is captured for
 // persistence; `tool` is recorded as an OBSERVED-after-the-fact audit event (the
-// tool NAME, a ref — never args/output; the CLI owns the gate, P1.2/P1.3 Q3). An
+// tool NAME + an `isError` boolean, both refs — never args/output; the CLI owns
+// the gate, P1.2/P1.3 Q3). `isError` is read off the matched `tool_result`'s
+// `is_error` (records WHETHER the tool errored, never the error content). An
 // unmodeled event yields nothing (parsed → no fact).
 export type CliStreamFact =
   | { kind: "session"; sessionId: string }
   | { kind: "text"; text: string }
-  | { kind: "tool"; tool: string };
+  | { kind: "tool"; tool: string; isError: boolean };
 
 // ─── claude-code stream-json ──────────────────────────────────────────────────
 
@@ -58,20 +60,28 @@ const claudeAssistant = z.object({
 });
 
 // User content blocks carry the `tool_result` for an earlier `tool_use`, keyed
-// by `tool_use_id`. We read only the id (the match key) — never the result
-// content (ADR-0004: refs not values).
+// by `tool_use_id`. We read the id (the match key) and the `is_error` boolean
+// (whether the tool errored — a ref) — never the result content (ADR-0004: refs
+// not values).
 const claudeUser = z.object({
   type: z.literal("user"),
   message: z.object({
-    content: z.array(z.object({ type: z.string(), tool_use_id: z.string().optional() })),
+    content: z.array(
+      z.object({
+        type: z.string(),
+        tool_use_id: z.string().optional(),
+        is_error: z.boolean().optional(),
+      }),
+    ),
   }),
 });
 
 // claude's tool calls span two messages: the `assistant`→`tool_use` block names
 // the tool (recorded in `pending` by id), and a later `user`→`tool_result` block
 // confirms it RAN (matched by `tool_use_id`). We emit the OBSERVED tool fact at
-// the result — proof the CLI executed it — carrying the tool NAME only (a ref).
-// `pending` (tool_use_id → name) is owned by `parseCliStream` and threaded here.
+// the result — proof the CLI executed it — carrying the tool NAME and the
+// `is_error` flag read off that `tool_result` (both refs). `pending`
+// (tool_use_id → name) is owned by `parseCliStream` and threaded here.
 function parseClaudeEvent(value: unknown, pending: Map<string, string>): CliStreamFact[] {
   const init = claudeInit.safeParse(value);
   if (init.success) return [{ kind: "session", sessionId: init.data.session_id }];
@@ -97,7 +107,7 @@ function parseClaudeEvent(value: unknown, pending: Map<string, string>): CliStre
       const name = pending.get(b.tool_use_id);
       if (name !== undefined) {
         pending.delete(b.tool_use_id);
-        facts.push({ kind: "tool", tool: name });
+        facts.push({ kind: "tool", tool: name, isError: b.is_error === true });
       }
     }
     return facts;

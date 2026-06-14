@@ -608,6 +608,7 @@ describe("cli-dispatch — observed tool audit (P1.3)", () => {
     sessionId: string;
     toolUseId: string;
     toolName: string;
+    isError?: boolean;
   }): string[] {
     return [
       `${JSON.stringify({ type: "system", subtype: "init", session_id: opts.sessionId })}\n`,
@@ -627,7 +628,14 @@ describe("cli-dispatch — observed tool audit (P1.3)", () => {
       `${JSON.stringify({
         type: "user",
         message: {
-          content: [{ type: "tool_result", tool_use_id: opts.toolUseId, content: "SECRET-OUTPUT" }],
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: opts.toolUseId,
+              content: "SECRET-OUTPUT",
+              ...(opts.isError ? { is_error: true } : {}),
+            },
+          ],
         },
       })}\n`,
       `${JSON.stringify({
@@ -654,8 +662,36 @@ describe("cli-dispatch — observed tool audit (P1.3)", () => {
     expect(observed).toHaveLength(1);
     expect(observed[0]?.payload.tool).toBe("Bash");
     expect(observed[0]?.payload.backend).toBe("claude-code");
+    // A clean tool_result → is_error:false (P1.3 r1-design-2).
+    expect(observed[0]?.payload.is_error).toBe(false);
     // Redaction: no command arg / output in the payload (ADR-0004 refs).
     expect(JSON.stringify(observed[0]?.payload)).not.toContain("SECRET-ARG");
+    expect(JSON.stringify(observed[0]?.payload)).not.toContain("SECRET-OUTPUT");
+    dispose();
+  });
+
+  test("an errored tool_result → backend.tool_use.observed row with is_error:true, no error content", async () => {
+    const { spawner } = makeFakeSpawner({
+      stdout: claudeToolStream({
+        sessionId: "s1",
+        toolUseId: "tu-2",
+        toolName: "Bash",
+        isError: true,
+      }),
+      exitCode: 0,
+    });
+    const audit = makeAudit();
+    const { executor, threadId } = await setup({ cliSpawner: spawner });
+    const dispose = wireSubscriptions(audit, { backend: { events: executor.backendEvents } });
+
+    await collect(executor.startRun({ threadId, userMessage: [{ type: "text", text: "hi" }] }));
+
+    const rows = await audit.query({ source: "backend" });
+    const observed = rows.filter((r) => r.event_type === "backend.tool_use.observed");
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.payload.tool).toBe("Bash");
+    expect(observed[0]?.payload.is_error).toBe(true);
+    // Redaction holds even on the error path (ADR-0004 refs — no error content).
     expect(JSON.stringify(observed[0]?.payload)).not.toContain("SECRET-OUTPUT");
     dispose();
   });

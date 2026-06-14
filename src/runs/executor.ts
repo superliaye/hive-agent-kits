@@ -776,6 +776,7 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
             agentId,
             backend,
             tool: fact.tool,
+            isError: fact.isError,
           });
         } else sessionId = fact.sessionId;
       }

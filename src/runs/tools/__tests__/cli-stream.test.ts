@@ -85,8 +85,37 @@ describe("parseCliStream — claude tool observation", () => {
     expect(facts).toEqual([
       { kind: "session", sessionId: "s1" },
       { kind: "text", text: "let me check" },
-      { kind: "tool", tool: "Bash" },
+      { kind: "tool", tool: "Bash", isError: false },
       { kind: "text", text: "done" },
+    ]);
+  });
+
+  test("an errored tool_result → tool fact with isError:true; a clean one → false", async () => {
+    const lines = [
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "tool_use", id: "tu-ok", name: "Read", input: {} },
+            { type: "tool_use", id: "tu-bad", name: "Bash", input: {} },
+          ],
+        },
+      })}\n`,
+      `${JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "tu-ok", content: "file" },
+            { type: "tool_result", tool_use_id: "tu-bad", content: "boom", is_error: true },
+          ],
+        },
+      })}\n`,
+    ];
+    const facts = await collect(parseCliStream("claude-code", fromChunks(lines)));
+    const tools = facts.filter((f) => f.kind === "tool");
+    expect(tools).toEqual([
+      { kind: "tool", tool: "Read", isError: false },
+      { kind: "tool", tool: "Bash", isError: true },
     ]);
   });
 
@@ -122,7 +151,7 @@ describe("parseCliStream — claude tool observation", () => {
     ];
     const facts = await collect(parseCliStream("claude-code", fromChunks(lines)));
     const serialized = JSON.stringify(facts);
-    expect(facts).toContainEqual({ kind: "tool", tool: "Bash" });
+    expect(facts).toContainEqual({ kind: "tool", tool: "Bash", isError: false });
     expect(serialized).not.toContain("SECRET");
     expect(serialized).not.toContain("SECRET-OUTPUT");
   });
