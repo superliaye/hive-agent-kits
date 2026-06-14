@@ -764,8 +764,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
 
       // Parse the JSON event stream at the boundary: accumulate assistant text,
       // capture the native session id, and emit an OBSERVED audit event for each
-      // tool the CLI ran (P1.3 — REFS only, the tool NAME). Unknown events are
-      // ignored (cli-stream.ts).
+      // tool the CLI ran (P1.3 — REFS only: the tool NAME + the `is_error` flag,
+      // both refs). Unknown events are ignored (cli-stream.ts).
       let out = "";
       let sessionId: string | undefined;
       for await (const fact of parseCliStream(backend, spawned.stdout)) {
