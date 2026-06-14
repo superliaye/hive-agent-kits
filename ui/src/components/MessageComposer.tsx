@@ -57,10 +57,10 @@ export function MessageComposer({
   efforts: ThinkingEffort[];
   selectedEffort: ThinkingEffort | null;
   onSelectEffort: (effort: ThinkingEffort) => void;
-  // Agent-Backend axis (ADR-0015), Worker-only. `backends` lists the offerable
-  // options (synthetic `native` + installed CLI backends with versions);
-  // `selectedBackend` is the resolved pick. The picker renders only when
-  // `showBackendPicker` is true (the daemon-supplied Worker gate).
+  // Agent-Backend axis (ADR-0015 + ADR-0018: selectable for every agent except
+  // the always-native Agent Manager). `backends` lists the offerable options
+  // (synthetic `native` + installed CLI backends with versions); `selectedBackend`
+  // is the resolved pick. The picker renders only when `showBackendPicker` is true.
   backends: BackendOption[];
   selectedBackend: AgentBackend | null;
   onSelectBackend: (backend: AgentBackend) => void;

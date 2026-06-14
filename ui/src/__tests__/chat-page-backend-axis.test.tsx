@@ -1,8 +1,8 @@
-// ChatPage backend×model axis (Item 1 / OQ-1 + OQ-2 + OQ-4):
-//   - the composer renders a backend picker (with versions) ONLY for a Worker;
+// ChatPage backend×model axis (ADR-0015 + ADR-0018):
+//   - the composer renders a backend picker (with versions) for EVERY agent
+//     (the Agent-Manager native-lock is enforced by the daemon, not UI hiding);
 //   - picking a backend issues PUT /api/threads/:id/scope { backend };
 //   - a stored Thread backend scope survives a reload (scope-load reads it back);
-//   - the axis is absent for a non-Worker (Root / Agent Manager);
 //   - the apply-to-default control surfaces when the pick differs from the agent
 //     default and issues PUT /api/agents/:id/model-pref { backend }.
 
@@ -14,8 +14,7 @@ import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 
 type Body = Record<string, unknown>;
 let writes: Array<{ method: string; path: string; body: Body }>;
-// Per-agent config: isWorker + the stored scope backend the daemon would echo.
-let agentIsWorker: boolean;
+// The stored scope backend the daemon would echo.
 let scopeBackend: string | null;
 // Model/effort apply-to-default fixtures (P4). When set, the daemon echoes them
 // as the Thread scope and offers a matching model in /api/models.
@@ -106,7 +105,6 @@ function installStubs(): void {
       return json({
         agentId: "worker",
         backend: "native",
-        isWorker: agentIsWorker,
         config: agentConfig,
       });
     }
@@ -154,8 +152,7 @@ afterEach(async () => {
 });
 
 describe("ChatPage — Agent-Backend axis", () => {
-  test("Worker: composer shows a backend picker listing available backends with versions", async () => {
-    agentIsWorker = true;
+  test("composer shows a backend picker listing available backends with versions", async () => {
     scopeBackend = null;
     installStubs();
     const host = await render();
@@ -168,16 +165,17 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(picker?.textContent ?? "").not.toContain("codex");
   });
 
-  test("non-Worker: the backend picker is absent", async () => {
-    agentIsWorker = false;
+  test("the backend picker shows for EVERY agent (ADR-0018 — no UI Worker gate)", async () => {
+    // No isWorker flag is sent by the daemon anymore; the picker always renders.
+    // The Agent-Manager native-lock is enforced by the daemon scope-write (409),
+    // not by hiding the picker.
     scopeBackend = null;
     installStubs();
     const host = await render();
-    expect(host.querySelector('[data-testid="composer-backend-picker"]')).toBeNull();
+    expect(host.querySelector('[data-testid="composer-backend-picker"]')).not.toBeNull();
   });
 
   test("picking a backend writes Thread scope; a stored pick survives reload", async () => {
-    agentIsWorker = true;
     scopeBackend = null;
     installStubs();
     const host = await render();
@@ -209,9 +207,7 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(picker2?.value).toBe("claude-code");
   });
 
-  test("apply-model-to-default surfaces when the model pick differs and writes the agent default (P4)", async () => {
-    agentIsWorker = true;
-    scopeBackend = null;
+  test("apply-model-to-default surfaces when the model pick differs and writes the agent default (P4)", async () => {    scopeBackend = null;
     scopeModel = "openai/gpt-5"; // a runnable model, differs from the (null) default
     modelsFixture = [{ provider: "openai", modelId: "gpt-5", model: "openai/gpt-5", efforts: ["off"] }];
     installStubs();
@@ -226,9 +222,7 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(prefWrite?.body).toMatchObject({ model: "openai/gpt-5" });
   });
 
-  test("apply-effort-to-default surfaces when the effort pick differs and writes the agent default (P4)", async () => {
-    agentIsWorker = true;
-    scopeBackend = null;
+  test("apply-effort-to-default surfaces when the effort pick differs and writes the agent default (P4)", async () => {    scopeBackend = null;
     scopeModel = "openai/gpt-5";
     scopeEffort = "high";
     modelsFixture = [
@@ -246,9 +240,7 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(prefWrite?.body).toMatchObject({ effort: "high" });
   });
 
-  test("apply-to-default surfaces when the pick differs and writes the agent default (OQ-2)", async () => {
-    agentIsWorker = true;
-    scopeBackend = "claude-code"; // pick differs from the native default
+  test("apply-to-default surfaces when the pick differs and writes the agent default (OQ-2)", async () => {    scopeBackend = "claude-code"; // pick differs from the native default
     installStubs();
     const host = await render();
     const apply = host.querySelector('[data-testid="apply-backend-default"]');
@@ -261,9 +253,7 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(prefWrite?.body).toMatchObject({ backend: "claude-code" });
   });
 
-  test("apply rows are grouped, named per axis, and the button reads Update (P8/P9)", async () => {
-    agentIsWorker = true;
-    scopeBackend = "claude-code"; // backend pick differs from the native default
+  test("apply rows are grouped, named per axis, and the button reads Update (P8/P9)", async () => {    scopeBackend = "claude-code"; // backend pick differs from the native default
     scopeModel = "openai/gpt-5"; // model pick differs from the (null) default
     scopeEffort = "high"; // effort pick differs from the (null) default
     modelsFixture = [
@@ -287,9 +277,7 @@ describe("ChatPage — Agent-Backend axis", () => {
     }
   });
 
-  test("fresh conversation with a symbolic agent default and no pick shows NO apply rows", async () => {
-    agentIsWorker = true;
-    scopeBackend = null; // no per-conversation pick on any axis
+  test("fresh conversation with a symbolic agent default and no pick shows NO apply rows", async () => {    scopeBackend = null; // no per-conversation pick on any axis
     scopeModel = null;
     scopeEffort = null;
     // Symbolic agent default — resolves to the catalog head, but the user picked
@@ -306,9 +294,7 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(host.querySelector(".composer-apply-default-group")).toBeNull();
   });
 
-  test("symbolic 'latest' default renders as 'latest → <catalog head>' once a row surfaces", async () => {
-    agentIsWorker = true;
-    scopeBackend = null;
+  test("symbolic 'latest' default renders as 'latest → <catalog head>' once a row surfaces", async () => {    scopeBackend = null;
     // Symbolic model default; user picks a DIFFERENT runnable model → the model
     // apply row surfaces and shows the resolved default in its label.
     agentConfig = { model: "latest" };

@@ -21,7 +21,6 @@ function makeAgent(overrides: Partial<AgentDetail["bindings"]> = {}): AgentDetai
     domain: "test",
     layer: "bundled",
     hasFork: false,
-    isWorker: false,
     bindingCounts: { skills: 0, snippets: 0, tools: 0, mcp: 0 },
     bindings: {
       skills: ["alpha", "beta"],

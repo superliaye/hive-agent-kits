@@ -22,10 +22,6 @@ export type AgentSummary = {
   domain: string;
   layer: "bundled" | "runtime";
   hasFork: boolean;
-  // True iff a Worker Agent (not Root / Agent Manager). The composer gates the
-  // per-conversation Agent-Backend axis on this — only Workers may switch
-  // backend (ADR-0015). Daemon-supplied; the UI never hardcodes the kernel ids.
-  isWorker: boolean;
   bindingCounts: {
     skills: number;
     snippets: number;

@@ -249,13 +249,18 @@ describe("resolve — backend tier (Thread pick > user default > harness, OQ-1)"
   });
 });
 
-describe("resolve — worker-only backend invariant (authoritative guard, ADR-0015 §27)", () => {
-  test("a non-native Thread pick on a non-Worker agent is neutralized to native", () => {
-    const r = resolve({ ...base(), agentId: "root", backend: "native", threadBackend: "codex" });
+describe("resolve — agent-manager native-lock (authoritative guard, ADR-0018)", () => {
+  test("a non-native Thread pick on the Agent Manager is neutralized to native", () => {
+    const r = resolve({
+      ...base(),
+      agentId: "agent-manager",
+      backend: "native",
+      threadBackend: "codex",
+    });
     if (!("failure" in r)) expect(r.backend).toBe("native");
   });
 
-  test("a non-native user default on a non-Worker agent is neutralized to native", () => {
+  test("a non-native user default on the Agent Manager is neutralized to native", () => {
     const r = resolve({
       ...base(),
       agentId: "agent-manager",
@@ -265,9 +270,14 @@ describe("resolve — worker-only backend invariant (authoritative guard, ADR-00
     if (!("failure" in r)) expect(r.backend).toBe("native");
   });
 
-  test("a non-native harness backend on a non-Worker agent is neutralized to native", () => {
-    const r = resolve({ ...base(), agentId: "root", backend: "claude-code" });
+  test("a non-native harness backend on the Agent Manager is neutralized to native", () => {
+    const r = resolve({ ...base(), agentId: "agent-manager", backend: "claude-code" });
     if (!("failure" in r)) expect(r.backend).toBe("native");
+  });
+
+  test("Root MAY keep its non-native pick (ADR-0018 relaxes the gate to Root)", () => {
+    const r = resolve({ ...base(), agentId: "root", backend: "native", threadBackend: "codex" });
+    if (!("failure" in r)) expect(r.backend).toBe("codex");
   });
 
   test("a Worker agent keeps its non-native pick", () => {
@@ -280,22 +290,10 @@ describe("resolve — worker-only backend invariant (authoritative guard, ADR-00
     if (!("failure" in r)) expect(r.backend).toBe("codex");
   });
 
-  test("neutralization surfaces the offending backend (pure, no logger)", () => {
-    // The offender is the higher-precedence `threadBackend` (`codex`), NOT the
-    // lowest-precedence harness `backend` (`native`) — the flag must carry the
-    // value actually rejected so the call-site TRACE is accurate (P13/P14/P15).
-    const r = resolve({ ...base(), agentId: "root", backend: "native", threadBackend: "codex" });
-    expect("failure" in r).toBe(false);
-    if (!("failure" in r)) {
-      expect(r.backend).toBe("native");
-      expect(r.neutralizedBackend).toBe("codex");
-    }
-  });
-
-  test("no `neutralizedBackend` flag when nothing is neutralized", () => {
+  test("a Worker / Root agent with a non-native backend resolves to that backend (no neutralization)", () => {
     const worker = resolve({ ...base(), agentId: "worker-9", backend: "codex" });
-    if (!("failure" in worker)) expect(worker.neutralizedBackend).toBeUndefined();
-    const nativeOnRoot = resolve({ ...base(), agentId: "root", backend: "native" });
-    if (!("failure" in nativeOnRoot)) expect(nativeOnRoot.neutralizedBackend).toBeUndefined();
+    if (!("failure" in worker)) expect(worker.backend).toBe("codex");
+    const root = resolve({ ...base(), agentId: "root", backend: "claude-code" });
+    if (!("failure" in root)) expect(root.backend).toBe("claude-code");
   });
 });

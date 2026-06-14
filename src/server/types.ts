@@ -98,11 +98,6 @@ export type AgentSummaryWire = {
   domain: string;
   layer: z.infer<typeof CapabilityLayer>;
   hasFork: boolean;
-  // True iff a Worker Agent (not Root / Agent Manager). The UI gates the
-  // per-conversation Agent-Backend axis on this — only Workers may switch
-  // backend (ADR-0015 §"Backend joins the axes for Worker Agents only"). Derived
-  // daemon-side from the kernel role; the UI never hardcodes the kernel ids.
-  isWorker: boolean;
   bindingCounts: {
     skills: number;
     snippets: number;

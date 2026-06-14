@@ -160,13 +160,13 @@ export function ChatPage({
     ThinkingEffort | typeof SYMBOLIC_EFFORT_HIGHEST | null
   >(null);
   const [effortPick, setEffortPick] = useState<ThinkingEffort | null>(null);
-  // Agent-Backend axis (ADR-0015), Worker-only. `backendStatuses` is the daemon
-  // probe (which CLI backends are installed + healthy); `isWorker` gates the
-  // picker (daemon-supplied — never hardcoded ids). `backendDefault` is the
-  // agent default (saved pref, else the harness-authored backend); `backendPick`
-  // an explicit in-session choice. Same default/pick shape as model/effort.
+  // Agent-Backend axis (ADR-0015 + ADR-0018: selectable for every agent except
+  // the always-native Agent Manager, which the daemon rejects at the scope/pref
+  // write). `backendStatuses` is the daemon probe (which CLI backends are
+  // installed + healthy). `backendDefault` is the agent default (saved pref, else
+  // the harness-authored backend); `backendPick` an explicit in-session choice.
+  // Same default/pick shape as model/effort.
   const [backendStatuses, setBackendStatuses] = useState<BackendStatus[]>([]);
-  const [isWorker, setIsWorker] = useState(false);
   const [backendDefault, setBackendDefault] = useState<AgentBackend | null>(null);
   const [backendPick, setBackendPick] = useState<AgentBackend | null>(null);
 
@@ -238,7 +238,8 @@ export function ChatPage({
 
   // Offerable backends: the synthetic `native` (always available, in-process)
   // plus each installed + healthy CLI backend, labelled with its detected
-  // version. The picker is Worker-only (gated below on `isWorker`).
+  // version. The picker shows for every agent (ADR-0018); the daemon rejects a
+  // CLI pick for the always-native Agent Manager.
   const backendOptions: BackendOption[] = [
     { backend: "native", label: "native" },
     ...backendStatuses
@@ -300,8 +301,7 @@ export function ChatPage({
     // (not "none") — intentional, kept distinct from the model/effort fallback.
     // Backend is never symbolic, so the label stays the raw default.
     defaultLabel: backendDefault ?? "native",
-    enabled:
-      isWorker && backendPick !== null && backendPick !== (backendDefault ?? "native"),
+    enabled: backendPick !== null && backendPick !== (backendDefault ?? "native"),
     write: (id, v) => api.setAgentModelPref(apiConfig, id, { backend: v }),
     setDefault: (v) => setBackendDefault(v),
     testId: "apply-backend-default",
@@ -396,7 +396,6 @@ export function ChatPage({
       setAgentDefault(null);
       setEffortDefault(null);
       setBackendDefault(null);
-      setIsWorker(false);
       return;
     }
     let cancelled = false;
@@ -419,8 +418,6 @@ export function ChatPage({
             : null;
         setEffortDefault(pref.effort ?? harnessEffort);
         // Backend default: the saved pref, else the harness-authored backend.
-        // The Worker gate is daemon-supplied (no hardcoded kernel ids).
-        setIsWorker(agent.isWorker);
         const harnessBackend = isAgentBackend(agent.backend) ? agent.backend : null;
         setBackendDefault(pref.backend ?? harnessBackend);
       } catch {
@@ -428,7 +425,6 @@ export function ChatPage({
           setAgentDefault(null);
           setEffortDefault(null);
           setBackendDefault(null);
-          setIsWorker(false);
         }
       }
     })();
@@ -884,7 +880,7 @@ export function ChatPage({
               backends={backendOptions}
               selectedBackend={selectedBackend}
               onSelectBackend={(b) => void onSelectBackend(b)}
-              showBackendPicker={isWorker}
+              showBackendPicker={true}
             />
           </>
         )}

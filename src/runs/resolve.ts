@@ -34,10 +34,11 @@ import {
 
 export type ResolveInput = {
   /**
-   * The Agent this Run is for. The authoritative gate for the worker-only
-   * backend invariant (ADR-0015 §27): a non-native backend resolved for a
-   * non-Worker agent is neutralized to `native` here, regardless of how it
-   * entered the axis stores (the route 409s are fast feedback only).
+   * The Agent this Run is for. The authoritative gate for the agent-manager
+   * native-lock (ADR-0018): a non-native backend resolved for the Agent Manager
+   * is neutralized to `native` here, regardless of how it entered the axis
+   * stores (the route 409s are fast feedback only). Every other agent keeps its
+   * chosen backend.
    */
   agentId: string;
   /** Agent's harness `config.model`, when a string; else undefined. */
@@ -84,16 +85,6 @@ export type ResolveResult =
       provider: string;
       effort?: ThinkingEffort;
       backend: AgentBackend;
-      /**
-       * The non-native backend the worker-only guard (ADR-0015 §27) neutralized
-       * to `native` for a non-Worker agent — i.e. the OFFENDING `backendWinner`
-       * (the highest-precedence resolved value: Thread pick > user default >
-       * harness backend), NOT the lowest-precedence harness backend. Carried out
-       * of the PURE computation so the call site (a thin I/O edge) can emit an
-       * accurate TRACE warning without `resolve()` taking a logger dependency.
-       * Absent ⇒ not neutralized.
-       */
-      neutralizedBackend?: AgentBackend;
     }
   | { model: string; failure: GatewayFailure };
 
@@ -150,22 +141,19 @@ export function resolve(input: ResolveInput): ResolveResult {
   // effort, with the harness backend as the terminal fallback.
   const backendWinner: AgentBackend =
     input.threadBackend ?? input.userBackendDefault ?? input.backend;
-  // Authoritative worker-only guard (ADR-0015 §27): the axis stores stay dumb;
-  // `resolve()` is where the invariant is enforced. A non-native backend that
-  // reached a non-Worker agent — by any path — is neutralized to `native`. The
-  // computation stays PURE: it returns the offending backend in
-  // `neutralizedBackend` so the thin I/O edge that invokes `resolve()` can emit
-  // an accurate TRACE warning (r2-architecture-2) — no logger in the core.
-  const allowed = backendAllowedForAgent(input.agentId, backendWinner);
-  const backend: AgentBackend = allowed ? backendWinner : "native";
+  // Authoritative agent-manager carve-out (ADR-0018, superseding ADR-0015 §27's
+  // worker-only rule): the axis stores stay dumb; `resolve()` is where the
+  // invariant is enforced. A non-native backend that reached the always-native
+  // Agent Manager — by any path — is neutralized to `native`. Every other agent
+  // (including Root) keeps its chosen backend.
+  const backend: AgentBackend = backendAllowedForAgent(input.agentId, backendWinner)
+    ? backendWinner
+    : "native";
 
   return {
     model: modelResult.model,
     provider: modelResult.provider,
     ...(effort !== undefined ? { effort } : {}),
     backend,
-    // Carry the OFFENDING value (`backendWinner`), not a bare boolean, so the
-    // call site logs the backend actually rejected (P13/P14/P15).
-    ...(allowed ? {} : { neutralizedBackend: backendWinner }),
   };
 }
