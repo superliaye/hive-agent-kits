@@ -17,7 +17,12 @@ async function claudeOnPath(): Promise<boolean> {
   }
 }
 
-describe("claude-cli adapter (smoke)", () => {
+// These tests make a real `claude` CLI call — a live LLM round-trip — so they are
+// OPT-IN: the default `bun test` must stay offline + deterministic. Set HIVE_SMOKE=1
+// to run them (also requires the `claude` CLI on PATH).
+const RUN_SMOKE = process.env.HIVE_SMOKE === "1";
+
+describe.skipIf(!RUN_SMOKE)("claude-cli adapter (smoke)", () => {
   let available = false;
 
   beforeAll(async () => {

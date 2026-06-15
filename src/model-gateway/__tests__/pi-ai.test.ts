@@ -686,9 +686,12 @@ describe("resolveOAuthApiKey", () => {
   });
 });
 
-// ─── smoke test (real Anthropic call, skipped without key) ──────────────────
+// ─── smoke test (real Anthropic call) — OPT-IN via HIVE_SMOKE ────────────────
+// Makes a live Anthropic round-trip, so the default `bun test` stays offline +
+// deterministic. Set HIVE_SMOKE=1 (and ANTHROPIC_API_KEY) to run it.
+const RUN_SMOKE = process.env.HIVE_SMOKE === "1";
 
-describe("pi-ai adapter (smoke)", () => {
+describe.skipIf(!RUN_SMOKE)("pi-ai adapter (smoke)", () => {
   test("real Anthropic call emits text + usage + done(stop)", async () => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {

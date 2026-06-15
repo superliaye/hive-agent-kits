@@ -6,6 +6,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
     "test": "bun test",
+    "test:smoke": "HIVE_SMOKE=1 bun test",
     "check": "biome check",
     "check:no-float": "bun run scripts/check-no-floating-suppressions.ts",
     "format": "biome format --write",
