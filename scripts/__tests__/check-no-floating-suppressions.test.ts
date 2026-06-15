@@ -24,6 +24,13 @@ import {
   scanSrc,
 } from "../check-no-floating-suppressions.ts";
 
+// Tests that build a real TS Program parse the default lib — CPU-bound work that,
+// under a loaded machine (a live dev stack saturating the cores), gets starved well
+// past bun's 5s default and times out (~1-in-4 with the stack up). The work is
+// legitimately slow, not hung; size the timeout to it so the suite is deterministic
+// under load. Pure-string tests below keep the tight 5s default as a hang detector.
+const TS_TIMEOUT = 30_000;
+
 /** Compile a one-file program from source text and return its checker + file. */
 function compile(src: string): { checker: ts.TypeChecker; file: ts.SourceFile } {
   const dir = join(
@@ -56,20 +63,32 @@ function initType(checker: ts.TypeChecker, file: ts.SourceFile): ts.Type {
 }
 
 describe("isThenable", () => {
-  test("true for a Promise<void>-typed expression", () => {
-    const { checker, file } = compile("const x = Promise.resolve();");
-    expect(isThenable(checker, initType(checker, file))).toBe(true);
-  });
+  test(
+    "true for a Promise<void>-typed expression",
+    () => {
+      const { checker, file } = compile("const x = Promise.resolve();");
+      expect(isThenable(checker, initType(checker, file))).toBe(true);
+    },
+    TS_TIMEOUT,
+  );
 
-  test("false for a number expression", () => {
-    const { checker, file } = compile("const x = 1;");
-    expect(isThenable(checker, initType(checker, file))).toBe(false);
-  });
+  test(
+    "false for a number expression",
+    () => {
+      const { checker, file } = compile("const x = 1;");
+      expect(isThenable(checker, initType(checker, file))).toBe(false);
+    },
+    TS_TIMEOUT,
+  );
 
-  test("false for a string expression", () => {
-    const { checker, file } = compile('const x = "hi";');
-    expect(isThenable(checker, initType(checker, file))).toBe(false);
-  });
+  test(
+    "false for a string expression",
+    () => {
+      const { checker, file } = compile('const x = "hi";');
+      expect(isThenable(checker, initType(checker, file))).toBe(false);
+    },
+    TS_TIMEOUT,
+  );
 });
 
 describe("findRuleSuppressions", () => {
@@ -96,40 +115,48 @@ describe("findRuleSuppressions", () => {
 });
 
 describe("scanProgram", () => {
-  test("flags `void <promise>` but not `void <non-promise>`", () => {
-    const dir = join(tmpdir(), `hive-float-vp-${Date.now()}`, "src");
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, "frag.ts");
-    writeFileSync(
-      path,
-      ["async function p() {}", "const n = 1;", "void p();", "void n;"].join("\n"),
-    );
-    const program = buildProgram([path]);
-    const hits = scanProgram(program);
-    expect(hits.length).toBe(1);
-    expect(hits[0]?.line).toBe(3);
-    rmSync(join(tmpdir(), `hive-float-vp-${Date.now()}`), { recursive: true, force: true });
-  });
+  test(
+    "flags `void <promise>` but not `void <non-promise>`",
+    () => {
+      const dir = join(tmpdir(), `hive-float-vp-${Date.now()}`, "src");
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, "frag.ts");
+      writeFileSync(
+        path,
+        ["async function p() {}", "const n = 1;", "void p();", "void n;"].join("\n"),
+      );
+      const program = buildProgram([path]);
+      const hits = scanProgram(program);
+      expect(hits.length).toBe(1);
+      expect(hits[0]?.line).toBe(3);
+      rmSync(join(tmpdir(), `hive-float-vp-${Date.now()}`), { recursive: true, force: true });
+    },
+    TS_TIMEOUT,
+  );
 });
 
 describe("deliberate-failure smoke", () => {
-  test("a fixture with one void-promise and one rule-suppression reports exactly 2 violations", () => {
-    const root = join(tmpdir(), `hive-float-smoke-${Date.now()}`);
-    const src = join(root, "src");
-    mkdirSync(src, { recursive: true });
-    writeFileSync(
-      join(src, "bad.ts"),
-      [
-        "// biome-ignore lint/nursery/noFloatingPromises: deliberately wrong",
-        "export function bad(): void {",
-        "  void Promise.resolve();",
-        "}",
-      ].join("\n"),
-    );
-    const violations = scanSrc(src);
-    expect(violations.length).toBe(2);
-    expect(violations.some((v) => v.kind === "void-promise")).toBe(true);
-    expect(violations.some((v) => v.kind === "rule-suppression")).toBe(true);
-    rmSync(root, { recursive: true, force: true });
-  });
+  test(
+    "a fixture with one void-promise and one rule-suppression reports exactly 2 violations",
+    () => {
+      const root = join(tmpdir(), `hive-float-smoke-${Date.now()}`);
+      const src = join(root, "src");
+      mkdirSync(src, { recursive: true });
+      writeFileSync(
+        join(src, "bad.ts"),
+        [
+          "// biome-ignore lint/nursery/noFloatingPromises: deliberately wrong",
+          "export function bad(): void {",
+          "  void Promise.resolve();",
+          "}",
+        ].join("\n"),
+      );
+      const violations = scanSrc(src);
+      expect(violations.length).toBe(2);
+      expect(violations.some((v) => v.kind === "void-promise")).toBe(true);
+      expect(violations.some((v) => v.kind === "rule-suppression")).toBe(true);
+      rmSync(root, { recursive: true, force: true });
+    },
+    TS_TIMEOUT,
+  );
 });
