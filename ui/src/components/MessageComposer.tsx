@@ -6,7 +6,12 @@
 // options are only the levels the selected model supports.
 
 import { useState } from "react";
-import type { AgentBackend, AvailableModel, ThinkingEffort } from "../api.ts";
+import {
+  forwardableModels,
+  type AgentBackend,
+  type AvailableModel,
+  type ThinkingEffort,
+} from "../api.ts";
 
 // A backend option offered in the composer's backend picker: the backend id +
 // a human label (with the detected version for CLI backends). `native` is
@@ -42,7 +47,6 @@ export function MessageComposer({
   backends,
   selectedBackend,
   onSelectBackend,
-  showBackendPicker,
 }: {
   inFlight: boolean;
   onSend: (text: string) => void | Promise<void>;
@@ -60,11 +64,11 @@ export function MessageComposer({
   // Agent-Backend axis (ADR-0015 + ADR-0018: selectable for every agent except
   // the always-native Agent Manager). `backends` lists the offerable options
   // (synthetic `native` + installed CLI backends with versions); `selectedBackend`
-  // is the resolved pick. The picker renders only when `showBackendPicker` is true.
+  // is the resolved pick. The picker always renders (every Agent is backend-
+  // selectable except the always-native Agent Manager, gated daemon-side).
   backends: BackendOption[];
   selectedBackend: AgentBackend | null;
   onSelectBackend: (backend: AgentBackend) => void;
-  showBackendPicker: boolean;
 }): JSX.Element {
   const [text, setText] = useState("");
   const canSend = !inFlight && text.trim().length > 0;
@@ -83,15 +87,31 @@ export function MessageComposer({
     }
   }
 
+  const onCliBackend = selectedBackend !== null && selectedBackend !== "native";
+
+  // Constrain the model picker to the models that actually forward to the chosen
+  // backend (ADR-0018: the model is forwarded, not just labelled). On a CLI backend
+  // with none forwardable, Hive does not pick the model at all — the CLI uses its
+  // own; show that instead of a phantom, incompatible pick.
+  const modelOptions = forwardableModels(models, selectedBackend);
+  const modelManagedByCli = onCliBackend && modelOptions.length === 0;
+
   // The current selection may be the agent's harness default, which isn't
-  // necessarily a configured+routable model — show it (disabled) so the picker
-  // reflects reality and prompts the user to pick a runnable one.
-  const selectionKnown = selectedModel !== null && models.some((m) => m.model === selectedModel);
+  // necessarily a configured+routable (or backend-forwardable) model — reflect
+  // that in the picker rather than imply it is selected.
+  const selectionKnown =
+    selectedModel !== null && modelOptions.some((m) => m.model === selectedModel);
 
   // Render the effort picker only when the model exposes a real reasoning level.
   // A model whose only supported level is "off" (a non-reasoning model) gets no
   // picker — there is nothing to choose.
   const hasRealEffort = efforts.some((eff) => eff !== "off");
+
+  // Effort is the SOFT case (unlike the hard model-provider constraint above): on a
+  // CLI backend `--effort` forwards for low/medium/high/xhigh but off/minimal fall
+  // back to the CLI default, so cue it rather than hide the level.
+  const effortNotForwarded =
+    onCliBackend && (selectedEffort === "off" || selectedEffort === "minimal");
 
   function onPick(value: string): void {
     if (value === ADD_MODELS) {
@@ -116,55 +136,65 @@ export function MessageComposer({
       />
       <div className="composer-actions">
         <div className="composer-run-settings">
-          {showBackendPicker && (
-            <select
-              className="composer-backend-picker"
-              value={selectedBackend ?? ""}
-              onChange={(e) => {
-                const picked = backends.find((b) => b.backend === e.target.value);
-                if (picked) onSelectBackend(picked.backend);
-              }}
-              disabled={inFlight}
-              data-testid="composer-backend-picker"
-              aria-label="Agent backend"
-            >
-              {selectedBackend === null && (
-                <option value="" disabled>
-                  Select a backend…
-                </option>
-              )}
-              {backends.map((b) => (
-                <option key={b.backend} value={b.backend}>
-                  {b.label}
-                </option>
-              ))}
-            </select>
-          )}
           <select
-            className="composer-model-picker"
-            value={selectedModel ?? ""}
-            onChange={(e) => onPick(e.target.value)}
+            className="composer-backend-picker"
+            value={selectedBackend ?? ""}
+            onChange={(e) => {
+              const picked = backends.find((b) => b.backend === e.target.value);
+              if (picked) onSelectBackend(picked.backend);
+            }}
             disabled={inFlight}
-            data-testid="composer-model-picker"
-            aria-label="Model"
+            data-testid="composer-backend-picker"
+            aria-label="Agent backend"
           >
-            {selectedModel === null && (
+            {selectedBackend === null && (
               <option value="" disabled>
-                {models.length === 0 ? "No models configured" : "Select a model…"}
+                Select a backend…
               </option>
             )}
-            {selectedModel !== null && !selectionKnown && (
-              <option value={selectedModel} disabled>
-                {selectedModel} (unavailable)
-              </option>
-            )}
-            {models.map((m) => (
-              <option key={m.model} value={m.model}>
-                {m.label ?? m.model}
+            {backends.map((b) => (
+              <option key={b.backend} value={b.backend}>
+                {b.label}
               </option>
             ))}
-            <option value={ADD_MODELS}>+ Add models in Settings…</option>
           </select>
+          {modelManagedByCli ? (
+            <select
+              className="composer-model-picker"
+              value=""
+              disabled
+              data-testid="composer-model-picker"
+              aria-label="Model"
+            >
+              <option value="">{selectedBackend} uses its own model</option>
+            </select>
+          ) : (
+            <select
+              className="composer-model-picker"
+              value={onCliBackend && !selectionKnown ? "" : selectedModel ?? ""}
+              onChange={(e) => onPick(e.target.value)}
+              disabled={inFlight}
+              data-testid="composer-model-picker"
+              aria-label="Model"
+            >
+              {(selectedModel === null || (onCliBackend && !selectionKnown)) && (
+                <option value="" disabled>
+                  {modelOptions.length === 0 ? "No models configured" : "Select a model…"}
+                </option>
+              )}
+              {!onCliBackend && selectedModel !== null && !selectionKnown && (
+                <option value={selectedModel} disabled>
+                  {selectedModel} (unavailable)
+                </option>
+              )}
+              {modelOptions.map((m) => (
+                <option key={m.model} value={m.model}>
+                  {m.label ?? m.model}
+                </option>
+              ))}
+              <option value={ADD_MODELS}>+ Add models in Settings…</option>
+            </select>
+          )}
           {hasRealEffort && (
             <select
               className="composer-effort-picker"
@@ -209,6 +239,21 @@ export function MessageComposer({
           </button>
         )}
       </div>
+      {(modelManagedByCli || effortNotForwarded) && (
+        <div className="composer-forward-note" data-testid="composer-forward-note" role="note">
+          {modelManagedByCli && (
+            <span>
+              Add an Anthropic model in Settings to choose the model {selectedBackend} runs.
+            </span>
+          )}
+          {effortNotForwarded && (
+            <span>
+              {selectedBackend} uses its own thinking default — "{selectedEffort}" effort isn't
+              forwarded.
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

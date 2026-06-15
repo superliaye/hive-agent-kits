@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "../../../model-gateway/types.ts";
-import { buildCliInvocation, claudeModelEffort } from "../cli-invocation.ts";
+import { buildCliInvocation, claudeModelEffort, claudePermission } from "../cli-invocation.ts";
 
 const userTurn = (text: string): Message => ({ role: "user", content: [{ type: "text", text }] });
 
@@ -191,6 +191,29 @@ describe("claudeModelEffort — effort transform (intersection map, per-level gu
         effort: "high",
       }),
     ).toEqual({ model: "claude-opus-4-8", effort: "high" });
+  });
+});
+
+// ─── P1.2: the pure permission transform (Q2) ────────────────────────────────
+describe("claudePermission — permission-mode floor + allowlist projection", () => {
+  test("empty allowlist → permission-mode default, NO allowedTools (no silent widening)", () => {
+    expect(claudePermission([])).toEqual({ permissionMode: "default", allowedTools: [] });
+  });
+
+  test("['node'] → Bash(node *) with the LOAD-BEARING space", () => {
+    expect(claudePermission(["node"])).toEqual({
+      permissionMode: "default",
+      allowedTools: ["Bash(node *)"],
+    });
+  });
+
+  test("multiple commands → one Bash(<cmd> *) each, space preserved", () => {
+    const out = claudePermission(["node", "git", "ls"]);
+    expect(out).toEqual({
+      permissionMode: "default",
+      allowedTools: ["Bash(node *)", "Bash(git *)", "Bash(ls *)"],
+    });
+    expect(out.allowedTools).not.toContain("Bash(node*)");
   });
 });
 

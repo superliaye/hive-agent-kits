@@ -8,7 +8,7 @@ extends: ADR-0016
 
 ## What this records
 
-[ADR-0015](0015-selection-resolution-model.md) added the Agent-Backend axis "for Worker Agents only" — the Root Agent and the Agent Manager were both pinned `native`. With [ADR-0016](0016-cli-backend-projecting-spawn.md)'s projecting spawn built and the CLI-parity gaps closed (model/effort forwarding, the permission contract, the observed-tool audit, and the CLI prompt preamble), the Worker-only restriction now keeps a CLI backend off the **Root Agent** for no remaining technical reason. This ADR relaxes the gate.
+[ADR-0015](0015-selection-resolution-model.md) added the Agent-Backend axis "for Worker Agents only" — the Root Agent and the Agent Manager were both pinned `native`. With [ADR-0016](0016-cli-backend-projecting-spawn.md)'s projecting spawn built and the CLI-parity gaps addressed (model/effort forwarding, the permission contract, the observed-tool audit, and the CLI prompt preamble), the Worker-only restriction now keeps a CLI backend off the **Root Agent** for no remaining technical reason. This ADR relaxes the gate. Model/effort forwarding is Anthropic-direct-only — claude-code receives `--model` only for an `anthropic`-provider model and `--effort` only for the low/medium/high/xhigh intersection (off/minimal fall back to the CLI default); the composer now honestly signals the non-forwarded cases client-side rather than silently dropping the pick.
 
 ## Decision
 

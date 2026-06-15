@@ -880,7 +880,6 @@ export function ChatPage({
               backends={backendOptions}
               selectedBackend={selectedBackend}
               onSelectBackend={(b) => void onSelectBackend(b)}
-              showBackendPicker={true}
             />
           </>
         )}

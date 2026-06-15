@@ -71,6 +71,26 @@ function stripProviderPrefix(model: string): string {
   return slash === -1 ? model : model.slice(slash + 1);
 }
 
+// PURE transform from the Agent's `commandAllowlist` to the claude-code
+// permission argv contribution (P1.2, Q2): the `--permission-mode default` floor
+// (ask-on-unapproved, mirroring Hive's deny-by-default native posture) plus one
+// `--allowedTools` Bash entry per allowlist command. An empty allowlist still
+// yields the floor but NO `allowedTools` (the CLI stays at its asking default; it
+// does NOT silently widen).
+export function claudePermission(commandAllowlist: readonly string[]): {
+  permissionMode: "default";
+  allowedTools: string[];
+} {
+  return { permissionMode: "default", allowedTools: commandAllowlist.map(toBashAllowedTool) };
+}
+
+// Project one `commandAllowlist` entry to a claude `--allowedTools` Bash entry.
+// The SPACE before `*` is LOAD-BEARING — `Bash(node *)`, not `Bash(node*)` — per
+// claude's documented allow syntax (prefix matching).
+function toBashAllowedTool(command: string): string {
+  return `Bash(${command} *)`;
+}
+
 // Create a fresh CLI session, or resume the CLI's own on-disk session by id.
 export type CliInvocationMode = { kind: "create" } | { kind: "resume"; sessionId: string };
 

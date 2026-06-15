@@ -131,6 +131,21 @@ export type AvailableModel = {
   efforts: ThinkingEffort[];
 };
 
+// Which configured models actually take effect for a given Agent Backend, so a
+// UI can constrain its model picker rather than present an incoherent
+// backend+model pair (e.g. claude-code + an openai model). `native` routes every
+// model through the ModelGateway; `claude-code` forwards only an anthropic-provider
+// model via `--model` (others are ignored — the CLI runs its own); `codex` (and any
+// other CLI backend) forwards no Hive-picked model today.
+export function forwardableModels(
+  models: AvailableModel[],
+  backend: AgentBackend | null,
+): AvailableModel[] {
+  if (backend === null || backend === "native") return models;
+  if (backend === "claude-code") return models.filter((m) => m.provider === "anthropic");
+  return [];
+}
+
 // ─── Threads + Runs ────────────────────────────────────────────────────
 
 // Canonical ContentBlock lives in the daemon's model-gateway types. The UI

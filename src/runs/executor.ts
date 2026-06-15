@@ -71,6 +71,7 @@ import {
   buildCliInvocation,
   type CliInvocationMode,
   claudeModelEffort,
+  claudePermission,
 } from "./tools/cli-invocation.ts";
 import { createDefaultFsCopy, projectSkillsForCli } from "./tools/cli-skill-projection.ts";
 import { createDefaultCliSpawner } from "./tools/cli-spawn.ts";
@@ -382,6 +383,21 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       }
       const { provider, effort, backend } = resolved;
 
+      // Trace the agent-manager native-lock fail-soft (ADR-0018): resolve()
+      // neutralizes a non-native backend that reached the always-native Agent
+      // Manager to `native`. Derive the requested winner the same way the
+      // resolver does (Thread > user default > harness backend) and warn ONLY
+      // when neutralization actually fired — keeping the pure ResolveResult free
+      // of a neutralize-only field. Near-unreachable (route 409s + UI gating sit
+      // in front); a defence-in-depth breadcrumb.
+      const requestedBackend = threadBackend ?? userBackendDefault ?? agent.backend;
+      if (backend !== requestedBackend) {
+        log().warn(
+          { module: "runs/resolve", agentId, backend: requestedBackend },
+          "neutralized non-native backend for the always-native Agent Manager",
+        );
+      }
+
       // Auth lookup. ONLY the native backend authenticates through a Hive secret
       // (Fix r1-general-0). The CLI backends (claude-code/codex) authenticate via
       // their OWN login (claude login / codex OAuth), so they skip this gate
@@ -639,12 +655,12 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         : {};
     // P1.2 permission contract (claude-code only): the `--permission-mode
     // default` floor + each `commandAllowlist` entry projected to a
-    // `Bash(<cmd> *)` allowed-tool (the space before `*` is load-bearing). An
-    // empty allowlist projects no `--allowedTools` (no silent widening). codex
-    // gets neither in v1.
-    const permissionMode = backend === "claude-code" ? "default" : undefined;
-    const allowedTools =
-      backend === "claude-code" ? args.commandAllowlist.map(toBashAllowedTool) : [];
+    // `Bash(<cmd> *)` allowed-tool. A pure helper, co-located with
+    // `claudeModelEffort`; codex gets neither in v1.
+    const permission =
+      backend === "claude-code" ? claudePermission(args.commandAllowlist) : undefined;
+    const permissionMode = permission?.permissionMode;
+    const allowedTools = permission?.allowedTools ?? [];
 
     // Create-vs-resume: resume only when the Thread carries a session id for THIS
     // backend. A stale id from a different backend is ignored (create fresh).
@@ -1057,13 +1073,6 @@ export const CLI_BACKEND_PREAMBLE =
 export function cliSystemPrompt(promptBody: string): string {
   const body = bareSystemPrompt(promptBody);
   return body !== undefined ? `${CLI_BACKEND_PREAMBLE}\n\n${body}` : CLI_BACKEND_PREAMBLE;
-}
-
-// Project one `commandAllowlist` entry to a claude `--allowedTools` Bash entry
-// (P1.2, Q2). The SPACE before `*` is LOAD-BEARING — `Bash(node *)`, not
-// `Bash(node*)` — per claude's documented allow syntax.
-function toBashAllowedTool(command: string): string {
-  return `Bash(${command} *)`;
 }
 
 // Narrow a stored Thread-scope effort (a free `string | null` column) to a

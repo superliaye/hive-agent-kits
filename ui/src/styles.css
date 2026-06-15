@@ -1024,6 +1024,18 @@ pre.config {
   opacity: 0.6;
 }
 
+/* Honest cue when a CLI backend won't forward the selected model/effort
+   (non-Anthropic model, or off/minimal effort). Muted, stacked under the
+   pickers so it reads as a caveat, not an error. */
+.composer-forward-note {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-fg-muted);
+}
+
 /* Apply-to-default affordances: surface above the composer when a
    conversation pick (model / effort / backend) differs from the agent default.
    The group is a single visually-bounded block (P9) so the stacked rows read as
