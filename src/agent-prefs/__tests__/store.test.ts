@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentPrefsPersistence } from "../persistence.ts";
@@ -141,6 +141,59 @@ describe("agent-prefs store", () => {
       const reloaded = createAgentPrefsStore(new AgentPrefsPersistence(path).read());
       expect(reloaded.getModel("agent-manager")).toBe("anthropic/claude-opus-4-7");
       expect(reloaded.getEffort("agent-manager")).toBe("medium");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // ADR-0019 deleted the `native` backend; files the prior ADR-0018 effort wrote
+  // carry `backend: "native"`, which the current enum no longer admits. read()
+  // must tolerate-and-drop it (not throw) so the daemon boots against real state.
+  test("read() tolerates-and-drops a retired backend: native (no boot crash)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hive-prefs-"));
+    const path = join(dir, "agent-model-prefs.json");
+    try {
+      const legacy = {
+        version: AGENT_PREFS_FILE_VERSION,
+        prefs: {
+          "agent-manager": {
+            model: "openai-codex/gpt-5.5",
+            backend: "native",
+            updatedAt: 1730000000000,
+          },
+          root: { effort: "xhigh", backend: "native", updatedAt: 1730000000001 },
+          code: { backend: "native", updatedAt: 1730000000002 },
+        },
+      };
+      writeFileSync(path, JSON.stringify(legacy), "utf8");
+
+      const persist = new AgentPrefsPersistence(path);
+      expect(() => persist.read()).not.toThrow();
+
+      const store = createAgentPrefsStore(persist.read());
+      // The retired backend is dropped — no agent resolves to "native".
+      expect(store.getBackend("agent-manager")).toBeUndefined();
+      expect(store.getBackend("root")).toBeUndefined();
+      expect(store.getBackend("code")).toBeUndefined();
+      // The other fields survive the strip.
+      expect(store.getModel("agent-manager")).toBe("openai-codex/gpt-5.5");
+      expect(store.getEffort("root")).toBe("xhigh");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("read() preserves a valid backend pref", () => {
+    const dir = mkdtempSync(join(tmpdir(), "hive-prefs-"));
+    const path = join(dir, "agent-model-prefs.json");
+    try {
+      const file = {
+        version: AGENT_PREFS_FILE_VERSION,
+        prefs: { code: { backend: "claude-code", updatedAt: 1730000000000 } },
+      };
+      writeFileSync(path, JSON.stringify(file), "utf8");
+      const store = createAgentPrefsStore(new AgentPrefsPersistence(path).read());
+      expect(store.getBackend("code")).toBe("claude-code");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
