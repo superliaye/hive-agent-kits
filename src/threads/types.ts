@@ -3,7 +3,7 @@
 // shape end-to-end. No translation between API layer and storage.
 
 import type { AgentId, ThreadId } from "../lib/ids.ts";
-import type { ContentBlock } from "../model-gateway/types.ts";
+import type { ContentBlock } from "../lib/messages.ts";
 
 // `titleSource` records whether `title` was set automatically (the future
 // auto-title generator) or by the user. Once `manual`, an `auto` write no-ops

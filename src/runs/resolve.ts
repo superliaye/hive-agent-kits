@@ -19,10 +19,9 @@
 // tool-loop or the backend-dispatch switch. Keep this file the only place those
 // tiers live.
 
-import { backendAllowedForAgent } from "../catalog/role.ts";
 import type { AgentBackend } from "../lib/capability-types.ts";
-import type { GatewayFailure } from "../model-gateway/effect/failure.ts";
-import type { ThinkingEffort } from "../model-gateway/types.ts";
+import type { ThinkingEffort } from "../lib/effort.ts";
+import type { BackendFailure } from "./backends/stream-events.ts";
 import { resolveAgentModel } from "./resolve-model.ts";
 import {
   type EffortDefault,
@@ -33,13 +32,7 @@ import {
 } from "./symbolic.ts";
 
 export type ResolveInput = {
-  /**
-   * The Agent this Run is for. The authoritative gate for the agent-manager
-   * native-lock (ADR-0018): a non-native backend resolved for the Agent Manager
-   * is neutralized to `native` here, regardless of how it entered the axis
-   * stores (the route 409s are fast feedback only). Every other agent keeps its
-   * chosen backend.
-   */
+  /** The Agent this Run is for. */
   agentId: string;
   /** Agent's harness `config.model`, when a string; else undefined. */
   configuredModel: string | undefined;
@@ -86,7 +79,7 @@ export type ResolveResult =
       effort?: ThinkingEffort;
       backend: AgentBackend;
     }
-  | { model: string; failure: GatewayFailure };
+  | { model: string; failure: BackendFailure };
 
 // Narrow an Agent's harness `config.thinkingEffort` (an `unknown` from the open
 // config record) to a concrete `ThinkingEffort` or the symbolic "highest", or
@@ -138,17 +131,11 @@ export function resolve(input: ResolveInput): ResolveResult {
   // Backend tier (ADR-0015): Thread-scope pick > user agent default > harness-
   // authored backend. No per-Run backend override exists today (no symbolic
   // backend either — a concrete discriminator). Same precedence shape as model/
-  // effort, with the harness backend as the terminal fallback.
-  const backendWinner: AgentBackend =
-    input.threadBackend ?? input.userBackendDefault ?? input.backend;
-  // Authoritative agent-manager carve-out (ADR-0018, superseding ADR-0015 §27's
-  // worker-only rule): the axis stores stay dumb; `resolve()` is where the
-  // invariant is enforced. A non-native backend that reached the always-native
-  // Agent Manager — by any path — is neutralized to `native`. Every other agent
-  // (including Root) keeps its chosen backend.
-  const backend: AgentBackend = backendAllowedForAgent(input.agentId, backendWinner)
-    ? backendWinner
-    : "native";
+  // effort, with the harness backend as the terminal fallback. With native gone
+  // (ADR-0019, resolving ADR-0018), there is no agent-manager carve-out: the
+  // Agent Manager runs on whichever CLI/SDK backend its harness/prefs resolve to,
+  // like any other agent (its lifecycle ops go through the MCP-projected tools).
+  const backend: AgentBackend = input.threadBackend ?? input.userBackendDefault ?? input.backend;
 
   return {
     model: modelResult.model,

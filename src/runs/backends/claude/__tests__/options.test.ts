@@ -19,6 +19,7 @@ function invocation(over: Partial<BackendInvocation> = {}): BackendInvocation {
     mode: { kind: "create" },
     mcpEndpoint: "http://127.0.0.1:3117/mcp",
     signal: new AbortController().signal,
+    callbacks: { persistSession: () => {}, onToolObserved: () => {} },
     ...over,
   };
 }

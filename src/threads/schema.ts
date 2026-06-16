@@ -16,7 +16,7 @@
 
 import { sql } from "drizzle-orm";
 import { foreignKey, index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
-import type { ContentBlock } from "../model-gateway/types.ts";
+import type { ContentBlock } from "../lib/messages.ts";
 
 // `updated_at` is the sort key (most-recent-interaction first) AND is bumped
 // ONLY by `append` — no `last_interacted_at` column. The lifecycle verbs

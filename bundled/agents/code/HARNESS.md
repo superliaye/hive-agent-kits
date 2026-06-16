@@ -1,6 +1,6 @@
 ---
 agentId: code
-backend: native
+backend: claude-code
 domain: focused coding and codebase tasks
 bindings:
   skills:

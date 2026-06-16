@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { AvailableModel } from "../../model-gateway/types.ts";
 import { MODEL_FALLBACK } from "../defaults.ts";
+import type { AvailableModel } from "../model-catalog.ts";
 import { resolve } from "../resolve.ts";
 import type { RunnableCatalog } from "../symbolic.ts";
 
@@ -31,7 +31,7 @@ function base() {
     configuredEffort: undefined,
     userModelDefault: undefined,
     userEffortDefault: undefined,
-    backend: "native" as const,
+    backend: "claude-code" as const,
   };
 }
 
@@ -206,11 +206,6 @@ describe("resolve — Thread scope tier (S1, ADR-0015)", () => {
 });
 
 describe("resolve — backend passthrough", () => {
-  test("native passes through", () => {
-    const r = resolve({ ...base(), backend: "native" });
-    if (!("failure" in r)) expect(r.backend).toBe("native");
-  });
-
   test("claude-code passes through unchanged", () => {
     const r = resolve({ ...base(), backend: "claude-code" });
     if (!("failure" in r)) expect(r.backend).toBe("claude-code");
@@ -224,14 +219,14 @@ describe("resolve — backend passthrough", () => {
 
 describe("resolve — backend tier (Thread pick > user default > harness, OQ-1)", () => {
   test("Thread backend beats the harness backend", () => {
-    const r = resolve({ ...base(), backend: "native", threadBackend: "claude-code" });
+    const r = resolve({ ...base(), backend: "codex", threadBackend: "claude-code" });
     if (!("failure" in r)) expect(r.backend).toBe("claude-code");
   });
 
   test("Thread backend beats the user agent default", () => {
     const r = resolve({
       ...base(),
-      backend: "native",
+      backend: "claude-code",
       userBackendDefault: "codex",
       threadBackend: "claude-code",
     });
@@ -239,7 +234,7 @@ describe("resolve — backend tier (Thread pick > user default > harness, OQ-1)"
   });
 
   test("user agent default beats the harness backend when no Thread pick", () => {
-    const r = resolve({ ...base(), backend: "native", userBackendDefault: "codex" });
+    const r = resolve({ ...base(), backend: "claude-code", userBackendDefault: "codex" });
     if (!("failure" in r)) expect(r.backend).toBe("codex");
   });
 
@@ -249,51 +244,19 @@ describe("resolve — backend tier (Thread pick > user default > harness, OQ-1)"
   });
 });
 
-describe("resolve — agent-manager native-lock (authoritative guard, ADR-0018)", () => {
-  test("a non-native Thread pick on the Agent Manager is neutralized to native", () => {
-    const r = resolve({
-      ...base(),
-      agentId: "agent-manager",
-      backend: "native",
-      threadBackend: "codex",
-    });
-    if (!("failure" in r)) expect(r.backend).toBe("native");
-  });
-
-  test("a non-native user default on the Agent Manager is neutralized to native", () => {
-    const r = resolve({
-      ...base(),
-      agentId: "agent-manager",
-      backend: "native",
-      userBackendDefault: "claude-code",
-    });
-    if (!("failure" in r)) expect(r.backend).toBe("native");
-  });
-
-  test("a non-native harness backend on the Agent Manager is neutralized to native", () => {
-    const r = resolve({ ...base(), agentId: "agent-manager", backend: "claude-code" });
-    if (!("failure" in r)) expect(r.backend).toBe("native");
-  });
-
-  test("Root MAY keep its non-native pick (ADR-0018 relaxes the gate to Root)", () => {
-    const r = resolve({ ...base(), agentId: "root", backend: "native", threadBackend: "codex" });
+describe("resolve — no agent-manager carve-out (ADR-0019: native gone)", () => {
+  test("the Agent Manager keeps its resolved CLI backend like any other agent", () => {
+    const r = resolve({ ...base(), agentId: "agent-manager", backend: "codex" });
     if (!("failure" in r)) expect(r.backend).toBe("codex");
   });
 
-  test("a Worker agent keeps its non-native pick", () => {
+  test("a Thread pick on the Agent Manager wins (no neutralization)", () => {
     const r = resolve({
       ...base(),
-      agentId: "worker-9",
-      backend: "native",
+      agentId: "agent-manager",
+      backend: "claude-code",
       threadBackend: "codex",
     });
     if (!("failure" in r)) expect(r.backend).toBe("codex");
-  });
-
-  test("a Worker / Root agent with a non-native backend resolves to that backend (no neutralization)", () => {
-    const worker = resolve({ ...base(), agentId: "worker-9", backend: "codex" });
-    if (!("failure" in worker)) expect(worker.backend).toBe("codex");
-    const root = resolve({ ...base(), agentId: "root", backend: "claude-code" });
-    if (!("failure" in root)) expect(root.backend).toBe("claude-code");
   });
 });

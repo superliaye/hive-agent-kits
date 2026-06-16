@@ -39,7 +39,7 @@ describe("server routes — appearance (via Config)", () => {
     mkdirSync(join(bundledRoot, "agents", "root"), { recursive: true });
     writeFileSync(
       join(bundledRoot, "agents", "root", "HARNESS.md"),
-      "---\nagentId: root\nbackend: native\ndomain: root\nbindings:\n  skills: []\n  snippets: []\n  tools: []\n  mcp: []\nconfig: {}\n---\n# root\nbody\n",
+      "---\nagentId: root\nbackend: claude-code\ndomain: root\nbindings:\n  skills: []\n  snippets: []\n  tools: []\n  mcp: []\nconfig: {}\n---\n# root\nbody\n",
     );
     server = await createServer({ mode: "memory", token: TOKEN });
   });

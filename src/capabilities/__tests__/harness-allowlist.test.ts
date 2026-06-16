@@ -9,7 +9,7 @@ import { HarnessManifest } from "../schemas.ts";
 
 const base = {
   agentId: "test-agent",
-  backend: "native",
+  backend: "claude-code",
   domain: "test",
   bindings: { skills: [], snippets: [], tools: ["run_shell"], mcp: [] },
   config: {},

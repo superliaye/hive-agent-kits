@@ -4,11 +4,11 @@
 
 // AgentBackend ids the daemon knows. Mirrors the daemon's `AgentBackend` Zod
 // enum (src/lib/capability-types.ts); the UI is a separate Vite bundle, so this
-// literal is kept in sync by hand. `native` is the in-process loop; the other
-// two are CLI-driven backends a Worker agent may switch to.
-export type AgentBackend = "native" | "claude-code" | "codex";
+// literal is kept in sync by hand. Both are vendor-SDK backends (ADR-0019 dropped
+// the native in-process loop).
+export type AgentBackend = "claude-code" | "codex";
 
-const AGENT_BACKENDS: readonly AgentBackend[] = ["native", "claude-code", "codex"];
+const AGENT_BACKENDS: readonly AgentBackend[] = ["claude-code", "codex"];
 
 // Narrow an `unknown` (e.g. a stored scope backend or an agent's harness
 // `backend`) to an AgentBackend, cast-free.
@@ -133,26 +133,26 @@ export type AvailableModel = {
 
 // Which configured models actually take effect for a given Agent Backend, so a
 // UI can constrain its model picker rather than present an incoherent
-// backend+model pair (e.g. claude-code + an openai model). `native` routes every
-// model through the ModelGateway; `claude-code` forwards only an anthropic-provider
-// model via `--model` (others are ignored — the CLI runs its own); `codex` (and any
-// other CLI backend) forwards no Hive-picked model today.
+// backend+model pair (e.g. claude-code + an openai model). Each vendor SDK is
+// scoped to its own provider's models: `claude-code` forwards anthropic models;
+// `codex` forwards openai-codex models. A null backend (unresolved) shows all.
 export function forwardableModels(
   models: AvailableModel[],
   backend: AgentBackend | null,
 ): AvailableModel[] {
-  if (backend === null || backend === "native") return models;
+  if (backend === null) return models;
   if (backend === "claude-code") return models.filter((m) => m.provider === "anthropic");
+  if (backend === "codex") return models.filter((m) => m.provider === "openai-codex");
   return [];
 }
 
 // ─── Threads + Runs ────────────────────────────────────────────────────
 
-// Canonical ContentBlock lives in the daemon's model-gateway types. The UI
-// imports it directly (rather than mirroring) so a new block kind added on
-// the server surfaces as a TypeScript error in the UI's discriminated
-// `renderBlock` switches — no silent drift.
-import type { ContentBlock } from "../../src/model-gateway/types.ts";
+// Canonical ContentBlock lives in the daemon's lib/messages. The UI imports it
+// directly (rather than mirroring) so a new block kind added on the server
+// surfaces as a TypeScript error in the UI's discriminated `renderBlock`
+// switches — no silent drift.
+import type { ContentBlock } from "../../src/lib/messages.ts";
 import type { Preferences } from "./theming/index.ts";
 export type { ContentBlock };
 

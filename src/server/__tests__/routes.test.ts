@@ -23,7 +23,7 @@ function harness(agentId: string, withSkill = "alpha", commandAllowlist?: string
       : "";
   return `---
 agentId: ${agentId}
-backend: native
+backend: claude-code
 domain: ${agentId} domain
 bindings:
   skills:
@@ -572,7 +572,7 @@ describe("server routes", () => {
     expect((await cleared.json()) as Record<string, unknown>).toMatchObject({ backend: null });
   });
 
-  test("a non-native backend scope write for the Agent Manager is rejected (ADR-0018)", async () => {
+  test("the Agent Manager accepts a CLI backend scope (ADR-0019: no native carve-out)", async () => {
     const id = await createThread("agent-manager");
     const res = await server.app.fetch(
       authed(`/api/threads/${id}/scope`, {
@@ -581,16 +581,11 @@ describe("server routes", () => {
         body: JSON.stringify({ backend: "claude-code" }),
       }),
     );
-    expect(res.status).toBe(409);
-    expect((await res.json()) as { reason?: string }).toMatchObject({
-      reason: "agent_manager_native",
-    });
-    // The scope stays unset — the rejected write never landed.
-    const get = await server.app.fetch(authed(`/api/threads/${id}/scope`));
-    expect((await get.json()) as Record<string, unknown>).toMatchObject({ backend: null });
+    expect(res.status).toBe(200);
+    expect((await res.json()) as Record<string, unknown>).toMatchObject({ backend: "claude-code" });
   });
 
-  test("Root MAY pick a non-native backend scope (ADR-0018 relaxes the gate to Root)", async () => {
+  test("Root picks a CLI backend scope", async () => {
     const id = await createThread("root");
     const res = await server.app.fetch(
       authed(`/api/threads/${id}/scope`, {
@@ -603,20 +598,7 @@ describe("server routes", () => {
     expect((await res.json()) as Record<string, unknown>).toMatchObject({ backend: "claude-code" });
   });
 
-  test("native backend scope is allowed for the Agent Manager", async () => {
-    const id = await createThread("agent-manager");
-    const res = await server.app.fetch(
-      authed(`/api/threads/${id}/scope`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ backend: "native" }),
-      }),
-    );
-    expect(res.status).toBe(200);
-    expect((await res.json()) as Record<string, unknown>).toMatchObject({ backend: "native" });
-  });
-
-  test("apply-to-default carries backend for any agent; rejected only for the Agent Manager (ADR-0018)", async () => {
+  test("apply-to-default carries a backend for EVERY agent incl. the Agent Manager (ADR-0019)", async () => {
     // Worker: backend default round-trips.
     const put = await server.app.fetch(
       authed("/api/agents/gated/model-pref", {
@@ -630,7 +612,7 @@ describe("server routes", () => {
     const get = await server.app.fetch(authed("/api/agents/gated/model-pref"));
     expect((await get.json()) as Record<string, unknown>).toMatchObject({ backend: "codex" });
 
-    // Root MAY now have a non-native backend default (ADR-0018).
+    // Root has a CLI backend default.
     const rootPut = await server.app.fetch(
       authed("/api/agents/root/model-pref", {
         method: "PUT",
@@ -640,18 +622,16 @@ describe("server routes", () => {
     );
     expect(rootPut.status).toBe(200);
 
-    // The Agent Manager stays native-locked: a non-native backend default is rejected.
-    const rejected = await server.app.fetch(
+    // The Agent Manager now accepts a CLI backend default too (no carve-out).
+    const am = await server.app.fetch(
       authed("/api/agents/agent-manager/model-pref", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ backend: "codex" }),
       }),
     );
-    expect(rejected.status).toBe(409);
-    expect((await rejected.json()) as { reason?: string }).toMatchObject({
-      reason: "agent_manager_native",
-    });
+    expect(am.status).toBe(200);
+    expect((await am.json()) as Record<string, unknown>).toMatchObject({ backend: "codex" });
   });
 
   test("apply-to-default with backend records the axis in the agent_pref.set audit row (OQ-2)", async () => {

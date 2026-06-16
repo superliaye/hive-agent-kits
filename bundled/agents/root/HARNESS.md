@@ -1,6 +1,6 @@
 ---
 agentId: root
-backend: native
+backend: claude-code
 domain: orchestration and direct task handling
 bindings:
   skills:

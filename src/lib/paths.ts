@@ -80,6 +80,15 @@ export const runtime = {
     join(runtimeRoot(), "agents", id, "cli-projection", runId),
   projectedCliSkillsDir: (id: string, runId: string) =>
     join(runtimeRoot(), "agents", id, "cli-projection", runId, ".claude", "skills"),
+  // Per-Run skill projection for the SDK backends (vendor-sdk runtime). The
+  // Claude `plugins` dir is a per-Run Hive-owned root; skills land under
+  // `<root>/skills/<name>/` and Claude loads them via `plugins:[{type:'local',
+  // path:<root>}]` (isolated regardless of cwd). Keyed by runId so concurrent
+  // Runs never race; lives under the Hive runtime tier, never inside the cwd.
+  backendPluginRoot: (id: string, runId: string) =>
+    join(runtimeRoot(), "agents", id, "skill-projection", runId),
+  backendPluginSkillsDir: (id: string, runId: string) =>
+    join(runtimeRoot(), "agents", id, "skill-projection", runId, "skills"),
 };
 
 // Files that live only in the runtime tier.

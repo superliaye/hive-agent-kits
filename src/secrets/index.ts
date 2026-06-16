@@ -18,8 +18,8 @@
 // service via `SecretsLive` + a `ManagedRuntime`.
 
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
+import type { AuthInput } from "../lib/auth.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
-import type { AuthInput } from "../model-gateway/types.ts";
 import type { ConfiguredProvider, SecretEntry, SecretEvents } from "./types.ts";
 
 // The legacy `Secrets` surface: `SecretsSvc` minus the Effect-native typed-error

@@ -133,9 +133,10 @@ export type WireEvent = {
 
 // ─── Threads + Runs (Part 4a) ─────────────────────────────────────────────
 
+import { EFFORT_ORDER } from "../lib/effort.ts";
 // Wire ContentBlock — Zod-validated at the HTTP boundary. The shape *is*
-// the canonical `ContentBlock` from model-gateway/types.ts; the schema
-// validates inbound JSON against that single source of truth.
+// the canonical `ContentBlock` from lib/messages.ts; the schema validates
+// inbound JSON against that single source of truth.
 // Per AGENTS.md "Zod at every external boundary".
 //
 // `tool_result` has a recursive `content` field (string or nested
@@ -145,8 +146,7 @@ export type WireEvent = {
 // `z.ZodType<T>` annotations fights us on recursive unions; the cast on
 // the lazy wrapper says "this schema parses `unknown` and outputs
 // ContentBlock" — true at runtime.
-import type { ContentBlock as DaemonContentBlock } from "../model-gateway/types.ts";
-import { EFFORT_ORDER } from "../model-gateway/types.ts";
+import type { ContentBlock as DaemonContentBlock } from "../lib/messages.ts";
 
 const ContentBlockSchema: z.ZodType<DaemonContentBlock> = z.lazy(
   () => ContentBlockUnion,

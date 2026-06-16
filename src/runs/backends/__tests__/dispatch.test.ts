@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { Stream } from "effect";
 import { AgentId, RunId, ThreadId } from "../../../lib/ids.ts";
-import { createClaudeAdapter } from "../claude/adapter.ts";
-import { createCodexAdapter } from "../codex/adapter.ts";
-import { dispatch } from "../dispatch.ts";
+import type { RunEvent } from "../../types.ts";
+import { type BackendAdapters, dispatch } from "../dispatch.ts";
 import type { BackendInvocation } from "../invocation.ts";
+import type { BackendRun } from "../port.ts";
 
 function invocation(backend: "claude-code" | "codex"): BackendInvocation {
   return {
@@ -22,49 +22,62 @@ function invocation(backend: "claude-code" | "codex"): BackendInvocation {
     mode: { kind: "create" },
     mcpEndpoint: "http://127.0.0.1:3117/mcp",
     signal: new AbortController().signal,
+    callbacks: { persistSession: () => {}, onToolObserved: () => {} },
   };
 }
 
-describe("backend dispatch", () => {
-  const adapters = {
-    "claude-code": createClaudeAdapter({ now: () => 1 }),
-    codex: createCodexAdapter({ now: () => 1 }),
+// A fake BackendRun tagged with which adapter ran, so dispatch routing is
+// observable. (The real adapters spawn vendor SDKs — exercised live elsewhere.)
+function tagged(tag: string): BackendRun {
+  return {
+    run: (inv) => {
+      const completed: RunEvent = {
+        type: "run.completed",
+        runId: inv.runId,
+        finishReason: "stop",
+        finalMessage: {
+          id: crypto.randomUUID(),
+          threadId: inv.threadId,
+          idx: 0,
+          role: "assistant",
+          content: [{ type: "text", text: tag }],
+          createdAt: 1,
+        },
+        ts: 1,
+      };
+      return Stream.fromIterable([completed]) as ReturnType<BackendRun["run"]>;
+    },
   };
+}
 
-  test("claude-code id routes to the Claude adapter and yields run.completed", async () => {
-    const events = await collect(dispatch(adapters, invocation("claude-code")));
-    expect(events.map((e) => e.type)).toEqual(["run.completed"]);
-  });
-
-  test("codex id routes to the Codex adapter and yields run.completed", async () => {
-    const events = await collect(dispatch(adapters, invocation("codex")));
-    expect(events.map((e) => e.type)).toEqual(["run.completed"]);
-  });
-
-  test("the routed completion carries the dispatched backend's stub text", async () => {
-    const claude = await collect(dispatch(adapters, invocation("claude-code")));
-    const codex = await collect(dispatch(adapters, invocation("codex")));
-    const claudeText = textOf(claude);
-    const codexText = textOf(codex);
-    expect(claudeText).toContain("claude");
-    expect(codexText).toContain("codex");
-  });
-});
-
-async function collect<A>(stream: Stream.Stream<A, unknown>): Promise<A[]> {
-  const out: A[] = [];
-  for await (const a of Stream.toAsyncIterable(stream as Stream.Stream<A, never>)) out.push(a);
+async function collect(stream: ReturnType<BackendRun["run"]>): Promise<RunEvent[]> {
+  const out: RunEvent[] = [];
+  for await (const a of Stream.toAsyncIterable(stream as Stream.Stream<RunEvent, never>))
+    out.push(a);
   return out;
 }
 
-function textOf(events: Array<{ type: string }>): string {
-  const completed = events.find((e) => e.type === "run.completed") as
-    | { finalMessage: { content: Array<{ type: string; text?: string }> } }
-    | undefined;
-  return (
-    completed?.finalMessage.content
-      .filter((b): b is { type: "text"; text: string } => b.type === "text")
-      .map((b) => b.text)
-      .join("") ?? ""
-  );
+function textOf(events: RunEvent[]): string {
+  const c = events.find((e) => e.type === "run.completed");
+  if (c?.type !== "run.completed") return "";
+  return c.finalMessage.content
+    .filter((b): b is { type: "text"; text: string } => b.type === "text")
+    .map((b) => b.text)
+    .join("");
 }
+
+describe("backend dispatch", () => {
+  const adapters: BackendAdapters = { "claude-code": tagged("claude"), codex: tagged("codex") };
+
+  test("claude-code id routes to the Claude adapter", async () => {
+    const events = await collect(dispatch(adapters, invocation("claude-code")));
+    expect(events.map((e) => e.type)).toEqual(["run.completed"]);
+    expect(textOf(events)).toBe("claude");
+  });
+
+  test("codex id routes to the Codex adapter", async () => {
+    const events = await collect(dispatch(adapters, invocation("codex")));
+    expect(events.map((e) => e.type)).toEqual(["run.completed"]);
+    expect(textOf(events)).toBe("codex");
+  });
+});

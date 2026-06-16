@@ -23,18 +23,15 @@ import type { BackendRun } from "../port.ts";
 import type { BackendErrorCode, BackendStreamEvent } from "../stream-events.ts";
 import { buildClaudeOptions } from "./options.ts";
 
-// Side-effect callbacks the adapter discharges at its boundary (the executor /
-// composition root provides them) — session persistence, skill projection, and
-// the audit tool-observed emit (REFS only, ADR-0004).
+// Construction-time deps the adapter discharges at its boundary. Per-Run
+// session persistence + audit tool-observed are on the invocation's `callbacks`
+// (the executor owns those); skill projection + the Phase-0 escape hatch are
+// composition-root construction concerns.
 export type ClaudeAdapterDeps = {
   /** Project bound skills to a per-Run dir, returning the plugin path (or none). */
   projectSkills?: (invocation: BackendInvocation) => Promise<string | undefined>;
   /** Best-effort cleanup of a per-Run projection dir after the Run ends. */
   cleanupSkills?: (invocation: BackendInvocation) => void;
-  /** Persist the SDK session id after a create turn (resume next turn). */
-  persistSession?: (threadId: string, sessionId: string) => void;
-  /** Audit: a tool the SDK ran (name + isError refs only). */
-  onToolObserved?: (tool: string, isError: boolean) => void;
   /** Escape hatch from Phase 0. */
   pathToClaudeCodeExecutable?: string;
   now?: () => number;
@@ -123,8 +120,8 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): BackendRun {
           try {
             for await (const message of q) {
               if (message.type === "system" && message.subtype === "init") {
-                if (mode.kind === "create" && deps.persistSession) {
-                  deps.persistSession(threadId, message.session_id);
+                if (mode.kind === "create") {
+                  invocation.callbacks.persistSession(message.session_id);
                 }
                 continue;
               }
@@ -164,7 +161,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): BackendRun {
                       },
                     };
                     blockIndex += 1;
-                    deps.onToolObserved?.(block.name, false);
+                    invocation.callbacks.onToolObserved(block.name, false);
                   }
                 }
                 continue;
@@ -177,7 +174,7 @@ export function createClaudeAdapter(deps: ClaudeAdapterDeps = {}): BackendRun {
                   for (const block of content) {
                     if (block.type === "tool_result") {
                       const name = toolNames.get(block.tool_use_id);
-                      if (name && block.is_error) deps.onToolObserved?.(name, true);
+                      if (name && block.is_error) invocation.callbacks.onToolObserved(name, true);
                     }
                   }
                 }

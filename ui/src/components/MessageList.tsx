@@ -121,7 +121,9 @@ function renderBlock(b: ContentBlock, i: number): JSX.Element | null {
         <pre className="block-tool-result-body">
           {typeof b.content === "string"
             ? b.content
-            : b.content.map((c) => (c.type === "text" ? c.text : `[${c.type} block]`)).join("\n")}
+            : b.content
+                .map((c: ContentBlock) => (c.type === "text" ? c.text : `[${c.type} block]`))
+                .join("\n")}
         </pre>
       </div>
     );

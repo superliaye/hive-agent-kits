@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { orderByRecency } from "../../model-gateway/index.ts";
-import type { AvailableModel } from "../../model-gateway/types.ts";
+import type { AvailableModel } from "../model-catalog.ts";
+import { orderByRecency } from "../model-catalog.ts";
 import {
   isSymbolicEffort,
   isSymbolicModel,
@@ -70,13 +70,13 @@ describe('resolveLatestModel — "latest" picks the top of the runnable catalog'
 });
 
 describe("runnableCatalog — single shared credentialed ∩ routable + ordered helper", () => {
-  function gateway(byProvider: Record<string, AvailableModel[]>) {
-    return { listModels: (p: string) => byProvider[p] ?? [] };
+  function lister(byProvider: Record<string, AvailableModel[]>) {
+    return (p: string) => byProvider[p] ?? [];
   }
 
   test("intersects credentialed with routable (a credentialed-but-unroutable provider drops out)", () => {
     const secrets = { list: () => [{ provider: "anthropic" }, { provider: "not-routable" }] };
-    const gw = gateway({ anthropic: [model("anthropic/claude-opus-4-7")] });
+    const gw = lister({ anthropic: [model("anthropic/claude-opus-4-7")] });
     const cat = runnableCatalog(secrets, gw);
     expect(cat.models.map((m) => m.model)).toEqual(["anthropic/claude-opus-4-7"]);
   });
@@ -85,7 +85,7 @@ describe("runnableCatalog — single shared credentialed ∩ routable + ordered 
     // openai-codex listed FIRST in secrets, but anthropic outranks it by
     // PROVIDER_PREFERENCE, so anthropic's models come first regardless of id.
     const secrets = { list: () => [{ provider: "openai-codex" }, { provider: "anthropic" }] };
-    const gw = gateway({
+    const gw = lister({
       "openai-codex": [model("openai-codex/gpt-5.9"), model("openai-codex/gpt-5.10")],
       anthropic: [model("anthropic/claude-opus-4-7")],
     });
@@ -99,7 +99,7 @@ describe("runnableCatalog — single shared credentialed ∩ routable + ordered 
 
   test("with only openai-codex credentialed, latest is its newest (finding #3 case)", () => {
     const secrets = { list: () => [{ provider: "openai-codex" }] };
-    const gw = gateway({
+    const gw = lister({
       "openai-codex": [model("openai-codex/gpt-5.4-mini"), model("openai-codex/gpt-5.10")],
     });
     const cat = runnableCatalog(secrets, gw);
@@ -107,7 +107,7 @@ describe("runnableCatalog — single shared credentialed ∩ routable + ordered 
   });
 
   test("empty when nothing is credentialed", () => {
-    expect(runnableCatalog({ list: () => [] }, gateway({})).models).toEqual([]);
+    expect(runnableCatalog({ list: () => [] }, lister({})).models).toEqual([]);
   });
 
   test("PROVIDER_PREFERENCE prefers anthropic over openai-codex", () => {
@@ -120,7 +120,7 @@ describe("runnableCatalog — single shared credentialed ∩ routable + ordered 
     // Both providers are absent from PROVIDER_PREFERENCE (equal rank). Their
     // cross-provider order must be self-contained (localeCompare), independent
     // of the order secrets.list() hands them in.
-    const gw = gateway({
+    const gw = lister({
       zebra: [model("zebra/m1")],
       alpha: [model("alpha/m1")],
     });

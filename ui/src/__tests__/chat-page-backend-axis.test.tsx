@@ -104,7 +104,9 @@ function installStubs(): void {
     if (method === "GET" && parts[1] === "agents") {
       return json({
         agentId: "worker",
-        backend: "native",
+        // The harness default backend — kept DISTINCT from the "claude-code" pick
+        // the apply-to-default tests use, so the pick differs from the default.
+        backend: "codex",
         config: agentConfig,
       });
     }
@@ -158,9 +160,8 @@ describe("ChatPage — Agent-Backend axis", () => {
     const host = await render();
     const picker = host.querySelector('[data-testid="composer-backend-picker"]');
     expect(picker).not.toBeNull();
-    // native is always offered; claude-code shows its version; codex (not
-    // installed) is NOT offered.
-    expect(picker?.textContent).toContain("native");
+    // claude-code (installed) shows its version; codex (not installed) is NOT
+    // offered. (ADR-0019 dropped the synthetic native backend.)
     expect(picker?.textContent).toContain("claude-code 2.0.13");
     expect(picker?.textContent ?? "").not.toContain("codex");
   });
@@ -240,7 +241,7 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(prefWrite?.body).toMatchObject({ effort: "high" });
   });
 
-  test("apply-to-default surfaces when the pick differs and writes the agent default (OQ-2)", async () => {    scopeBackend = "claude-code"; // pick differs from the native default
+  test("apply-to-default surfaces when the pick differs and writes the agent default (OQ-2)", async () => {    scopeBackend = "claude-code"; // pick differs from the agent default
     installStubs();
     const host = await render();
     const apply = host.querySelector('[data-testid="apply-backend-default"]');
@@ -253,7 +254,7 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(prefWrite?.body).toMatchObject({ backend: "claude-code" });
   });
 
-  test("apply rows are grouped, named per axis, and the button reads Update (P8/P9)", async () => {    scopeBackend = "claude-code"; // backend pick differs from the native default
+  test("apply rows are grouped, named per axis, and the button reads Update (P8/P9)", async () => {    scopeBackend = "claude-code"; // backend pick differs from the agent default
     scopeModel = "openai/gpt-5"; // model pick differs from the (null) default
     scopeEffort = "high"; // effort pick differs from the (null) default
     modelsFixture = [

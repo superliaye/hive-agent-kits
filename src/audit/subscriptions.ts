@@ -12,9 +12,8 @@ import type { Catalog } from "../catalog/index.ts";
 import type { CatalogEvents } from "../catalog/types.ts";
 import type { Config, ConfigEvents } from "../config/types.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
-import type { ModelGateway } from "../model-gateway/index.ts";
 import type { RunExecutor } from "../runs/index.ts";
-import type { BackendEvents, PermissionEvents, RunModuleEvents } from "../runs/types.ts";
+import type { BackendEvents, RunModuleEvents } from "../runs/types.ts";
 import type { SecretEvents } from "../secrets/types.ts";
 import type { ThreadEvents } from "../threads/index.ts";
 import type { AuditSvc } from "./effect/audit-live.ts";
@@ -22,7 +21,6 @@ import type { Normalizer } from "./types.ts";
 
 export type AuditSources<S extends Record<string, unknown> = Record<string, unknown>> = {
   config?: Config<S>;
-  gateway?: ModelGateway;
   registry?: Registry;
   catalog?: Catalog;
   // Consumer-owned port: only the event stream is read here (audit attaches to
@@ -37,13 +35,9 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   // (manual archive/rename, mark-unread, delete) flow here; auto-archive and
   // auto-title are system-initiated → trace, not audit.
   threads?: { events: TypedEmitter<ThreadEvents> };
-  // Dedicated `permission` source (ADR-0004, Q4). Consumer-owned port: only the
-  // event stream is read here. Satisfied by the Run executor's
-  // `permissionEvents` emitter (separate from its `events`/run source).
-  permission?: { events: TypedEmitter<PermissionEvents> };
-  // Dedicated `backend` source: the CLI-spawn audit. Consumer-owned port: only
-  // the event stream is read here. Satisfied by the Run executor's
-  // `backendEvents` emitter (separate from `events`/`permissionEvents`).
+  // Dedicated `backend` source: the SDK-backend run + tool-observed audit.
+  // Consumer-owned port: only the event stream is read here. Satisfied by the
+  // Run executor's `backendEvents` emitter (separate from `events`/run source).
   backend?: { events: TypedEmitter<BackendEvents> };
   // Same dedicated `backend` source, second emitter: the user-triggered
   // delegated CLI-update action. Satisfied by the BackendProbe service's
@@ -193,10 +187,9 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
     disposers.push(audit.attach("config", sources.config.events, configNormalizer<S>()));
   }
 
-  // gateway and registry intentionally not attached: their events are
-  // system-driven (startup / hot-reload), so they belong in the trace log,
-  // not the audit log. See "Audit vs trace" in ADR-0004.
-  void sources.gateway;
+  // registry intentionally not attached: its events are system-driven
+  // (startup / hot-reload), so they belong in the trace log, not the audit log.
+  // See "Audit vs trace" in ADR-0004.
   void sources.registry;
 
   if (sources.catalog) {
@@ -217,10 +210,6 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
 
   if (sources.runs) {
     disposers.push(audit.attach("run", sources.runs.events, runsNormalizer));
-  }
-
-  if (sources.permission) {
-    disposers.push(audit.attach("permission", sources.permission.events, permissionNormalizer));
   }
 
   if (sources.backend) {
@@ -263,84 +252,22 @@ const runsNormalizer: Normalizer<RunModuleEvents> = {
     run_id: event.runId,
     payload: {},
   }),
-  // Tool dispatch on the `run` source. Payload carries REFS only — tool name,
-  // tool_use_id, the command NAME (a ref), and a redacted arg count. Never raw
-  // arg strings, never stdout (ADR-0004:141, Q6).
-  "run.tool_use.requested": (event) => ({
-    event_type: "run.tool_use.requested",
-    run_id: event.runId,
-    agent_id: event.agentId,
-    payload: {
-      tool: event.tool,
-      tool_use_id: event.toolUseId,
-      ...(event.command !== undefined && { command: event.command }),
-      ...(event.path !== undefined && { path: event.path }),
-      ...(event.argSummary !== undefined && { arg_count: event.argSummary.count }),
-      ...(event.editSummary !== undefined && {
-        old_len: event.editSummary.oldLen,
-        new_len: event.editSummary.newLen,
-      }),
-    },
-  }),
-  "run.tool_use.executed": (event) => ({
-    event_type: "run.tool_use.executed",
-    run_id: event.runId,
-    agent_id: event.agentId,
-    payload: { tool: event.tool, tool_use_id: event.toolUseId, is_error: event.isError },
-  }),
-  // Skill load (N3) on the `run` source. The skill NAME is a ref; the body is
-  // never in the payload (ADR-0004:141 redaction).
-  "run.skill_loaded": (event) => ({
-    event_type: "run.skill_loaded",
-    run_id: event.runId,
-    agent_id: event.agentId,
-    payload: { skill: event.skill },
-  }),
 };
 
-// Permission: the dedicated `permission` AuditSource (Q4). Payloads carry the
-// command NAME (a ref) + the decision — never raw args. The full G2 Permission
-// System is unbuilt; F1 carves this normalizer + source now.
-const permissionNormalizer: Normalizer<PermissionEvents> = {
-  "permission.requested": (event) => ({
-    event_type: "permission.requested",
-    run_id: event.runId,
-    agent_id: event.agentId,
-    payload: { tool: event.tool, ...(event.command !== undefined && { command: event.command }) },
-  }),
-  "permission.decided": (event) => ({
-    event_type: "permission.decided",
-    run_id: event.runId,
-    agent_id: event.agentId,
-    payload: {
-      tool: event.tool,
-      ...(event.command !== undefined && { command: event.command }),
-      outcome: event.outcome,
-      ...(event.reason !== undefined && { reason: event.reason }),
-    },
-  }),
-};
-
-// Backend: the dedicated `backend` AuditSource — a CLI-backed Run's spawn.
-// Payload carries the binary NAME (a ref) + an arg COUNT + a stdin presence
-// flag. Never the prompt, the systemPrompt, the flags' values, or auth — same
-// redaction posture as `run.tool_use.requested`.
+// Backend: the dedicated `backend` AuditSource — an SDK-backed Run's dispatch.
+// Payload carries the backend kind + the resolved model (a non-secret ref). The
+// SDK owns argv now, so there is no binary/args to record.
 const backendNormalizer: Normalizer<BackendEvents> = {
-  "backend.spawn.requested": (event) => ({
-    event_type: "backend.spawn.requested",
+  "backend.run.started": (event) => ({
+    event_type: "backend.run.started",
     run_id: event.runId,
     agent_id: event.agentId,
-    payload: {
-      backend: event.backend,
-      binary: event.binary,
-      arg_count: event.argSummary.count,
-      has_stdin: event.hasStdin,
-    },
+    payload: { backend: event.backend, model: event.model },
   }),
-  // A tool the CLI backend ran, recovered from its event stream (P1.3, Q3).
-  // OBSERVED-after-the-fact (the CLI owns the gate) — NOT a permission decision.
-  // Payload carries the tool NAME + the `is_error` flag (both refs), never
-  // args/output. `is_error` mirrors `run.tool_use.executed`'s redaction posture.
+  // A tool the SDK backend ran, observed from its event stream. OBSERVED-after-
+  // the-fact (the SDK runs under its own bypass governance) — NOT a permission
+  // decision. Payload carries the tool NAME + the `is_error` flag (both refs),
+  // never args/output (ADR-0004 redaction).
   "backend.tool_use.observed": (event) => ({
     event_type: "backend.tool_use.observed",
     run_id: event.runId,

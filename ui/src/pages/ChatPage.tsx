@@ -236,28 +236,24 @@ export function ChatPage({
       ? `${effortDefault} → ${resolvedDefaultEffort}`
       : (effortDefault ?? "none");
 
-  // Offerable backends: the synthetic `native` (always available, in-process)
-  // plus each installed + healthy CLI backend, labelled with its detected
-  // version. The picker shows for every agent (ADR-0018); the daemon rejects a
-  // CLI pick for the always-native Agent Manager.
-  const backendOptions: BackendOption[] = [
-    { backend: "native", label: "native" },
-    ...backendStatuses
-      .filter((s) => s.installed && s.reason === "ok")
-      .map<BackendOption>((s) => ({
-        backend: s.backend,
-        label: s.version ? `${s.backend} ${s.version}` : s.backend,
-      })),
-  ];
+  // Offerable backends: each installed + healthy vendor-SDK backend, labelled
+  // with its detected version (ADR-0019 dropped the synthetic native backend).
+  // The picker shows for every agent.
+  const backendOptions: BackendOption[] = backendStatuses
+    .filter((s) => s.installed && s.reason === "ok")
+    .map<BackendOption>((s) => ({
+      backend: s.backend,
+      label: s.version ? `${s.backend} ${s.version}` : s.backend,
+    }));
 
   // Effective backend selection: the in-session pick, else the agent default if
-  // offerable, else `native` (always available). Mirrors the model tier.
+  // offerable, else null (no Hive-side pick — the resolved harness backend runs).
   const selectedBackend: AgentBackend | null = resolveAxis<AgentBackend>({
     pick: backendPick,
     pickValid: () => true,
     def: backendDefault,
     defOfferable: (b) => backendOptions.some((o) => o.backend === b),
-    fallback: "native",
+    fallback: null,
   });
 
   // Apply-to-default affordances (ADR-0015:22, P8/P9): all three axes
@@ -297,11 +293,11 @@ export function ChatPage({
     axis: "backend",
     noun: "backend",
     value: selectedBackend,
-    // Backend always resolves to native, so the default fallback is native
-    // (not "none") — intentional, kept distinct from the model/effort fallback.
-    // Backend is never symbolic, so the label stays the raw default.
-    defaultLabel: backendDefault ?? "native",
-    enabled: backendPick !== null && backendPick !== (backendDefault ?? "native"),
+    // No synthetic native backend (ADR-0019): the default may be unset. The label
+    // falls back to a neutral marker; apply is enabled only when a concrete pick
+    // differs from the (possibly unset) default. Backend is never symbolic.
+    defaultLabel: backendDefault ?? "(unset)",
+    enabled: backendPick !== null && backendPick !== backendDefault,
     write: (id, v) => api.setAgentModelPref(apiConfig, id, { backend: v }),
     setDefault: (v) => setBackendDefault(v),
     testId: "apply-backend-default",

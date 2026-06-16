@@ -26,10 +26,6 @@ import { buildCodexOptions } from "./options.ts";
 export type CodexAdapterDeps = {
   /** Project bound skills to the workspace .agents/skills before the turn. */
   projectSkills?: (invocation: BackendInvocation) => Promise<void>;
-  /** Persist the SDK thread id after a create turn (resume next turn). */
-  persistSession?: (threadId: string, sessionId: string) => void;
-  /** Audit: a tool the SDK ran (name + isError refs only). */
-  onToolObserved?: (tool: string, isError: boolean) => void;
   now?: () => number;
 };
 
@@ -59,8 +55,8 @@ export function createCodexAdapter(deps: CodexAdapterDeps = {}): BackendRun {
           const { events } = await thread.runStreamed(prompt, { signal: invocation.signal });
           for await (const event of events) {
             if (event.type === "thread.started") {
-              if (mode.kind === "create" && deps.persistSession) {
-                deps.persistSession(threadId, event.thread_id);
+              if (mode.kind === "create") {
+                invocation.callbacks.persistSession(event.thread_id);
               }
               continue;
             }
@@ -84,11 +80,14 @@ export function createCodexAdapter(deps: CodexAdapterDeps = {}): BackendRun {
                 // carries an exit_code; file_change / mcp_tool_call carry status.
                 if (item.type === "command_execution") {
                   const isError = item.status === "failed" || (item.exit_code ?? 0) !== 0;
-                  deps.onToolObserved?.("command_execution", isError);
+                  invocation.callbacks.onToolObserved("command_execution", isError);
                 } else if (item.type === "file_change") {
-                  deps.onToolObserved?.("file_change", item.status === "failed");
+                  invocation.callbacks.onToolObserved("file_change", item.status === "failed");
                 } else if (item.type === "mcp_tool_call") {
-                  deps.onToolObserved?.(`${item.server}/${item.tool}`, item.status === "failed");
+                  invocation.callbacks.onToolObserved(
+                    `${item.server}/${item.tool}`,
+                    item.status === "failed",
+                  );
                 }
               }
               continue;

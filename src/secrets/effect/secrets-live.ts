@@ -16,8 +16,8 @@
 
 import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 import { Context, Effect, Layer } from "effect";
+import type { AuthInput } from "../../lib/auth.ts";
 import type { TypedEmitter } from "../../lib/typed-emitter.ts";
-import type { AuthInput } from "../../model-gateway/types.ts";
 import { loginOAuth } from "../oauth.ts";
 import { SecretsPersistence } from "../persistence.ts";
 import { createSecretsStore, type SecretsStore } from "../store.ts";

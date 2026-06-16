@@ -6,8 +6,8 @@
 import { and, asc, eq, isNull, lt, max } from "drizzle-orm";
 import type { HiveDb } from "../db/hive-db.ts";
 import { AgentId, ThreadId } from "../lib/ids.ts";
+import type { ContentBlock, Message } from "../lib/messages.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
-import type { ContentBlock, Message } from "../model-gateway/types.ts";
 import { messages, threads } from "./schema.ts";
 import type { CliSession, Thread, ThreadEvents, ThreadMessage, TitleSource } from "./types.ts";
 

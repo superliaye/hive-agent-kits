@@ -22,7 +22,7 @@
 
 import { z } from "zod";
 import { AgentBackend } from "../lib/capability-types.ts";
-import { EFFORT_ORDER, type ThinkingEffort } from "../model-gateway/types.ts";
+import { EFFORT_ORDER, type ThinkingEffort } from "../lib/effort.ts";
 import { SYMBOLIC_EFFORT_HIGHEST, SYMBOLIC_MODEL_LATEST } from "../runs/symbolic.ts";
 
 // An agent default may be SYMBOLIC (ADR-0015): "latest" model / "highest"

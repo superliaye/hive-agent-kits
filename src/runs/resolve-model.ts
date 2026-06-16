@@ -8,10 +8,10 @@
 // canonical `parseModelProvider` (ADR-0005) rather than a hand-rolled
 // `indexOf("/")`.
 
-import { GatewayFailure } from "../model-gateway/effect/failure.ts";
-import { parseModelProvider } from "../model-gateway/index.ts";
-import type { ThinkingEffort } from "../model-gateway/types.ts";
+import type { ThinkingEffort } from "../lib/effort.ts";
+import { BackendFailure } from "./backends/stream-events.ts";
 import { MODEL_FALLBACK } from "./defaults.ts";
+import { parseModelProvider } from "./model-catalog.ts";
 import { isSymbolicModel, type RunnableCatalog, resolveLatestModel } from "./symbolic.ts";
 
 export type ResolveAgentModelInput = {
@@ -33,7 +33,7 @@ export type ResolveAgentModelInput = {
 
 export type ResolveAgentModelResult =
   | { model: string; provider: string; efforts?: readonly ThinkingEffort[] }
-  | { model: string; failure: GatewayFailure };
+  | { model: string; failure: BackendFailure };
 
 // Tier order (ADR-0013, +ADR-0015 Thread scope): per-Run override > Thread scope
 // > user default > harness config > deployment fallback. A SYMBOLIC winner
@@ -56,7 +56,7 @@ export function resolveAgentModel(input: ResolveAgentModelInput): ResolveAgentMo
     if (!latest) {
       return {
         model: winner,
-        failure: new GatewayFailure({
+        failure: new BackendFailure({
           code: "model_not_found",
           message:
             'symbolic model "latest" has no runnable model to resolve to — no credentialed, routable provider is configured',

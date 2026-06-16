@@ -19,7 +19,7 @@ import type { CatalogEvents } from "../types.ts";
 
 const HARNESS_TEMPLATE = (agentId: string, extraSkill?: string): string => `---
 agentId: ${agentId}
-backend: native
+backend: claude-code
 domain: ${agentId} domain
 bindings:
   skills:${extraSkill ? `\n    - ${extraSkill}` : " []"}

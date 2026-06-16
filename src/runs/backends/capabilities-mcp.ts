@@ -54,7 +54,7 @@ export type CapabilityMcpDeps = {
 // The MCP server's public name — both SDKs reference tools as `mcp__<server>__*`.
 export const CAPABILITY_MCP_SERVER_NAME = "hive";
 
-const AgentBackendSchema = z.enum(["native", "claude-code", "codex"]);
+const AgentBackendSchema = z.enum(["claude-code", "codex"]);
 
 // Build a fresh McpServer instance with all Hive capability tools registered.
 // One instance per transport/session (the MCP SDK couples a server to one

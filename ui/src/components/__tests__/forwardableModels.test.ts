@@ -12,8 +12,7 @@ const models: AvailableModel[] = [
 ];
 
 describe("forwardableModels", () => {
-  test("native and no-backend route every configured model", () => {
-    expect(forwardableModels(models, "native")).toEqual(models);
+  test("no-backend (unresolved) routes every configured model", () => {
     expect(forwardableModels(models, null)).toEqual(models);
   });
 
@@ -24,7 +23,7 @@ describe("forwardableModels", () => {
     ]);
   });
 
-  test("codex forwards no Hive-picked model today", () => {
-    expect(forwardableModels(models, "codex")).toEqual([]);
+  test("codex keeps only openai-codex-provider models", () => {
+    expect(forwardableModels(models, "codex").map((m) => m.model)).toEqual(["openai-codex/gpt-5.5"]);
   });
 });

@@ -45,9 +45,9 @@ export type CapabilityLayer = z.infer<typeof CapabilityLayer>;
 export const CapabilitySource = z.enum(["filesystem", "builtin", "mcp-discovered"]);
 export type CapabilitySource = z.infer<typeof CapabilitySource>;
 
-// AgentBackend: the runtime that executes a Run for a given Agent.
-//   native      — Hive's in-process tool-use loop (uses ModelGateway)
-//   claude-code — Hive spawns the Claude Code CLI as a subprocess
-//   codex       — Hive spawns the OpenAI Codex CLI as a subprocess
-export const AgentBackend = z.enum(["native", "claude-code", "codex"]);
+// AgentBackend: the vendor Agent SDK that executes a Run for a given Agent
+// (ADR-0019 — the native in-process loop is deleted).
+//   claude-code — drives @anthropic-ai/claude-agent-sdk
+//   codex       — drives @openai/codex-sdk
+export const AgentBackend = z.enum(["claude-code", "codex"]);
 export type AgentBackend = z.infer<typeof AgentBackend>;

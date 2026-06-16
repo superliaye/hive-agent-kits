@@ -1,6 +1,6 @@
 ---
 agentId: agent-manager
-backend: native
+backend: claude-code
 domain: agent authoring and lifecycle
 bindings:
   skills:

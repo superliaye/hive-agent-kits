@@ -71,7 +71,7 @@ function installStubs(): void {
     if (method === "GET" && path.endsWith("/model-pref"))
       return json({ model: null, effort: null, backend: null });
     if (method === "GET" && parts[1] === "agents")
-      return json({ agentId: "root", backend: "native", config: {} });
+      return json({ agentId: "root", backend: "claude-code", config: {} });
     if (method === "PUT" && path.endsWith("/title")) {
       const id = decodeURIComponent(parts[2] ?? "");
       const body = JSON.parse(String(init?.body ?? "{}")) as { title: string };

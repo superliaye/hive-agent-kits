@@ -87,7 +87,9 @@ export function MessageComposer({
     }
   }
 
-  const onCliBackend = selectedBackend !== null && selectedBackend !== "native";
+  // Every backend is now a vendor-SDK (CLI-driven) backend (ADR-0019 dropped
+  // native): a non-null selection is always a CLI backend.
+  const onCliBackend = selectedBackend !== null;
 
   // Constrain the model picker to the models that actually forward to the chosen
   // backend (ADR-0018: the model is forwarded, not just labelled). On a CLI backend

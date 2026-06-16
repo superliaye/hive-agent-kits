@@ -42,17 +42,22 @@ import {
 } from "../config/index.ts";
 import { HiveDb, HiveDbLive } from "../db/effect/hive-db-live.ts";
 import { createLogger, log, setLogger } from "../lib/log.ts";
-import { files, runtimeRoot } from "../lib/paths.ts";
-import { createPiAiAdapter } from "../model-gateway/adapters/pi-ai.ts";
-import { createGateway, type ModelGateway } from "../model-gateway/index.ts";
+import { files, runtime as runtimePaths, runtimeRoot } from "../lib/paths.ts";
+import type { BackendInvocation } from "../runs/backends/invocation.ts";
+import { createDefaultSkillFsCopy, projectSkills } from "../runs/backends/skills.ts";
 import {
+  type AgentLifecyclePort,
+  type BackendAdapters,
+  type CapabilityInvokePort,
+  createCapabilityMcpServer,
+  createClaudeAdapter,
+  createCodexAdapter,
   createRunExecutor,
   createRunsStore,
   type RunExecutor,
   type RunnableCatalogPort,
   runnableCatalog,
   type SkillProjectionPort,
-  type SkillResolverPort,
 } from "../runs/index.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
 import type { Secrets } from "../secrets/index.ts";
@@ -73,6 +78,10 @@ export type CreateServerOptions = {
   // `daemon.httpPort` — used by e2e tests for isolation. Bypasses Config so
   // a stale config.yaml value cannot fight the explicit choice.
   port?: number;
+  // TEST SEAM (memory mode): inject fake backend adapters so a route test can
+  // drive a Run without spawning a real vendor SDK. Production builds the real
+  // Claude/Codex adapters; this override replaces them when present.
+  adapters?: BackendAdapters;
 };
 
 export type ServerHandles = {
@@ -81,7 +90,6 @@ export type ServerHandles = {
   config: Config<AppConfig>;
   registry: Registry;
   catalog: Catalog;
-  gateway: ModelGateway;
   secrets: Secrets;
   agentModelPrefs: AgentModelPrefsSvc;
   threads: Threads;
@@ -194,7 +202,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // the DB handle is closed by the layer's release, not exposed on the value.
   const audit: Audit = runtime.runSync(AuditTag);
 
-  const gateway = createGateway();
   // Threads + Runs consume the single Layer-owned `hive.db` handle. Threads
   // resolves off the root runtime (built over `dataLayer`); Runs still wraps the
   // raw `hiveDb` handle (unmigrated). Same connection, no second handle.
@@ -230,38 +237,14 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       log().error({ module: "backend-probe", err }, "backend availability probe failed");
     });
 
-  // Register the default multi-provider adapter (ADR-0002 §"Model abstraction":
-  // pi-ai is the v1 default for anthropic/openai/google/mistral/bedrock/…).
-  // Tests that want to override a provider can `registerAdapter(makeFakeAdapter([provider], …))`
-  // — last registration wins per registry.test.ts.
-  gateway.registerAdapter(createPiAiAdapter());
-
-  // SkillResolverPort adapter (D-5): adapt the F2 BindingResolver over the
-  // existing Capability Registry to the runs-owned port. F2's `resolveSkills`
-  // is a synchronous, never-failing Effect, so we discharge it with runSync at
-  // this composition root — runs/ never imports capabilities concretes. Skill
-  // loads are scoped to the Run's bound names (load(boundNames, name)).
-  // The resolver is reached only through the single composition-root runtime
-  // (P-3) — `BindingResolverLive(registry)` is folded into `rootLayer` above.
+  // SkillProjectionPort adapter: adapt the F2 BindingResolver over the Capability
+  // Registry to the runs-owned port. `resolveSkills` is a synchronous,
+  // never-failing Effect, discharged with runSync at this composition root —
+  // runs/ never imports capabilities concretes. Surfaces `path`/`origin` (the
+  // file-system facts the per-Run skill projector needs). Reached only through
+  // the single composition-root runtime (BindingResolverLive folded into
+  // rootLayer above).
   const bindingResolver = runtime.runSync(BindingResolver);
-  const skillResolver: SkillResolverPort = {
-    list: (boundNames) =>
-      Effect.runSync(bindingResolver.resolveSkills(boundNames)).resolved.map((s) => ({
-        name: s.name,
-        description: s.description,
-      })),
-    load: (boundNames, name) => {
-      if (!boundNames.includes(name)) return undefined;
-      const found = Effect.runSync(bindingResolver.resolveSkills([name])).resolved[0];
-      return found ? { description: found.description, body: found.body } : undefined;
-    },
-  };
-
-  // SkillProjectionPort adapter (C3): the sibling port the CLI (claude-code)
-  // path uses to copy bound skills into a `--add-dir` location. Reuses the same
-  // `bindingResolver` handle + Effect.runSync discharge as skillResolver above —
-  // no second runtime. Surfaces `path`/`origin` (the file-system facts the
-  // projector needs), unlike the N3-shaped skillResolver.
   const skillProjection: SkillProjectionPort = {
     resolve: (names) =>
       Effect.runSync(bindingResolver.resolveSkills(names)).resolved.map((s) => ({
@@ -271,46 +254,120 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       })),
   };
 
-  // RunnableCatalogPort adapter (E3/E5): the credentialed ∩ routable models the
+  // RunnableCatalogPort adapter: the credentialed ∩ routable models the
   // symbolic-default resolver consumes, assembled by the SINGLE shared
-  // `runnableCatalog` helper (P2) — the same globally-ordered list the title-gen
-  // path and `GET /api/models` consume. Built ONCE here and threaded into BOTH
-  // the executor and the routes (RoutesDeps.runnableCatalog). Snapshot per
-  // Run/request — a newly-added credential is visible next time. pi-ai stays
-  // imported only in its adapter (ADR-0005): enumeration goes through the
-  // gateway seam.
+  // `runnableCatalog` helper (the same globally-ordered list title-gen and
+  // `GET /api/models` consume). The catalog SOURCE is now pi-ai's model registry
+  // (Migration §3) — there is no ModelGateway. Snapshot per Run/request.
   const runnableCatalogPort: RunnableCatalogPort = {
-    snapshot: () => runnableCatalog(secrets, gateway),
+    snapshot: () => runnableCatalog(secrets),
   };
+
+  // The port is resolved here (before the executor) so the capability MCP
+  // endpoint URL both backends connect to is known. Explicit override > Config.
+  const port = opts.port ?? config.get("daemon").httpPort;
+  const mcpEndpoint = `http://127.0.0.1:${port}/mcp`;
+
+  // The ONE Hive capability MCP server (spec §unified MCP surface): Memory (stub),
+  // capability invocation over the Registry, and the AM-lifecycle tools over the
+  // Catalog. Served over THIS daemon (mounted on app.all("/mcp") below); both SDK
+  // backends connect by `mcpEndpoint`.
+  const capabilityInvoke: CapabilityInvokePort = {
+    invoke: async (name, args) => {
+      try {
+        const found = registry.get("tool", name);
+        if (!found) return { content: `unknown capability: ${name}`, isError: true };
+        // Tool capabilities are registry entries; there is no in-process tool
+        // runner yet (the native tools are deleted). Return a structured ack so
+        // the seam is invocable end-to-end; a real tool runtime is a follow-up.
+        return {
+          content: JSON.stringify({ invoked: name, args, acknowledged: true }),
+          isError: false,
+        };
+      } catch (err) {
+        return { content: `capability invoke failed: ${String(err)}`, isError: true };
+      }
+    },
+  };
+  const agentLifecycle: AgentLifecyclePort = {
+    createAgent: async (input) => {
+      const created = await catalog.createAgent(input);
+      return { agentId: created.agentId };
+    },
+    updateAgentHarness: async ({ agentId, bindings }) => {
+      const updated = await catalog.updateBindings(agentId, bindings, "agent-manager");
+      return { agentId: updated.agentId };
+    },
+    destroyAgent: async ({ agentId }) => {
+      await catalog.destroyAgent(agentId);
+    },
+  };
+  const capabilityMcp = createCapabilityMcpServer({
+    capabilities: capabilityInvoke,
+    agents: agentLifecycle,
+  });
+
+  // The two SDK backend adapters. Skill projection retargets per-Run: Claude
+  // projects into an isolated plugins dir; Codex projects into the workspace
+  // `.agents/skills`. The fs-copy edge + cleanup are shared.
+  const skillFsCopy = createDefaultSkillFsCopy();
+  const claudeAdapter = createClaudeAdapter({
+    projectSkills: async (invocation: BackendInvocation) => {
+      if (invocation.skills.length === 0) return undefined;
+      const root = runtimePaths.backendPluginRoot(invocation.agentId, invocation.runId);
+      const skillsDir = runtimePaths.backendPluginSkillsDir(invocation.agentId, invocation.runId);
+      const landed = await projectSkills({
+        skills: invocation.skills,
+        skillsDir,
+        copy: skillFsCopy.copy,
+        runId: invocation.runId,
+      });
+      return landed ? root : undefined;
+    },
+    cleanupSkills: (invocation: BackendInvocation) => {
+      if (invocation.skills.length === 0) return;
+      const root = runtimePaths.backendPluginRoot(invocation.agentId, invocation.runId);
+      skillFsCopy.remove(root).catch(() => {});
+    },
+  });
+  const codexAdapter = createCodexAdapter({
+    projectSkills: async (invocation: BackendInvocation) => {
+      if (invocation.skills.length === 0) return;
+      // Codex discloses skills from `.agents/skills` under its workspace cwd
+      // (no out-of-tree option; the bound-to-a-repo case degrades — ADR-0019).
+      const { join } = await import("node:path");
+      await projectSkills({
+        skills: invocation.skills,
+        skillsDir: join(invocation.cwd, ".agents", "skills"),
+        copy: skillFsCopy.copy,
+        runId: invocation.runId,
+      });
+    },
+  });
 
   const runs = createRunExecutor({
     threads,
     runs: runsStore,
     catalog,
-    gateway,
     secrets,
+    // Production wires the real SDK adapters; a memory-mode test may inject fakes.
+    adapters: opts.adapters ?? { "claude-code": claudeAdapter, codex: codexAdapter },
+    mcpEndpoint,
     prefs: agentModelPrefs,
     runnableCatalog: runnableCatalogPort,
-    skillResolver,
     skillProjection,
-    // Cap port — snapshot of runs.maxIterations off the root Config (0 =
-    // unlimited). Narrow consumer-owned port, not the whole Config tree.
-    capConfig: { maxIterations: () => config.get("runs").maxIterations },
   });
 
   const dispose = wireSubscriptions<AppConfig>(audit, {
     config,
-    gateway,
     registry,
     catalog,
     secrets,
     agentPrefs: agentModelPrefs,
     threads,
     runs,
-    // Dedicated `permission` audit source (Q4) — the executor's separate
-    // permission emitter, distinct from its `events` (run source).
-    permission: { events: runs.permissionEvents },
-    // Dedicated `backend` audit source — the executor's CLI-spawn emitter.
+    // Dedicated `backend` audit source — the executor's SDK-backend run +
+    // tool-observed emitter.
     backend: { events: runs.backendEvents },
     // Same `backend` source, second emitter — the user-triggered delegated
     // CLI-update action (the sibling BackendUpdater service, OQ-5).
@@ -321,7 +378,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   await catalog.start();
 
   const token = opts.token ?? (opts.mode === "memory" ? "test-token" : ensureToken());
-  const port = opts.port ?? config.get("daemon").httpPort;
 
   const app = buildRoutes({
     registry,
@@ -330,7 +386,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     threads,
     runs,
     secrets,
-    gateway,
     agentModelPrefs,
     backendProbe,
     backendUpdater,
@@ -339,13 +394,17 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     runnableCatalog: runnableCatalogPort,
   });
 
+  // Mount the capability MCP server on the daemon (local HTTP). Both SDK
+  // backends connect to `${mcpEndpoint}`. Auth-exempt: it is bound to 127.0.0.1
+  // and consumed by the daemon's own child SDK processes.
+  app.all("/mcp", (c) => capabilityMcp.handle(c.req.raw));
+
   return {
     app,
     audit,
     config,
     registry,
     catalog,
-    gateway,
     secrets,
     agentModelPrefs,
     threads,
@@ -355,6 +414,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     port,
     async dispose() {
       dispose();
+      await capabilityMcp.dispose();
       registry.dispose();
       // ONE teardown: releases Config (watcher + ref scope), Secrets (no-op),
       // Catalog (file watchers), Audit ($client.close), and HiveDb

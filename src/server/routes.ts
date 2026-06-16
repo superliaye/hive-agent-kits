@@ -12,12 +12,10 @@ import { BackendStatus, ProbeableBackend } from "../backend-probe/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Capability } from "../capabilities/types.ts";
 import { AgentNotFoundError } from "../catalog/index.ts";
-import { backendAllowedForAgent } from "../catalog/role.ts";
 import type { Agent, Catalog } from "../catalog/types.ts";
 import { type AppConfig, AppearanceConfigSchema } from "../config/schema.ts";
 import type { Config } from "../config/types.ts";
 import { CapabilityKind } from "../lib/capability-types.ts";
-import type { ModelGateway } from "../model-gateway/index.ts";
 import type { RunExecutor, RunnableCatalogPort } from "../runs/index.ts";
 import type { Run } from "../runs/types.ts";
 import type { Secrets } from "../secrets/index.ts";
@@ -53,7 +51,6 @@ export type RoutesDeps = {
   threads: Threads;
   runs: RunExecutor;
   secrets: Secrets;
-  gateway: ModelGateway;
   agentModelPrefs: AgentModelPrefsSvc;
   backendProbe: BackendProbeSvc;
   backendUpdater: BackendUpdaterSvc;
@@ -309,21 +306,6 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     if (!parsed.success) {
       return c.json({ error: "invalid body", issues: zodIssues(parsed.error) }, 400);
     }
-    // Agent-Manager native-lock (ADR-0018): every agent may have a non-native
-    // backend default EXCEPT the always-native Agent Manager. A clear (null) or
-    // `native` is always allowed. The decision lives behind
-    // `backendAllowedForAgent` (next to the role derivation); the 409/reason JSON
-    // stays here (HTTP concern). Fast feedback only — `resolve()` is the
-    // authoritative guard (ADR-0018).
-    if (!backendAllowedForAgent(id, parsed.data.backend)) {
-      return c.json(
-        {
-          error: "the Agent Manager is always native; it cannot use a CLI backend",
-          reason: "agent_manager_native",
-        },
-        409,
-      );
-    }
     // Merge semantics: the store keeps any field the patch omits.
     await deps.agentModelPrefs.set(id, {
       ...(parsed.data.model !== undefined && { model: parsed.data.model }),
@@ -337,12 +319,11 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     });
   });
 
-  // Models the user can actually run: the SINGLE shared runnable catalog (P2) —
-  // configured providers (have credentials) ∩ routable providers (the gateway
-  // has an adapter), globally ordered (recency within a provider, PROVIDER_
-  // PREFERENCE across providers). The picker's data source returns exactly the
-  // catalog symbolic "latest" resolves against. pi-ai stays imported only in its
-  // adapter — enumeration goes through the gateway seam (ADR-0005).
+  // Models the user can actually run: the SINGLE shared runnable catalog —
+  // configured providers (have credentials) ∩ routable providers (pi-ai's model
+  // registry enumerates them), globally ordered (recency within a provider,
+  // PROVIDER_PREFERENCE across providers). The picker's data source returns
+  // exactly the catalog symbolic "latest" resolves against.
   app.get("/api/models", (c) => {
     return c.json(deps.runnableCatalog.snapshot().models);
   });
@@ -458,20 +439,6 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     }
     const existing = deps.threads.get(id);
     if (!existing) return c.json({ error: "thread not found" }, 404);
-    // Agent-Manager native-lock (ADR-0018): every agent (including Root) may pick
-    // a non-native backend EXCEPT the always-native Agent Manager. A clear (null)
-    // or `native` is always allowed. Same predicate as the model-pref route,
-    // narrowed on the Thread's own agentId. Fast feedback only — `resolve()` is
-    // the authoritative guard (ADR-0018).
-    if (!backendAllowedForAgent(existing.agentId, parsed.data.backend)) {
-      return c.json(
-        {
-          error: "the Agent Manager is always native; it cannot use a CLI backend",
-          reason: "agent_manager_native",
-        },
-        409,
-      );
-    }
     // Merge semantics: pass only the present axes (a `null` clears, an omitted
     // axis is untouched), so the axes stay independent.
     await deps.threads.setScope(id, {
@@ -596,7 +563,6 @@ export function buildRoutes(deps: RoutesDeps): Hono {
             threads: deps.threads,
             runs: deps.runs,
             catalog: deps.catalog,
-            gateway: deps.gateway,
             secrets: deps.secrets,
             agentModelPrefs: deps.agentModelPrefs,
             // The ONE shared runnable-catalog port (P2) — the same instance the

@@ -55,4 +55,14 @@ export type BackendInvocation = {
   mcpEndpoint: string;
   /** Cancellation — wired to the executor's per-Run AbortController. */
   signal: AbortSignal;
+  /**
+   * Per-Run callbacks the adapter invokes at its boundary. The executor owns
+   * Thread writes + audit; the adapter just signals the events as it folds.
+   */
+  callbacks: {
+    /** Persist the SDK session id after a create turn (resume next turn). */
+    persistSession(sessionId: string): void;
+    /** Audit: a tool the SDK ran (name + isError refs only — ADR-0004). */
+    onToolObserved(tool: string, isError: boolean): void;
+  };
 };

@@ -17,7 +17,7 @@ import {
 function makeAgent(overrides: Partial<AgentDetail["bindings"]> = {}): AgentDetail {
   return {
     agentId: "root",
-    backend: "native",
+    backend: "claude-code",
     domain: "test",
     layer: "bundled",
     hasFork: false,
