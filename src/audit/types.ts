@@ -11,7 +11,6 @@ export type ModuleSource =
   | "lifecycle"
   | "backend"
   | "config"
-  | "gateway"
   | "agent-prefs"
   | "thread";
 

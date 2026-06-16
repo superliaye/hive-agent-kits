@@ -26,7 +26,6 @@ export const ModuleSourceSchema = z.enum([
   "lifecycle",
   "backend",
   "config",
-  "gateway",
   "agent-prefs",
   "thread",
 ]);
@@ -126,7 +125,7 @@ export type AgentDetailWire = AgentSummaryWire & {
 
 // Envelope for events delivered over /api/events (SSE).
 export type WireEvent = {
-  source: "registry" | "catalog" | "config" | "gateway" | "run";
+  source: "registry" | "catalog" | "config" | "run";
   type: string;
   payload: unknown;
 };
@@ -221,7 +220,7 @@ export const EffortLevel = z.enum(EFFORT_ORDER);
 const ModelOverride = z
   .string()
   .min(1)
-  // "provider/model" — gateway registry rejects malformed; just sanity-check.
+  // "provider/model" — the model catalog rejects malformed; just sanity-check.
   .regex(/^[^/]+\/.+$/, "must be 'provider/model-id'");
 
 // POST /api/threads/:id/runs body. `userMessage` is the next user turn —

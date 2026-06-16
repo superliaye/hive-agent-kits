@@ -1,6 +1,6 @@
 // Provider auth input — what Secrets resolves and a backend adapter authenticates
 // with. A cross-cutting primitive (Secrets produces it, the backend adapters
-// consume it) homed in `lib/` so it survives the ModelGateway deletion.
+// consume it), homed in `lib/` alongside the other shared types.
 
 export type AuthInput =
   | { kind: "apiKey"; apiKey: string }

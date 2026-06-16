@@ -1,11 +1,9 @@
 // Canonical conversation message vocabulary — Anthropic-flavored content blocks.
 //
-// These are cross-cutting primitives shared by KEPT modules (Threads, the runs
+// These are cross-cutting primitives shared by modules (Threads, the runs
 // resolver chain, the server HTTP boundary) that have no dependency on any one
 // backend. They live in `lib/` (alongside `ids.ts`, `capability-types.ts`) so
-// the message shape outlives the deletion of the old ModelGateway: re-homing it
-// here keeps Threads/server compiling without coupling them to the runs/backends
-// module.
+// Threads and the server stay decoupled from the runs/backends module.
 
 export type JsonSchema = Record<string, unknown>;
 

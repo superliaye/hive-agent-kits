@@ -86,7 +86,7 @@ export type ConfiguredProvider = {
 };
 
 // Thinking-effort levels. Deliberate cross-package mirror of the daemon's
-// canonical `EFFORT_ORDER` / `ThinkingEffort` (src/model-gateway/types.ts):
+// canonical `EFFORT_ORDER` / `ThinkingEffort` (src/lib/effort.ts):
 // the UI is a separate Vite bundle and does not import daemon source, so this
 // literal is kept in sync by hand. If `EFFORT_ORDER` is widened/narrowed there,
 // update this list to match.
@@ -187,7 +187,7 @@ export type RunInfo = {
 
 // ─── RunEvent types — match server's runs/types.ts. ─────────────────────
 
-export type GatewayEventWire =
+export type BackendStreamEventWire =
   | { type: "text_start"; blockIndex: number }
   | { type: "text_delta"; blockIndex: number; delta: string }
   | { type: "text_end"; blockIndex: number }
@@ -226,7 +226,7 @@ export type RunEventWire =
       model: string;
       ts: number;
     }
-  | { type: "model.event"; runId: string; event: GatewayEventWire }
+  | { type: "model.event"; runId: string; event: BackendStreamEventWire }
   | {
       type: "run.completed";
       runId: string;

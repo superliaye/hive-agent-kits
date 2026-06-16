@@ -21,8 +21,7 @@ import type { RunEvent } from "../../runs/types.ts";
 import { createServer, type ServerHandles } from "../index.ts";
 
 // A fixture is a scripted stream of backend stream-events (text/tool deltas),
-// keyed by model — the same shape the old gateway fixtures used, now folded into
-// RunEvents by the injected fake backend below.
+// keyed by model, folded into RunEvents by the injected fake backend below.
 type FixtureScript = BackendStreamEvent[] | ((inv: BackendInvocation) => BackendStreamEvent[]);
 type FakeFixtures = Record<string, FixtureScript>;
 

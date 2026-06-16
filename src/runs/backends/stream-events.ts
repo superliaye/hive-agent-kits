@@ -17,7 +17,7 @@ export type FinishReason =
   | "error"
   | "cancelled";
 
-// Backend-neutral error-code union (was `GatewayErrorCode`). A backend adapter
+// Backend-neutral error-code union. A backend adapter
 // classifies an SDK `result(error)` / `turn.failed` / spawn failure into one of
 // these; they flow through `run.failed`'s `errorCode`.
 export type BackendErrorCode =
@@ -44,8 +44,8 @@ export function isRetryable(code: BackendErrorCode): boolean {
   return RETRYABLE.has(code);
 }
 
-// The per-token / per-block stream vocabulary an adapter emits (was
-// `GatewayEvent`). Mirrors Anthropic's content-block semantics (parallel blocks
+// The per-token / per-block stream vocabulary an adapter emits. Mirrors
+// Anthropic's content-block semantics (parallel blocks
 // keyed by `blockIndex`, deltas append, `_end` finalizes) — the shape the
 // accumulator and the UI both already understand.
 export type BackendStreamEvent =
@@ -93,7 +93,7 @@ export type BackendStreamEvent =
       retryable: boolean;
     };
 
-// Typed failure value for an adapter's Effect `E` channel (was `GatewayFailure`).
+// Typed failure value for an adapter's Effect `E` channel.
 // A spawn/auth/classification error is a value, not a throw (AGENTS.md typed
 // error channel).
 export class BackendFailure extends Data.TaggedError("BackendFailure")<{

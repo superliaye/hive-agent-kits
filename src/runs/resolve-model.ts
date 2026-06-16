@@ -4,9 +4,8 @@
 //   1. the model-tier policy (per-Run override > user's per-agent default >
 //      harness config.model > deployment fallback) — ADR-0013, and
 //   2. the "provider/model" provider parse.
-// Both now route through here. The provider parse reuses the gateway's
-// canonical `parseModelProvider` (ADR-0005) rather than a hand-rolled
-// `indexOf("/")`.
+// Both now route through here. The provider parse reuses the model-catalog's
+// canonical `parseModelProvider` rather than a hand-rolled `indexOf("/")`.
 
 import type { ThinkingEffort } from "../lib/effort.ts";
 import { BackendFailure } from "./backends/stream-events.ts";
@@ -39,7 +38,7 @@ export type ResolveAgentModelResult =
 // > user default > harness config > deployment fallback. A SYMBOLIC winner
 // ("latest") is resolved against the runnable catalog BEFORE the provider parse,
 // so the concrete result is guaranteed credentialed+routable. Provider parsed
-// off the resolved model via the gateway's canonical parse — a malformed model
+// off the resolved model via the model-catalog's canonical parse — a malformed model
 // surfaces as `failure` for the caller to classify (the executor emits
 // `invalid_request`; title-gen silently skips). `efforts` (when a symbolic model
 // resolved) carries the resolved model's supported levels for "highest".

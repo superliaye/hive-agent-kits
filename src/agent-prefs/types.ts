@@ -28,7 +28,7 @@ import { SYMBOLIC_EFFORT_HIGHEST, SYMBOLIC_MODEL_LATEST } from "../runs/symbolic
 // An agent default may be SYMBOLIC (ADR-0015): "latest" model / "highest"
 // effort, a rule resolved at Run start rather than a pinned id. So the stored
 // value admits the symbolic token OR a concrete value. A concrete model is the
-// "provider/model-id" shape (gateway registry is the real validator); a
+// "provider/model-id" shape (the runnable model catalog is the real validator); a
 // concrete effort is an EFFORT_ORDER member.
 export const ModelStringSchema = z.union([
   z.literal(SYMBOLIC_MODEL_LATEST),

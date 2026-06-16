@@ -72,10 +72,6 @@ function redactAppearance(value: unknown): unknown {
   return { mode: (value as { mode?: string }).mode };
 }
 
-// Gateway adapter registration is startup-only / diagnostic; trace, not audit.
-// When a future flow lets a *user* register a gateway adapter at runtime, we
-// can subscribe a filtered normalizer here.
-
 // Catalog: only user/agent-driven side effects are audited. agent.created at
 // scan time is system inventory — that goes to trace via the log singleton.
 const catalogNormalizer: Partial<Normalizer<CatalogEvents>> = {

@@ -8,7 +8,7 @@ import { Stream } from "effect";
 /**
  * Drain a fully-provided Effect Stream into an AsyncIterable, mapping a typed
  * failure in `E` into one or more terminal in-band elements instead of a thrown
- * error. `onError` returns the terminal sequence (e.g. the gateway maps a
+ * error. `onError` returns the terminal sequence (e.g. a backend adapter maps a
  * failure to an `error` event followed by a `done` event), so a migrated
  * module's Stream keeps the legacy stream's contract.
  */
