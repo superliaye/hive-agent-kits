@@ -10,12 +10,21 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { HarnessManifest } from "../capabilities/schemas.ts";
+import { KebabName } from "../lib/capability-types.ts";
+import { AgentId } from "../lib/ids.ts";
 import { log } from "../lib/log.ts";
 import { bundledRoot, runtime, runtimeRoot } from "../lib/paths.ts";
 import { createTieredManifestStore } from "../lib/tiered-store.ts";
 import { TypedEmitter } from "../lib/typed-emitter.ts";
 import { type LoaderResult, scanAll } from "./loader.ts";
-import type { Agent, BindingKind, BindingPatch, Catalog, CatalogEvents } from "./types.ts";
+import type {
+  Agent,
+  BindingKind,
+  BindingPatch,
+  Catalog,
+  CatalogEvents,
+  CreateAgentInput,
+} from "./types.ts";
 
 const KIND_TO_FIELD: Record<BindingKind, keyof Agent["bindings"]> = {
   skill: "skills",
@@ -130,6 +139,51 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
   return {
     list: () => store.current(),
     get: (agentId) => store.get(agentId),
+    async createAgent(input: CreateAgentInput) {
+      // Validate the kebab shape, then brand for the Agent record's id field.
+      KebabName.parse(input.agentId);
+      const agentId = AgentId.parse(input.agentId);
+      if (store.get(agentId)) {
+        throw new Error(`createAgent: agent already exists: ${agentId}`);
+      }
+      const runtimePath = join(runtime.agent(agentId), "HARNESS.md");
+      const seed: Agent = {
+        agentId,
+        backend: input.backend,
+        domain: input.domain,
+        bindings: {
+          skills: input.bindings?.skills ?? [],
+          snippets: input.bindings?.snippets ?? [],
+          tools: input.bindings?.tools ?? [],
+          mcp: input.bindings?.mcp ?? [],
+        },
+        config: input.config ?? {},
+        ...(input.commandAllowlist !== undefined
+          ? { commandAllowlist: input.commandAllowlist }
+          : {}),
+        promptBody: input.promptBody,
+        layer: "runtime",
+        hasFork: true,
+        path: runtimePath,
+      };
+      writeHarness(runtimePath, seed);
+      const created = await refreshOne(agentId);
+      await events.emit("agent.created", { agentId: created.agentId, path: created.path });
+      return created;
+    },
+    async destroyAgent(agentId) {
+      const agent = store.get(agentId);
+      if (!agent) throw new AgentNotFoundError(agentId);
+      const runtimePath = join(runtime.agent(agentId), "HARNESS.md");
+      if (!existsSync(runtimePath)) {
+        // A bundled kernel agent with no runtime fork cannot be destroyed —
+        // destroying it would leave a dangling bundled definition unreachable.
+        throw new Error(`destroyAgent: no runtime fork to delete for ${agentId}`);
+      }
+      rmSync(runtimePath, { force: true });
+      await store.rescan();
+      await events.emit("agent.destroyed", { agentId: agent.agentId });
+    },
     async updateBindings(agentId, patches, source = "ui") {
       if (patches.length === 0) {
         throw new Error("updateBindings requires at least one patch");

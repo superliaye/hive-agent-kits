@@ -210,4 +210,66 @@ describe("createCatalog — real filesystem fork-on-write", () => {
       catalog.updateBindings("nonexistent", [{ kind: "skill", name: "x", action: "bind" }]),
     ).rejects.toBeInstanceOf(AgentNotFoundError);
   });
+
+  test("createAgent writes a fresh runtime HARNESS.md and emits agent.created", async () => {
+    const catalog = createCatalog({ logErrors: false });
+    await catalog.start();
+    const created: CatalogEvents["agent.created"][] = [];
+    catalog.events.on("agent.created", (e) => {
+      created.push(e);
+    });
+
+    const agent = await catalog.createAgent({
+      agentId: "writer",
+      backend: "claude-code",
+      domain: "writing",
+      promptBody: "You write prose.",
+    });
+
+    expect(String(agent.agentId)).toBe("writer");
+    expect(agent.layer).toBe("runtime");
+    expect(agent.backend).toBe("claude-code");
+    const runtimePath = join(runtimeRoot, "agents", "writer", "HARNESS.md");
+    expect(existsSync(runtimePath)).toBe(true);
+    expect(created.map((e): string => e.agentId)).toContain("writer");
+    expect(catalog.get("writer")?.promptBody.trim()).toBe("You write prose.");
+  });
+
+  test("createAgent rejects an id that already resolves", async () => {
+    writeBundledHarness("root", "alpha");
+    const catalog = createCatalog({ logErrors: false });
+    await catalog.start();
+    await expect(
+      catalog.createAgent({ agentId: "root", backend: "codex", domain: "x", promptBody: "y" }),
+    ).rejects.toThrow(/already exists/);
+  });
+
+  test("destroyAgent deletes the runtime fork and emits agent.destroyed", async () => {
+    const catalog = createCatalog({ logErrors: false });
+    await catalog.start();
+    await catalog.createAgent({
+      agentId: "scratch",
+      backend: "codex",
+      domain: "scratch",
+      promptBody: "temp",
+    });
+    const destroyed: CatalogEvents["agent.destroyed"][] = [];
+    catalog.events.on("agent.destroyed", (e) => {
+      destroyed.push(e);
+    });
+
+    await catalog.destroyAgent("scratch");
+
+    const runtimePath = join(runtimeRoot, "agents", "scratch", "HARNESS.md");
+    expect(existsSync(runtimePath)).toBe(false);
+    expect(catalog.get("scratch")).toBeUndefined();
+    expect(destroyed.map((e): string => e.agentId)).toContain("scratch");
+  });
+
+  test("destroyAgent rejects a bundled agent with no runtime fork", async () => {
+    writeBundledHarness("root", "alpha");
+    const catalog = createCatalog({ logErrors: false });
+    await catalog.start();
+    await expect(catalog.destroyAgent("root")).rejects.toThrow(/no runtime fork/);
+  });
 });

@@ -44,6 +44,12 @@ function makeCatalogStub(agents: Agent[]): Catalog {
   return {
     list: () => agents,
     get: (id) => agents.find((a) => a.agentId === id),
+    createAgent: async () => {
+      throw new Error("not supported in stub");
+    },
+    destroyAgent: async () => {
+      throw new Error("not supported in stub");
+    },
     updateBindings: async () => {
       throw new Error("not supported in stub");
     },

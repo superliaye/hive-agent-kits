@@ -50,6 +50,12 @@ function makeCatalogStub(agents: Agent[]): Catalog {
   return {
     list: () => agents,
     get: (id) => agents.find((a) => a.agentId === id),
+    createAgent: async () => {
+      throw new Error("nope");
+    },
+    destroyAgent: async () => {
+      throw new Error("nope");
+    },
     updateBindings: async () => {
       throw new Error("nope");
     },

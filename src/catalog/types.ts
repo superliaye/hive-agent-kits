@@ -57,9 +57,31 @@ export type CatalogEvents = {
   };
 };
 
+// The fields the Agent-Manager lifecycle tool supplies to create a brand-new
+// runtime agent (CONTEXT.md "Agent Harness"). The Catalog writes a fresh runtime
+// HARNESS.md from these — the create-time counterpart to the per-binding
+// `updateBindings` write. `bindings`/`config` default to empty when omitted.
+export type CreateAgentInput = {
+  agentId: string;
+  backend: AgentBackend;
+  domain: string;
+  promptBody: string;
+  bindings?: Partial<HarnessManifest["bindings"]>;
+  config?: HarnessManifest["config"];
+  commandAllowlist?: HarnessManifest["commandAllowlist"];
+};
+
 export type Catalog = {
   list(): readonly Agent[];
   get(agentId: string): Agent | undefined;
+  // Create a brand-new runtime Agent (the Agent-Manager `create_agent`
+  // lifecycle op). Writes a fresh runtime HARNESS.md, emits `agent.created`.
+  // Rejects when an agent with this id already resolves (no clobber).
+  createAgent(input: CreateAgentInput): Promise<Agent>;
+  // Destroy a runtime Agent (the Agent-Manager `destroy_agent` lifecycle op):
+  // delete its runtime fork file. Emits `agent.destroyed`. Rejects when no
+  // runtime fork exists (a bundled kernel agent cannot be destroyed).
+  destroyAgent(agentId: string): Promise<void>;
   // Apply a batch of binding mutations all-or-nothing. Writes/forks to the
   // runtime tier with a single file write, emits one `harness.updated` event.
   // Bundled HARNESS.md is never modified. Empty array is rejected.
