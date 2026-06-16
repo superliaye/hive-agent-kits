@@ -5,8 +5,7 @@
 
 import { z } from "zod";
 
-// The CLI-driven Agent Backends a probe can target. The third AgentBackend
-// kind, `native`, is in-process and has nothing to detect.
+// The CLI-driven Agent Backends a probe can target.
 export const ProbeableBackend = z.enum(["claude-code", "codex"]);
 export type ProbeableBackend = z.infer<typeof ProbeableBackend>;
 

@@ -114,16 +114,6 @@ describe("createSecrets — memory mode", () => {
     await s.setApiKey("anthropic", "sk-ant");
     expect(s.list().map((p) => p.provider)).toEqual(["anthropic", "openai"]);
   });
-
-  test("startOAuthLogin throws on unknown provider", async () => {
-    const s = makeSecrets({ mode: "memory" });
-    await expect(
-      s.startOAuthLogin("not-a-real-provider-zzz", {
-        onAuth: () => {},
-        onPrompt: async () => "",
-      }),
-    ).rejects.toThrow(/unknown OAuth provider/);
-  });
 });
 
 describe("createSecrets — file mode", () => {

@@ -1,6 +1,5 @@
 // Hono route definitions. Pure routing — module dependencies are passed in.
 
-import { getOAuthProviders } from "@earendil-works/pi-ai/oauth";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
@@ -32,7 +31,6 @@ import {
   type CapabilityWire,
   type ConfiguredProviderWire,
   CreateThreadBody,
-  type OAuthProviderWire,
   type RunWire,
   SetAgentModelPrefBody,
   SetApiKeyBody,
@@ -174,17 +172,6 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     };
   }
 
-  // Single-flight guard for interactive OAuth logins. pi-ai's callback-server
-  // providers each bind a *fixed* loopback port (openai-codex :1455,
-  // anthropic :53692), so two concurrent logins can't both bind it — the
-  // second silently fails to receive its callback and dies confusingly.
-  // `oauthInFlight` is the in-flight provider id (for the rejection message);
-  // `oauthOwner` is a per-request token so a stale login's cleanup can't free a
-  // newer login's slot. Both cleared when the login settles or its SSE request
-  // is aborted (UI cancel / navigation).
-  let oauthInFlight: string | null = null;
-  let oauthOwner: symbol | null = null;
-
   // Daemon listens on 127.0.0.1; CORS allowlist covers the two legitimate
   // callers: Electron renderer (file:// → Origin header "null") and the Vite
   // dev server. The bearer token is the real auth gate; this is defense in
@@ -319,11 +306,11 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     });
   });
 
-  // Models the user can actually run: the SINGLE shared runnable catalog —
-  // configured providers (have credentials) ∩ routable providers (pi-ai's model
-  // registry enumerates them), globally ordered (recency within a provider,
-  // PROVIDER_PREFERENCE across providers). The picker's data source returns
-  // exactly the catalog symbolic "latest" resolves against.
+  // Models the user can actually run: the SINGLE shared runnable catalog — the
+  // static per-backend model table ∩ available providers, globally ordered
+  // (recency within a provider, PROVIDER_PREFERENCE across providers). The
+  // picker's data source returns exactly the catalog symbolic "latest" resolves
+  // against.
   app.get("/api/models", (c) => {
     return c.json(deps.runnableCatalog.snapshot().models);
   });
@@ -601,18 +588,6 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     return c.json(out);
   });
 
-  // Available OAuth providers from pi-ai's OAuth registry. UI shows these as
-  // "Log in with X" actions in Settings. Filtered to providers Hive's model
-  // catalog can route to (so we don't offer login to a provider we couldn't
-  // then use).
-  app.get("/api/secrets/oauth-providers", (c) => {
-    const providers = getOAuthProviders().map<OAuthProviderWire>((p) => ({
-      id: p.id,
-      name: p.name,
-    }));
-    return c.json(providers);
-  });
-
   app.post("/api/secrets/:provider/api-key", async (c) => {
     const provider = c.req.param("provider");
     let body: unknown;
@@ -636,104 +611,6 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     }
     await deps.secrets.remove(provider);
     return c.body(null, 204);
-  });
-
-  // Start an OAuth login. Returns Server-Sent Events; pi-ai's login flow
-  // signals progress and asks for the auth URL to be opened via the
-  // `onAuth` callback. v1 only supports the callback-server flow (no
-  // interactive prompts over HTTP); providers that require manual code
-  // input fail with a clear error.
-  //
-  // Event names:
-  //   - `auth`     — { url, instructions? }    open this URL in a browser
-  //   - `progress` — { message }              optional info
-  //   - `done`     — { provider }             credentials stored
-  //   - `error`    — { message }              login failed
-  app.post("/api/secrets/:provider/oauth/login", async (c) => {
-    const provider = c.req.param("provider");
-    // `usesCallbackServer` providers fail by losing the browser callback (busy
-    // port), not by needing a prompt — so onPrompt being hit means something
-    // else; give an actionable message instead of "prompt not supported".
-    const usesCallbackServer =
-      getOAuthProviders().find((p) => p.id === provider)?.usesCallbackServer ?? false;
-    return streamSSE(c, async (stream) => {
-      if (oauthInFlight) {
-        const msg = `a sign-in for "${oauthInFlight}" is already in progress — finish it in your browser or cancel it, then try again`;
-        await stream.writeSSE({ event: "error", data: JSON.stringify({ message: msg }) });
-        return;
-      }
-      const owner = Symbol("oauth-login");
-      oauthInFlight = provider;
-      oauthOwner = owner;
-      const release = () => {
-        if (oauthOwner === owner) {
-          oauthInFlight = null;
-          oauthOwner = null;
-        }
-      };
-      // Free the slot if the client disconnects (UI cancel / navigation). The
-      // dangling pi-ai callback server can't be torn down until the next daemon
-      // restart, but releasing the slot lets the user retry (and get the clear
-      // "port busy" message above rather than a silent block).
-      stream.onAbort(release);
-      try {
-        await deps.secrets.startOAuthLogin(provider, {
-          onAuth: (info) => {
-            // pi-ai's onAuth is synchronous; fire-and-forget the SSE write.
-            // Order is preserved by the underlying stream. Drop on failure
-            // (dead client) — the catch keeps the promise from floating.
-            stream
-              .writeSSE({
-                event: "auth",
-                data: JSON.stringify({
-                  url: info.url,
-                  ...(info.instructions !== undefined && { instructions: info.instructions }),
-                }),
-              })
-              .catch(() => {});
-          },
-          onProgress: (message) => {
-            stream
-              .writeSSE({ event: "progress", data: JSON.stringify({ message }) })
-              .catch(() => {});
-          },
-          // v1 supports only the loopback callback-server flow over HTTP.
-          // onPrompt/onSelect are genuine interactive steps a provider may
-          // demand mid-flow (e.g. GitHub Copilot's enterprise-URL prompt);
-          // surface a clear error and bail when one is hit.
-          //
-          // Deliberately NO onManualCodeInput: pi-ai's callback-server
-          // providers (anthropic, openai-codex) *race* a supplied
-          // onManualCodeInput against the browser callback, so a rejecting
-          // stub cancels the wait and tears down the loopback server on
-          // :1455 before the user finishes authenticating. Omitting it lets
-          // the loopback server receive the redirect and win normally.
-          onPrompt: async () => {
-            const msg = usesCallbackServer
-              ? "couldn't complete the browser sign-in — the callback port may be in use by another sign-in or the Codex CLI. Restart Hive and try again."
-              : "interactive prompt not yet supported over HTTP; OAuth provider requires manual input";
-            await stream.writeSSE({ event: "error", data: JSON.stringify({ message: msg }) });
-            throw new Error(msg);
-          },
-          onSelect: async () => {
-            const msg = "interactive selection not yet supported over HTTP";
-            await stream.writeSSE({ event: "error", data: JSON.stringify({ message: msg }) });
-            throw new Error(msg);
-          },
-        });
-        await stream.writeSSE({
-          event: "done",
-          data: JSON.stringify({ provider }),
-        });
-      } catch (err) {
-        await stream.writeSSE({
-          event: "error",
-          data: JSON.stringify({ message: (err as Error).message }),
-        });
-      } finally {
-        release();
-      }
-    });
   });
 
   // ─── Appearance (theme + font preferences) ───────────────────────────

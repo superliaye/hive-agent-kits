@@ -1,30 +1,21 @@
 // Public API for the Secrets module.
 //
-// Hive owns its own Secrets primitive (pi-ai is stateless for credentials at
-// the library boundary). This module persists API keys and OAuth credential
-// triples at the deployment level — `~/.hive/secrets.json` — and exposes:
+// Hive owns its own Secrets primitive. This module persists provider API keys at
+// the deployment level — `~/.hive/secrets.json` — and exposes:
 //
-//   - `getAuth(provider)`: the `AuthInput` shape the SDK adapters consume.
-//     The adapters currently consume only the `apiKey` branch; the OAuth-refresh
-//     path is not yet wired on the consumer side. For OAuth providers the returned
-//     `onRefresh` callback is bound to the store, so that — once a backend adapter
-//     consumes the `kind: "oauth"` branch and awaits `onRefresh` — mid-call refreshes
-//     WILL persist transparently. The SDK adapters MUST honor this once that branch
-//     lands (mirrors `lib/auth.ts`'s "any consumer that handles `kind: \"oauth\"`").
-//   - `startOAuthLogin(provider, callbacks)`: drives a pi-ai login flow.
+//   - `getAuth(provider)`: the `AuthInput` shape the SDK adapters consume (the
+//     `apiKey` branch). When no Secret resolves, the SDK falls back to its own
+//     ambient OS login (`~/.claude` from `claude login`, `~/.codex/auth.json`).
 //   - `set` / `remove` / `list` for direct CRUD by the Settings UI.
 //
 // Implementation is Effect-native (`SecretsLive`, ADR-0011 Phase 3a); consumers
 // resolve the `Secrets` service off the root `ManagedRuntime` (`createServer()`).
 // This barrel re-exports the legacy `Secrets` surface type (which `server/`
-// projects the resolved `SecretsSvc` onto) plus the module's types. The legacy
-// `createSecrets()` proxy was deleted in §4.3 — its test suites now build the
-// service via `SecretsLive` + a `ManagedRuntime`.
+// projects the resolved `SecretsSvc` onto) plus the module's types.
 
-import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 import type { AuthInput } from "../lib/auth.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
-import type { ConfiguredProvider, SecretEntry, SecretEvents } from "./types.ts";
+import type { ConfiguredProvider, SecretEvents } from "./types.ts";
 
 // The legacy `Secrets` surface: `SecretsSvc` minus the Effect-native typed-error
 // verbs (`requireAuth`, `refresh`), plus a `dispose()`. `server/` projects the
@@ -32,7 +23,6 @@ import type { ConfiguredProvider, SecretEntry, SecretEvents } from "./types.ts";
 export type Secrets = {
   getAuth(provider: string): Promise<AuthInput | undefined>;
   setApiKey(provider: string, apiKey: string): Promise<void>;
-  startOAuthLogin(provider: string, callbacks: OAuthLoginCallbacks): Promise<SecretEntry>;
   remove(provider: string): Promise<void>;
   list(): ConfiguredProvider[];
   status(provider: string): ConfiguredProvider["status"];

@@ -13,8 +13,7 @@ import { AgentBackend } from "../capability-types.ts";
 // is added or removed on one side only. This test pins the daemon's
 // authoritative set against the literal the wire/UI mirror is expected to carry.
 // When the daemon enum changes, this test fails loudly — the fix is to update
-// BOTH this expectation and the UI hand-mirror together. (ADR-0019 dropped the
-// `native` backend.)
+// BOTH this expectation and the UI hand-mirror together.
 describe("AgentBackend wire mirror (drift guard, r1-architecture-2)", () => {
   // The value set the UI's `AGENT_BACKENDS` hand-mirror is expected to equal.
   // Order-independent equality (a Set): the mirror is a value set, not a list.

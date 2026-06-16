@@ -13,13 +13,11 @@ Hive's Run runtime is now **one deep module that drives the vendor Agent SDKs
 directly** — `@anthropic-ai/claude-agent-sdk` (`claude-code`) and
 `@openai/codex-sdk` (`codex`) — behind the unchanged Run seam
 `startRun(thread, agent) → AsyncIterable<RunEvent>` ([CONTEXT.md](../../CONTEXT.md)).
-The **native in-process tool-loop, the ModelGateway, and pi-ai as the LLM
-completion transport are deleted**; the **Permission module is deleted**
-(governance deliberately deferred); **Audit is kept** (its emitter relocates to
-the SDK adapters). v1 ships **both** backends.
-
-Full design + locked decisions D1-D6: [the vendor-SDK CLI-backends
-design](../superpowers/specs/2026-06-15-vendor-sdk-cli-backends-design.md).
+The **native in-process tool-loop, the ModelGateway, and pi-ai (both as the LLM
+completion transport AND as the OAuth-login + model-catalog source) are
+deleted**; the **Permission module is deleted** (governance deliberately
+deferred); **Audit is kept** (its emitter relocates to the SDK adapters). v1
+ships **both** backends.
 
 ## Decisions (locked)
 
@@ -47,20 +45,33 @@ design](../superpowers/specs/2026-06-15-vendor-sdk-cli-backends-design.md).
   Agent-Manager lifecycle) are exposed as **one MCP server** on the daemon that both
   backends connect to by URL — the single "author tools once" boundary, and the
   common denominator (Codex accepts only MCP servers, not in-process tools).
-- **Auth defaults to API keys.** `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`, resolved
-  from the surviving Secrets module (`SecretsPort.getAuth`); subscription OAuth
-  (`CLAUDE_CODE_OAUTH_TOKEN`, `codex login`) is a personal-dev path honored when
-  present but not the product default. When no Hive secret resolves the SDK falls
-  back to its own ambient login.
-- **Keep model selection in Hive (ADR-0015 partial).** Hive still resolves model +
-  effort and passes them to the SDK. What changes is the *catalog source*: there is
-  no `ModelGateway.listModels` — the runnable list is derived per backend from
-  pi-ai's model registry ∩ credentialed providers. The tiered resolver SHAPE is
+- **Auth is API keys OR ambient CLI login — no in-app OAuth.** Auth resolves from
+  the Secrets module (`SecretsPort.getAuth`) as `ANTHROPIC_API_KEY` /
+  `OPENAI_API_KEY`; when no Hive Secret resolves, the SDK falls back to its own
+  ambient OS login (`~/.claude` from `claude login`, `~/.codex/auth.json` from
+  `codex login`). The in-app subscription-OAuth login flow is **deleted**. The
+  adapters spread `process.env` and set the API-key var only when a Secret is
+  present, so an empty value never clobbers an ambient login.
+- **Keep model selection in Hive (ADR-0015 partial); static catalog.** Hive still
+  resolves model + effort and passes them to the SDK. The *catalog source* is now a
+  **static per-backend model list** (no `ModelGateway.listModels`, no live registry),
+  filtered to the providers a backend exists for. The tiered resolver SHAPE is
   unchanged.
-- **Keep `@earendil-works/pi-ai` as a package.** It is deleted only as the LLM
-  *completion transport*; the Secrets module still imports its OAuth surface
-  (`@earendil-works/pi-ai/oauth`) for subscription login, and the model catalog uses
-  its model registry for enumeration.
+- **pi-ai is fully removed.** It is gone as the LLM completion transport AND as the
+  OAuth-login + model-catalog source; `@earendil-works/pi-ai` is dropped from
+  dependencies entirely.
+- **Continuity is SDK-native session resume only.** The sole continuity mechanism
+  is each backend's own session resume: only the latest user message crosses the
+  Run seam; Hive never re-projects prior turns. Create-vs-resume is decided at
+  message-send time by comparing the resolved backend to the Thread's STORED CLI
+  session backend, and the stored backend is updated only when a Run actually
+  executes. So switch-without-send and switch-back-before-send are **no-ops**;
+  switching backend and then sending starts that backend's session **fresh**
+  (accepted, silent) — the prior history is not replayed into it.
+- **`invoke_capability` reports unrunnable honestly.** A capability found in the
+  Registry but with no in-process tool runner to execute it returns
+  `{ isError: true }` (`"cannot run: no in-process tool runtime"`), not a false
+  success. The missing in-process tool runner is an explicit follow-up.
 
 ## Resolves ADR-0018 (the agent-manager native-lock)
 
@@ -116,9 +127,10 @@ stub proving the seam, not a store).
 - No native backend, no ModelGateway, no Provider Adapter, no Permission module, no
   native built-in tools, no raw-binary CLI spawn.
 - The capability MCP server is the single place Hive authors domain tools; the
-  Memory tool is a stub this iteration (the full Memory subsystem is a follow-up).
-- pi-ai survives as a dependency for Secrets OAuth + the model catalog source, never
-  as the completion transport.
+  Memory tool is a stub this iteration, and `invoke_capability` reports unrunnable
+  until an in-process tool runner lands (both follow-ups).
+- pi-ai is removed entirely — no completion transport, no OAuth login, no model
+  registry; auth is API keys in Secrets or ambient CLI login, the catalog is static.
 - ADR-0005 (ModelGateway), ADR-0010 (pi-ai transport), ADR-0016 (CLI projecting
   spawn), and ADR-0017 (native tool-calling loop) are superseded; ADR-0015 is
   superseded in part (catalog source); ADR-0018's AM native-lock is resolved by full

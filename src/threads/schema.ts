@@ -48,8 +48,8 @@ export const threads = sqliteTable("threads", {
   // An open `text` path — the resolver is the single concretization point.
   working_dir: text("working_dir"),
   // Per-conversation Agent-Backend pick (ADR-0015). NULL = unset (fall through
-  // to the agent default). An open `text` backend id (native/claude-code/codex);
-  // the resolver's `threadBackend` tier is the single resolution point.
+  // to the agent default). An open `text` backend id (claude-code/codex); the
+  // resolver's `threadBackend` tier is the single resolution point.
   backend: text("backend"),
   // Per-Thread CLI native-session continuity (ADR-0016). When a CLI backend
   // (claude-code/codex) creates a session, its session id is persisted here

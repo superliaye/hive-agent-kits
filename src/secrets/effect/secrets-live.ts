@@ -10,22 +10,17 @@
 // originating op, with mutating verbs emitting BEFORE committing. The typed
 // `E` channel (errors.ts) covers the genuine domain failures — `requireAuth`
 // (no credentials) and `refresh` (bad target); an audit-persist failure surfaces
-// as an Effect defect (die), not a typed `E`. The OAuth `onRefresh` callback
-// stays plain-async at the pi-ai boundary (ADR-0010): pi-ai calls it
-// mid-completion and it now awaits the async store refresh.
+// as an Effect defect (die), not a typed `E`.
 
-import type { OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 import { Context, Effect, Layer } from "effect";
 import type { AuthInput } from "../../lib/auth.ts";
 import type { TypedEmitter } from "../../lib/typed-emitter.ts";
-import { loginOAuth } from "../oauth.ts";
 import { SecretsPersistence } from "../persistence.ts";
 import { createSecretsStore, type SecretsStore } from "../store.ts";
 import {
   type ConfiguredProvider,
   type OAuthCredentials,
   SECRETS_FILE_VERSION,
-  type SecretEntry,
   type SecretEvents,
   type SecretsFile,
 } from "../types.ts";
@@ -38,7 +33,6 @@ export type CreateSecretsOptions =
 export type SecretsSvc = {
   getAuth(provider: string): Promise<AuthInput | undefined>;
   setApiKey(provider: string, apiKey: string): Promise<void>;
-  startOAuthLogin(provider: string, callbacks: OAuthLoginCallbacks): Promise<SecretEntry>;
   remove(provider: string): Promise<void>;
   list(): ConfiguredProvider[];
   status(provider: string): ConfiguredProvider["status"];
@@ -91,12 +85,6 @@ function buildSvc(store: SecretsStore): SecretsSvc {
     remove: (provider) => store.remove(provider),
     list: () => store.list(),
     status: (provider) => store.getStatus(provider),
-    startOAuthLogin: async (provider, callbacks) => {
-      const credentials = await loginOAuth(provider, callbacks);
-      const entry: SecretEntry = { kind: "oauth", credentials, addedAt: Date.now() };
-      await store.set(provider, entry);
-      return entry;
-    },
     requireAuth: (provider) =>
       Effect.flatMap(
         // getAuth awaits the `secret.read` emit; an audit-persist failure on

@@ -1,8 +1,8 @@
 // Backend dispatch (D2) — a thin branch on the EXISTING resolved backend id, NOT
 // model-inferred (Hive owns selection; ADR-0015). `claude-code` → the Claude
-// adapter, `codex` → the Codex adapter. No id rename, no model-shape inference,
-// no `native` arm (native is deleted). The two adapter handles are constructed
-// once at the composition root and passed in; `dispatch` only routes.
+// adapter, `codex` → the Codex adapter. No id rename, no model-shape inference.
+// The two adapter handles are constructed once at the composition root and passed
+// in; `dispatch` only routes.
 
 import type { Stream } from "effect";
 import type { RunEvent } from "../types.ts";

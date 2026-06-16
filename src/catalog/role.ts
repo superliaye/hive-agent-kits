@@ -5,10 +5,10 @@
 // There is no `role` field on the HarnessManifest, so the role is DERIVED from
 // the well-known kernel ids here, on the daemon (the domain authority).
 //
-// With native gone (ADR-0019, resolving ADR-0018) there is no Agent-Backend gate:
-// every Agent — including the Agent Manager — runs on whichever CLI/SDK backend
-// its harness/prefs resolve to. The AM performs lifecycle ops through the
-// MCP-projected lifecycle tools, so the old always-native lock is gone.
+// There is no Agent-Backend gate (ADR-0019, resolving ADR-0018): every Agent —
+// including the Agent Manager — runs on whichever SDK backend its harness/prefs
+// resolve to. The AM performs lifecycle ops through the MCP-projected lifecycle
+// tools.
 
 const AGENT_MANAGER_ID = "agent-manager";
 

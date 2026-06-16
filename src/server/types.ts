@@ -256,11 +256,9 @@ export const SetAgentModelPrefBody = z
   .object({
     model: DefaultModel.optional(),
     effort: DefaultEffort.optional(),
-    // Apply-to-default for the Agent-Backend axis (ADR-0015 §"Backend joins the
-    // axes for Worker Agents only"). An id ONLY — a backend carries NO stored
-    // config block. `null` clears the stored default (back to the Harness-
-    // authored backend). Worker-only: a non-native backend for a non-Worker is
-    // rejected at the route.
+    // Apply-to-default for the Agent-Backend axis (ADR-0015). An id ONLY — a
+    // backend carries NO stored config block. `null` clears the stored default
+    // (back to the Harness-authored backend).
     backend: AgentBackend.nullable().optional(),
   })
   .strict()
@@ -283,8 +281,7 @@ export const SetThreadScopeBody = z
     workingDir: z.string().nullable().optional(),
     // Per-conversation Agent-Backend pick (ADR-0015 axis: per-conversation >
     // agent default). A backend id only (no config block); `null` clears the
-    // axis (back to the agent default). Worker-only: a non-native backend for a
-    // non-Worker agent is rejected at the route.
+    // axis (back to the agent default).
     backend: AgentBackend.nullable().optional(),
   })
   .strict()
@@ -350,9 +347,4 @@ export type ConfiguredProviderWire = {
   status: "ok" | "expired";
   addedAt: number;
   refreshedAt?: number;
-};
-
-export type OAuthProviderWire = {
-  id: string;
-  name: string;
 };

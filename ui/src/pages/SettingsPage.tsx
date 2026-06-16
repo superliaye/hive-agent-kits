@@ -21,7 +21,7 @@ const SECTIONS: readonly Section[] = [
     id: "secrets",
     label: "Secrets",
     description:
-      "API keys and OAuth credentials for model providers. Stored locally in ~/.hive/secrets.json with file mode 0600.",
+      "API keys for model providers. Stored locally in ~/.hive/secrets.json with file mode 0600.",
   },
   {
     id: "backends",

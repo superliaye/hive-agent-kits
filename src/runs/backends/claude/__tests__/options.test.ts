@@ -10,7 +10,6 @@ function invocation(over: Partial<BackendInvocation> = {}): BackendInvocation {
     agentId: AgentId.parse("worker"),
     backend: "claude-code",
     userMessage: [{ type: "text", text: "hi" }],
-    history: [],
     systemPrompt: "you are helpful",
     cwd: "/work",
     model: "anthropic/claude-opus-4-1",

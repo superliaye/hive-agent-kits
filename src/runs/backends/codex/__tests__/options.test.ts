@@ -10,7 +10,6 @@ function invocation(over: Partial<BackendInvocation> = {}): BackendInvocation {
     agentId: AgentId.parse("worker"),
     backend: "codex",
     userMessage: [{ type: "text", text: "hi" }],
-    history: [],
     systemPrompt: "you are helpful",
     cwd: "/work",
     model: "openai-codex/gpt-5-codex",

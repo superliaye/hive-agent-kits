@@ -1,5 +1,4 @@
-// Per-Run Working Directory resolution (ADR-0016 C4). The three-tier resolver,
-// re-homed out of the deleted native `run-shell.ts`:
+// Per-Run Working Directory resolution (ADR-0016 C4). The three-tier resolver:
 //   1. per-conversation — the Thread's `working_dir` pick
 //   2. agent default    — the Agent's `config.workingDir`
 //   3. per-Agent `~/.hive` workspace fallback

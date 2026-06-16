@@ -31,7 +31,7 @@ export const OAuthCredentialsSchema = z
     refresh: z.string().min(1),
     expires: z.number(),
   })
-  .passthrough(); // pi-ai's OAuthCredentials allows extra fields; preserve them.
+  .passthrough(); // OAuth credentials may carry extra provider fields; preserve them.
 
 export type OAuthCredentials = z.infer<typeof OAuthCredentialsSchema>;
 

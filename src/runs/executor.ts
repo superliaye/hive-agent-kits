@@ -197,9 +197,8 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       }
       const { provider, effort, backend } = resolved;
 
-      // With native deleted, only the two SDK backends remain. A stored/stale
-      // `native` value can no longer resolve (the enum drops it); guard anyway so
-      // a future unknown backend fails truthfully rather than dispatching nowhere.
+      // Only the two SDK backends exist. Guard so a future unknown backend fails
+      // truthfully rather than dispatching nowhere.
       if (backend !== "claude-code" && backend !== "codex") {
         const run = runs.create({ threadId, agentId, model });
         yield await finalizeFailed(
@@ -231,7 +230,12 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
       // the SDK owns argv now, so there is no binary/args to record).
       await backendEvents.emit("backend.run.started", { runId: run.id, agentId, backend, model });
 
-      // Create-vs-resume from the Thread's stored CLI session for THIS backend.
+      // Create-vs-resume decided HERE, at message-send time, by comparing the
+      // resolved backend to the Thread's STORED CLI-session backend. The stored
+      // backend is updated only when a run actually executes (persistSession on a
+      // create turn), so switching backend and switching back before sending is a
+      // no-op; history is only "lost" when a message is sent on a backend
+      // differing from the stored one (a fresh SDK session, ADR-0019).
       const stored = threads.getCliSession(threadId);
       const mode =
         stored && stored.backend === backend
@@ -248,7 +252,6 @@ export function createRunExecutor(deps: CreateRunExecutorDeps): RunExecutor {
         agentId,
         backend,
         userMessage,
-        history: threads.getCompletionMessages(threadId),
         systemPrompt: agent.promptBody.trim(),
         cwd,
         model,

@@ -90,7 +90,8 @@ describe("server routes", () => {
       join(bundledRoot, "agents", "gated", "HARNESS.md"),
       harness("gated", "alpha", ["node", "git"]),
     );
-    // The Agent Manager: the one agent that stays native-locked (ADR-0018).
+    // The Agent Manager — runs on whichever SDK backend its harness/prefs resolve
+    // to, like any other agent (no carve-out; ADR-0019).
     mkdirSync(join(bundledRoot, "agents", "agent-manager"), { recursive: true });
     writeFileSync(
       join(bundledRoot, "agents", "agent-manager", "HARNESS.md"),

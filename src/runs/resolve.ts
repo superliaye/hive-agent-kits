@@ -50,7 +50,7 @@ export type ResolveInput = {
   modelOverride?: string;
   /** Per-Run effort override, when present; else undefined. Always concrete. */
   effortOverride?: ThinkingEffort;
-  /** The Agent's harness-authored backend (native | claude-code | codex). */
+  /** The Agent's harness-authored backend (claude-code | codex). */
   backend: AgentBackend;
   /**
    * Thread-scope Agent-Backend pick, when set; else undefined. Wins over the
@@ -131,10 +131,10 @@ export function resolve(input: ResolveInput): ResolveResult {
   // Backend tier (ADR-0015): Thread-scope pick > user agent default > harness-
   // authored backend. No per-Run backend override exists today (no symbolic
   // backend either — a concrete discriminator). Same precedence shape as model/
-  // effort, with the harness backend as the terminal fallback. With native gone
-  // (ADR-0019, resolving ADR-0018), there is no agent-manager carve-out: the
-  // Agent Manager runs on whichever CLI/SDK backend its harness/prefs resolve to,
-  // like any other agent (its lifecycle ops go through the MCP-projected tools).
+  // effort, with the harness backend as the terminal fallback. There is no
+  // agent-manager carve-out (ADR-0019, resolving ADR-0018): the Agent Manager
+  // runs on whichever SDK backend its harness/prefs resolve to, like any other
+  // agent (its lifecycle ops go through the MCP-projected tools).
   const backend: AgentBackend = input.threadBackend ?? input.userBackendDefault ?? input.backend;
 
   return {

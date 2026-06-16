@@ -13,7 +13,6 @@ function invocation(backend: "claude-code" | "codex"): BackendInvocation {
     agentId: AgentId.parse("worker"),
     backend,
     userMessage: [{ type: "text", text: "hi" }],
-    history: [],
     systemPrompt: "",
     cwd: "/tmp",
     model: "anthropic/claude-opus",

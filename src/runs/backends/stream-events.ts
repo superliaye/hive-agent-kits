@@ -1,12 +1,7 @@
-// Canonical backend stream-event vocabulary — re-homed from the deleted
-// model-gateway (Migration §1). The two SDK adapters (Claude, Codex) fold their
-// vendor streams into `BackendStreamEvent`s; `RunEvent.model.event` wraps each
-// one, so the UI's SSE consumer sees the unchanged envelope (types.ts).
-//
-// Renamed backend-neutral: the old `GatewayEvent`/`GatewayErrorCode`/
-// `GatewayFailure` carried gateway-era names; the runtime is now SDK adapters,
-// not a gateway. The SHAPE is preserved so the consumer (the accumulator, the
-// audit fold, the SSE forwarder) is unaffected by the rename.
+// Canonical backend stream-event vocabulary. The two SDK adapters (Claude,
+// Codex) fold their vendor streams into `BackendStreamEvent`s;
+// `RunEvent.model.event` wraps each one, so the UI's SSE consumer sees the
+// unchanged envelope (types.ts).
 
 import { Data } from "effect";
 

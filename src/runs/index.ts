@@ -15,7 +15,9 @@ export {
   createCapabilityMcpServer,
 } from "./backends/capabilities-mcp.ts";
 export { createClaudeAdapter } from "./backends/claude/adapter.ts";
+export { createClaudeSkillProjector } from "./backends/claude/skill-projector.ts";
 export { createCodexAdapter } from "./backends/codex/adapter.ts";
+export { createCodexSkillProjector } from "./backends/codex/skill-projector.ts";
 export type { BackendAdapters } from "./backends/dispatch.ts";
 export { dispatch } from "./backends/dispatch.ts";
 export type { BackendInvocation, InvocationSkill } from "./backends/invocation.ts";

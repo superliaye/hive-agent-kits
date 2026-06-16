@@ -1,8 +1,11 @@
 // BackendInvocation — the resolved, backend-agnostic description of one Run the
 // executor hands to a backend adapter (D2). Everything an adapter needs to spawn
-// its SDK and fold the stream: the identity triad, the prompt + conversation
-// continuity token, the resolved model/effort/auth, the working dir, the bound
-// skills to project, and the capability MCP endpoint both backends connect to.
+// its SDK and fold the stream: the identity triad, the latest user message, the
+// resolved model/effort/auth, the working dir, the bound skills to project, and
+// the capability MCP endpoint both backends connect to. Conversation continuity
+// is the SDK's own native session resume (ADR-0019) — only the latest user
+// message crosses the seam; prior turns live in the SDK's stored session, never
+// re-projected by Hive.
 //
 // The executor resolves this ONCE (model/effort/backend/auth/cwd) and dispatches
 // on `backend`; the adapter never re-derives selection (Hive owns it).
@@ -19,10 +22,10 @@ import type { Message } from "../../lib/messages.ts";
 // future workplace-scoping.
 export type InvocationSkill = { name: string; path: string; origin: Origin };
 
-// Create vs resume — the SDK's own native session continuity (ADR-0016). On
-// resume the adapter replays the SDK's stored session and sends only the new
-// message; on create it sends the latest user message (+ projected history) and
-// captures a fresh session id to persist.
+// Create vs resume — the SDK's own native session continuity (ADR-0016/0019).
+// Either way only the latest user message is sent: on resume the adapter replays
+// the SDK's stored session; on create the SDK starts a fresh session and the
+// adapter captures its id to persist. Hive never re-projects prior turns.
 export type ContinuationMode = { kind: "create" } | { kind: "resume"; sessionId: string };
 
 export type BackendInvocation = {
@@ -33,8 +36,6 @@ export type BackendInvocation = {
   backend: "claude-code" | "codex";
   /** The latest user message for this turn (Anthropic-flavored content blocks). */
   userMessage: Message["content"];
-  /** Full projected conversation history (used on the first/create turn). */
-  history: Message[];
   /** The agent's authored system-prompt body (already trimmed; may be empty). */
   systemPrompt: string;
   /** Resolved Working Directory for this Run (ADR-0016 C4) — the SDK's cwd. */

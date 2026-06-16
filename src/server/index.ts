@@ -43,15 +43,16 @@ import {
 import { HiveDb, HiveDbLive } from "../db/effect/hive-db-live.ts";
 import { createLogger, log, setLogger } from "../lib/log.ts";
 import { files, runtime as runtimePaths, runtimeRoot } from "../lib/paths.ts";
-import type { BackendInvocation } from "../runs/backends/invocation.ts";
-import { createDefaultSkillFsCopy, projectSkills } from "../runs/backends/skills.ts";
+import { createDefaultSkillFsCopy } from "../runs/backends/skills.ts";
 import {
   type AgentLifecyclePort,
   type BackendAdapters,
   type CapabilityInvokePort,
   createCapabilityMcpServer,
   createClaudeAdapter,
+  createClaudeSkillProjector,
   createCodexAdapter,
+  createCodexSkillProjector,
   createRunExecutor,
   createRunsStore,
   type RunExecutor,
@@ -189,7 +190,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     events: secretsSvc.events,
     getAuth: (provider) => secretsSvc.getAuth(provider),
     setApiKey: (provider, apiKey) => secretsSvc.setApiKey(provider, apiKey),
-    startOAuthLogin: (provider, callbacks) => secretsSvc.startOAuthLogin(provider, callbacks),
     remove: (provider) => secretsSvc.remove(provider),
     list: () => secretsSvc.list(),
     status: (provider) => secretsSvc.status(provider),
@@ -254,11 +254,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       })),
   };
 
-  // RunnableCatalogPort adapter: the credentialed ∩ routable models the
-  // symbolic-default resolver consumes, assembled by the SINGLE shared
-  // `runnableCatalog` helper (the same globally-ordered list title-gen and
-  // `GET /api/models` consume). The catalog SOURCE is now pi-ai's model registry
-  // (Migration §3) — there is no ModelGateway. Snapshot per Run/request.
+  // RunnableCatalogPort adapter: the available models the symbolic-default
+  // resolver consumes, assembled by the SINGLE shared `runnableCatalog` helper
+  // (the same globally-ordered list title-gen and `GET /api/models` consume).
+  // The catalog SOURCE is a static per-backend table filtered to available
+  // providers — no live registry. Snapshot per Run/request.
   const runnableCatalogPort: RunnableCatalogPort = {
     snapshot: () => runnableCatalog(secrets),
   };
@@ -273,17 +273,14 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // Catalog. Served over THIS daemon (mounted on app.all("/mcp") below); both SDK
   // backends connect by `mcpEndpoint`.
   const capabilityInvoke: CapabilityInvokePort = {
-    invoke: async (name, args) => {
+    invoke: async (name, _args) => {
       try {
         const found = registry.get("tool", name);
         if (!found) return { content: `unknown capability: ${name}`, isError: true };
-        // Tool capabilities are registry entries; there is no in-process tool
-        // runner yet (the native tools are deleted). Return a structured ack so
-        // the seam is invocable end-to-end; a real tool runtime is a follow-up.
-        return {
-          content: JSON.stringify({ invoked: name, args, acknowledged: true }),
-          isError: false,
-        };
+        // The capability exists in the Registry but there is no in-process tool
+        // runner to execute it yet (a follow-up). Report this honestly as an
+        // error rather than a false success.
+        return { content: "cannot run: no in-process tool runtime", isError: true };
       } catch (err) {
         return { content: `capability invoke failed: ${String(err)}`, isError: true };
       }
@@ -307,41 +304,27 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     agents: agentLifecycle,
   });
 
-  // The two SDK backend adapters. Skill projection retargets per-Run: Claude
-  // projects into an isolated plugins dir; Codex projects into the workspace
-  // `.agents/skills`. The fs-copy edge + cleanup are shared.
+  // The two SDK backend adapters. Each backend's native skill-projection LAYOUT
+  // lives in its own SkillProjector adapter (beside the adapter); the fs-copy
+  // edge is shared. The adapter's `projectSkills`/`cleanupSkills` callbacks just
+  // dispatch to the projector.
   const skillFsCopy = createDefaultSkillFsCopy();
-  const claudeAdapter = createClaudeAdapter({
-    projectSkills: async (invocation: BackendInvocation) => {
-      if (invocation.skills.length === 0) return undefined;
-      const root = runtimePaths.backendPluginRoot(invocation.agentId, invocation.runId);
-      const skillsDir = runtimePaths.backendPluginSkillsDir(invocation.agentId, invocation.runId);
-      const landed = await projectSkills({
-        skills: invocation.skills,
-        skillsDir,
-        copy: skillFsCopy.copy,
-        runId: invocation.runId,
-      });
-      return landed ? root : undefined;
-    },
-    cleanupSkills: (invocation: BackendInvocation) => {
-      if (invocation.skills.length === 0) return;
-      const root = runtimePaths.backendPluginRoot(invocation.agentId, invocation.runId);
-      skillFsCopy.remove(root).catch(() => {});
+  const claudeSkillProjector = createClaudeSkillProjector({
+    copy: skillFsCopy,
+    paths: {
+      pluginRoot: runtimePaths.backendPluginRoot,
+      pluginSkillsDir: runtimePaths.backendPluginSkillsDir,
     },
   });
+  const codexSkillProjector = createCodexSkillProjector({ copy: skillFsCopy });
+  const claudeAdapter = createClaudeAdapter({
+    projectSkills: async (invocation) =>
+      (await claudeSkillProjector.project(invocation)).pluginPath,
+    cleanupSkills: (invocation) => claudeSkillProjector.cleanup(invocation),
+  });
   const codexAdapter = createCodexAdapter({
-    projectSkills: async (invocation: BackendInvocation) => {
-      if (invocation.skills.length === 0) return;
-      // Codex discloses skills from `.agents/skills` under its workspace cwd
-      // (no out-of-tree option; the bound-to-a-repo case degrades — ADR-0019).
-      const { join } = await import("node:path");
-      await projectSkills({
-        skills: invocation.skills,
-        skillsDir: join(invocation.cwd, ".agents", "skills"),
-        copy: skillFsCopy.copy,
-        runId: invocation.runId,
-      });
+    projectSkills: async (invocation) => {
+      await codexSkillProjector.project(invocation);
     },
   });
 

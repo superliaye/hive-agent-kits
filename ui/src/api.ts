@@ -85,11 +85,6 @@ export type ConfiguredProvider = {
   refreshedAt?: number;
 };
 
-export type OAuthProvider = {
-  id: string;
-  name: string;
-};
-
 // Thinking-effort levels. Deliberate cross-package mirror of the daemon's
 // canonical `EFFORT_ORDER` / `ThinkingEffort` (src/model-gateway/types.ts):
 // the UI is a separate Vite bundle and does not import daemon source, so this
@@ -276,9 +271,8 @@ declare global {
  * Open an http(s) URL in the user's default external browser.
  *
  * In Electron: calls the preload bridge → main process's
- * `shell.openExternal(url)`. The OAuth login flow uses this so the user's
- * real browser handles the Anthropic consent screen, not the in-app
- * webview.
+ * `shell.openExternal(url)`, so the user's real browser handles the page rather
+ * than the in-app webview.
  *
  * In a plain browser tab (Vite dev): falls back to `window.open(url, "_blank")`.
  */
@@ -423,8 +417,6 @@ export const api = {
 
   // ─── Secrets ─────────────────────────────────────────────────────────
   listSecrets: (cfg: ApiConfig) => call<ConfiguredProvider[]>(cfg, "/api/secrets"),
-  listOAuthProviders: (cfg: ApiConfig) =>
-    call<OAuthProvider[]>(cfg, "/api/secrets/oauth-providers"),
   setApiKey: (cfg: ApiConfig, provider: string, apiKey: string) =>
     callVoid(cfg, `/api/secrets/${encodeURIComponent(provider)}/api-key`, {
       method: "POST",
@@ -432,28 +424,6 @@ export const api = {
     }),
   removeSecret: (cfg: ApiConfig, provider: string) =>
     callVoid(cfg, `/api/secrets/${encodeURIComponent(provider)}`, { method: "DELETE" }),
-  /**
-   * Start a provider's OAuth login. Returns when the SSE stream ends with
-   * `done` (success) or `error`. Caller receives streaming events via
-   * `onEvent` — typically:
-   *   - "auth"    { url, instructions? }   open URL via openUrl()
-   *   - "progress" { message }              informational
-   *   - "done"    { provider }              credentials stored
-   *   - "error"   { message }               login failed
-   */
-  startOAuthLogin: (
-    cfg: ApiConfig,
-    provider: string,
-    onEvent: (name: string, data: unknown) => void,
-    signal?: AbortSignal,
-  ) =>
-    consumeSSE(
-      cfg,
-      `/api/secrets/${encodeURIComponent(provider)}/oauth/login`,
-      { method: "POST" },
-      onEvent,
-      signal,
-    ),
 
   // ─── Models + per-agent model preference ─────────────────────────────
   // Models the user can actually run (configured providers ∩ routable).

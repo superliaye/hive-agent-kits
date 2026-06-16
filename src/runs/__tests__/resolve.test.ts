@@ -244,7 +244,7 @@ describe("resolve — backend tier (Thread pick > user default > harness, OQ-1)"
   });
 });
 
-describe("resolve — no agent-manager carve-out (ADR-0019: native gone)", () => {
+describe("resolve — no agent-manager carve-out (ADR-0019)", () => {
   test("the Agent Manager keeps its resolved CLI backend like any other agent", () => {
     const r = resolve({ ...base(), agentId: "agent-manager", backend: "codex" });
     if (!("failure" in r)) expect(r.backend).toBe("codex");

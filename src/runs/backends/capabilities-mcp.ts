@@ -88,7 +88,8 @@ export function buildCapabilityMcpServer(deps: CapabilityMcpDeps): McpServer {
   server.registerTool(
     "invoke_capability",
     {
-      description: "Invoke a bound Hive capability tool by name with JSON arguments.",
+      description:
+        "Invoke a bound Hive capability tool by name with JSON arguments. NOTE: cannot execute capabilities yet — there is no in-process tool runtime, so a found capability returns an error until that runtime lands.",
       inputSchema: {
         name: z.string().describe("The bound capability tool name."),
         args: z.unknown().optional().describe("JSON arguments for the capability."),
@@ -103,8 +104,8 @@ export function buildCapabilityMcpServer(deps: CapabilityMcpDeps): McpServer {
     },
   );
 
-  // Agent-Manager lifecycle tools (Q-mcp-scope + Q-am-lock BINDING). With native
-  // gone the AM has no other path to perform lifecycle ops — these are the path.
+  // Agent-Manager lifecycle tools (Q-mcp-scope + Q-am-lock BINDING). These MCP
+  // tools are the AM's only path to perform lifecycle ops (ADR-0019).
   server.registerTool(
     "create_agent",
     {

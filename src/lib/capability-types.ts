@@ -46,7 +46,7 @@ export const CapabilitySource = z.enum(["filesystem", "builtin", "mcp-discovered
 export type CapabilitySource = z.infer<typeof CapabilitySource>;
 
 // AgentBackend: the vendor Agent SDK that executes a Run for a given Agent
-// (ADR-0019 — the native in-process loop is deleted).
+// (ADR-0019).
 //   claude-code — drives @anthropic-ai/claude-agent-sdk
 //   codex       — drives @openai/codex-sdk
 export const AgentBackend = z.enum(["claude-code", "codex"]);

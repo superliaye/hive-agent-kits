@@ -18,13 +18,24 @@
 import { cp, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { log } from "../../lib/log.ts";
-import type { InvocationSkill } from "./invocation.ts";
+import type { BackendInvocation, InvocationSkill } from "./invocation.ts";
 
 // The default FS copy edge: recursive dir copy + recursive remove. Plain async
 // around node:fs/promises at the true external boundary.
 export type SkillFsCopy = {
   copy(src: string, dest: string): Promise<void>;
   remove(target: string): Promise<void>;
+};
+
+// Per-backend skill-projection port. Each adapter owns its native LAYOUT
+// decision (Claude: an isolated plugins root, returning a pluginPath only when a
+// skill actually landed; Codex: `.agents/skills` under the workspace cwd, no
+// plugin path). `project` lands the Run's bound skills and reports the plugin
+// path (when the backend uses one); `cleanup` tears the projection down after the
+// Run ends.
+export type SkillProjector = {
+  project(invocation: BackendInvocation): Promise<{ pluginPath?: string }>;
+  cleanup(invocation: BackendInvocation): void;
 };
 
 export function createDefaultSkillFsCopy(): SkillFsCopy {

@@ -4,9 +4,7 @@
 // executor type-depends on these shapes, never on Catalog / Secrets / Threads /
 // RunsStore concretes.
 //
-// With the native loop deleted (ADR-0019), the native-path ports are gone
-// (Completion, ShellRunner, FsRunner, Permission, CapConfig, SkillResolver,
-// CliSpawner). The surviving ports below feed the SDK-backend dispatch.
+// These ports feed the SDK-backend dispatch (ADR-0019).
 
 import { Context } from "effect";
 import type { Agent } from "../../catalog/types.ts";
