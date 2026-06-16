@@ -4,9 +4,13 @@
 // the library boundary). This module persists API keys and OAuth credential
 // triples at the deployment level — `~/.hive/secrets.json` — and exposes:
 //
-//   - `getAuth(provider)`: the `AuthInput` shape the SDK adapters consume
-//     (apiKey or OAuth token). For OAuth providers the returned `onRefresh`
-//     callback is bound to the store, so mid-call refreshes persist transparently.
+//   - `getAuth(provider)`: the `AuthInput` shape the SDK adapters consume.
+//     The adapters currently consume only the `apiKey` branch; the OAuth-refresh
+//     path is not yet wired on the consumer side. For OAuth providers the returned
+//     `onRefresh` callback is bound to the store, so that — once a backend adapter
+//     consumes the `kind: "oauth"` branch and awaits `onRefresh` — mid-call refreshes
+//     WILL persist transparently. The SDK adapters MUST honor this once that branch
+//     lands (mirrors `lib/auth.ts`'s "any consumer that handles `kind: \"oauth\"`").
 //   - `startOAuthLogin(provider, callbacks)`: drives a pi-ai login flow.
 //   - `set` / `remove` / `list` for direct CRUD by the Settings UI.
 //

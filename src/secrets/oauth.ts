@@ -4,9 +4,12 @@
 // PKCE / token-exchange protocol per provider.
 //
 // Per-request token refresh is carried by the `AuthInput` that `getAuth`
-// returns (see index.ts): its `onRefresh` callback is bound to the store, so a
-// mid-call refresh by the SDK adapter persists transparently. The Secrets
-// module deals only with credential storage + login + that refresh callback.
+// returns (see index.ts): its `onRefresh` callback is bound to the store, so
+// that — once a backend adapter consumes the `kind: "oauth"` branch and awaits
+// `onRefresh` — a mid-call refresh WILL persist transparently. The SDK adapters
+// currently consume only the `apiKey` branch; the OAuth-refresh path is not yet
+// wired on the consumer side. The Secrets module deals only with credential
+// storage + login + that refresh callback.
 
 import { getOAuthProvider, type OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 import { type OAuthCredentials, OAuthCredentialsSchema } from "./types.ts";
