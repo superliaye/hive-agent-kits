@@ -601,10 +601,10 @@ export function buildRoutes(deps: RoutesDeps): Hono {
     return c.json(out);
   });
 
-  // Available OAuth providers from pi-ai's registry. UI shows these as
-  // "Log in with X" actions in Settings. Filtered to providers Hive's
-  // pi-ai adapter actually routes to (so we don't offer login to a
-  // provider we couldn't then use).
+  // Available OAuth providers from pi-ai's OAuth registry. UI shows these as
+  // "Log in with X" actions in Settings. Filtered to providers Hive's model
+  // catalog can route to (so we don't offer login to a provider we couldn't
+  // then use).
   app.get("/api/secrets/oauth-providers", (c) => {
     const providers = getOAuthProviders().map<OAuthProviderWire>((p) => ({
       id: p.id,

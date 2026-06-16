@@ -19,9 +19,9 @@ import {
 export type SecretsStore = {
   /**
    * Get the stored entry for a provider, or undefined. Emits `secret.read`.
-   * Returns the raw entry — callers needing an `AuthInput` (e.g. the
-   * ModelGateway) should use `index.ts:getAuth(provider)` instead, which
-   * handles the OAuth `onRefresh` callback binding.
+   * Returns the raw entry — callers needing an `AuthInput` (e.g. a backend
+   * adapter) should use `index.ts:getAuth(provider)` instead, which handles the
+   * OAuth `onRefresh` callback binding.
    *
    * Async + block-on-failure: the read emit is awaited so a failed audit of
    * a read fails the read (ADR-0004 uniform no-silent-degrade, 4.2-A1).
