@@ -1,7 +1,11 @@
 import type { AgentBackend } from "../lib/capability-types.ts";
 import type { AgentId, RunId, ThreadId } from "../lib/ids.ts";
-import type { FinishReason, GatewayErrorCode, GatewayEvent } from "../model-gateway/types.ts";
 import type { ThreadMessage } from "../threads/types.ts";
+import type {
+  BackendErrorCode,
+  BackendStreamEvent,
+  FinishReason,
+} from "./backends/stream-events.ts";
 import type { RunStatus } from "./schema.ts";
 
 export type { RunStatus } from "./schema.ts";
@@ -16,7 +20,7 @@ export type Run = {
   endedAt?: number;
   finishReason?: FinishReason;
   errorCode?:
-    | GatewayErrorCode
+    | BackendErrorCode
     | "daemon_restart"
     | "no_credentials"
     | "agent_not_found"
@@ -29,7 +33,7 @@ export type Run = {
  * Run event stream — what `startRun()` yields. Nested envelope so the UI's
  * SSE consumer can route lifecycle events separately from per-token deltas.
  *
- * `model.event` wraps every GatewayEvent (text_delta, tool_use_*, usage,
+ * `model.event` wraps every BackendStreamEvent (text_delta, tool_use_*, usage,
  * etc.). `run.completed` carries the final assistant message that was
  * persisted to the messages table. `run.failed` carries a classified error.
  */
@@ -42,7 +46,7 @@ export type RunEvent =
       model: string;
       ts: number;
     }
-  | { type: "model.event"; runId: RunId; event: GatewayEvent }
+  | { type: "model.event"; runId: RunId; event: BackendStreamEvent }
   | {
       type: "run.completed";
       runId: RunId;
