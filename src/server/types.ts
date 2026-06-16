@@ -212,7 +212,7 @@ export const SetThreadTitleBody = z
 export type SetThreadTitleBody = z.infer<typeof SetThreadTitleBody>;
 
 // Thinking-effort levels accepted at the HTTP boundary. Inferred from the
-// canonical `EFFORT_ORDER` tuple (src/model-gateway/types.ts) — the closed set
+// canonical `EFFORT_ORDER` tuple (src/lib/effort.ts) — the closed set
 // of levels any provider can express — so this boundary enum can't drift from
 // `ThinkingEffort`. The catalog's per-model `efforts` narrows which are valid
 // for a given model; this is the boundary sanity-check.

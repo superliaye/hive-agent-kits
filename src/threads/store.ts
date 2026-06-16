@@ -50,8 +50,8 @@ export type ThreadsStore = {
   append(input: AppendMessageInput): ThreadMessage;
 
   /**
-   * Get the messages from a thread as a `Message[]` ready to drop into
-   * a CompletionInput. Convenience for the Run executor.
+   * Get the messages from a thread as a `Message[]` — the prior turns an SDK
+   * adapter replays as conversation history. Convenience for the Run executor.
    */
   getCompletionMessages(threadId: string): Message[];
 

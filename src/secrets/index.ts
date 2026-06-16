@@ -4,9 +4,9 @@
 // the library boundary). This module persists API keys and OAuth credential
 // triples at the deployment level — `~/.hive/secrets.json` — and exposes:
 //
-//   - `getAuth(provider)`: the ADR-0005 `AuthInput` shape ready to drop into a
-//     `CompletionInput`. For OAuth providers the returned `onRefresh` callback
-//     is bound to the store, so mid-call refreshes persist transparently.
+//   - `getAuth(provider)`: the `AuthInput` shape the SDK adapters consume
+//     (apiKey or OAuth token). For OAuth providers the returned `onRefresh`
+//     callback is bound to the store, so mid-call refreshes persist transparently.
 //   - `startOAuthLogin(provider, callbacks)`: drives a pi-ai login flow.
 //   - `set` / `remove` / `list` for direct CRUD by the Settings UI.
 //

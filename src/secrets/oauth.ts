@@ -3,10 +3,10 @@
 // browser, prompt for code, etc.) and persistence; pi-ai owns the
 // PKCE / token-exchange protocol per provider.
 //
-// Per-request token refresh lives in the model adapter
-// (`src/model-gateway/adapters/pi-ai.ts`) because the refresh→apiKey
-// translation is pi-ai-API-specific. The Secrets module deals only with
-// credential storage + initial login.
+// Per-request token refresh is carried by the `AuthInput` that `getAuth`
+// returns (see index.ts): its `onRefresh` callback is bound to the store, so a
+// mid-call refresh by the SDK adapter persists transparently. The Secrets
+// module deals only with credential storage + login + that refresh callback.
 
 import { getOAuthProvider, type OAuthLoginCallbacks } from "@earendil-works/pi-ai/oauth";
 import { type OAuthCredentials, OAuthCredentialsSchema } from "./types.ts";

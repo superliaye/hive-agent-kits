@@ -8,7 +8,7 @@
 // against a denormalized blob. ADR-0008 sequel: ADR for run pipeline.
 //
 // `content` is a JSON column carrying ContentBlock[] per
-// `model-gateway/types.ts`. Schema-flexible at the column boundary;
+// `lib/messages.ts`. Schema-flexible at the column boundary;
 // Zod-validated by the application layer when written or read.
 //
 // `idx` is the message's position within its thread (0-based, monotonic).

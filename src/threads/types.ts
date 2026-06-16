@@ -1,6 +1,6 @@
 // Thread + Message types. Message reuses the ContentBlock + role union
-// from `model-gateway/types.ts` — same canonical Anthropic-flavored
-// shape end-to-end. No translation between API layer and storage.
+// from `lib/messages.ts` — same canonical Anthropic-flavored shape
+// end-to-end. No translation between API layer and storage.
 
 import type { AgentId, ThreadId } from "../lib/ids.ts";
 import type { ContentBlock } from "../lib/messages.ts";
