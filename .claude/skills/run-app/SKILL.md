@@ -55,6 +55,17 @@ Cross-platform (`scripts/dev.ts` — cmd windows on Windows, Terminal.app on mac
 
 Rerun the script (it tears down any prior stack first) or close the cmd windows. The daemon writes to `~/.hive/`.
 
+## Headless screenshot (dev-in-browser visual loop)
+
+With the dev stack up, capture the live UI from Vite as a PNG — no interactive login:
+
+```
+bun run scripts/screenshot.ts [route] --out <path> [--full-page] [--wait <selector>] [--viewport WxH] [--vite <url>] [--daemon <url>]
+bun run scripts/screenshot.ts / --out shot.png            # the app's root, default viewport
+```
+
+It seeds auth from `~/.hive/.token` (`HIVE_TOKEN` env overrides), folding the token plus the daemon URL into `?baseUrl=&token=` exactly as the UI's `resolveApiConfig()` reads them, then waits for the React app to mount in `#root` and writes the PNG. The token value is never printed. Requires the dev stack running (`scripts/dev.ps1`) so Vite (:5173) and the daemon (:3117) are serving; defaults match those ports. Exits non-zero on a missing token, a failed nav (stack down), or an empty render.
+
 ## Ship mode
 
 ```

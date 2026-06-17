@@ -12,10 +12,12 @@
     "typecheck": "bun run --filter '*' typecheck",
     "format": "biome format --write",
     "dev:full": "bun run scripts/dev.ts",
+    "screenshot": "bun run scripts/screenshot.ts",
     "ship": "bun run scripts/ship.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",
+    "@playwright/test": "^1.49.0",
     "@types/bun": "latest"
   },
   "peerDependencies": {

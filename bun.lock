@@ -6,6 +6,7 @@
       "name": "hive",
       "devDependencies": {
         "@biomejs/biome": "2.4.16",
+        "@playwright/test": "^1.49.0",
         "@types/bun": "latest",
       },
       "peerDependencies": {
