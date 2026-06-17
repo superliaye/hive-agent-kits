@@ -9,6 +9,7 @@
     "test": "bun test",
     "check": "biome check",
     "check:no-float": "bun run scripts/check-no-floating-suppressions.ts",
+    "typecheck": "bun run --filter '*' typecheck",
     "format": "biome format --write",
     "dev:full": "bun run scripts/dev.ts",
     "ship": "bun run scripts/ship.ts"

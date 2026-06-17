@@ -6,7 +6,8 @@
   "scripts": {
     "start": "tsc && electron .",
     "build": "tsc",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "zod": "^3.23.8"
