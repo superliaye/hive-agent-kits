@@ -1,11 +1,13 @@
 #!/usr/bin/env sh
 # Tracked pre-commit hook (wired via core.hooksPath=.githooks; see package.json
-# "prepare"). Blocks the commit unless both the no-floating-promises gate and
-# biome pass. Keep the two guards in lockstep with CI.
+# "prepare"). Runs the fast subset of the verify gate — no-floating-promises and
+# biome — so commits stay quick. CI runs the full gate via `bun run verify`
+# (no-float -> check -> typecheck -> test). The hook invokes the same named
+# scripts verify composes, so the two share definitions with no drift.
 set -e
 
 echo "[pre-commit] no-floating-promises gate (bun run check:no-float)"
 bun run check:no-float
 
-echo "[pre-commit] biome check"
-bunx biome check
+echo "[pre-commit] biome check (bun run check)"
+bun run check

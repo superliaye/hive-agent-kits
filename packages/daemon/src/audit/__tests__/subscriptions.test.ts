@@ -162,7 +162,11 @@ describe("wireSubscriptions", () => {
       path: "/fake/bundled/agents/root/HARNESS.md",
     };
     const catalogRuntime = ManagedRuntime.make(
-      CatalogLive({ scanner: () => ({ agents: [fakeAgent], errors: [] }), logErrors: false }),
+      CatalogLive({
+        scanner: () => ({ agents: [fakeAgent], errors: [] }),
+        watch: false,
+        logErrors: false,
+      }),
     );
     try {
       const catalog = catalogRuntime.runSync(CatalogTag);

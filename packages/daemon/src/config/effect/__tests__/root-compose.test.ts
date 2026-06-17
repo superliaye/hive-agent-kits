@@ -15,7 +15,7 @@ describe("root composition (4.1a)", () => {
       ConfigLive({ mode: "memory", initial: APP_CONFIG_DEFAULTS, schema: AppConfigSchema }),
       HiveDbLive(":memory:"),
       SecretsLive({ mode: "memory" }),
-      CatalogLive(),
+      CatalogLive({ watch: false }),
     );
     const runtime = ManagedRuntime.make(root);
     try {
