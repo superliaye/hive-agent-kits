@@ -41,6 +41,16 @@ describe("createCatalog — real filesystem fork-on-write", () => {
   let bundledRoot: string;
   let runtimeRoot: string;
 
+  // start() attaches recursive fs.watch handles via the tiered store; dispose
+  // every catalog so the watchers don't keep bun's event loop alive between
+  // files (hangs `bun test` on Linux CI).
+  const open: ReturnType<typeof createCatalog>[] = [];
+  function makeCatalog(): ReturnType<typeof createCatalog> {
+    const catalog = createCatalog({ logErrors: false });
+    open.push(catalog);
+    return catalog;
+  }
+
   beforeEach(() => {
     bundledRoot = mkdtempSync(join(tmpdir(), "hive-bundled-"));
     runtimeRoot = mkdtempSync(join(tmpdir(), "hive-runtime-"));
@@ -49,6 +59,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
   });
 
   afterEach(() => {
+    for (const catalog of open.splice(0)) catalog.dispose();
     delete process.env.HIVE_BUNDLED_ROOT;
     delete process.env.HIVE_RUNTIME_ROOT;
     if (existsSync(bundledRoot)) rmSync(bundledRoot, { recursive: true, force: true });
@@ -65,7 +76,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     writeBundledHarness("root");
     writeBundledHarness("agent-manager");
 
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     const created: CatalogEvents["agent.created"][] = [];
     catalog.events.on("agent.created", (e) => {
       created.push(e);
@@ -83,7 +94,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     const bundledPath = join(bundledRoot, "agents", "root", "HARNESS.md");
     const bundledBefore = readFileSync(bundledPath, "utf8");
 
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
     const updated: CatalogEvents["harness.updated"][] = [];
     catalog.events.on("harness.updated", (e) => {
@@ -112,7 +123,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
 
   test("updateBindings(bind) adds to the slot without duplicates", async () => {
     writeBundledHarness("root", "alpha");
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
 
     await catalog.updateBindings("root", [{ kind: "tool", name: "ask_user", action: "bind" }]);
@@ -125,7 +136,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
 
   test("updateBindings applies a batch of patches all-or-nothing in one write", async () => {
     writeBundledHarness("root", "alpha");
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
     const updated: CatalogEvents["harness.updated"][] = [];
     catalog.events.on("harness.updated", (e) => {
@@ -148,14 +159,14 @@ describe("createCatalog — real filesystem fork-on-write", () => {
 
   test("updateBindings rejects an empty batch", async () => {
     writeBundledHarness("root", "alpha");
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
     await expect(catalog.updateBindings("root", [])).rejects.toThrow(/at least one patch/);
   });
 
   test("resetToBundled deletes the fork and re-resolves to bundled", async () => {
     writeBundledHarness("root", "alpha");
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
     await catalog.updateBindings("root", [{ kind: "skill", name: "alpha", action: "unbind" }]);
 
@@ -176,7 +187,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     mkdirSync(runtimeDir, { recursive: true });
     writeFileSync(join(runtimeDir, "HARNESS.md"), HARNESS_TEMPLATE("root", "beta"));
 
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
 
     const root = catalog.get("root");
@@ -192,7 +203,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
     mkdirSync(runtimeDir, { recursive: true });
     writeFileSync(join(runtimeDir, "HARNESS.md"), "no frontmatter here, just text");
 
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
 
     const root = catalog.get("root");
@@ -204,7 +215,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
   });
 
   test("unknown agentId throws AgentNotFoundError", async () => {
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
     await expect(
       catalog.updateBindings("nonexistent", [{ kind: "skill", name: "x", action: "bind" }]),
@@ -212,7 +223,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
   });
 
   test("createAgent writes a fresh runtime HARNESS.md and emits agent.created", async () => {
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
     const created: CatalogEvents["agent.created"][] = [];
     catalog.events.on("agent.created", (e) => {
@@ -237,7 +248,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
 
   test("createAgent rejects an id that already resolves", async () => {
     writeBundledHarness("root", "alpha");
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
     await expect(
       catalog.createAgent({ agentId: "root", backend: "codex", domain: "x", promptBody: "y" }),
@@ -245,7 +256,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
   });
 
   test("destroyAgent deletes the runtime fork and emits agent.destroyed", async () => {
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
     await catalog.createAgent({
       agentId: "scratch",
@@ -268,7 +279,7 @@ describe("createCatalog — real filesystem fork-on-write", () => {
 
   test("destroyAgent rejects a bundled agent with no runtime fork", async () => {
     writeBundledHarness("root", "alpha");
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = makeCatalog();
     await catalog.start();
     await expect(catalog.destroyAgent("root")).rejects.toThrow(/no runtime fork/);
   });
