@@ -48,7 +48,12 @@ function parseViewport(value: string): { width: number; height: number } {
   if (!match) {
     throw new Error(`bad --viewport "${value}" — expected WxH, e.g. 1280x800`);
   }
-  return { width: Number(match[1]), height: Number(match[2]) };
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (width <= 0 || height <= 0) {
+    throw new Error(`bad --viewport "${value}" — width and height must be positive`);
+  }
+  return { width, height };
 }
 
 function nextValue(argv: string[], i: number, flag: string): string {
@@ -134,13 +139,27 @@ function readToken(): string {
 
 // route + daemon + token folded into the dev-in-browser URL resolveApiConfig()
 // reads. Token kept separate from the returned `redacted` form for logging.
+// `route` must be a same-origin path: an absolute or protocol-relative route
+// would discard the Vite base via `new URL(route, vite)` and ship the token to
+// an arbitrary origin, so reject anything that resolves off the Vite origin.
 function buildUrl(args: Args, token: string): { url: string; redacted: string } {
+  const viteOrigin = new URL(args.vite).origin;
   const target = new URL(args.route, args.vite);
+  if (target.origin !== viteOrigin) {
+    throw new Error(`route "${args.route}" must be a path on ${viteOrigin}, not an absolute URL`);
+  }
   target.searchParams.set("baseUrl", args.daemon);
   target.searchParams.set("token", token);
   const redacted = new URL(target.toString());
   redacted.searchParams.set("token", "***");
   return { url: target.toString(), redacted: redacted.toString() };
+}
+
+// Defense-in-depth for the "token is never logged" guarantee: Playwright's
+// navigation errors embed the full target URL (token and all), so scrub every
+// occurrence of the raw token from any string before it reaches a log.
+function redact(text: string, token: string): string {
+  return text.split(token).join("***");
 }
 
 // Re-run this file under Node, forwarding the original args. Node strips the
@@ -171,7 +190,7 @@ async function main(): Promise<void> {
     try {
       await page.goto(url, { waitUntil: "domcontentloaded" });
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = redact(err instanceof Error ? err.message : String(err), token);
       throw new Error(
         `navigation to ${redacted} failed — is the dev stack up? (dev.ps1): ${reason}`,
       );
@@ -182,6 +201,10 @@ async function main(): Promise<void> {
     // App-mounted readiness: React renders into <div id="root"> (ui/index.html).
     await page.waitForSelector("#root > *");
     await page.screenshot({ path: args.out, fullPage: args.fullPage });
+  } catch (err) {
+    // Any later Playwright error can also embed the token-bearing URL; scrub it
+    // here while the token is still in scope, before it reaches the logger.
+    throw err instanceof Error ? new Error(redact(err.message, token)) : err;
   } finally {
     await browser.close();
   }
