@@ -22,7 +22,9 @@ function memStorage(): CacheStorage & { peek(): string | null } {
   };
 }
 
-function memPersistence(initial: Preferences | null = null): Persistence & { saved: Preferences[] } {
+function memPersistence(
+  initial: Preferences | null = null,
+): Persistence & { saved: Preferences[] } {
   const saved: Preferences[] = [];
   return {
     saved,

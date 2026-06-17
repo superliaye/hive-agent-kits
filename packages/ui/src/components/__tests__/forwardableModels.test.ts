@@ -24,6 +24,8 @@ describe("forwardableModels", () => {
   });
 
   test("codex keeps only openai-codex-provider models", () => {
-    expect(forwardableModels(models, "codex").map((m) => m.model)).toEqual(["openai-codex/gpt-5.5"]);
+    expect(forwardableModels(models, "codex").map((m) => m.model)).toEqual([
+      "openai-codex/gpt-5.5",
+    ]);
   });
 });

@@ -65,7 +65,10 @@ export function sessionReducer(state: EditingSession, action: EditingAction): Ed
     case "toggle":
       return {
         ...state,
-        selected: { ...state.selected, [action.kind]: toggleIn(state.selected[action.kind], action.name) },
+        selected: {
+          ...state.selected,
+          [action.kind]: toggleIn(state.selected[action.kind], action.name),
+        },
       };
     case "discard":
       return { ...state, selected: state.baseline };

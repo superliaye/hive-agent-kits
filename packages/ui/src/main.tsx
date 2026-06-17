@@ -6,8 +6,8 @@ import { resolveApiConfig } from "./api.ts";
 import { ChromeBridge } from "./components/ChromeBridge.tsx";
 import { startEventStream } from "./events.ts";
 import "./styles.css";
-import { createHivePersistence } from "./theming-hive-persistence.ts";
 import { ThemeProvider } from "./theming/index.ts";
+import { createHivePersistence } from "./theming-hive-persistence.ts";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },

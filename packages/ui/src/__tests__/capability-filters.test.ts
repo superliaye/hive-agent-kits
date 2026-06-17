@@ -29,19 +29,13 @@ function cap(overrides: Partial<CapabilityWire> & { name: string }): CapabilityW
 
 describe("extractRepoSlug", () => {
   test("github short form", () => {
-    expect(extractRepoSlug("github.com/heygen-com/hyperframes")).toBe(
-      "heygen-com/hyperframes",
-    );
+    expect(extractRepoSlug("github.com/heygen-com/hyperframes")).toBe("heygen-com/hyperframes");
   });
   test("github full URL", () => {
-    expect(extractRepoSlug("https://github.com/mattpocock/skills")).toBe(
-      "mattpocock/skills",
-    );
+    expect(extractRepoSlug("https://github.com/mattpocock/skills")).toBe("mattpocock/skills");
   });
   test("github URL with path", () => {
-    expect(
-      extractRepoSlug("https://github.com/owner/repo/blob/main/README.md"),
-    ).toBe("owner/repo");
+    expect(extractRepoSlug("https://github.com/owner/repo/blob/main/README.md")).toBe("owner/repo");
   });
   test("non-github URL returns null", () => {
     expect(extractRepoSlug("https://example.com/foo/bar")).toBeNull();
@@ -66,9 +60,7 @@ describe("capabilityWorkspace", () => {
   });
   test("workplace with id", () => {
     expect(
-      capabilityWorkspace(
-        cap({ name: "x", origin: "workplace", workplaceId: "acme" }),
-      ),
+      capabilityWorkspace(cap({ name: "x", origin: "workplace", workplaceId: "acme" })),
     ).toEqual({ kind: "workplace", workplaceId: "acme" });
   });
 });
@@ -128,15 +120,15 @@ describe("applyFilter", () => {
   });
 
   test("search hits name", () => {
-    expect(
-      applyFilter(caps, { ...EMPTY_FILTER, search: "alpha" }).map((c) => c.name),
-    ).toEqual(["alpha-thing"]);
+    expect(applyFilter(caps, { ...EMPTY_FILTER, search: "alpha" }).map((c) => c.name)).toEqual([
+      "alpha-thing",
+    ]);
   });
 
   test("search hits description", () => {
-    expect(
-      applyFilter(caps, { ...EMPTY_FILTER, search: "desc gamma" }).map((c) => c.name),
-    ).toEqual(["gamma"]);
+    expect(applyFilter(caps, { ...EMPTY_FILTER, search: "desc gamma" }).map((c) => c.name)).toEqual(
+      ["gamma"],
+    );
   });
 
   test("tags facet is OR within", () => {
@@ -179,9 +171,9 @@ describe("applyFilter", () => {
   test("search is case-insensitive", () => {
     // `caps` includes alpha-thing, beta-thing, gamma, delta. Uppercased query
     // must still match the lowercased name.
-    expect(
-      applyFilter(caps, { ...EMPTY_FILTER, search: "ALPHA" }).map((c) => c.name),
-    ).toEqual(["alpha-thing"]);
+    expect(applyFilter(caps, { ...EMPTY_FILTER, search: "ALPHA" }).map((c) => c.name)).toEqual([
+      "alpha-thing",
+    ]);
   });
 });
 

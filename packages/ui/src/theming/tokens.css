@@ -35,8 +35,8 @@
 
   /* Fonts */
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-  --font-code: "SF Mono", "JetBrains Mono", "Cascadia Code", "Consolas", "Liberation Mono",
-    monospace;
+  --font-code:
+    "SF Mono", "JetBrains Mono", "Cascadia Code", "Consolas", "Liberation Mono", monospace;
   --font-size-ui: 14px;
   --font-size-code: 13px;
 
@@ -48,9 +48,13 @@
 :root[data-reduce-motion="on"] *,
 :root[data-reduce-motion="on"] *::before,
 :root[data-reduce-motion="on"] *::after {
+  /* biome-ignore lint/complexity/noImportantStyles: global reduce-motion override must win over any component animation */
   animation-duration: 0.001ms !important;
+  /* biome-ignore lint/complexity/noImportantStyles: global reduce-motion override must win over any component animation */
   animation-iteration-count: 1 !important;
+  /* biome-ignore lint/complexity/noImportantStyles: global reduce-motion override must win over any component transition */
   transition-duration: 0.001ms !important;
+  /* biome-ignore lint/complexity/noImportantStyles: global reduce-motion override must win over any component scroll behavior */
   scroll-behavior: auto !important;
 }
 
@@ -68,6 +72,7 @@
 /* Themed scrollbars — narrow, semi-transparent, hover-reveal. Matches
  * Codex desktop's restrained chrome. WebKit + Blink only (Firefox uses
  * scrollbar-width below). */
+/* biome-ignore lint/style/noDescendingSpecificity: disjoint properties from the reduce-motion rule above — no cascade conflict */
 * {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--color-fg-muted) 40%, transparent) transparent;

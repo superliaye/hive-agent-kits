@@ -11,8 +11,21 @@
 //
 // Everything else is delegated.
 
-import { type ReactNode, createContext, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { resolveEffectiveConfig, resolveMode, resolveReduceMotion, resolveTokens } from "./resolve.ts";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  resolveEffectiveConfig,
+  resolveMode,
+  resolveReduceMotion,
+  resolveTokens,
+} from "./resolve.ts";
 import { importPreferences as deserialize, exportPreferences as serialize } from "./serialize.ts";
 import { getSystemMode, watchSystemMode } from "./system.ts";
 import type { Persistence, Preferences, ResolvedMode, ResolvedTheme } from "./types.ts";

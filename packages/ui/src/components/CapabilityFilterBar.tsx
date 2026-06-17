@@ -3,12 +3,7 @@
 // supply the facets (already extracted), the current FilterState, the
 // group-by selection, and a testIdPrefix so e2e selectors stay distinct.
 
-import type {
-  FilterState,
-  GroupKey,
-  SourceFacet,
-  Workspace,
-} from "../capability-filters.ts";
+import type { FilterState, GroupKey, SourceFacet, Workspace } from "../capability-filters.ts";
 import {
   type FilterAxis,
   sourceKey,
@@ -82,6 +77,7 @@ export function CapabilityFilterBar({
         )}
         {filterActive && (
           <button
+            type="button"
             className="button ghost"
             onClick={onClear}
             data-testid={`${testIdPrefix}-filter-clear`}
@@ -142,13 +138,7 @@ export function CapabilityFilterBar({
   );
 }
 
-function FacetRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}): JSX.Element {
+function FacetRow({ label, children }: { label: string; children: React.ReactNode }): JSX.Element {
   return (
     <div className="facet-row">
       <span className="facet-label">{label}:</span>
@@ -169,12 +159,14 @@ function ChipFilter({
   testId?: string;
 }): JSX.Element {
   return (
-    <span
+    <button
+      type="button"
       className={`tag-chip ${active ? "active" : ""}`}
+      aria-pressed={active}
       onClick={onToggle}
       data-testid={testId}
     >
       {label}
-    </span>
+    </button>
   );
 }

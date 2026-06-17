@@ -14,7 +14,7 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
-import { type Root, createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { ChatPage } from "../pages/ChatPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 
@@ -51,7 +51,10 @@ function installStubs(): void {
     addEventListener(): void {}
     close(): void {}
   };
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     const method = (init?.method ?? "GET").toUpperCase();
@@ -150,7 +153,9 @@ describe("active thread sidebar regressions", () => {
     const row = host.querySelector(`[data-testid="thread-${ROOT_ID}"]`);
     expect(row).not.toBeNull();
     await act(async () => {
-      row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+      row?.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }),
+      );
     });
     await flush();
     const unreadItem = host.querySelector('[data-testid="thread-menu-unread"]');
@@ -162,16 +167,16 @@ describe("active thread sidebar regressions", () => {
     await flush();
 
     // The active row must still show the unread dot...
-    const dot = host.querySelector(`[data-testid="thread-${ROOT_ID}"] [data-testid="status-unread"]`);
+    const dot = host.querySelector(
+      `[data-testid="thread-${ROOT_ID}"] [data-testid="status-unread"]`,
+    );
     expect(dot).not.toBeNull();
 
     // ...and no POST /read may follow the POST /unread (the revert bug).
     const writes = writeCalls.slice(writesBefore);
     const unreadIdx = writes.findIndex((w) => w.path.endsWith("/unread"));
     expect(unreadIdx).toBeGreaterThanOrEqual(0);
-    const readAfterUnread = writes
-      .slice(unreadIdx + 1)
-      .some((w) => w.path.endsWith("/read"));
+    const readAfterUnread = writes.slice(unreadIdx + 1).some((w) => w.path.endsWith("/read"));
     expect(readAfterUnread).toBe(false);
   });
 });

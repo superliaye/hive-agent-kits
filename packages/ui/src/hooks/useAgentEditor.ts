@@ -11,7 +11,7 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useReducer } from "react";
-import { api, type AgentDetail, type ApiConfig } from "../api.ts";
+import { type AgentDetail, type ApiConfig, api } from "../api.ts";
 import {
   type BindingKind,
   type BindingSet,

@@ -14,9 +14,7 @@ import type { CapabilityWire } from "./api.ts";
 // bundled layer is a separate workspace. UI hides the chip group when only
 // one workspace value is present (the typical first-launch state today).
 
-export type Workspace =
-  | { kind: "personal" }
-  | { kind: "workplace"; workplaceId: string };
+export type Workspace = { kind: "personal" } | { kind: "workplace"; workplaceId: string };
 
 export function workspaceKey(w: Workspace): string {
   return w.kind === "personal" ? "personal" : `workplace/${w.workplaceId}`;
@@ -131,12 +129,7 @@ export const EMPTY_FILTER: FilterState = {
 // True when any facet has a selection or search has any text. Single source
 // of truth so callers don't drift on the predicate.
 export function isFilterActive(f: FilterState): boolean {
-  return (
-    f.search.length > 0 ||
-    f.tags.size > 0 ||
-    f.workspaces.size > 0 ||
-    f.sources.size > 0
-  );
+  return f.search.length > 0 || f.tags.size > 0 || f.workspaces.size > 0 || f.sources.size > 0;
 }
 
 // Convenience: toggle a value in/out of one facet axis without callers
@@ -161,10 +154,7 @@ export function applyFilter(
   const q = filter.search.trim().toLowerCase();
   return caps.filter((c) => {
     if (q) {
-      if (
-        !c.name.toLowerCase().includes(q) &&
-        !c.description.toLowerCase().includes(q)
-      ) {
+      if (!c.name.toLowerCase().includes(q) && !c.description.toLowerCase().includes(q)) {
         return false;
       }
     }
@@ -191,10 +181,7 @@ export type Group = {
   items: CapabilityWire[];
 };
 
-export function groupCapabilities(
-  caps: readonly CapabilityWire[],
-  by: GroupKey,
-): Group[] {
+export function groupCapabilities(caps: readonly CapabilityWire[], by: GroupKey): Group[] {
   if (by === "none") {
     return [{ label: "", items: [...caps] }];
   }
@@ -249,5 +236,10 @@ export function groupCapabilities(
     return a.localeCompare(b);
   });
 
-  return order.map((k) => buckets.get(k)!);
+  const groups: Group[] = [];
+  for (const k of order) {
+    const g = buckets.get(k);
+    if (g) groups.push(g);
+  }
+  return groups;
 }

@@ -16,8 +16,8 @@ import {
   type AgentDetail,
   type AgentSummary,
   type ApiConfig,
-  type BackendStatus,
   api,
+  type BackendStatus,
 } from "../api.ts";
 
 // reason → badge tone. ok = healthy (personal/green); not_installed = neutral
@@ -136,7 +136,9 @@ export function BackendsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
                           disabled={disabled}
                           data-testid={`backend-update-${s.backend}`}
                         >
-                          {rowBusy === "updating" ? "Updating…" : "Update via the CLI's own updater"}
+                          {rowBusy === "updating"
+                            ? "Updating…"
+                            : "Update via the CLI's own updater"}
                         </button>
                       )}{" "}
                       <button

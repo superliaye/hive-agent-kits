@@ -57,6 +57,7 @@ export function InlineTitle({
 
   if (!editing) {
     return (
+      // biome-ignore lint/a11y/noStaticElementInteractions: optional double-click shortcut; the context-menu "Rename" is the keyboard-reachable path
       <span
         className={className}
         onDoubleClick={() => onEditingChange(true)}

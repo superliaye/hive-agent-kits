@@ -149,6 +149,7 @@ export function forwardableModels(
 // switches — no silent drift.
 import type { ContentBlock } from "../../daemon/src/lib/messages.ts";
 import type { Preferences } from "./theming/index.ts";
+
 export type { ContentBlock };
 
 export type ThreadSummary = {

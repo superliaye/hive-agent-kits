@@ -8,7 +8,7 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
-import { type Root, createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { ChatPage } from "../pages/ChatPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 
@@ -38,7 +38,10 @@ function installStubs(): void {
     addEventListener(): void {}
     close(): void {}
   };
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     const method = (init?.method ?? "GET").toUpperCase();
@@ -77,7 +80,13 @@ function installStubs(): void {
     if (method === "GET" && path === "/api/backends") {
       return json([
         { backend: "claude-code", installed: true, version: "2.0.13", reason: "ok", checkedAt: 1 },
-        { backend: "codex", installed: false, version: null, reason: "not_installed", checkedAt: 1 },
+        {
+          backend: "codex",
+          installed: false,
+          version: null,
+          reason: "not_installed",
+          checkedAt: 1,
+        },
       ]);
     }
     if (method === "GET" && path.endsWith("/scope")) {
@@ -180,9 +189,9 @@ describe("ChatPage — Agent-Backend axis", () => {
     scopeBackend = null;
     installStubs();
     const host = await render();
-    const picker = host.querySelector('[data-testid="composer-backend-picker"]') as
-      | HTMLSelectElement
-      | null;
+    const picker = host.querySelector(
+      '[data-testid="composer-backend-picker"]',
+    ) as HTMLSelectElement | null;
     expect(picker).not.toBeNull();
     if (picker) {
       picker.value = "claude-code";
@@ -202,15 +211,18 @@ describe("ChatPage — Agent-Backend axis", () => {
     scopeBackend = "claude-code";
     installStubs();
     const host2 = await render();
-    const picker2 = host2.querySelector('[data-testid="composer-backend-picker"]') as
-      | HTMLSelectElement
-      | null;
+    const picker2 = host2.querySelector(
+      '[data-testid="composer-backend-picker"]',
+    ) as HTMLSelectElement | null;
     expect(picker2?.value).toBe("claude-code");
   });
 
-  test("apply-model-to-default surfaces when the model pick differs and writes the agent default (P4)", async () => {    scopeBackend = null;
+  test("apply-model-to-default surfaces when the model pick differs and writes the agent default (P4)", async () => {
+    scopeBackend = null;
     scopeModel = "openai/gpt-5"; // a runnable model, differs from the (null) default
-    modelsFixture = [{ provider: "openai", modelId: "gpt-5", model: "openai/gpt-5", efforts: ["off"] }];
+    modelsFixture = [
+      { provider: "openai", modelId: "gpt-5", model: "openai/gpt-5", efforts: ["off"] },
+    ];
     installStubs();
     const host = await render();
     const apply = host.querySelector('[data-testid="apply-model-default"]');
@@ -223,7 +235,8 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(prefWrite?.body).toMatchObject({ model: "openai/gpt-5" });
   });
 
-  test("apply-effort-to-default surfaces when the effort pick differs and writes the agent default (P4)", async () => {    scopeBackend = null;
+  test("apply-effort-to-default surfaces when the effort pick differs and writes the agent default (P4)", async () => {
+    scopeBackend = null;
     scopeModel = "openai/gpt-5";
     scopeEffort = "high";
     modelsFixture = [
@@ -241,7 +254,8 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(prefWrite?.body).toMatchObject({ effort: "high" });
   });
 
-  test("apply-to-default surfaces when the pick differs and writes the agent default (OQ-2)", async () => {    scopeBackend = "claude-code"; // pick differs from the agent default
+  test("apply-to-default surfaces when the pick differs and writes the agent default (OQ-2)", async () => {
+    scopeBackend = "claude-code"; // pick differs from the agent default
     installStubs();
     const host = await render();
     const apply = host.querySelector('[data-testid="apply-backend-default"]');
@@ -254,7 +268,8 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(prefWrite?.body).toMatchObject({ backend: "claude-code" });
   });
 
-  test("apply rows are grouped, named per axis, and the button reads Update (P8/P9)", async () => {    scopeBackend = "claude-code"; // backend pick differs from the agent default
+  test("apply rows are grouped, named per axis, and the button reads Update (P8/P9)", async () => {
+    scopeBackend = "claude-code"; // backend pick differs from the agent default
     scopeModel = "openai/gpt-5"; // model pick differs from the (null) default
     scopeEffort = "high"; // effort pick differs from the (null) default
     modelsFixture = [
@@ -278,7 +293,8 @@ describe("ChatPage — Agent-Backend axis", () => {
     }
   });
 
-  test("fresh conversation with a symbolic agent default and no pick shows NO apply rows", async () => {    scopeBackend = null; // no per-conversation pick on any axis
+  test("fresh conversation with a symbolic agent default and no pick shows NO apply rows", async () => {
+    scopeBackend = null; // no per-conversation pick on any axis
     scopeModel = null;
     scopeEffort = null;
     // Symbolic agent default — resolves to the catalog head, but the user picked
@@ -295,7 +311,8 @@ describe("ChatPage — Agent-Backend axis", () => {
     expect(host.querySelector(".composer-apply-default-group")).toBeNull();
   });
 
-  test("symbolic 'latest' default renders as 'latest → <catalog head>' once a row surfaces", async () => {    scopeBackend = null;
+  test("symbolic 'latest' default renders as 'latest → <catalog head>' once a row surfaces", async () => {
+    scopeBackend = null;
     // Symbolic model default; user picks a DIFFERENT runnable model → the model
     // apply row surfaces and shows the resolved default in its label.
     agentConfig = { model: "latest" };

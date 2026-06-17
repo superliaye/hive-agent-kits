@@ -49,6 +49,7 @@ export function NewThreadModal({
     // instead of stopPropagation on the inner modal — that way the click
     // handler only fires for backdrop clicks, and the inner content needs
     // no event-blocking handler. Keyboard: Escape closes.
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop is a dismiss surface, not a control; keyboard users close via Escape (handled below)
     <div
       className="modal-backdrop"
       onClick={(e) => {

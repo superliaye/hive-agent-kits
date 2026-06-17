@@ -153,20 +153,12 @@ describe("resolveTokens — translucent sidebar", () => {
 describe("resolveEffectiveConfig", () => {
   const base = { themeId: "dracula", accent: "#111111" };
   test("system accent wins when opted in and available", () => {
-    const config = resolveEffectiveConfig(
-      { ...DEFAULTS, useSystemAccent: true },
-      base,
-      "#ff8800",
-    );
+    const config = resolveEffectiveConfig({ ...DEFAULTS, useSystemAccent: true }, base, "#ff8800");
     expect(config.accent).toBe("#ff8800");
     expect(config.themeId).toBe("dracula");
   });
   test("returns base config unchanged when not opted in", () => {
-    const config = resolveEffectiveConfig(
-      { ...DEFAULTS, useSystemAccent: false },
-      base,
-      "#ff8800",
-    );
+    const config = resolveEffectiveConfig({ ...DEFAULTS, useSystemAccent: false }, base, "#ff8800");
     expect(config).toBe(base);
   });
   test("returns base config unchanged when no system accent is available", () => {

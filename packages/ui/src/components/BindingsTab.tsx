@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { api, type AgentDetail, type ApiConfig, type CapabilityWire } from "../api.ts";
+import { type AgentDetail, type ApiConfig, api, type CapabilityWire } from "../api.ts";
 import {
   applyFilter,
   capabilitySource,
@@ -8,8 +8,8 @@ import {
   EMPTY_FILTER,
   extractFacets,
   type FilterState,
-  groupCapabilities,
   type GroupKey,
+  groupCapabilities,
   isFilterActive,
   workspaceLabel,
 } from "../capability-filters.ts";
@@ -51,6 +51,7 @@ export function BindingsTab({
   // (kind, groupBy) pair; reset whenever either changes so collapse state
   // never points at stale labels.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: groupBy/kind are the reset triggers, not read in the body
   useEffect(() => setCollapsed(new Set()), [groupBy, kind]);
 
   function toggleCollapsed(key: string): void {
@@ -77,9 +78,7 @@ export function BindingsTab({
     const skill = real.filter((c) => c.kind === "skill");
     const snippet = real.filter((c) => c.kind === "snippet");
     const mcp = real.filter((c) => c.kind === "mcp");
-    const toolNames = Array.from(
-      new Set([...agent.bindings.tools, ...editor.selected.tool]),
-    );
+    const toolNames = Array.from(new Set([...agent.bindings.tools, ...editor.selected.tool]));
     const tool: CapabilityWire[] = toolNames.map((name) => ({
       name,
       kind: "tool",
@@ -94,10 +93,7 @@ export function BindingsTab({
   const kindUniverse = universes[kind];
   const facets = useMemo(() => extractFacets(kindUniverse), [kindUniverse]);
   const filtered = useMemo(() => applyFilter(kindUniverse, filter), [kindUniverse, filter]);
-  const grouped = useMemo(
-    () => groupCapabilities(filtered, groupBy),
-    [filtered, groupBy],
-  );
+  const grouped = useMemo(() => groupCapabilities(filtered, groupBy), [filtered, groupBy]);
 
   const filterActive = isFilterActive(filter);
 
@@ -117,6 +113,7 @@ export function BindingsTab({
         {KIND_ORDER.map((k) => (
           <button
             key={k}
+            type="button"
             className={`subtab ${kind === k ? "active" : ""}`}
             onClick={() => selectKind(k)}
             data-testid={`bind-tab-${k}`}
@@ -159,15 +156,23 @@ export function BindingsTab({
         return (
           <div key={key}>
             {groupBy !== "none" && (
+              // biome-ignore lint/a11y/useSemanticElements: row-styled collapse toggle; a native <button> can't carry the group-header grid layout
               <div
                 className="binding-group-header group-header"
-                onClick={() => toggleCollapsed(key)}
                 role="button"
+                tabIndex={0}
                 aria-expanded={!isCollapsed}
+                onClick={() => toggleCollapsed(key)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleCollapsed(key);
+                  }
+                }}
                 data-testid={`bind-group-${group.label}`}
               >
-                <span className="group-caret">{isCollapsed ? "▸" : "▾"}</span>{" "}
-                {group.label} <span className="empty">({group.items.length})</span>
+                <span className="group-caret">{isCollapsed ? "▸" : "▾"}</span> {group.label}{" "}
+                <span className="empty">({group.items.length})</span>
               </div>
             )}
             {!isCollapsed &&
@@ -186,6 +191,7 @@ export function BindingsTab({
 
       <div className="section">
         <button
+          type="button"
           className="button ghost"
           onClick={editor.reset}
           disabled={!agent.hasFork || editor.isResetting}
@@ -209,10 +215,16 @@ export function BindingsTab({
               ))}
             </ul>
           </div>
-          <button className="button ghost" onClick={editor.discard} disabled={editor.isSaving}>
+          <button
+            type="button"
+            className="button ghost"
+            onClick={editor.discard}
+            disabled={editor.isSaving}
+          >
             Discard
           </button>
           <button
+            type="button"
             className="button"
             onClick={editor.save}
             disabled={editor.isSaving}
@@ -250,13 +262,10 @@ function CapabilityCheckbox({
           <span className={`badge badge-${cap.origin}`}>
             {workspaceLabel(capabilityWorkspace(cap))}
           </span>
-          {src.kind === "upstream" && (
-            <span className="badge badge-source">{src.slug}</span>
-          )}
+          {src.kind === "upstream" && <span className="badge badge-source">{src.slug}</span>}
         </div>
         <div className="desc">{cap.description}</div>
       </div>
     </label>
   );
 }
-

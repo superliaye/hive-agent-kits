@@ -44,18 +44,14 @@ describe("editing session", () => {
   test("toggle removes a name → unbind emitted", () => {
     let s = initialSession(makeAgent());
     s = sessionReducer(s, { type: "toggle", kind: "skill", name: "alpha" });
-    expect(computePending(s)).toEqual([
-      { kind: "skill", name: "alpha", action: "unbind" },
-    ]);
+    expect(computePending(s)).toEqual([{ kind: "skill", name: "alpha", action: "unbind" }]);
     expect(hasPending(s)).toBe(true);
   });
 
   test("toggle adds a name → bind emitted", () => {
     let s = initialSession(makeAgent());
     s = sessionReducer(s, { type: "toggle", kind: "tool", name: "memory_read" });
-    expect(computePending(s)).toEqual([
-      { kind: "tool", name: "memory_read", action: "bind" },
-    ]);
+    expect(computePending(s)).toEqual([{ kind: "tool", name: "memory_read", action: "bind" }]);
   });
 
   test("toggle twice returns to baseline (idempotent)", () => {

@@ -20,10 +20,10 @@ export function usePreferences(
   // Recreate the controller only when persistence identity changes.
   // Callers in main.tsx pass a memoized persistence, so this is stable
   // for the lifetime of the app.
+  // bootstrap intentionally NOT in deps — it's an initial value only.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrap is initial-only
   const controller = useMemo(
     () => createPreferencesController(persistence, bootstrap),
-    // bootstrap intentionally NOT in deps — it's an initial value only.
-    // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrap is initial-only
     [persistence],
   );
   useEffect(() => () => controller.dispose(), [controller]);

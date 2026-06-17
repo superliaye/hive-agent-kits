@@ -9,7 +9,7 @@
 // login`). Hive stores API keys only.
 
 import { useCallback, useEffect, useState } from "react";
-import { type ApiConfig, type ConfiguredProvider, api } from "../api.ts";
+import { type ApiConfig, api, type ConfiguredProvider } from "../api.ts";
 
 export function SecretsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
   const [configured, setConfigured] = useState<ConfiguredProvider[]>([]);
@@ -73,8 +73,8 @@ export function SecretsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.El
         <h3>Configured</h3>
         {configured.length === 0 ? (
           <p className="empty">
-            No credentials stored. Add an API key below, or sign in to the CLI backends directly
-            (<code>claude login</code> / <code>codex login</code>).
+            No credentials stored. Add an API key below, or sign in to the CLI backends directly (
+            <code>claude login</code> / <code>codex login</code>).
           </p>
         ) : (
           <table className="secrets-table" data-testid="secrets-configured">

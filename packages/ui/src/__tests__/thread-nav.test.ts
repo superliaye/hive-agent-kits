@@ -7,14 +7,14 @@
 import { describe, expect, test } from "bun:test";
 import type { ThreadSummary } from "../api.ts";
 import {
-  PAGE_SIZE,
-  UNTITLED_PLACEHOLDER,
   groupByAgent,
+  PAGE_SIZE,
   paginate,
   sortThreads,
   statusDot,
   statusMeta,
   threadTitle,
+  UNTITLED_PLACEHOLDER,
 } from "../thread-nav.ts";
 
 function makeThread(over: Partial<ThreadSummary> = {}): ThreadSummary {

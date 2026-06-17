@@ -16,12 +16,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type ApiConfig,
+  api,
   type ContentBlock,
   type RunEventWire,
   type ThinkingEffort,
   type ThreadDetail,
   type ThreadMessage,
-  api,
 } from "../api.ts";
 
 export type PendingBlock =

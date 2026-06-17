@@ -31,10 +31,12 @@ function deferred<T = void>(): {
   return { promise, resolve, reject };
 }
 
-function makePersistence(opts: {
-  load?: () => Promise<Preferences | null>;
-  save?: (prefs: Preferences) => Promise<void>;
-} = {}): Persistence {
+function makePersistence(
+  opts: {
+    load?: () => Promise<Preferences | null>;
+    save?: (prefs: Preferences) => Promise<void>;
+  } = {},
+): Persistence {
   return {
     load: opts.load ?? (async () => null),
     save: opts.save ?? (async () => undefined),
@@ -52,10 +54,7 @@ describe("createPreferencesController", () => {
 
   test("load completes → ready true, preferences replaced by loaded", async () => {
     const loaded: Preferences = { ...DEFAULTS, mode: "dark" };
-    const c = createPreferencesController(
-      makePersistence({ load: async () => loaded }),
-      DEFAULTS,
-    );
+    const c = createPreferencesController(makePersistence({ load: async () => loaded }), DEFAULTS);
     await Promise.resolve(); // let load microtask resolve
     await Promise.resolve();
     const s = c.getSnapshot();
@@ -65,7 +64,11 @@ describe("createPreferencesController", () => {
 
   test("load failure → ready true, preferences stay at bootstrap", async () => {
     const c = createPreferencesController(
-      makePersistence({ load: async () => { throw new Error("boom"); } }),
+      makePersistence({
+        load: async () => {
+          throw new Error("boom");
+        },
+      }),
       DEFAULTS,
     );
     await Promise.resolve();
@@ -146,10 +149,7 @@ describe("createPreferencesController", () => {
 
   test("dispose() ignores in-flight load resolution", async () => {
     const d = deferred<Preferences | null>();
-    const c = createPreferencesController(
-      makePersistence({ load: () => d.promise }),
-      DEFAULTS,
-    );
+    const c = createPreferencesController(makePersistence({ load: () => d.promise }), DEFAULTS);
     c.dispose();
     d.resolve({ ...DEFAULTS, mode: "dark" });
     await Promise.resolve();

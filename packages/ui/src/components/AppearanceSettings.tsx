@@ -81,14 +81,13 @@ export function AppearanceSettings(): JSX.Element {
 
       <div className="section settings-card">
         <div className="appearance-card-header">
-          <h3 className="settings-card-title">
-            {editingMode === "dark" ? "Dark" : "Light"} theme
-          </h3>
+          <h3 className="settings-card-title">{editingMode === "dark" ? "Dark" : "Light"} theme</h3>
           {hasOverrides && (
             <div className="appearance-card-modified-cluster">
               <span
                 className="settings-card-modified-dot"
                 title="This mode has unsaved overrides on top of the named theme"
+                role="img"
                 aria-label="Modified"
               />
               <button
@@ -662,7 +661,6 @@ function ThemeDropdown({
         <ul
           ref={listRef}
           className="theme-dropdown-list"
-          // biome-ignore lint/a11y/useSemanticElements: spec-mandated W3C-APG Select-Only Combobox listbox; no native element renders per-row swatches (design-brief 5.1)
           // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: listbox is the APG combobox popup role; intentional (design-brief 5.1)
           role="listbox"
           id={listId}
@@ -681,7 +679,6 @@ function ThemeDropdown({
               <li
                 key={t.id}
                 id={optionId(i)}
-                // biome-ignore lint/a11y/useSemanticElements: option is the APG combobox row role; intentional (design-brief 5.1)
                 // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: option is the APG combobox row role; intentional (design-brief 5.1)
                 role="option"
                 aria-selected={isSelected}

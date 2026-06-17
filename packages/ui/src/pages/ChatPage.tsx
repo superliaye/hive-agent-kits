@@ -9,26 +9,23 @@ import {
   type AgentBackend,
   type ApiConfig,
   type AvailableModel,
+  api,
   type BackendStatus,
   type ContentBlock,
-  type ThinkingEffort,
-  type ThreadSummary,
+  isAgentBackend,
+  isThinkingEffort,
   SYMBOLIC_EFFORT_HIGHEST,
   SYMBOLIC_MODEL_LATEST,
   THINKING_EFFORTS,
-  api,
-  isAgentBackend,
-  isThinkingEffort,
+  type ThinkingEffort,
+  type ThreadSummary,
 } from "../api.ts";
 import { resolveAxis } from "../axis-precedence.ts";
 import { InlineTitle } from "../components/InlineTitle.tsx";
 import { type BackendOption, MessageComposer } from "../components/MessageComposer.tsx";
 import { MessageList } from "../components/MessageList.tsx";
 import { NewThreadModal } from "../components/NewThreadModal.tsx";
-import {
-  type ThreadMenuAction,
-  ThreadContextMenu,
-} from "../components/ThreadContextMenu.tsx";
+import { ThreadContextMenu, type ThreadMenuAction } from "../components/ThreadContextMenu.tsx";
 import { useChatThread } from "../hooks/useChatThread.ts";
 import {
   groupByAgent,
@@ -532,9 +529,7 @@ export function ChatPage({
   async function markUnread(threadId: string): Promise<void> {
     // 204 (void) — flip optimistically; the server is the source of truth on
     // the next refetch.
-    setThreads((list) =>
-      list.map((t) => (t.id === threadId ? { ...t, status: "unread" } : t)),
-    );
+    setThreads((list) => list.map((t) => (t.id === threadId ? { ...t, status: "unread" } : t)));
     try {
       await api.markThreadUnread(apiConfig, threadId);
     } catch (err) {
@@ -703,11 +698,13 @@ export function ChatPage({
                       {page.visible.map((t) => {
                         const meta = statusMeta(t.status);
                         return (
+                          // biome-ignore lint/a11y/useSemanticElements: keep the <li> for the thread <ul> list semantics; it doubles as a selectable row
                           <li
                             key={t.id}
                             className={`sidebar-item${activeId === t.id ? " active" : ""}${
                               t.archivedAt !== null ? " archived" : ""
                             }`}
+                            // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: list row doubles as a selectable button; list semantics intentional
                             role="button"
                             tabIndex={0}
                             aria-current={activeId === t.id}

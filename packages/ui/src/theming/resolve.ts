@@ -99,7 +99,10 @@ export function resolveTokens(config: ThemeConfig, mode: ResolvedMode): TokenMap
  * "Should we suppress animations?" — applied as `data-reduce-motion`
  * on `:root`. `"system"` defers to `prefers-reduced-motion`.
  */
-export function resolveReduceMotion(prefs: Preferences, systemPrefersReduced: boolean): "on" | "off" {
+export function resolveReduceMotion(
+  prefs: Preferences,
+  systemPrefersReduced: boolean,
+): "on" | "off" {
   if (prefs.reduceMotion === "on") return "on";
   if (prefs.reduceMotion === "off") return "off";
   return systemPrefersReduced ? "on" : "off";

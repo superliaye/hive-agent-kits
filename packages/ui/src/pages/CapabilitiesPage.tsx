@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { api, type ApiConfig, type CapabilityWire } from "../api.ts";
+import { type ApiConfig, api, type CapabilityWire } from "../api.ts";
 import {
   applyFilter,
   capabilitySource,
@@ -8,8 +8,8 @@ import {
   EMPTY_FILTER,
   extractFacets,
   type FilterState,
-  groupCapabilities,
   type GroupKey,
+  groupCapabilities,
   isFilterActive,
   workspaceLabel,
 } from "../capability-filters.ts";
@@ -44,6 +44,7 @@ export function CapabilitiesPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
   // Groups in the *collapsed* set are hidden. Default empty = all expanded.
   // Reset whenever the grouping axis (or kind) changes — labels move.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  // biome-ignore lint/correctness/useExhaustiveDependencies: groupBy/kind are the reset triggers, not read in the body
   useEffect(() => setCollapsed(new Set()), [groupBy, kind]);
 
   const kindCaps = useMemo(
@@ -71,6 +72,7 @@ export function CapabilitiesPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
         {(Object.keys(KIND_LABELS) as Kind[]).map((k) => (
           <button
             key={k}
+            type="button"
             className={`subtab ${kind === k ? "active" : ""}`}
             onClick={() => setKind(k)}
             data-testid={`cap-tab-${k}`}
@@ -84,8 +86,8 @@ export function CapabilitiesPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
 
       {kind === "tool" && (
         <p className="empty">
-          Built-in tool registration is not part of this slice. Built-in Tools will appear
-          here once they are wired through <code>defineTool()</code>.
+          Built-in tool registration is not part of this slice. Built-in Tools will appear here once
+          they are wired through <code>defineTool()</code>.
         </p>
       )}
 
@@ -149,15 +151,24 @@ function CapabilityGroup({
   return (
     <section className="section">
       {showHeader && (
+        // biome-ignore lint/a11y/useSemanticElements: keep the <h3> for the document outline; it doubles as a collapse toggle
         <h3
           className="group-header"
-          onClick={onToggleCollapsed}
+          // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: heading doubles as a collapse toggle; the outline role is intentional
           role="button"
+          tabIndex={0}
           aria-expanded={!collapsed}
+          onClick={onToggleCollapsed}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onToggleCollapsed();
+            }
+          }}
           data-testid={`group-header-${group.label}`}
         >
-          <span className="group-caret">{collapsed ? "▸" : "▾"}</span>{" "}
-          {group.label} <span className="empty">({group.items.length})</span>
+          <span className="group-caret">{collapsed ? "▸" : "▾"}</span> {group.label}{" "}
+          <span className="empty">({group.items.length})</span>
         </h3>
       )}
       {!collapsed &&
@@ -168,13 +179,7 @@ function CapabilityGroup({
   );
 }
 
-function CapabilityRow({
-  cap,
-  boundBy,
-}: {
-  cap: CapabilityWire;
-  boundBy: string[];
-}): JSX.Element {
+function CapabilityRow({ cap, boundBy }: { cap: CapabilityWire; boundBy: string[] }): JSX.Element {
   const ws = capabilityWorkspace(cap);
   const src = capabilitySource(cap);
   return (
@@ -186,14 +191,10 @@ function CapabilityRow({
             {cap.layer}
           </span>
           <span className={`badge badge-${cap.origin}`}>{workspaceLabel(ws)}</span>
-          {src.kind === "upstream" && (
-            <span className="badge badge-source">{src.slug}</span>
-          )}
+          {src.kind === "upstream" && <span className="badge badge-source">{src.slug}</span>}
         </div>
         <div className="desc">{cap.description}</div>
-        <div className="desc">
-          Bound by: {boundBy.join(", ") || "(no agents)"}
-        </div>
+        <div className="desc">Bound by: {boundBy.join(", ") || "(no agents)"}</div>
         {cap.tags && cap.tags.length > 0 && (
           <div>
             {cap.tags.map((t) => (

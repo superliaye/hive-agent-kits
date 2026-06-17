@@ -17,9 +17,9 @@
 // e.stopPropagation() in the input onKeyDown.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { act, createElement } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import { type Root, createRoot } from "react-dom/client";
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { InlineTitle } from "../components/InlineTitle.tsx";
 import { keydown, mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 

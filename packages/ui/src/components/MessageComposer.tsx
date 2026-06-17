@@ -7,9 +7,9 @@
 
 import { useState } from "react";
 import {
-  forwardableModels,
   type AgentBackend,
   type AvailableModel,
+  forwardableModels,
   type ThinkingEffort,
 } from "../api.ts";
 
@@ -173,7 +173,7 @@ export function MessageComposer({
           ) : (
             <select
               className="composer-model-picker"
-              value={onCliBackend && !selectionKnown ? "" : selectedModel ?? ""}
+              value={onCliBackend && !selectionKnown ? "" : (selectedModel ?? "")}
               onChange={(e) => onPick(e.target.value)}
               disabled={inFlight}
               data-testid="composer-model-picker"

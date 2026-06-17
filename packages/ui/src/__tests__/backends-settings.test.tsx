@@ -4,7 +4,7 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
-import { type Root, createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { BackendsSettings } from "../components/BackendsSettings.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 
@@ -25,7 +25,10 @@ function json(data: unknown, status = 200): Response {
 function installStubs(): void {
   calls = [];
   upgradeStatus = 200;
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  globalThis.fetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     const method = (init?.method ?? "GET").toUpperCase();
@@ -90,7 +93,13 @@ describe("BackendsSettings", () => {
     backendsSeq = [
       [
         { backend: "claude-code", installed: true, version: "2.0.13", reason: "ok", checkedAt: 1 },
-        { backend: "codex", installed: false, version: null, reason: "not_installed", checkedAt: 1 },
+        {
+          backend: "codex",
+          installed: false,
+          version: null,
+          reason: "not_installed",
+          checkedAt: 1,
+        },
       ],
     ];
     const host = await render();
