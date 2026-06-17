@@ -156,7 +156,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     SecretsLive(secretsOpts),
     AgentModelPrefsLive(agentPrefsOpts),
     ConfigLive(configOpts),
-    CatalogLive(),
+    CatalogLive({ watch: opts.mode === "file" }),
     AuditLive(auditOpts),
     ThreadsLive().pipe(Layer.provide(dataLayer)),
     backendProbeLayer,

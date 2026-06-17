@@ -41,12 +41,13 @@ describe("createCatalog — real filesystem fork-on-write", () => {
   let bundledRoot: string;
   let runtimeRoot: string;
 
-  // start() attaches recursive fs.watch handles via the tiered store; dispose
-  // every catalog so the watchers don't keep bun's event loop alive between
-  // files (hangs `bun test` on Linux CI).
+  // These tests don't exercise hot-reload, so disable the tiered store's
+  // recursive fs.watch — on Linux those handles keep bun's event loop alive and
+  // hang `bun test` at a file boundary. Still dispose each catalog to clear any
+  // pending rescan timer.
   const open: ReturnType<typeof createCatalog>[] = [];
   function makeCatalog(): ReturnType<typeof createCatalog> {
-    const catalog = createCatalog({ logErrors: false });
+    const catalog = createCatalog({ watch: false, logErrors: false });
     open.push(catalog);
     return catalog;
   }
