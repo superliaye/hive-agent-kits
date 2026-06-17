@@ -13,7 +13,7 @@
 import { type SpawnOptions, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 type Job = {
   title: string;
@@ -30,12 +30,12 @@ const daemonOnly = process.argv.includes("--daemon-only");
 const jobs: Job[] = [
   {
     title: "Hive Daemon",
-    cmd: "bun --watch src/server/start.ts",
+    cmd: "bun --watch packages/daemon/src/server/start.ts",
   },
   {
     title: "Hive UI (Vite)",
     cmd: "bun run dev",
-    cwd: "ui",
+    cwd: "packages/ui",
   },
   // Shell runs last so daemon + Vite are already serving by the time Electron
   // probes them. HIVE_UI_MODE=dev tells main.ts to load from the Vite URL
@@ -45,7 +45,7 @@ const jobs: Job[] = [
   {
     title: "Hive Shell (Electron)",
     cmd: "bun run start",
-    cwd: "shell",
+    cwd: "packages/shell",
     env: { HIVE_UI_MODE: "dev", ELECTRON_RUN_AS_NODE: "" },
   },
 ];
@@ -125,17 +125,11 @@ function spawnTerminal(job: Job): void {
 // actually boot — without it the daemon and Vite start but silently fail to
 // bind their ports. Daemon-only needs the root package alone.
 function installAll(): void {
-  const targets: Array<[string, string]> = [["root", REPO_ROOT]];
-  if (!daemonOnly) {
-    targets.push(["ui", resolve(REPO_ROOT, "ui")], ["shell", resolve(REPO_ROOT, "shell")]);
-  }
-  for (const [label, dir] of targets) {
-    console.log(`→ bun install (${label})`);
-    const r = spawnSync("bun", ["install"], { cwd: dir, stdio: "inherit", shell: isWin });
-    if (r.status !== 0) {
-      console.error(`bun install failed in ${label} (exit ${r.status})`);
-      process.exit(1);
-    }
+  console.log("→ bun install (workspace root)");
+  const r = spawnSync("bun", ["install"], { cwd: REPO_ROOT, stdio: "inherit", shell: isWin });
+  if (r.status !== 0) {
+    console.error(`bun install failed (exit ${r.status})`);
+    process.exit(1);
   }
 }
 
@@ -146,9 +140,12 @@ function stopPriorStack(): void {
   if (isWin) {
     // Kill the titled cmd host windows (taskkill /T cascades to their bun +
     // Electron children), sweep any Electron orphaned from an already-closed
-    // window (scoped to this repo's binary so other Electron apps are spared),
-    // then clear the ports as a backstop.
-    const electronDir = resolve(REPO_ROOT, "shell", "node_modules");
+    // window (scoped to this repo's tree so other Electron apps are spared),
+    // then clear the ports as a backstop. Scoped to the repo root (with a
+    // trailing separator so a sibling clone like hive-v2-experiment isn't
+    // matched) — Bun nests electron under packages/shell/node_modules, and
+    // this prefix survives a future Bun that hoists it to root node_modules.
+    const electronDir = REPO_ROOT.endsWith(sep) ? REPO_ROOT : REPO_ROOT + sep;
     const cmd = [
       `Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | Where-Object { $_.CommandLine -match 'hive-dev-|hive-shell-launch\\.bat' } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }`,
       `Get-CimInstance Win32_Process -Filter "Name='electron.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${electronDir}', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,

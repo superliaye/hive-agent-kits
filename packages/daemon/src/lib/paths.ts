@@ -17,7 +17,7 @@ import type { Origin } from "./capability-types.ts";
 
 export function bundledRoot(): string {
   if (process.env.HIVE_BUNDLED_ROOT) return process.env.HIVE_BUNDLED_ROOT;
-  // src/lib/paths.ts -> ../../bundled
+  // packages/daemon/src/lib/paths.ts -> ../../bundled = packages/daemon/bundled
   return resolve(import.meta.dir, "..", "..", "bundled");
 }
 

@@ -15,8 +15,11 @@
 // Together: the shapes match.
 
 import { describe, expect, test } from "bun:test";
-import { importPreferences } from "../../../ui/src/theming/serialize.ts";
-import type { Preferences, ThemeConfig as UiThemeConfig } from "../../../ui/src/theming/types.ts";
+import { importPreferences } from "../../../../ui/src/theming/serialize.ts";
+import type {
+  Preferences,
+  ThemeConfig as UiThemeConfig,
+} from "../../../../ui/src/theming/types.ts";
 import {
   APP_CONFIG_DEFAULTS,
   type AppearanceConfig,

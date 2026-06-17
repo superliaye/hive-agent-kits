@@ -31,7 +31,7 @@ bun run format      # Biome format (writes)
 bun run ship
 ```
 
-Produces a runnable app folder at `shell/release/Hive-<platform>-x64/` — double-click `Hive.exe` (or the platform equivalent). This is a copy-and-run folder, not an `.msi`/`.dmg` installer.
+Produces a runnable app folder at `packages/shell/release/Hive-<platform>-x64/` — double-click `Hive.exe` (or the platform equivalent). This is a copy-and-run folder, not an `.msi`/`.dmg` installer.
 
 ## Learn more
 

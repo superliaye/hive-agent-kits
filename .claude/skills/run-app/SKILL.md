@@ -34,7 +34,7 @@ It installs deps, tears down any prior stack, launches, and verifies, then print
 
 Read that block. `STATUS: PASS` means everything it launched is up; `STATUS: FAIL` names what's missing. Exit code matches (0 / 1).
 
-- **Default = full GUI stack** (daemon + Vite + Electron window), for full-loop verification. Windows open **minimized to the taskbar** and the Electron window shows **unfocused** (see [shell/src/main.ts](../../../shell/src/main.ts)), so a launch never steals focus from what you're doing.
+- **Default = full GUI stack** (daemon + Vite + Electron window), for full-loop verification. Windows open **minimized to the taskbar** and the Electron window shows **unfocused** (see [packages/shell/src/main.ts](../../../packages/shell/src/main.ts)), so a launch never steals focus from what you're doing.
 - **`-DaemonOnly`** launches just the daemon and verifies `/api/ready` + agents — no Vite, no Electron. If a daemon is already healthy it reuses it (won't disturb a running GUI stack). Use when you only need the HTTP API.
 
 Two hard rules are why this is a PowerShell `.ps1` and not the Bash tool or `bun run dev:full`:
@@ -61,7 +61,7 @@ Rerun the script (it tears down any prior stack first) or close the cmd windows.
 bun run ship
 ```
 
-`scripts/ship.ts` builds the UI, compiles the daemon to a self-contained binary, packages with `@electron/packager`, then verifies the artifacts and prints `STATUS: PASS` (with exact sizes). Output: `shell/release/Hive-<platform>-x64/Hive.exe`, a double-clickable folder app — not an installer. Build steps and the packager-vs-electron-builder rationale are in the script header.
+`scripts/ship.ts` builds the UI, compiles the daemon to a self-contained binary, packages with `@electron/packager`, then verifies the artifacts and prints `STATUS: PASS` (with exact sizes). Output: `packages/shell/release/Hive-<platform>-x64/Hive.exe`, a double-clickable folder app — not an installer. Build steps and the packager-vs-electron-builder rationale are in the script header.
 
 ## Common failures and gotchas
 
@@ -72,7 +72,7 @@ The dev scripts already handle the frequent ones (missing `node_modules`, stale 
 | `dev.ps1` STATUS: FAIL, daemon unreachable | Daemon crashed on boot — read its terminal window | Fix the error shown in the Hive Daemon window; rerun |
 | Electron window opens but agents list is empty | Daemon came up after Electron probed it | Rerun — the script's stagger + health poll normally prevents this |
 | `bun run ship` fails with "Cannot create symbolic link" during winCodeSign extraction | Using electron-builder on Windows without Developer Mode | Already worked around: `scripts/ship.ts` uses `@electron/packager` |
-| `Hive.exe` from `shell/release/` runs but no window appears | `ELECTRON_RUN_AS_NODE=1` inherited by the packaged app | Unset the env var globally, or wrap the launch in a `.bat` that clears it |
+| `Hive.exe` from `packages/shell/release/` runs but no window appears | `ELECTRON_RUN_AS_NODE=1` inherited by the packaged app | Unset the env var globally, or wrap the launch in a `.bat` that clears it |
 | Don't smoke-test `Hive.exe` from a background shell | GUI processes detach stdout — you can't observe boot state | Probe `http://127.0.0.1:3117/api/ready` instead |
 
 ## Querying the audit log

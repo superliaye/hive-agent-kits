@@ -11,6 +11,10 @@ Repo conventions for AI coding agents working in this repo.
 
 A portable personal AI system. Capabilities carry an origin tag: Personal travels with the user; Workplace stays at the company. Two-sentence pitch; full vocabulary in CONTEXT.md.
 
+## Repo layout
+
+A Bun workspace: deployable units live under `packages/*` — `daemon` (`@hive/daemon`, source in `packages/daemon/src/`, vendored capabilities in `packages/daemon/bundled/`), `ui` (`@hive/ui`), `shell` (`@hive/shell`), and `contract` (`@hive/contract`, shared wire types). Root `package.json` is orchestration-only; one root `bun.lock`. See [ADR-0020](docs/adr/0020-monorepo-workspace-layout.md).
+
 ## Reference projects (architecture sources, not clones)
 
 - **OpenClaw** — `github.com/openclaw/openclaw`, local clone `E:\dev\GitRepos\openclaw`.
@@ -25,7 +29,7 @@ Two distinct stores; don't conflate them.
 
 **Audit** = what users and agents did: tool calls (observed from a backend's stream), secret accesses, harness edits, backend run starts, Run lifecycle. SQLite-backed, retained, queryable. Subscribe pattern — modules emit typed events as side effects; the Audit module subscribes and persists. The Run-path emitter is now the SDK-backend adapter folding the vendor SDK's stream, not an in-process tool loop. Never called directly (no `audit.record(...)` API). When your code does something user-visible (mutates state, invokes a capability), check the relevant event is emitted from the module's internal write path. Refs, not values — never put sensitive values in payloads. (Governance/permission enforcement is deferred — the SDKs run under bypass mode — so there are no permission-decision audit rows; ADR-0019.)
 
-**Trace** = system diagnostics: parse errors, watcher events, daemon startup chatter, perf counters. JSONL via Pino at `~/.hive/logs/daemon.log`. *No* subscribe pattern — import the `log()` singleton from `src/lib/log.ts` and write at the call site with full context: `log().warn({ module, path, err }, "skipped malformed manifest")`. `console.log`/`.warn`/`.error` in non-test source is wrong; use the trace logger.
+**Trace** = system diagnostics: parse errors, watcher events, daemon startup chatter, perf counters. JSONL via Pino at `~/.hive/logs/daemon.log`. *No* subscribe pattern — import the `log()` singleton from `packages/daemon/src/lib/log.ts` and write at the call site with full context: `log().warn({ module, path, err }, "skipped malformed manifest")`. `console.log`/`.warn`/`.error` in non-test source is wrong; use the trace logger.
 
 Decision: was a user or agent the proximate cause? Yes → audit. No (system observed it during normal operation) → trace.
 
@@ -42,7 +46,7 @@ See [ADR-0004](docs/adr/0004-audit-log-design.md) for the full design: event typ
 
 Apply without asking when writing or reviewing daemon code; deviations need a stated reason. Guiding rule: spend complexity on **seams and contracts** (the expensive-to-reverse lines); keep the boxes thin.
 
-**Effect-TS is the default substrate** for all daemon source (`src/`).
+**Effect-TS is the default substrate** for all daemon source (`packages/daemon/src/`).
 
 - **Typed error channel.** Errors are values in `E`. No `throw` of untyped errors, no stringly-typed handling. Effect gives the channel, not the meaning — own the *semantic* error taxonomy at your ports (e.g. the gateway's `GatewayErrorCode`); edges map into it.
 - **DI via `Layer`/`Context`.** No hidden globals, no wide constructor-threading.
@@ -53,7 +57,7 @@ Apply without asking when writing or reviewing daemon code; deviations need a st
 **Deep, hexagonal, modular — not academic DDD.**
 
 - **Ports-and-adapters with deep modules.** Narrow, *consumer-owned* ports shaped to the consumer's need; the providing module / Config / external system is the adapter. Configuration is infrastructure behind a port — not a wide dependency, not a global.
-- **Modular monolith, functional core.** Vertical slices under `src/<module>/`; hexagonal layers are *roles* (domain / application / adapter / infrastructure), not folders. A data record plus its module's factory verbs is a healthy functional core.
+- **Modular monolith, functional core.** Vertical slices under `packages/daemon/src/<module>/`; hexagonal layers are *roles* (domain / application / adapter / infrastructure), not folders. A data record plus its module's factory verbs is a healthy functional core.
 - **Skip tactical-DDD ceremony.** No aggregates-with-methods, no four-folder layering for its own sake, no abstraction for a single forever-adapter. Add a value object / domain service only where it earns its place.
 - **Keep strategic DDD.** Ubiquitous language (`CONTEXT.md`), bounded contexts, the typed relationships between them. Spend modeling effort on **Core** subdomains; build **Supporting** plainly; buy/wrap **Generic** ones.
 
@@ -81,6 +85,6 @@ Why these invocations, failure modes, and internals: the **`run-app` skill** ([.
 | Domain vocabulary | `CONTEXT.md` |
 | Hard-to-reverse architectural | `docs/adr/NNNN-*.md` |
 | Repo conventions (this file) | `AGENTS.md` |
-| Subtree-specific conventions | `src/<module>/AGENTS.md` (lazily, when warranted) |
+| Subtree-specific conventions | `packages/daemon/src/<module>/AGENTS.md` (lazily, when warranted) |
 
 Prefer the more specific location: subtree AGENTS.md over root; ADR over AGENTS.md when the decision is structural.

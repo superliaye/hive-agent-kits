@@ -147,7 +147,7 @@ export function forwardableModels(
 // directly (rather than mirroring) so a new block kind added on the server
 // surfaces as a TypeScript error in the UI's discriminated `renderBlock`
 // switches — no silent drift.
-import type { ContentBlock } from "../../src/lib/messages.ts";
+import type { ContentBlock } from "../../daemon/src/lib/messages.ts";
 import type { Preferences } from "./theming/index.ts";
 export type { ContentBlock };
 

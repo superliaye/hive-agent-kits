@@ -43,30 +43,24 @@ if ($DaemonOnly) {
 if (-not $reuse) {
   # 1. Install. `bun install` is near-instant when the lockfile is satisfied; on
   #    a fresh/pulled repo it is the only thing that makes the processes bind
-  #    their ports. Daemon-only needs the root package only.
-  # Build explicitly (not via `if`-as-expression): a single-element array
-  # returned from an `if` block gets unrolled, which would turn the lone
-  # ('root', $repo) pair into two scalar iterations.
-  $targets = @(, @('root', $repo))
-  if (-not $DaemonOnly) {
-    $targets += , @('ui', "$repo\ui")
-    $targets += , @('shell', "$repo\shell")
-  }
-  foreach ($t in $targets) {
-    Write-Host "-> bun install ($($t[0]))"
-    Push-Location $t[1]
-    bun install
-    $code = $LASTEXITCODE
-    Pop-Location
-    if ($code -ne 0) { Write-Host "bun install failed in $($t[0]) (exit $code)"; exit 1 }
-  }
+  #    their ports. One workspace-root install covers every member.
+  Write-Host "-> bun install (workspace root)"
+  Push-Location $repo
+  bun install
+  $code = $LASTEXITCODE
+  Pop-Location
+  if ($code -ne 0) { Write-Host "bun install failed (exit $code)"; exit 1 }
 
   # 2. Fully tear down any prior Hive stack so relaunching restarts cleanly
   #    instead of piling up windows. taskkill /T on the titled cmd hosts
   #    cascades to their bun + Electron children; we then sweep any Electron
   #    orphaned from an already-closed window (scoped to this repo's binary, so
   #    other Electron apps like VS Code are untouched) and clear the ports.
-  $electronDir = Join-Path $repo 'shell\node_modules'
+  # Scope the Electron sweep to the repo root (trailing separator so a sibling
+  # clone like hive-v2-experiment isn't matched). Bun nests electron under
+  # packages\shell\node_modules; this prefix survives a future Bun that hoists
+  # it to root node_modules.
+  $electronDir = $repo + [IO.Path]::DirectorySeparatorChar
   # Scope the daemon/Vite cmd kill to this repo (their command line contains
   # `cd /d <repo>`) so a second clone or a stray window that merely mentions
   # "Hive Daemon" isn't force-killed. The Electron host goes through the temp
@@ -87,15 +81,15 @@ if (-not $reuse) {
   #    inline (set VAR= && ...) is unreliable in cmd; if it stays set, Electron
   #    boots in plain-Node mode and never opens a window.
   Write-Host "`nStarting Hive $(if ($DaemonOnly) { 'daemon' } else { 'dev stack' })..."
-  Start-Process -FilePath cmd.exe -ArgumentList '/k', "title Hive Daemon && cd /d $repo && bun --watch src/server/start.ts" -WindowStyle Minimized
+  Start-Process -FilePath cmd.exe -ArgumentList '/k', "title Hive Daemon && cd /d $repo && bun --watch packages/daemon/src/server/start.ts" -WindowStyle Minimized
   if (-not $DaemonOnly) {
     Start-Sleep -Seconds 2
-    Start-Process -FilePath cmd.exe -ArgumentList '/k', "title Hive UI Vite && cd /d $repo\ui && bun run dev" -WindowStyle Minimized
+    Start-Process -FilePath cmd.exe -ArgumentList '/k', "title Hive UI Vite && cd /d $repo\packages\ui && bun run dev" -WindowStyle Minimized
     Start-Sleep -Seconds 2
     $bat = "$env:TEMP\hive-shell-launch.bat"
     @"
 title Hive Shell Electron
-cd /d $repo\shell
+cd /d $repo\packages\shell
 set ELECTRON_RUN_AS_NODE=
 set HIVE_UI_MODE=dev
 bun run start

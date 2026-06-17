@@ -5,7 +5,7 @@
  * Biome's nursery/noFloatingPromises treats `void p` as VALID — the canonical
  * "deliberately ignore this promise" escape hatch. So Biome alone cannot enforce
  * the operator's directive ("forbid `void someAsync()`"). This script is the
- * teeth: it walks the src/ + scripts/ *.ts off the TS type-checker (each file
+ * teeth: it walks packages/daemon/src/ + scripts/ *.ts off the TS type-checker (each file
  * read once, from the loaded SourceFile) and fails on either
  *
  *   (a) a noFloatingPromises rule-suppression comment, or
@@ -22,7 +22,7 @@ import * as ts from "typescript";
 
 export type Violation = { file: string; line: number; kind: "void-promise" | "rule-suppression" };
 
-const SRC_ROOT = resolve(import.meta.dir, "..", "src");
+const SRC_ROOT = resolve(import.meta.dir, "..", "packages", "daemon", "src");
 const SCRIPTS_ROOT = resolve(import.meta.dir);
 const SCAN_ROOTS = [SRC_ROOT, SCRIPTS_ROOT];
 

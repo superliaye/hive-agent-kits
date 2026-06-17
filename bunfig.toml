@@ -1,0 +1,8 @@
+[install]
+# electron-packager (run from packages/shell during `bun run ship`) resolves its
+# own transitive @electron/* deps by walking node_modules from the consuming
+# package. Bun's default "isolated" linker nests those deps inside the packager's
+# own store dir, unreachable through the workspace symlink — packaging then fails
+# with "Failed to locate module @electron/asar". The "hoisted" linker lays out a
+# flat root node_modules the packager's walk can traverse. ADR-0020.
+linker = "hoisted"

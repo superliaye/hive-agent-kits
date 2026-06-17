@@ -6,6 +6,4 @@
 * text=auto eol=lf
 
 # Generated lockfiles: text (LF-normalized) but never diffed or hand-edited.
-bun.lock        linguist-generated -diff
-shell/bun.lock  linguist-generated -diff
-ui/bun.lock     linguist-generated -diff
+bun.lock  linguist-generated -diff

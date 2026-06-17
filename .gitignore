@@ -10,16 +10,16 @@ org/*/.workspace/
 .claude/skills/ui-ux-pro-max/
 .claude/settings.local.json
 # Playwright artifacts
-shell/test-results/
-shell/test-results.json
-shell/playwright-report/
+packages/shell/test-results/
+packages/shell/test-results.json
+packages/shell/playwright-report/
 # Ship build artifacts — derived
-shell/staging/
-shell/ui-dist/
-shell/release/
-shell/build-resources/
+packages/shell/staging/
+packages/shell/ui-dist/
+packages/shell/release/
+packages/shell/build-resources/
 # Vite dependency pre-bundle cache
-ui/.vite/
+packages/ui/.vite/
 # /build-feature-workflow loop scratch
 .build-feature-workflow/
 
