@@ -78,6 +78,11 @@ Write an ADR only when all three are true: hard to reverse, surprising without c
 
 Why these invocations, failure modes, and internals: the **`run-app` skill** ([.claude/skills/run-app/SKILL.md](.claude/skills/run-app/SKILL.md)) and the script headers.
 
+## Checks
+
+- **Type-check:** `bun run typecheck` — fans out `tsc --noEmit` across `daemon`, `ui`, and `shell` (Bun-workspace `--filter`). `contract` is types-only and checked transitively by its consumers. Run a single package with `bun run typecheck` inside it.
+- **Test:** `bun test`. **Lint:** `bun run check` (Biome). **Format:** `bun run format` (Biome, writes).
+
 ## Where decisions live
 
 | Kind | Where |
