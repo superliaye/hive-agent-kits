@@ -9,8 +9,7 @@
 // stored OAuth token (honest leftover-token copy: not used for runs, the CLI's own
 // login can't refresh it, Remove + secondary API key). When a backend is Not
 // installed the auth setup is suppressed — only a leftover stored credential
-// surfaces a single Remove. The allowlist lives in Permissions now, so its
-// controls must be ABSENT here.
+// surfaces a single Remove.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
@@ -447,14 +446,5 @@ describe("BackendsSettings", () => {
     expect(host.querySelector('[data-testid="backend-auth-setkey-codex"]')).toBeNull();
     expect(host.querySelector('[data-testid="backend-auth-leftover-codex"]')).toBeNull();
     expect(host.querySelector('[data-testid="backend-auth-remove-codex"]')).toBeNull();
-  });
-
-  test("allowlist controls are ABSENT from this page (moved to Permissions)", async () => {
-    installStubs();
-    readinessSeq = [[claudeApiKey, codexNotInstalled]];
-    const host = await render();
-    expect(host.querySelector('[data-testid="allowlist-list"]')).toBeNull();
-    expect(host.querySelector('[data-testid="allowlist-deny-all"]')).toBeNull();
-    expect(host.querySelector('[data-testid="allowlist-agent-picker"]')).toBeNull();
   });
 });

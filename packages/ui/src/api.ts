@@ -39,9 +39,6 @@ export type AgentDetail = AgentSummary & {
   };
   config: Record<string, unknown>;
   promptBody: string;
-  // Per-Agent `run_shell` command allowlist (read-only here). Absent/empty ⇒
-  // deny-all (no commands allowed). Mirrors the daemon's AgentDetailWire field.
-  commandAllowlist?: string[];
   forkError?: string;
 };
 

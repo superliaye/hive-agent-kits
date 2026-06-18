@@ -1,9 +1,8 @@
 import type { ApiConfig } from "../api.ts";
 import { AppearanceSettings } from "../components/AppearanceSettings.tsx";
 import { BackendsSettings } from "../components/BackendsSettings.tsx";
-import { PermissionsSettings } from "../components/PermissionsSettings.tsx";
 
-export type SectionId = "appearance" | "backends" | "permissions" | "other";
+export type SectionId = "appearance" | "backends" | "other";
 
 type Section = {
   id: SectionId;
@@ -21,11 +20,6 @@ const SECTIONS: readonly Section[] = [
     id: "backends",
     label: "Backends",
     description: "Claude Code and Codex CLIs — health, updates, and sign-in.",
-  },
-  {
-    id: "permissions",
-    label: "Permissions",
-    description: "Per-agent run_shell command allowlists.",
   },
   {
     id: "other",
@@ -74,7 +68,6 @@ export function SettingsPage({
           </header>
           {active === "appearance" && <AppearanceSettings />}
           {active === "backends" && <BackendsSettings apiConfig={apiConfig} />}
-          {active === "permissions" && <PermissionsSettings apiConfig={apiConfig} />}
           {active === "other" && (
             <div className="section">
               <p className="empty">

@@ -116,7 +116,7 @@ Query params (validated by Zod, strict shape — unknown keys 400):
 
 | Param | Type | Notes |
 |---|---|---|
-| `source` | enum | `run \| permission \| secrets \| mcp \| memory \| registry \| catalog \| lifecycle \| backend \| config \| gateway` |
+| `source` | enum | `run \| secrets \| mcp \| memory \| registry \| catalog \| lifecycle \| backend \| config \| agent-prefs \| thread` |
 | `event_type` | string | exact match, e.g. `harness.updated` |
 | `agent_id` | kebab-case | exact match |
 | `run_id` | string | exact match |

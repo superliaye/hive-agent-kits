@@ -119,7 +119,6 @@ describe("audit module", () => {
     await emitter.emit("thing.happened", { id: "1" });
 
     expect(await audit.query({ source: "run" })).toHaveLength(1);
-    expect(await audit.query({ source: "permission" })).toHaveLength(0);
   });
 
   test("query filters by event_type", async () => {
@@ -262,8 +261,8 @@ describe("audit module", () => {
     expect(audit.subscriptions()).toEqual(["run"]);
 
     const otherEmitter = new TypedEmitter<TestEvents>();
-    audit.attach("permission", otherEmitter, baseNormalizer);
-    expect(audit.subscriptions()).toEqual(["run", "permission"]);
+    audit.attach("memory", otherEmitter, baseNormalizer);
+    expect(audit.subscriptions()).toEqual(["run", "memory"]);
   });
 
   test("disposing removes the module from subscriptions()", () => {

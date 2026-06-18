@@ -16,11 +16,7 @@ import { createServer, type ServerHandles } from "../index.ts";
 
 const TOKEN = "test-token";
 
-function harness(agentId: string, withSkill = "alpha", commandAllowlist?: string[]): string {
-  const allowlistBlock =
-    commandAllowlist !== undefined
-      ? `commandAllowlist:\n${commandAllowlist.map((c) => `  - ${c}`).join("\n")}\n`
-      : "";
+function harness(agentId: string, withSkill = "alpha"): string {
   return `---
 agentId: ${agentId}
 backend: claude-code
@@ -34,7 +30,7 @@ bindings:
   mcp: []
 config:
   model: claude-opus-4-7
-${allowlistBlock}---
+---
 
 # ${agentId}
 
@@ -86,10 +82,7 @@ describe("server routes", () => {
     mkdirSync(join(bundledRoot, "agents", "root"), { recursive: true });
     writeFileSync(join(bundledRoot, "agents", "root", "HARNESS.md"), harness("root"));
     mkdirSync(join(bundledRoot, "agents", "gated"), { recursive: true });
-    writeFileSync(
-      join(bundledRoot, "agents", "gated", "HARNESS.md"),
-      harness("gated", "alpha", ["node", "git"]),
-    );
+    writeFileSync(join(bundledRoot, "agents", "gated", "HARNESS.md"), harness("gated"));
     // The Agent Manager — runs on whichever SDK backend its harness/prefs resolve
     // to, like any other agent (no carve-out; ADR-0019).
     mkdirSync(join(bundledRoot, "agents", "agent-manager"), { recursive: true });
@@ -147,13 +140,6 @@ describe("server routes", () => {
     expect(body.promptBody).toContain("# root");
   });
 
-  test("GET /api/agents/:id surfaces commandAllowlist when present", async () => {
-    const res = await server.app.fetch(authed("/api/agents/gated"));
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { commandAllowlist?: string[] };
-    expect(body.commandAllowlist).toEqual(["node", "git"]);
-  });
-
   test("GET /api/agents summary no longer carries isWorker (ADR-0018 dropped the field)", async () => {
     const list = (await (await server.app.fetch(authed("/api/agents"))).json()) as Array<
       Record<string, unknown>
@@ -161,13 +147,6 @@ describe("server routes", () => {
     const root = list.find((a) => a.agentId === "root");
     expect(root).toBeDefined();
     expect("isWorker" in (root ?? {})).toBe(false);
-  });
-
-  test("GET /api/agents/:id omits commandAllowlist when absent", async () => {
-    const res = await server.app.fetch(authed("/api/agents/root"));
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { commandAllowlist?: string[] };
-    expect(body.commandAllowlist).toBeUndefined();
   });
 
   test("GET /api/agents/unknown returns 404", async () => {

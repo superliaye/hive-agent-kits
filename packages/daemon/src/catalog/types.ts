@@ -35,10 +35,6 @@ export type Agent = {
   domain: string;
   bindings: HarnessManifest["bindings"];
   config: HarnessManifest["config"];
-  // Per-Agent `run_shell` command allowlist (deny-by-default). Surfaced from
-  // the HarnessManifest field of the same name; read by the executor's
-  // PermissionPort.
-  commandAllowlist?: HarnessManifest["commandAllowlist"];
   promptBody: string;
   layer: CapabilityLayer;
   hasFork: boolean;
@@ -68,7 +64,6 @@ export type CreateAgentInput = {
   promptBody: string;
   bindings?: Partial<HarnessManifest["bindings"]>;
   config?: HarnessManifest["config"];
-  commandAllowlist?: HarnessManifest["commandAllowlist"];
 };
 
 export type Catalog = {

@@ -16,8 +16,6 @@ bindings:
     - load_skill
     - spawn_sub_agent
   mcp: []
-commandAllowlist:
-  - node
 config:
   model: latest
   modelFallback: anthropic/claude-sonnet-4-6

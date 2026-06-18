@@ -1173,22 +1173,6 @@ pre.config {
   border-top: 1px solid var(--color-border-default);
 }
 
-/* Read-only command-allowlist list (Backends settings). */
-.allowlist {
-  list-style: none;
-  padding: 0;
-  margin: 8px 0 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.allowlist li {
-  background: var(--color-bg-subtle, var(--color-bg-base));
-  border: 1px solid var(--color-border-default);
-  border-radius: 4px;
-  padding: 2px 8px;
-}
-
 .empty-state {
   flex: 1;
   display: flex;

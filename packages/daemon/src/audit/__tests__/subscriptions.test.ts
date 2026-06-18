@@ -351,10 +351,6 @@ describe("wireSubscriptions", () => {
     expect(observed).toBeDefined();
     expect((observed?.payload as { tool?: string }).tool).toBe("Bash");
 
-    // No permission rows exist anymore (the permission source is deleted).
-    const permRows = await audit.query({ source: "permission" });
-    expect(permRows.length).toBe(0);
-
     // The run source still carries lifecycle.
     const runRows = await audit.query({ source: "run" });
     expect(runRows.some((r) => r.event_type === "run.started")).toBe(true);

@@ -53,9 +53,6 @@ function writeHarness(path: string, agent: Agent): void {
     domain: agent.domain,
     bindings: agent.bindings,
     config: agent.config,
-    // Preserve the per-Agent run_shell allowlist across fork-writes (binding
-    // edits) so a binding mutation never silently drops it.
-    ...(agent.commandAllowlist !== undefined ? { commandAllowlist: agent.commandAllowlist } : {}),
   };
   // Sanity-check before writing.
   HarnessManifest.parse(manifest);
@@ -158,9 +155,6 @@ export function createCatalog(opts: CreateCatalogOptions = {}): Catalog {
           mcp: input.bindings?.mcp ?? [],
         },
         config: input.config ?? {},
-        ...(input.commandAllowlist !== undefined
-          ? { commandAllowlist: input.commandAllowlist }
-          : {}),
         promptBody: input.promptBody,
         layer: "runtime",
         hasFork: true,

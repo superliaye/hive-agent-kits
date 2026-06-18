@@ -2,7 +2,6 @@
 
 import { z } from "zod";
 import type { BackendReadiness } from "../backend-readiness/index.ts";
-import type { HarnessManifest } from "../capabilities/schemas.ts";
 import {
   AgentBackend,
   CapabilityKind,
@@ -18,7 +17,6 @@ import { SYMBOLIC_EFFORT_HIGHEST, SYMBOLIC_MODEL_LATEST } from "../runs/symbolic
 // module's types into route signatures.
 export const ModuleSourceSchema = z.enum([
   "run",
-  "permission",
   "secrets",
   "mcp",
   "memory",
@@ -115,10 +113,6 @@ export type AgentDetailWire = AgentSummaryWire & {
   };
   config: Record<string, unknown>;
   promptBody: string;
-  // Per-Agent run_shell command allowlist (read-only here). Surfaced from the
-  // Agent / HarnessManifest field so the C5 Backends UI can render it; editing
-  // is C5's concern, not this endpoint.
-  commandAllowlist?: HarnessManifest["commandAllowlist"];
   // Populated when a runtime fork file exists but failed to parse; the
   // resolved agent falls back to bundled. UI shows a banner.
   forkError?: string;

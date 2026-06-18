@@ -2,7 +2,6 @@
 
 export type ModuleSource =
   | "run"
-  | "permission"
   | "secrets"
   | "mcp"
   | "memory"

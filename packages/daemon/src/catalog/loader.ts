@@ -58,9 +58,6 @@ function loadAgent(
       domain: result.data.domain,
       bindings: result.data.bindings,
       config: result.data.config,
-      ...(result.data.commandAllowlist !== undefined
-        ? { commandAllowlist: result.data.commandAllowlist }
-        : {}),
       promptBody: body,
       layer,
       hasFork,
