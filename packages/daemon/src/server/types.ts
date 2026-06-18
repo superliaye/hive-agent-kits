@@ -1,6 +1,7 @@
 // HTTP wire types and request-body schemas for the daemon's /api routes.
 
 import { z } from "zod";
+import type { BackendReadiness } from "../backend-readiness/index.ts";
 import type { HarnessManifest } from "../capabilities/schemas.ts";
 import {
   AgentBackend,
@@ -347,3 +348,10 @@ export type ConfiguredProviderWire = {
   addedAt: number;
   refreshedAt?: number;
 };
+
+// ─── Backend Readiness (GET /api/backends/readiness) ──────────────────────
+
+// The readiness projection's wire shape IS the backend-readiness Zod schema's
+// inferred type — no parallel redefinition. The route Zod-validates with the
+// schema itself at the boundary (BackendReadiness.array().parse).
+export type BackendReadinessWire = BackendReadiness;

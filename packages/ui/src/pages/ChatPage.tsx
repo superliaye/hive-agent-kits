@@ -119,10 +119,10 @@ function ApplyToDefault({ row }: { row: ApplyRowView }): JSX.Element {
 
 export function ChatPage({
   apiConfig,
-  onNavigateToSecrets,
+  onNavigateToBackends,
 }: {
   apiConfig: ApiConfig;
-  onNavigateToSecrets: () => void;
+  onNavigateToBackends: () => void;
 }): JSX.Element {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -866,7 +866,7 @@ export function ChatPage({
               models={models}
               selectedModel={selectedModel}
               onSelectModel={(m) => void onSelectModel(m)}
-              onAddModels={onNavigateToSecrets}
+              onAddModels={onNavigateToBackends}
               efforts={selectedModelEfforts}
               selectedEffort={selectedEffort}
               onSelectEffort={(e) => void onSelectEffort(e)}

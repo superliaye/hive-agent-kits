@@ -293,6 +293,133 @@ pre,
   border: 1px solid var(--color-border-default);
 }
 
+/* ─── Backends page cards ──────────────────────────────────────────────
+ * One card per Agent Backend. Bordered + elevated so each backend reads as
+ * a contained unit, not a flat wall. The Auth zone is split from the Health
+ * zone by a hairline border-top. */
+.backend-card {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 12px;
+}
+.backend-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.backend-card-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.backend-card-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-fg-default);
+}
+.backend-card-id {
+  font-family: var(--font-code);
+  font-size: 11px;
+  color: var(--color-fg-muted);
+}
+.backend-card-health {
+  margin-top: 8px;
+}
+.backend-card-auth {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border-default);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.backend-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+/* Expired-sign-in line: inline warning icon + text (no emoji), tinted warning. */
+.backend-auth-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-warning);
+}
+.backend-auth-warn svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+/* Readiness verdict badge — derived in the UI from health + auth (a human
+ * verdict, not the raw machine enum). Icon + text, so it never signals by
+ * color alone. Sized >= 11px and not uppercased (these are human labels). */
+.badge-readiness {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+}
+.badge-readiness svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.badge-ready {
+  background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-surface));
+  color: var(--color-success);
+}
+.badge-action-needed {
+  background: color-mix(in srgb, var(--color-warning) 18%, var(--color-bg-surface));
+  color: var(--color-warning);
+}
+.badge-not-installed {
+  background: var(--color-bg-hover);
+  color: var(--color-fg-muted);
+}
+/* cli-managed: neutral, not an alarm. Full-strength fg (vs not-installed's muted)
+ * so it reads as a present-and-fine state, distinct from the muted grey. */
+.badge-cli {
+  background: var(--color-bg-hover);
+  color: var(--color-fg-default);
+}
+.badge-error {
+  background: color-mix(in srgb, var(--color-danger) 16%, var(--color-bg-surface));
+  color: var(--color-danger);
+}
+/* Dark themes: derive the chip tint from the active theme's own status tokens
+ * (each dark preset sets its own --color-success/warning/danger) rather than a
+ * fixed hex, so High Contrast and the tinted dark presets stay consistent.
+ * Mixed into the card surface (bg-elevated) and lightened toward the status hue
+ * so the label reads on dark. */
+[data-theme="dark"] .badge-ready {
+  background: color-mix(in srgb, var(--color-success) 28%, var(--color-bg-elevated));
+  color: color-mix(in srgb, var(--color-success) 55%, var(--color-fg-default));
+}
+[data-theme="dark"] .badge-action-needed {
+  background: color-mix(in srgb, var(--color-warning) 28%, var(--color-bg-elevated));
+  color: color-mix(in srgb, var(--color-warning) 55%, var(--color-fg-default));
+}
+[data-theme="dark"] .badge-not-installed {
+  background: color-mix(in srgb, var(--color-fg-muted) 18%, transparent);
+  color: var(--color-fg-muted);
+}
+[data-theme="dark"] .badge-cli {
+  background: color-mix(in srgb, var(--color-fg-muted) 22%, transparent);
+  color: var(--color-fg-default);
+}
+[data-theme="dark"] .badge-error {
+  background: color-mix(in srgb, var(--color-danger) 28%, var(--color-bg-elevated));
+  color: color-mix(in srgb, var(--color-danger) 55%, var(--color-fg-default));
+}
+
 .search-row {
   display: flex;
   gap: 8px;
@@ -370,6 +497,12 @@ pre,
 .button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+/* Filled .button focus ring. Uses fg-default (not accent) so it stays visible
+ * against both the dark background AND the near-black accent fill. */
+.button:focus-visible {
+  outline: 2px solid var(--color-fg-default);
+  outline-offset: 2px;
 }
 
 .empty {

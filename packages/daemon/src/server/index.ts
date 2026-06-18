@@ -26,6 +26,11 @@ import {
   notInstalledRunner,
 } from "../backend-probe/index.ts";
 import {
+  BackendReadinessLive,
+  type BackendReadinessSvc,
+  BackendReadinessService as BackendReadinessTag,
+} from "../backend-readiness/index.ts";
+import {
   BindingResolver,
   BindingResolverLive,
   createRegistry,
@@ -263,6 +268,33 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     snapshot: () => runnableCatalog(secrets),
   };
 
+  // Backend Readiness projection: the per-backend health ∩ provider-auth join
+  // feeding the Settings "Backends" page. Its deps are adapted HERE onto the
+  // module's narrow consumer-owned ports — the resolved BackendProbe (probeAll)
+  // and Secrets (list) — so the module Layer carries no probe/secrets
+  // requirement. Resolved off the root runtime like every other live service.
+  const backendReadiness: BackendReadinessSvc = runtime.runSync(
+    BackendReadinessTag.pipe(
+      Effect.provide(
+        BackendReadinessLive({
+          probe: { probeAll: () => backendProbe.probeAll() },
+          // `list()` is typed `"ok" | "expired" | "missing"` but never emits
+          // "missing" (that status is only for a single-provider lookup of an
+          // absent entry). Narrow to the two statuses the readiness port consumes;
+          // the filter excludes the impossible value provably at the seam.
+          secrets: {
+            list: () =>
+              secrets
+                .list()
+                .filter(
+                  (p): p is typeof p & { status: "ok" | "expired" } => p.status !== "missing",
+                ),
+          },
+        }),
+      ),
+    ),
+  );
+
   // The port is resolved here (before the executor) so the capability MCP
   // endpoint URL both backends connect to is known. Explicit override > Config.
   const port = opts.port ?? config.get("daemon").httpPort;
@@ -371,6 +403,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     secrets,
     agentModelPrefs,
     backendProbe,
+    backendReadiness,
     backendUpdater,
     config,
     token,

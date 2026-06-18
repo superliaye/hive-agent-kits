@@ -139,7 +139,7 @@ async function render(): Promise<HTMLElement> {
   const root = createRoot(host);
   activeRoot = root;
   await act(async () => {
-    root.render(createElement(ChatPage, { apiConfig, onNavigateToSecrets: () => {} }));
+    root.render(createElement(ChatPage, { apiConfig, onNavigateToBackends: () => {} }));
   });
   await flush();
   return host;

@@ -136,6 +136,9 @@ For each, Hive resolves model + effort + auth, hands the SDK the task (Thread hi
 
 The seam is the Run module's interface: `startRun(thread, agent) → AsyncIterable<RunEvent>`. The two backends are interchangeable behind it — UI, CLI, audit, and Thread persistence see the same event shape. Every Agent — including the **Agent Manager** — runs on whichever backend its Harness/prefs resolve to; the AM performs its lifecycle ops (`create_agent`, `update_agent_harness`, `destroy_agent`) through the MCP capability server, so there is no always-native carve-out (ADR-0019 resolves ADR-0018).
 
+**Backend Readiness**:
+A per-backend projection joining an **Agent Backend**'s availability with the **Secret** auth state of its provider. It answers, for each backend, "is its CLI present, and how will a Run on it authenticate?" — either a Hive-injected API key (operative) or the CLI's own ambient login (Hive observes a missing or non-injected credential; it never claims a verified sign-in).
+
 ## Relationships
 
 - An **Agent** = identity + **Agent Harness** + **Memory** (keyed by Agent identity)

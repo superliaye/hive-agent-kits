@@ -77,12 +77,32 @@ export type BindingPatch = {
   action: "bind" | "unbind";
 };
 
-export type ConfiguredProvider = {
-  provider: string;
+// Backend Readiness (GET /api/backends/readiness). Hand-mirror of the daemon's
+// BackendReadiness Zod schema (src/backend-readiness/types.ts); the UI is a
+// separate Vite bundle, so this is kept in sync by hand (drift-guarded by
+// backend-readiness-wire-mirror.test.ts). Composes BackendStatus's health
+// fields with the mapped provider + auth state.
+//
+// auth.state — what actually authenticates a Run:
+//   api-key      — Hive injects a stored API key (operative).
+//   cli-managed  — the Run falls back to the CLI's ambient login. Covers BOTH
+//                  no stored secret AND a stored OAuth token (fetched but NOT
+//                  injected — see ADR-0019).
+export type BackendAuthState = "api-key" | "cli-managed";
+
+export type StoredSecretMeta = {
   kind: "apiKey" | "oauth";
   status: "ok" | "expired";
   addedAt: number;
   refreshedAt?: number;
+};
+
+export type BackendReadiness = BackendStatus & {
+  provider: string;
+  auth: {
+    state: BackendAuthState;
+    stored?: StoredSecretMeta;
+  };
 };
 
 // Thinking-effort levels. Deliberate cross-package mirror of the daemon's
@@ -417,7 +437,9 @@ export const api = {
     call<CapabilityWire[]>(cfg, `/api/capabilities${kind ? `?kind=${kind}` : ""}`),
 
   // ─── Secrets ─────────────────────────────────────────────────────────
-  listSecrets: (cfg: ApiConfig) => call<ConfiguredProvider[]>(cfg, "/api/secrets"),
+  // Backend-centric auth lives on the readiness projection (getBackendsReadiness
+  // below); the all-providers listing has no UI consumer. setApiKey/removeSecret
+  // remain the mutation verbs the Backends page drives per-provider.
   setApiKey: (cfg: ApiConfig, provider: string, apiKey: string) =>
     callVoid(cfg, `/api/secrets/${encodeURIComponent(provider)}/api-key`, {
       method: "POST",
@@ -455,8 +477,12 @@ export const api = {
 
   // ─── Backends ────────────────────────────────────────────────────────
   // Detected CLI agent backends with health + version (ADR-0016). Re-probes
-  // on every call.
+  // on every call. Consumed by the composer's Worker-only backend picker.
   listBackends: (cfg: ApiConfig) => call<BackendStatus[]>(cfg, "/api/backends"),
+  // Per-backend readiness: health ∩ provider auth state. Feeds the Settings
+  // "Backends" page (one card per backend). Re-probes on every call.
+  getBackendsReadiness: (cfg: ApiConfig) =>
+    call<BackendReadiness[]>(cfg, "/api/backends/readiness"),
   // Delegate to the backend CLI's OWN updater, then re-probe. Returns the fresh
   // status on success; throws on a 4xx/5xx (updater missing / failed / timeout).
   upgradeBackend: (cfg: ApiConfig, backend: "claude-code" | "codex") =>

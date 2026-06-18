@@ -53,7 +53,7 @@ export default function App({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elemen
       </div>
       <div className="body">
         {page === "chat" && (
-          <ChatPage apiConfig={apiConfig} onNavigateToSecrets={() => goToSettings("secrets")} />
+          <ChatPage apiConfig={apiConfig} onNavigateToBackends={() => goToSettings("backends")} />
         )}
         {page === "agents" && <AgentsPage apiConfig={apiConfig} />}
         {page === "capabilities" && <CapabilitiesPage apiConfig={apiConfig} />}

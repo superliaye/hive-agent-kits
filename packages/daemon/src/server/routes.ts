@@ -8,6 +8,8 @@ import type { AgentModelPrefsSvc } from "../agent-prefs/index.ts";
 import type { Audit } from "../audit/index.ts";
 import type { BackendProbeSvc, BackendUpdaterSvc } from "../backend-probe/index.ts";
 import { BackendStatus, ProbeableBackend } from "../backend-probe/index.ts";
+import type { BackendReadinessSvc } from "../backend-readiness/index.ts";
+import { BackendReadiness } from "../backend-readiness/index.ts";
 import type { Registry } from "../capabilities/index.ts";
 import type { Capability } from "../capabilities/types.ts";
 import { AgentNotFoundError } from "../catalog/index.ts";
@@ -51,6 +53,7 @@ export type RoutesDeps = {
   secrets: Secrets;
   agentModelPrefs: AgentModelPrefsSvc;
   backendProbe: BackendProbeSvc;
+  backendReadiness: BackendReadinessSvc;
   backendUpdater: BackendUpdaterSvc;
   config: Config<AppConfig>;
   token: string;
@@ -196,6 +199,13 @@ export function buildRoutes(deps: RoutesDeps): Hono {
   app.get("/api/backends", async (c) => {
     const statuses = await deps.backendProbe.probeAll();
     return c.json(BackendStatus.array().parse(statuses));
+  });
+
+  // Backend Readiness projection (per-backend health ∩ provider auth state).
+  // Read-only; feeds the Settings "Backends" page. Zod-validated at the boundary.
+  app.get("/api/backends/readiness", async (c) => {
+    const rows = await deps.backendReadiness.list();
+    return c.json(BackendReadiness.array().parse(rows));
   });
 
   // Delegated CLI self-update (ADR-0016: Hive detects + delegates, never

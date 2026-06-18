@@ -1,9 +1,9 @@
 import type { ApiConfig } from "../api.ts";
 import { AppearanceSettings } from "../components/AppearanceSettings.tsx";
 import { BackendsSettings } from "../components/BackendsSettings.tsx";
-import { SecretsSettings } from "../components/SecretsSettings.tsx";
+import { PermissionsSettings } from "../components/PermissionsSettings.tsx";
 
-export type SectionId = "appearance" | "secrets" | "backends" | "other";
+export type SectionId = "appearance" | "backends" | "permissions" | "other";
 
 type Section = {
   id: SectionId;
@@ -18,16 +18,14 @@ const SECTIONS: readonly Section[] = [
     description: "Theme mode, per-mode palette and typography, accessibility toggles.",
   },
   {
-    id: "secrets",
-    label: "Secrets",
-    description:
-      "API keys for model providers. Stored locally in ~/.hive/secrets.json with file mode 0600.",
-  },
-  {
     id: "backends",
     label: "Backends",
-    description:
-      "Detected CLI agent backends (Claude Code, Codex): health, version, and delegated updates. Hive detects and delegates — it does not install.",
+    description: "Claude Code and Codex CLIs — health, updates, and sign-in.",
+  },
+  {
+    id: "permissions",
+    label: "Permissions",
+    description: "Per-agent run_shell command allowlists.",
   },
   {
     id: "other",
@@ -75,8 +73,8 @@ export function SettingsPage({
             <p className="meta">{activeSection.description}</p>
           </header>
           {active === "appearance" && <AppearanceSettings />}
-          {active === "secrets" && <SecretsSettings apiConfig={apiConfig} />}
           {active === "backends" && <BackendsSettings apiConfig={apiConfig} />}
+          {active === "permissions" && <PermissionsSettings apiConfig={apiConfig} />}
           {active === "other" && (
             <div className="section">
               <p className="empty">
