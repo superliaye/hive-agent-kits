@@ -21,7 +21,7 @@ function friendlyName(backend: BackendStatus["backend"]): string {
 // Readiness verdict — a human-facing answer derived in the UI from the probe
 // health + the auth state. Presentation only; the daemon shape is unchanged.
 type ReadinessVerdict = {
-  label: "Ready" | "Using CLI sign-in" | "Action needed" | "Not installed" | "Error";
+  label: "Ready" | "Using CLI sign-in" | "Not installed" | "Error";
   className: string;
   icon: JSX.Element;
 };
@@ -37,28 +37,6 @@ function CheckIcon(): JSX.Element {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-    </svg>
-  );
-}
-
-function AlertIcon(): JSX.Element {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path
-        d="M8 2.5l6 11H2z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M8 6.5v3.2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-      />
-      <circle cx="8" cy="11.6" r="0.9" fill="currentColor" />
     </svg>
   );
 }
@@ -130,15 +108,11 @@ export function deriveReadinessVerdict(row: BackendReadiness): ReadinessVerdict 
   if (row.auth.state === "api-key") {
     return { label: "Ready", className: "badge-ready", icon: <CheckIcon /> };
   }
-  // cli-managed: an EXPIRED stored CLI sign-in is the one genuinely-actionable
-  // case. Otherwise Hive defers to the CLI's own login — a NEUTRAL state, not an
-  // alarm: Hive deliberately can't read the CLI login to verify it either way,
-  // and a user here is most likely already signed in via the CLI. Badging this
-  // "Action needed" manufactured a blocker for logged-in users.
-  const stored = row.auth.stored;
-  if (stored?.kind === "oauth" && stored.status === "expired") {
-    return { label: "Action needed", className: "badge-action-needed", icon: <AlertIcon /> };
-  }
+  // cli-managed → Hive defers to the CLI's own login. A NEUTRAL state, never an
+  // alarm: Hive deliberately can't read the CLI login to verify it, so it cannot
+  // assert an auth problem. A stored OAuth token — even expired — does NOT change
+  // this: it's display-only, never injected into a run, and `<cli> login` can't
+  // refresh a Hive-stored token anyway, so it must never drive "Action needed".
   return { label: "Using CLI sign-in", className: "badge-cli", icon: <TerminalIcon /> };
 }
 
@@ -378,7 +352,6 @@ function BackendAuthRow({
   const isApiKey = row.auth.state === "api-key";
   const stored = row.auth.stored;
   const storedOauth = stored?.kind === "oauth";
-  const oauthExpired = storedOauth && stored?.status === "expired";
 
   // Not installed: suppress all auth setup. Only a leftover stored credential
   // stays visible (and removable). No Set/Replace form, no sign-in paragraph.
@@ -438,16 +411,10 @@ function BackendAuthRow({
       ) : storedOauth ? (
         <>
           <span className="meta" data-testid={`backend-auth-oauth-${row.backend}`}>
-            Signed in via the CLI — Hive runs use that sign-in.
+            Hive uses your {name} CLI sign-in for runs. A leftover sign-in token is also stored here
+            but isn't used — running <code>{loginHint(row.backend)}</code> refreshes the CLI's own
+            login, not this stored copy, so just remove it.
           </span>
-          {oauthExpired && (
-            <span
-              className="meta backend-auth-warn"
-              data-testid={`backend-auth-expired-${row.backend}`}
-            >
-              <AlertIcon /> Sign-in expired — re-run <code>{loginHint(row.backend)}</code>.
-            </span>
-          )}
           <div className="backend-card-actions">
             <button
               type="button"
@@ -462,10 +429,10 @@ function BackendAuthRow({
               type="button"
               className="button ghost"
               onClick={() => setShowKeyForm((s) => !s)}
-              aria-label={`Set API key for ${name}`}
+              aria-label={`Use an API key for ${name} instead`}
               data-testid={`backend-auth-setkey-${row.backend}`}
             >
-              Set API key
+              Use an API key instead
             </button>
           </div>
         </>

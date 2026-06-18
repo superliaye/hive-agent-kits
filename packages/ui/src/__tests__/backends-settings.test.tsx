@@ -1,14 +1,16 @@
 // BackendsSettings: one card per backend from GET /api/backends/readiness, with
 // a Health zone and an Auth zone. The readiness badge is a UI-derived verdict
-// (Ready / Using CLI sign-in / Action needed / Not installed / Error) from
-// health + auth.state. "Using CLI sign-in" is the NEUTRAL cli-managed state;
-// "Action needed" is reserved for an installed backend whose stored sign-in is
-// EXPIRED. The Auth zone is driven by auth.state + auth.stored: api-key (Replace
-// + Remove), cli-managed without stored (reassurance copy + a SECONDARY "Use an
-// API key instead"), cli-managed with an OAuth token (CLI-sign-in copy + Remove +
-// Set API key). When a backend is Not installed the auth setup is suppressed —
-// only a leftover stored credential surfaces a single Remove. The allowlist lives
-// in Permissions now, so its controls must be ABSENT here.
+// (Ready / Using CLI sign-in / Not installed / Error) from health + auth.state.
+// cli-managed is ALWAYS the neutral "Using CLI sign-in" — Hive can't read the CLI
+// login to verify it, so it never asserts an auth alarm; a stored OAuth token,
+// even expired, is display-only and never escalates. The Auth zone is driven by
+// auth.state + auth.stored: api-key (Replace + Remove), cli-managed without stored
+// (reassurance copy + a SECONDARY "Use an API key instead"), cli-managed with a
+// stored OAuth token (honest leftover-token copy: not used for runs, the CLI's own
+// login can't refresh it, Remove + secondary API key). When a backend is Not
+// installed the auth setup is suppressed — only a leftover stored credential
+// surfaces a single Remove. The allowlist lives in Permissions now, so its
+// controls must be ABSENT here.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { act, createElement } from "react";
@@ -181,8 +183,11 @@ describe("BackendsSettings", () => {
     expect(badge?.textContent).not.toContain("Action needed");
   });
 
-  test("readiness badge: installed + EXPIRED stored sign-in → Action needed", async () => {
+  test("readiness badge: installed + EXPIRED stored oauth stays neutral 'Using CLI sign-in', NOT an alarm", async () => {
     installStubs();
+    // A stored OAuth token is display-only and never injected into a run, and the
+    // CLI's own `<cli> login` can't refresh a Hive-stored token — so an expired one
+    // is not actionable here and must not manufacture an "Action needed" alarm.
     const claudeExpired: BackendReadiness = {
       backend: "claude-code",
       installed: true,
@@ -195,7 +200,8 @@ describe("BackendsSettings", () => {
     readinessSeq = [[claudeExpired]];
     const host = await render();
     const badge = host.querySelector('[data-testid="backend-readiness-claude-code"]');
-    expect(badge?.textContent).toContain("Action needed");
+    expect(badge?.textContent).toContain("Using CLI sign-in");
+    expect(badge?.textContent).not.toContain("Action needed");
   });
 
   test("readiness badge: not installed → Not installed", async () => {
@@ -351,7 +357,7 @@ describe("BackendsSettings", () => {
     expect((post?.body as { apiKey: string }).apiKey).toBe("sk-test");
   });
 
-  test("cli-managed with stored oauth shows CLI-sign-in copy + Remove + Set API key (no 'not used for runs' jargon)", async () => {
+  test("cli-managed with stored oauth: honest leftover-token copy (not 'Signed in'), neutral badge, Remove + secondary API key", async () => {
     installStubs();
     const claudeOauth: BackendReadiness = {
       backend: "claude-code",
@@ -366,16 +372,23 @@ describe("BackendsSettings", () => {
     const host = await render();
     const oauth = host.querySelector('[data-testid="backend-auth-oauth-claude-code"]');
     expect(oauth).not.toBeNull();
-    expect(oauth?.textContent).toContain("Signed in via the CLI");
-    expect(host.textContent).not.toContain("not used for runs");
+    // The stored token is a leftover Hive copy, NOT "the sign-in Hive uses".
+    expect(oauth?.textContent).toContain("leftover");
+    expect(oauth?.textContent).toContain("isn't used");
+    expect(oauth?.textContent).not.toContain("Signed in via the CLI");
+    // Display-only token never drives an alarm.
+    const badge = host.querySelector('[data-testid="backend-readiness-claude-code"]');
+    expect(badge?.textContent).toContain("Using CLI sign-in");
     expect(host.querySelector('[data-testid="backend-auth-remove-claude-code"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="backend-auth-setkey-claude-code"]')).not.toBeNull();
-    // No expired warning for a healthy token.
-    expect(host.querySelector('[data-testid="backend-auth-expired-claude-code"]')).toBeNull();
   });
 
-  test("cli-managed with EXPIRED stored oauth surfaces a re-sign-in line", async () => {
+  test("cli-managed with EXPIRED stored oauth: no 're-run login' instruction, no alarm — same leftover-Remove copy", async () => {
     installStubs();
+    // Regression guard for the shipped bug: an expired Hive-stored OAuth token told
+    // the user to "re-run <cli> login", but CLI login can't refresh a Hive-stored
+    // token. That instruction and the expired-warning element must be gone, and the
+    // badge must stay neutral (expired vs ok is irrelevant — the token isn't used).
     const claudeExpired: BackendReadiness = {
       backend: "claude-code",
       installed: true,
@@ -387,9 +400,15 @@ describe("BackendsSettings", () => {
     };
     readinessSeq = [[claudeExpired]];
     const host = await render();
-    const expired = host.querySelector('[data-testid="backend-auth-expired-claude-code"]');
-    expect(expired).not.toBeNull();
-    expect(expired?.textContent?.toLowerCase()).toContain("expired");
+    expect(host.querySelector('[data-testid="backend-auth-expired-claude-code"]')).toBeNull();
+    expect(host.textContent).not.toContain("Sign-in expired");
+    const badge = host.querySelector('[data-testid="backend-readiness-claude-code"]');
+    expect(badge?.textContent).toContain("Using CLI sign-in");
+    expect(badge?.textContent).not.toContain("Action needed");
+    const oauth = host.querySelector('[data-testid="backend-auth-oauth-claude-code"]');
+    expect(oauth?.textContent).toContain("leftover");
+    expect(oauth?.textContent).toContain("remove it");
+    expect(host.querySelector('[data-testid="backend-auth-remove-claude-code"]')).not.toBeNull();
   });
 
   test("not installed: no Set-API-key form, but a leftover credential keeps a single Remove that DELETEs", async () => {

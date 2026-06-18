@@ -342,18 +342,6 @@ pre,
   flex-wrap: wrap;
   margin-top: 8px;
 }
-/* Expired-sign-in line: inline warning icon + text (no emoji), tinted warning. */
-.backend-auth-warn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--color-warning);
-}
-.backend-auth-warn svg {
-  width: 12px;
-  height: 12px;
-  flex: none;
-}
 
 /* Readiness verdict badge — derived in the UI from health + auth (a human
  * verdict, not the raw machine enum). Icon + text, so it never signals by
@@ -375,10 +363,6 @@ pre,
 .badge-ready {
   background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-surface));
   color: var(--color-success);
-}
-.badge-action-needed {
-  background: color-mix(in srgb, var(--color-warning) 18%, var(--color-bg-surface));
-  color: var(--color-warning);
 }
 .badge-not-installed {
   background: var(--color-bg-hover);
@@ -402,10 +386,6 @@ pre,
 [data-theme="dark"] .badge-ready {
   background: color-mix(in srgb, var(--color-success) 28%, var(--color-bg-elevated));
   color: color-mix(in srgb, var(--color-success) 55%, var(--color-fg-default));
-}
-[data-theme="dark"] .badge-action-needed {
-  background: color-mix(in srgb, var(--color-warning) 28%, var(--color-bg-elevated));
-  color: color-mix(in srgb, var(--color-warning) 55%, var(--color-fg-default));
 }
 [data-theme="dark"] .badge-not-installed {
   background: color-mix(in srgb, var(--color-fg-muted) 18%, transparent);
