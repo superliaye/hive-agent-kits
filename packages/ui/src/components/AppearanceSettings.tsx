@@ -28,12 +28,16 @@ export function AppearanceSettings(): JSX.Element {
     saveError,
     systemAccentAvailable,
     useSystemAccentEnabled,
+    accentLockedBySystem,
+    accentDisplayValue,
     importError,
     copyStatus,
+    canUndoReset,
     fileInputRef,
     patchPrefs,
     patchConfig,
     resetOverrides,
+    undoReset,
     onExportFile,
     onCopyTheme,
     onImportFile,
@@ -45,11 +49,6 @@ export function AppearanceSettings(): JSX.Element {
     { id: "dark", label: "Dark" },
     { id: "system", label: "System" },
   ];
-
-  // When system accent is on (and available), the per-mode accent is
-  // overridden app-wide — lock the Accent inputs so the override is legible
-  // and "I edited accent but nothing changed" can't happen.
-  const accentLockedBySystem = systemAccentAvailable && useSystemAccentEnabled;
 
   return (
     <>
@@ -103,6 +102,20 @@ export function AppearanceSettings(): JSX.Element {
           )}
         </div>
 
+        {canUndoReset && (
+          <div className="appearance-undo-banner" data-testid="theme-reset-undo">
+            <span>Overrides cleared.</span>
+            <button
+              type="button"
+              className="appearance-reset-link"
+              onClick={() => undoReset()}
+              data-testid="theme-reset-undo-button"
+            >
+              Undo
+            </button>
+          </div>
+        )}
+
         <ThemeDropdown
           themes={themes}
           activeId={currentTheme.id}
@@ -110,10 +123,14 @@ export function AppearanceSettings(): JSX.Element {
         />
 
         <h4 className="appearance-subhead">Custom colors</h4>
+        <p className="meta">
+          These take precedence over the selected theme — switching presets leaves them untouched.
+          Use Reset to return a field to the pure preset.
+        </p>
 
         <ColorOverride
           label="Accent"
-          value={editingConfig.accent ?? ""}
+          value={accentDisplayValue}
           fallback={palette.tokens["color-accent"] ?? "#000000"}
           onChange={(v) => patchConfig({ accent: v })}
           disabled={accentLockedBySystem}

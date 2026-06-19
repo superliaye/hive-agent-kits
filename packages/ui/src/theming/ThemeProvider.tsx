@@ -89,6 +89,7 @@ export function ThemeProvider({
     return {
       resolvedMode,
       fromSystem: preferences.mode === "system",
+      systemAccentApplied: preferences.useSystemAccent && systemAccent != null,
       config,
       tokens: resolveTokens(config, resolvedMode),
     };

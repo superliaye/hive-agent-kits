@@ -13,7 +13,7 @@
 // One consumer today (AppearanceSettings.tsx). The deepening payoff is
 // separation of concerns, not reuse.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   exportPreferencesWire,
   findNamedTheme,
@@ -44,6 +44,28 @@ export function hasOverrides(config: ThemeConfig): boolean {
   return OVERRIDE_KEYS.some((k) => config[k] !== undefined);
 }
 
+// The accent value the Accent control should display. When system accent is
+// locked on, the per-mode `accent` override is dormant — the app renders the
+// OS accent (resolveEffectiveConfig writes it into the effective config). Show
+// that applied value so the swatch matches the rest of the chrome. Otherwise
+// the control owns its per-mode override (or the empty string → palette
+// fallback in the component).
+export function displayedAccent(args: {
+  locked: boolean;
+  overrideAccent: string | undefined;
+  effectiveAccent: string | undefined;
+}): string {
+  if (args.locked) return args.effectiveAccent ?? "";
+  return args.overrideAccent ?? "";
+}
+
+// State captured by a Reset so an Undo can restore it exactly. Bound to the
+// mode it was taken in — a mode switch between reset and undo invalidates it.
+export type ResetSnapshot = {
+  mode: ResolvedMode;
+  config: ThemeConfig;
+};
+
 export type UseAppearanceSettingsReturn = {
   // Read state
   prefs: Preferences;
@@ -59,14 +81,22 @@ export type UseAppearanceSettingsReturn = {
   systemAccentAvailable: boolean;
   /** Mirrors prefs.useSystemAccent — the app-wide system-accent opt-in. */
   useSystemAccentEnabled: boolean;
+  /** True when the OS accent is overriding the per-mode accent app-wide. */
+  accentLockedBySystem: boolean;
+  /** Accent value the Accent control should show (applied OS accent when locked). */
+  accentDisplayValue: string;
   // Transient UI state (import errors, "Copied!" feedback)
   importError: string | null;
   copyStatus: string | null;
+  /** True while the post-reset Undo affordance is live (snapshot present and
+   * still in its mode); false once dismissed, undone, or after a mode switch. */
+  canUndoReset: boolean;
   fileInputRef: React.RefObject<HTMLInputElement>;
   // Mutators
   patchPrefs: (patch: Partial<Preferences>) => void;
   patchConfig: (patch: Partial<ThemeConfig>) => void;
   resetOverrides: () => void;
+  undoReset: () => void;
   // Share actions
   onExportFile: () => void;
   onCopyTheme: () => Promise<void>;
@@ -78,6 +108,8 @@ export function useAppearanceSettings(): UseAppearanceSettingsReturn {
   const theme = useTheme();
   const [importError, setImportError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [resetSnapshot, setResetSnapshot] = useState<ResetSnapshot | null>(null);
+  const undoTimerRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const prefs = theme.preferences;
@@ -92,6 +124,13 @@ export function useAppearanceSettings(): UseAppearanceSettingsReturn {
   // Electron bridge is present (web/dev mode disables it).
   const systemAccentAvailable =
     typeof window !== "undefined" && typeof window.__hive?.getSystemAccent === "function";
+  // Lock the Accent control only when the OS accent is ACTUALLY overriding the
+  // per-mode accent — opted in AND a host accent resolved. Keying on the opt-in
+  // alone would lock while the per-mode override is still what's applied (the
+  // async-boot window, or a host that reports no accent), showing the dormant
+  // override under a "using your system accent" label — the exact confusion the
+  // lock exists to prevent.
+  const accentLockedBySystem = theme.resolved.systemAccentApplied;
 
   const patchPrefs = useCallback(
     (patch: Partial<Preferences>): void => {
@@ -111,11 +150,44 @@ export function useAppearanceSettings(): UseAppearanceSettingsReturn {
     [editingConfig, editingMode, patchPrefs],
   );
 
+  // ~6s — longer than the 2s copy toast so the user can actually catch the
+  // Undo affordance before it auto-dismisses.
+  const UNDO_WINDOW_MS = 6000;
+
   const resetOverrides = useCallback((): void => {
+    // Snapshot the pre-reset config (and its mode) so Undo can restore it
+    // exactly; a second reset before the timer fires re-captures (latest wins).
+    setResetSnapshot({ mode: editingMode, config: editingConfig });
+    if (undoTimerRef.current !== null) window.clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = window.setTimeout(() => {
+      setResetSnapshot(null);
+      undoTimerRef.current = null;
+    }, UNDO_WINDOW_MS);
+
     // Keep themeId (the user's named-palette choice), drop everything else.
     const next: ThemeConfig = editingConfig.themeId ? { themeId: editingConfig.themeId } : {};
     patchPrefs(editingMode === "dark" ? { dark: next } : { light: next });
-  }, [editingConfig.themeId, editingMode, patchPrefs]);
+  }, [editingConfig, editingMode, patchPrefs]);
+
+  const undoReset = useCallback((): void => {
+    if (undoTimerRef.current !== null) {
+      window.clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+    setResetSnapshot((snap) => {
+      if (snap) patchPrefs(snap.mode === "dark" ? { dark: snap.config } : { light: snap.config });
+      return null;
+    });
+  }, [patchPrefs]);
+
+  // Cancel a pending auto-dismiss if the panel unmounts inside the undo window,
+  // so the timeout can't setState on an unmounted tree.
+  useEffect(
+    () => () => {
+      if (undoTimerRef.current !== null) window.clearTimeout(undoTimerRef.current);
+    },
+    [],
+  );
 
   const onExportFile = useCallback((): void => {
     const json = theme.exportPreferences();
@@ -179,12 +251,23 @@ export function useAppearanceSettings(): UseAppearanceSettingsReturn {
     saveError: theme.saveError,
     systemAccentAvailable,
     useSystemAccentEnabled: prefs.useSystemAccent,
+    accentLockedBySystem,
+    accentDisplayValue: displayedAccent({
+      locked: accentLockedBySystem,
+      overrideAccent: editingConfig.accent,
+      effectiveAccent: theme.resolved.config.accent,
+    }),
     importError,
     copyStatus,
+    // Only offer Undo in the mode the snapshot was taken in — a mode switch
+    // between reset and undo strands the snapshot (undoReset would write to the
+    // other mode, invisible under the current card).
+    canUndoReset: resetSnapshot !== null && resetSnapshot.mode === editingMode,
     fileInputRef,
     patchPrefs,
     patchConfig,
     resetOverrides,
+    undoReset,
     onExportFile,
     onCopyTheme,
     onImportFile,

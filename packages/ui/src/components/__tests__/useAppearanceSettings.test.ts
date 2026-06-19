@@ -5,7 +5,7 @@
 // pin its semantics here.
 
 import { describe, expect, test } from "bun:test";
-import { hasOverrides } from "../useAppearanceSettings.ts";
+import { displayedAccent, hasOverrides } from "../useAppearanceSettings.ts";
 
 describe("hasOverrides", () => {
   test("empty config has no overrides", () => {
@@ -40,5 +40,41 @@ describe("hasOverrides", () => {
 
   test("themeId + override → still true (override is what matters)", () => {
     expect(hasOverrides({ themeId: "dracula", accent: "#ff00ff" })).toBe(true);
+  });
+});
+
+describe("displayedAccent", () => {
+  test("locked → shows the applied (effective) accent, not the per-mode override", () => {
+    // System accent on: the OS accent is what the app renders; the dormant
+    // per-mode override must NOT be displayed.
+    expect(
+      displayedAccent({
+        locked: true,
+        overrideAccent: "#ff0000",
+        effectiveAccent: "#0a84ff",
+      }),
+    ).toBe("#0a84ff");
+  });
+
+  test("locked but no effective accent → empty string (palette fallback in UI)", () => {
+    expect(
+      displayedAccent({ locked: true, overrideAccent: "#ff0000", effectiveAccent: undefined }),
+    ).toBe("");
+  });
+
+  test("unlocked → shows the per-mode override", () => {
+    expect(
+      displayedAccent({
+        locked: false,
+        overrideAccent: "#ff0000",
+        effectiveAccent: "#0a84ff",
+      }),
+    ).toBe("#ff0000");
+  });
+
+  test("unlocked with no override → empty string (palette fallback in UI)", () => {
+    expect(
+      displayedAccent({ locked: false, overrideAccent: undefined, effectiveAccent: "#0a84ff" }),
+    ).toBe("");
   });
 });
