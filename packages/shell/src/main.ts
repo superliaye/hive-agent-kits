@@ -11,8 +11,9 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BrowserWindow, app, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
+import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
 import { z } from "zod";
+import { hasDaemonToDrain, shouldConfirmClose } from "./close-guard";
 
 // Renderer→main IPC contracts. AGENTS.md requires Zod at external
 // boundaries — the renderer process is its own untrusted context even
@@ -55,6 +56,9 @@ const UI_DIST_INDEX = app.isPackaged
 
 let daemon: ChildProcess | null = null;
 let spawnedByShell = false;
+// Feature 3: set by the renderer over IPC while a Kit deploy mutation is pending.
+// before-quit consults it to confirm before SIGKILLing the daemon mid-write.
+let deployInFlight = false;
 
 async function isDaemonReady(): Promise<boolean> {
   try {
@@ -220,6 +224,12 @@ ipcMain.handle("hive:getSystemAccent", (): string | null => {
   return parsed.success ? parsed.data : null;
 });
 
+// Renderer → main: the Kit deploy mutation toggles its in-flight state. A boolean
+// payload only; anything else is ignored (the flag stays at its prior value).
+ipcMain.handle("hive:setDeployInFlight", (_event, value: unknown) => {
+  if (typeof value === "boolean") deployInFlight = value;
+});
+
 ipcMain.handle("hive:openExternal", async (_event, url: unknown) => {
   if (typeof url !== "string") {
     throw new Error("openExternal: url must be a string");
@@ -259,7 +269,44 @@ app.on("window-all-closed", () => {
 // this, on Windows the orphan bun.exe keeps `audit.db` open and binds the
 // port — e2e tests then race against cleanup.
 let quitting = false;
+// Set once the user picks "Close anyway" so the confirm isn't re-shown on the
+// fall-through (and on any subsequent before-quit pass) this quit cycle.
+let closeConfirmed = false;
 app.on("before-quit", (event) => {
+  // Confirm BEFORE the drain when a deploy is in flight. Cancel keeps the app
+  // open (no drain); "Close anyway" records the choice and falls through to the
+  // existing daemon-drain sequencing below — no second preventDefault.
+  if (shouldConfirmClose(deployInFlight, closeConfirmed)) {
+    event.preventDefault();
+    const choice = dialog.showMessageBoxSync({
+      type: "warning",
+      buttons: ["Cancel", "Close anyway"],
+      defaultId: 0,
+      cancelId: 0,
+      title: "Deploy in progress",
+      message: "A capability deploy is still in progress.",
+      detail: "Closing now will interrupt it and may leave a partial deploy on disk.",
+    });
+    if (choice === 0) return; // Cancel — stay open, do NOT drain.
+    closeConfirmed = true;
+    // We already preventDefaulted to show the dialog, so the quit is cancelled.
+    // If there is no shell-spawned daemon to drain (the dev path spawns the
+    // daemon separately, so daemon===null/spawnedByShell===false here), the drain
+    // block below would early-return and the app would hang open. Re-issue the
+    // quit ourselves; the next before-quit pass has closeConfirmed set, so it
+    // skips the dialog and either drains or quits cleanly.
+    if (
+      !hasDaemonToDrain({
+        hasDaemon: daemon !== null,
+        spawnedByShell,
+        daemonKilled: daemon?.killed ?? true,
+      })
+    ) {
+      app.quit();
+      return;
+    }
+    // Otherwise fall through to the drain sequencing below in this same pass.
+  }
   if (!daemon || !spawnedByShell || daemon.killed || quitting) return;
   event.preventDefault();
   quitting = true;

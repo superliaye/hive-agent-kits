@@ -17,7 +17,10 @@ import {
   type KitDeployDiff,
   type KitDeployTarget,
   type KitSelection,
+  type KitVerifyReport,
+  type KitVerifyStatus,
 } from "../api.ts";
+import { signalDeployInFlight } from "../platform/deploy-in-flight.ts";
 
 const KINDS: KitCapabilityKind[] = ["instruction", "skill", "agent", "plugin", "bundle"];
 const KIND_LABEL: Record<KitCapabilityKind, string> = {
@@ -105,6 +108,20 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     [presets, add, remove, targets],
   );
 
+  // On-disk self-check (Feature 1/2): runs on load and is re-fetched after every
+  // deploy (the deploy mutation invalidates the ["kit","verify"] key). The row
+  // indicator reflects DISK reality, not just the ledger.
+  const verifyQuery = useQuery({
+    queryKey: ["kit", "verify"],
+    queryFn: () => api.getKitVerify(apiConfig),
+  });
+
+  // Per-kind, per-name collapsed on-disk status for the row indicator. A
+  // capability split across targets collapses to its worst state
+  // (drifted > missing > present/recorded) so a single missing/edited target
+  // still flags the row.
+  const onDisk = useMemo(() => collapseVerify(verifyQuery.data), [verifyQuery.data]);
+
   // Currently-deployed (ledger-owned) names, for the deployed/pending indicator.
   const deployed = useMemo(() => {
     const ledger = state?.ledger;
@@ -160,8 +177,22 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["kit", "state"] });
       void qc.invalidateQueries({ queryKey: ["kit", "diff"] });
+      // Re-run the on-disk self-check so rows reflect what the deploy just wrote.
+      void qc.invalidateQueries({ queryKey: ["kit", "verify"] });
     },
   });
+
+  // Feature 3: signal the Electron main process while a deploy is in flight, so a
+  // quit during the deploy prompts a confirm instead of SIGKILLing the daemon
+  // mid-write. The signal toggles with the mutation's pending state and is cleared
+  // when it settles (incl. on unmount). No-op in a plain browser tab.
+  const deployPending = deployMutation.isPending;
+  useEffect(() => {
+    void signalDeployInFlight(deployPending);
+    return () => {
+      if (deployPending) void signalDeployInFlight(false);
+    };
+  }, [deployPending]);
 
   function togglePreset(name: string): void {
     setPresets((cur) => (cur.includes(name) ? cur.filter((p) => p !== name) : [...cur, name]));
@@ -305,6 +336,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               entries={entries}
               selected={new Set(selected[KIND_TO_CAP[kind]])}
               deployed={deployed[kind]}
+              onDisk={onDisk[kind]}
               onToggle={(name, seeded) => toggleIndividual(kind, name, seeded)}
               seededNames={seededNames(catalog?.presets ?? [], presets, kind)}
             />
@@ -320,6 +352,7 @@ function KindSection({
   entries,
   selected,
   deployed,
+  onDisk,
   onToggle,
   seededNames,
 }: {
@@ -327,6 +360,7 @@ function KindSection({
   entries: KitCapabilityEntry[];
   selected: Set<string>;
   deployed: Set<string>;
+  onDisk: Map<string, KitVerifyStatus>;
   onToggle: (name: string, seeded: boolean) => void;
   seededNames: Set<string>;
 }): JSX.Element {
@@ -351,15 +385,13 @@ function KindSection({
           {rows.map((e) => {
             const isSelected = selected.has(e.name);
             const isDeployed = deployed.has(e.name);
-            const indicator = !e.deployable
-              ? "blocked"
-              : isDeployed && isSelected
-                ? "deployed"
-                : isSelected
-                  ? "pending"
-                  : isDeployed
-                    ? "removing"
-                    : "";
+            const disk = onDisk.get(e.name);
+            const indicator = rowIndicator({
+              deployable: e.deployable,
+              isSelected,
+              isDeployed,
+              disk,
+            });
             return (
               <button
                 type="button"
@@ -384,8 +416,9 @@ function KindSection({
                   <span
                     className={`kit-indicator kit-indicator-${indicator}`}
                     data-testid={`kit-indicator-${e.name}`}
+                    data-status={indicator}
                   >
-                    {indicator}
+                    {INDICATOR_LABEL[indicator]}
                   </span>
                 )}
               </button>
@@ -443,6 +476,70 @@ function DiffCol({
       </ul>
     </div>
   );
+}
+
+// Row indicator states. The first four are the original ledger/selection-derived
+// states; `missing` and `drifted` are the disk-truth states from the verify pass.
+type Indicator = "blocked" | "deployed" | "pending" | "removing" | "missing" | "drifted" | "";
+
+const INDICATOR_LABEL: Record<Exclude<Indicator, "">, string> = {
+  blocked: "blocked",
+  deployed: "deployed",
+  pending: "pending",
+  removing: "removing",
+  missing: "missing on disk",
+  drifted: "drifted",
+};
+
+// Fold ledger ownership + working selection + on-disk verify status into one
+// indicator. Disk truth WINS for a deployed capability: a ledger-owned row whose
+// files were removed reads `missing`; one edited since deploy reads `drifted`.
+function rowIndicator(args: {
+  deployable: boolean;
+  isSelected: boolean;
+  isDeployed: boolean;
+  disk: KitVerifyStatus | undefined;
+}): Indicator {
+  const { deployable, isSelected, isDeployed, disk } = args;
+  if (!deployable) return "blocked";
+  if (isDeployed) {
+    if (disk === "missing") return "missing";
+    if (disk === "drifted") return "drifted";
+    if (isSelected) return "deployed";
+    return "removing";
+  }
+  return isSelected ? "pending" : "";
+}
+
+// Collapse the per-target verify report into a per-kind, per-name single status.
+// Worst-state wins so a row split across targets still flags a problem:
+// drifted > missing > present > recorded.
+const STATUS_RANK: Record<KitVerifyStatus, number> = {
+  drifted: 3,
+  missing: 2,
+  present: 1,
+  recorded: 0,
+};
+
+function collapseVerify(
+  report: KitVerifyReport | undefined,
+): Record<KitCapabilityKind, Map<string, KitVerifyStatus>> {
+  const out: Record<KitCapabilityKind, Map<string, KitVerifyStatus>> = {
+    instruction: new Map(),
+    skill: new Map(),
+    agent: new Map(),
+    plugin: new Map(),
+    bundle: new Map(),
+  };
+  if (!report) return out;
+  for (const e of report.entries) {
+    let worst: KitVerifyStatus | undefined;
+    for (const t of e.targets) {
+      if (!worst || STATUS_RANK[t.status] > STATUS_RANK[worst]) worst = t.status;
+    }
+    if (worst) out[e.kind].set(e.name, worst);
+  }
+  return out;
 }
 
 function seededNames(

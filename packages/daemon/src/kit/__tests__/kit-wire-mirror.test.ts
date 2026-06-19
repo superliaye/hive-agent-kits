@@ -6,6 +6,13 @@
 // Nothing in the build couples the two — pin them here.
 
 import { describe, expect, test } from "bun:test";
+import type {
+  KitVerifyEntry,
+  KitVerifyReport,
+  KitVerifyStatus,
+  KitVerifyTargetStatus,
+} from "../../../../ui/src/kit-wire.ts";
+import type { VerifyEntry, VerifyReport, VerifyStatus, VerifyTargetStatus } from "../types.ts";
 import { CapabilityKind, SelectionSchema } from "../types.ts";
 
 describe("Kit wire mirror (drift guard)", () => {
@@ -37,5 +44,38 @@ describe("Kit wire mirror (drift guard)", () => {
   test("Selection target options equal the UI deploy-target union", () => {
     const UI_TARGETS = ["claude", "codex"] as const;
     expect(new Set(SelectionSchema.shape.targets.element.options)).toEqual(new Set(UI_TARGETS));
+  });
+
+  // Verify wire shape: the UI hand-mirror (KitVerify*) must stay structurally
+  // identical to the daemon types (Verify*). These bidirectional assignments fail
+  // to compile (`bun run typecheck`) the instant either side drifts.
+  test("Verify wire types are bidirectionally assignable daemon<->UI", () => {
+    const daemonStatus: VerifyStatus = "drifted";
+    const uiStatus: KitVerifyStatus = daemonStatus;
+    const roundtrip: VerifyStatus = uiStatus;
+    expect(roundtrip).toBe("drifted");
+
+    const daemonReport: VerifyReport = {
+      entries: [
+        {
+          kind: "skill",
+          name: "my-commit",
+          targets: [
+            { target: "claude", status: "present" },
+            { target: "codex", status: "missing" },
+          ],
+        },
+      ],
+    };
+    const asUi: KitVerifyReport = daemonReport;
+    const backToDaemon: VerifyReport = asUi;
+    expect(backToDaemon.entries[0]?.name).toBe("my-commit");
+
+    // Element-level mirror (catches a field rename on either entry/target type).
+    const t: VerifyTargetStatus = { target: "codex", status: "recorded" };
+    const tUi: KitVerifyTargetStatus = t;
+    const e: VerifyEntry = { kind: "plugin", name: "p", targets: [tUi] };
+    const eUi: KitVerifyEntry = e;
+    expect(eUi.targets[0]?.status).toBe("recorded");
   });
 });

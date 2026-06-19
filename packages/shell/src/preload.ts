@@ -31,4 +31,8 @@ contextBridge.exposeInMainWorld("__hive", {
   /** Read the OS accent color as `#rrggbb`, or null when unavailable. Backs
    * the "Use system accent" appearance toggle. */
   getSystemAccent: (): Promise<string | null> => ipcRenderer.invoke("hive:getSystemAccent"),
+  /** Signal the main process that a Kit deploy is/ isn't in flight, so a quit
+   * during a deploy prompts a confirm instead of SIGKILLing the daemon mid-write. */
+  setDeployInFlight: (inFlight: boolean): Promise<void> =>
+    ipcRenderer.invoke("hive:setDeployInFlight", inFlight),
 });

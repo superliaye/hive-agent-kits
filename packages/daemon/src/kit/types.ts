@@ -140,6 +140,35 @@ export type DeployResult = {
   targets: DeployTarget[];
 };
 
+// ---- Verify (on-disk existence + drift) ----
+
+// Per-target on-disk status for a deployed capability:
+//   present  — the expected file(s) exist and match the fingerprint (or no
+//              fingerprint was recorded — a pre-existing deploy never false-alarms).
+//   missing  — the ledger records it but the on-disk target is gone.
+//   drifted  — present, but edited since deploy (disk hash ≠ recorded fingerprint).
+//   recorded — plugin/bundle: external-installer owned, not stat-verifiable.
+export type VerifyStatus = "present" | "missing" | "drifted" | "recorded";
+
+// One (target → status) result for a capability under a single CLI target.
+export type VerifyTargetStatus = {
+  target: DeployTarget;
+  status: VerifyStatus;
+};
+
+// A capability's per-target verify result. `targets` holds one entry per CLI the
+// ledger targets (gated by ledger.agents) for stat-verifiable kinds; for
+// plugin/bundle it is a single `recorded` entry (target-agnostic).
+export type VerifyEntry = {
+  kind: CapabilityKind;
+  name: string;
+  targets: VerifyTargetStatus[];
+};
+
+export type VerifyReport = {
+  entries: VerifyEntry[];
+};
+
 // ---- Audit event (source: 'deploy') ----
 
 export type DeployAuditEvents = {

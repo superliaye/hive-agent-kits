@@ -7,10 +7,16 @@
 // Ledger stores names/pins only, so a same-name-new-body skill can't be detected
 // by name-set diffing).
 
-import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readSkillSource } from "./deploy/adapter.ts";
+import {
+  hashDeployedAgent,
+  hashDeployedInstruction,
+  hashDeployedSkill,
+  hashSkillFiles,
+  sha256,
+} from "./deploy/artifact-hash.ts";
 import {
   agentSources,
   instructionBody,
@@ -105,10 +111,6 @@ function kindToWire(kind: CapabilityKind): string {
   return kind;
 }
 
-function sha256(s: string): string {
-  return createHash("sha256").update(s).digest("hex");
-}
-
 // Hash the rendered content a deploy WOULD write for a name under `target`, so a
 // same-name new-body change is detectable. Mirrors what the engine writes per
 // target (incl. the Codex sidecar) so the hash is comparable to `deployedHash`.
@@ -135,8 +137,7 @@ function renderedHash(
     );
     // Codex also writes the manual-only sidecar; claude does not (matches engine).
     const written = out.sidecar && target === "codex" ? [...out.files, out.sidecar] : out.files;
-    const files = [...written].sort((a, b) => a.rel.localeCompare(b.rel));
-    return sha256(files.map((f) => `${f.rel}\n${f.content}`).join("\0"));
+    return hashSkillFiles(written);
   }
   if (kind === "agent") {
     const src = agentSources(mirror).get(name);
@@ -163,48 +164,18 @@ function refTarget(deployTargets: DeployTarget[]): DeployTarget {
 }
 
 // Hash what is currently deployed on disk for a name under the reference target.
-// Returns null when nothing is deployed there.
+// Returns null when nothing is deployed there. Delegates to the shared
+// artifact-hash util so the diff and the verify/fingerprint passes never compute
+// two incompatible hashes for the same on-disk artifact.
 function deployedHash(
   targets: DeployTargets,
   kind: CapabilityKind,
   name: string,
   target: DeployTarget,
 ): string | null {
-  if (kind === "skill") {
-    // Claude skills live under claudeHome/skills; Codex skills under agentsHome/skills.
-    const skillsRoot = target === "claude" ? targets.claudeHome() : targets.agentsHome();
-    const dir = join(skillsRoot, "skills", name);
-    if (!existsSync(dir)) return null;
-    const files: { rel: string; content: string }[] = [];
-    const walk = (d: string, base: string): void => {
-      for (const ent of readdirSync(d, { withFileTypes: true })) {
-        const full = join(d, ent.name);
-        const rel = base ? `${base}/${ent.name}` : ent.name;
-        if (ent.isDirectory()) walk(full, rel);
-        else if (ent.isFile()) files.push({ rel, content: readFileSync(full, "utf8") });
-      }
-    };
-    walk(dir, "");
-    files.sort((a, b) => a.rel.localeCompare(b.rel));
-    return sha256(files.map((f) => `${f.rel}\n${f.content}`).join("\0"));
-  }
-  if (kind === "agent") {
-    // Claude agents are <claudeHome>/agents/<n>.md; Codex are <codexHome>/agents/<n>.toml.
-    const p =
-      target === "claude"
-        ? join(targets.claudeHome(), "agents", `${name}.md`)
-        : join(targets.codexHome(), "agents", `${name}.toml`);
-    if (!existsSync(p)) return null;
-    return sha256(readFileSync(p, "utf8"));
-  }
-  if (kind === "instruction") {
-    const p =
-      target === "claude"
-        ? join(targets.claudeHome(), "CLAUDE.md")
-        : join(targets.codexHome(), "AGENTS.md");
-    if (!existsSync(p)) return null;
-    return sha256(readFileSync(p, "utf8"));
-  }
+  if (kind === "skill") return hashDeployedSkill(targets, name, target);
+  if (kind === "agent") return hashDeployedAgent(targets, name, target);
+  if (kind === "instruction") return hashDeployedInstruction(targets, target);
   return null;
 }
 

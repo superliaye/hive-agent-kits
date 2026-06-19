@@ -27,7 +27,9 @@ import type {
   DeployResult,
   Selection,
   SyncStatus,
+  VerifyReport,
 } from "../types.ts";
+import { runVerify } from "../verify.ts";
 import { DeployError, SyncError } from "./errors.ts";
 
 export type KitSvc = {
@@ -39,6 +41,9 @@ export type KitSvc = {
   sync(): Effect.Effect<SyncOutcome, SyncError>;
   // Compute the Deploy Diff for a Selection.
   diff(selection: Selection): Effect.Effect<DeployDiff, DeployError>;
+  // On-disk self-check: per-capability per-target status (present/missing/drifted/
+  // recorded). Read-only — emits no audit row.
+  verify(): VerifyReport;
   // Apply a Selection. Emits exactly one `deploy.applied` audit event.
   deploy(selection: Selection): Effect.Effect<DeployResult, DeployError>;
   // Audit source emitter (source: 'deploy').
@@ -100,6 +105,7 @@ function buildSvc(opts: CreateKitOptions): KitSvc {
     catalog: () =>
       mirrorExists(targets) ? readCatalog(targets) : { entries: [], presets: [], problems: [] },
     state: () => ({ sync: buildSyncStatus(targets, lastSyncError), ledger: readLedger(targets) }),
+    verify: () => runVerify(targets),
     sync: () =>
       runSync(targets, fetchImpl).pipe(
         Effect.tap(() =>

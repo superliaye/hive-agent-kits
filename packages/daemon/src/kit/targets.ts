@@ -27,6 +27,10 @@ export type DeployTargets = {
   agentsHome(): string;
   ledgerPath(): string;
   mirrorRoot(): string;
+  // Hive-PRIVATE integrity fingerprint sidecar (<hiveHome>/kit/fingerprints.json).
+  // Distinct from the ledger — the ledger is the fixed agent-kit interop schema
+  // and cannot carry Hive deploy-time hashes; this is where they live instead.
+  fingerprintPath(): string;
   // Working temp dir for sync extraction (under the Hive home, swept on start).
   kitTmpRoot(): string;
   // Redirected child-process env for an external exec. Folds CLAUDE_CONFIG_DIR /
@@ -55,6 +59,7 @@ export function defaultDeployTargets(): DeployTargets {
     envOr("HIVE_LEDGER_PATH", join(homedir(), ".agent-kit", "manifest.json"));
   const hiveHome = () => envOr("HIVE_RUNTIME_ROOT", join(homedir(), ".hive"));
   const mirrorRoot = () => join(hiveHome(), "kit", "mirror");
+  const fingerprintPath = () => join(hiveHome(), "kit", "fingerprints.json");
   const kitTmpRoot = () => join(hiveHome(), "kit", "tmp");
 
   const redirected =
@@ -68,19 +73,25 @@ export function defaultDeployTargets(): DeployTargets {
     agentsHome,
     ledgerPath,
     mirrorRoot,
+    fingerprintPath,
     kitTmpRoot,
     isChildEnvRedirected: () => redirected,
     childEnv: (base) => {
       const env: NodeJS.ProcessEnv = { ...base };
-      // Claude / its plugins resolve config from CLAUDE_CONFIG_DIR; redirect it
-      // to the resolved (possibly temp) claude home.
+      // Claude / its plugins resolve config from CLAUDE_CONFIG_DIR; pin it to the
+      // resolved claude home. In production this equals the real ~/.claude (the
+      // intended deploy target); under a redirected test it's the temp home.
       env.CLAUDE_CONFIG_DIR = claudeHome();
       // git / npx / ./setup resolve config from $HOME (POSIX) / $USERPROFILE
-      // (Windows). Point both at the Hive home so an installer that writes to
-      // "~/..." lands inside the redirected tree.
-      const redirectedHome = hiveHome();
-      env.HOME = redirectedHome;
-      env.USERPROFILE = redirectedHome;
+      // (Windows). Only override these when REDIRECTED (a test): point them at the
+      // Hive home so an installer that writes to "~/..." stays inside the temp
+      // tree. In production we must leave the real $HOME intact, or installers
+      // would silently write into ~/.hive instead of the user's home.
+      if (redirected) {
+        const redirectedHome = hiveHome();
+        env.HOME = redirectedHome;
+        env.USERPROFILE = redirectedHome;
+      }
       // Force public npm registry for installer subprocesses (matches the
       // upstream agent-kit behavior) unless the caller pinned one.
       if (!env.NPM_CONFIG_REGISTRY) {

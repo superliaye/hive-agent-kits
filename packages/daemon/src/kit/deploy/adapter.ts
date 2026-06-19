@@ -94,19 +94,28 @@ export function readSkillSource(srcDir: string): SkillFile[] {
 
 // ---- exec, with the A0 redirection guard ----
 
-// Run an external installer through the redirected child env. Refuses to run if
-// the child env is NOT redirected (the A0 blast-radius guard) — the caller must
-// have a skip-env hatch set instead. `tool` names the binary for the typed error.
+// Run an external installer through the resolved child env. In production this
+// legitimately targets the real home (deploying is the product's whole point).
+// The A0 blast-radius guard exists only to stop HIVE'S OWN TEST SUITE from
+// shelling out a real installer against the developer's real ~/.claude: it fires
+// solely under an automated test (NODE_ENV==="test") that neither redirected the
+// home nor set an AGENT_KIT_SKIP_* hatch. `tool` names the binary for the error.
 export function execInstaller(fx: DeployFsExec, req: ExecRequest, tool: string): ExecResult {
-  if (!fx.targets.isChildEnvRedirected()) {
+  if (isAutomatedTest() && !fx.targets.isChildEnvRedirected()) {
     throw new DeployError({
       reason: "not_redirected",
-      message: `refusing to run real ${tool} installer: child env is not redirected away from the real home (${join(homedir(), ".claude")})`,
+      message: `refusing to run real ${tool} installer in a test without a redirected home (${join(homedir(), ".claude")}); redirect HIVE_*_HOME or set AGENT_KIT_SKIP_*`,
       tool,
     });
   }
   const env = fx.targets.childEnv(process.env);
   return fx.exec(req, env);
+}
+
+// True only when running under Hive's own `bun test` suite (which sets
+// NODE_ENV=test); false for the dev-run and packaged daemon.
+function isAutomatedTest(): boolean {
+  return process.env.NODE_ENV === "test";
 }
 
 export function probeBinary(fx: DeployFsExec, name: string): boolean {

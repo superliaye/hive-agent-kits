@@ -44,10 +44,19 @@ export type BackendReadiness = BackendStatus & {
 // ─── Kit (capability deploy-manager) ──────────────────────────────────
 // Hand-mirror of the daemon's kit wire types (packages/daemon/src/kit/types.ts).
 // The UI is a separate Vite bundle; kept in sync by hand, drift-guarded by
-// __tests__/kit-wire-mirror.test.ts.
+// __tests__/kit-wire-mirror.test.ts. The kind/target enums + the verify shapes
+// live in the DOM-free kit-wire.ts so the daemon's drift guard can import them.
 
-export type KitCapabilityKind = "instruction" | "skill" | "agent" | "plugin" | "bundle";
-export type KitDeployTarget = "claude" | "codex";
+import type { KitCapabilityKind, KitDeployTarget, KitVerifyReport } from "./kit-wire.ts";
+
+export type {
+  KitCapabilityKind,
+  KitDeployTarget,
+  KitVerifyEntry,
+  KitVerifyReport,
+  KitVerifyStatus,
+  KitVerifyTargetStatus,
+} from "./kit-wire.ts";
 
 export type KitCapabilityEntry = {
   kind: KitCapabilityKind;
@@ -166,6 +175,9 @@ declare global {
       /** Read the OS accent color (`#rrggbb`), or null when unavailable.
        * Only present in Electron (preload bridge); absent in browser-tab mode. */
       getSystemAccent?: () => Promise<string | null>;
+      /** Signal the main process that a Kit deploy is/isn't in flight, so a quit
+       * mid-deploy prompts a confirm. Only present in Electron (preload bridge). */
+      setDeployInFlight?: (inFlight: boolean) => Promise<void>;
     };
   }
 }
@@ -351,6 +363,9 @@ export const api = {
   getKitCatalog: (cfg: ApiConfig) => call<KitCatalog>(cfg, "/api/kit/catalog"),
   // Sync status (freshness state + SHA) + the Deployment Ledger.
   getKitState: (cfg: ApiConfig) => call<KitState>(cfg, "/api/kit/state"),
+  // On-disk self-check: per-capability per-target status (present/missing/drifted/
+  // recorded). Read-only — no audit row. The page runs this on load and after deploy.
+  getKitVerify: (cfg: ApiConfig) => call<KitVerifyReport>(cfg, "/api/kit/verify"),
   // Check for updates: fetch the latest Kit into the Mirror. Returns the
   // resulting sync state; the catalog/state queries are re-fetched after.
   syncKit: (cfg: ApiConfig) =>

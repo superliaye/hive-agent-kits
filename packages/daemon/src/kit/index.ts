@@ -14,4 +14,8 @@ export {
   type Selection,
   SelectionSchema,
   type SyncStatus,
+  type VerifyEntry,
+  type VerifyReport,
+  type VerifyStatus,
+  type VerifyTargetStatus,
 } from "./types.ts";

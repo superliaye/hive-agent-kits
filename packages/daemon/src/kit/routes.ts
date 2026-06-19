@@ -4,6 +4,7 @@
 import { Effect } from "effect";
 import { Hono } from "hono";
 import { ZodError } from "zod";
+import { log } from "../lib/log.ts";
 import { DeployError, SyncError } from "./effect/errors.ts";
 import type { KitSvc } from "./effect/kit-live.ts";
 import { SelectionSchema } from "./types.ts";
@@ -35,6 +36,9 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
   app.get("/api/kit/catalog", (c) => c.json(kit.catalog()));
 
   app.get("/api/kit/state", (c) => c.json(kit.state()));
+
+  // On-disk self-check (Feature 1/2). Read-only — no audit row, no body.
+  app.get("/api/kit/verify", (c) => c.json(kit.verify()));
 
   app.post("/api/kit/sync", async (c) => {
     const res = await runKit(kit.sync());
@@ -80,7 +84,14 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
     }
     const res = await runKit(kit.deploy(parsed.data));
     if (res.ok) return c.json(res.value);
-    const err = res.error as DeployError;
+    const err = res.error;
+    // A defect (untyped throw) squashes to a non-DeployError here. Without this it
+    // would surface as a 500 with `reason: undefined` and NO trace line — exactly
+    // the blind 500 that made this path hard to diagnose. Log it, return clearly.
+    if (!(err instanceof DeployError)) {
+      log().error({ module: "kit/routes", route: "deploy", err: String(err) }, "deploy defect");
+      return c.json({ error: "deploy failed", reason: "io", message: String(err) }, 500);
+    }
     return c.json(
       {
         error: "deploy failed",

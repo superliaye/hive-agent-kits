@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { log } from "../../lib/log.ts";
 import { DeployError } from "../effect/errors.ts";
+import { recordFingerprints } from "../fingerprint.ts";
 import {
   type Ledger,
   mergeLedger,
@@ -31,6 +32,7 @@ import {
   writeFileAt,
   writeSkillFolder,
 } from "./adapter.ts";
+import { deployedAgentPath, deployedInstructionPath, deployedSkillDir } from "./artifact-hash.ts";
 import {
   agentSources,
   bundleMeta,
@@ -108,12 +110,12 @@ function applyInstructions(
   // captured as a per-kind failure, never an untyped defect escaping to a 500.
   try {
     if (sel.targets.includes("claude")) {
-      const claudeMd = join(fx.targets.claudeHome(), "CLAUDE.md");
+      const claudeMd = deployedInstructionPath(fx.targets, "claude");
       backupIfExists(claudeMd);
       writeFileAt(claudeMd, compiled);
     }
     if (sel.targets.includes("codex")) {
-      const agentsMd = join(fx.targets.codexHome(), "AGENTS.md");
+      const agentsMd = deployedInstructionPath(fx.targets, "codex");
       backupIfExists(agentsMd);
       writeFileAt(agentsMd, compiled);
     }
@@ -141,8 +143,7 @@ function applySkills(fx: DeployFsExec, sel: ResolvedSelection, mirrorRoot: strin
         snippets,
       );
       for (const target of sel.targets) {
-        const root = target === "claude" ? fx.targets.claudeHome() : fx.targets.agentsHome();
-        const skillsDir = join(root, "skills", name);
+        const skillsDir = deployedSkillDir(fx.targets, name, target);
         const allFiles =
           out.sidecar && target === "codex" ? [...out.files, out.sidecar] : out.files;
         writeSkillFolder(skillsDir, allFiles);
@@ -169,10 +170,10 @@ function applyAgents(fx: DeployFsExec, sel: ResolvedSelection, mirrorRoot: strin
       const content = readFileSync(join(srcDir, "AGENT.md"), "utf8");
       const out = transformAgent({ name, raw: content }, snippets);
       if (sel.targets.includes("claude")) {
-        writeFileAt(join(fx.targets.claudeHome(), "agents", `${name}.md`), out.claudeMd);
+        writeFileAt(deployedAgentPath(fx.targets, name, "claude"), out.claudeMd);
       }
       if (sel.targets.includes("codex")) {
-        writeFileAt(join(fx.targets.codexHome(), "agents", `${name}.toml`), out.codexToml);
+        writeFileAt(deployedAgentPath(fx.targets, name, "codex"), out.codexToml);
       }
       res.applied.push(name);
     } catch (err) {
@@ -331,16 +332,13 @@ function pruneOrphans(
   const pruned: { kind: CapabilityKind; name: string }[] = [];
   for (const name of pruneSkills) {
     for (const target of targets) {
-      const root = target === "claude" ? fx.targets.claudeHome() : fx.targets.agentsHome();
-      removeDir(join(root, "skills", name));
+      removeDir(deployedSkillDir(fx.targets, name, target));
     }
     pruned.push({ kind: "skill", name });
   }
   for (const name of pruneAgents) {
-    if (targets.includes("claude"))
-      removeFile(join(fx.targets.claudeHome(), "agents", `${name}.md`));
-    if (targets.includes("codex"))
-      removeFile(join(fx.targets.codexHome(), "agents", `${name}.toml`));
+    if (targets.includes("claude")) removeFile(deployedAgentPath(fx.targets, name, "claude"));
+    if (targets.includes("codex")) removeFile(deployedAgentPath(fx.targets, name, "codex"));
     pruned.push({ kind: "agent", name });
   }
   return pruned;
@@ -431,6 +429,30 @@ export function runDeploy(
       orphan.skills,
       orphan.agents,
     );
+
+    // Record integrity fingerprints for EXACTLY what landed (hashing the on-disk
+    // artifact deploy just wrote), pruning deselected names in lockstep with the
+    // ledger prune. Hive-private sidecar — never touches the ledger schema. This
+    // is best-effort metadata AFTER the deploy already landed on disk + ledger; a
+    // fault here must degrade to a trace warning, never fail the whole deploy.
+    yield* Effect.sync(() => {
+      try {
+        recordFingerprints(
+          fx.targets,
+          {
+            skills: skillResultApplied(perKind),
+            agents: agentResultApplied(perKind),
+            instructions: instructionResultApplied(perKind),
+            targets: sel.targets,
+          },
+          orphan.skills,
+          orphan.agents,
+          Date.now(),
+        );
+      } catch (err) {
+        log().warn({ module: "kit/deploy", err: String(err) }, "fingerprint recording failed");
+      }
+    });
 
     return {
       kitSha: input.kitSha,
