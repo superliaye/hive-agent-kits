@@ -49,7 +49,6 @@ const UI_DEV_URL = process.env.HIVE_UI_DEV_URL ?? "http://127.0.0.1:5173";
 const PACKAGED_DAEMON = app.isPackaged
   ? join(process.resourcesPath, isWin ? "hive-daemon.exe" : "hive-daemon")
   : null;
-const PACKAGED_BUNDLED = app.isPackaged ? join(process.resourcesPath, "bundled") : null;
 const UI_DIST_INDEX = app.isPackaged
   ? join(app.getAppPath(), "ui-dist", "index.html")
   : join(REPO_ROOT, "ui", "dist", "index.html");
@@ -78,11 +77,10 @@ async function waitForReady(timeoutMs = 10_000): Promise<void> {
 async function ensureDaemon(): Promise<void> {
   if (await isDaemonReady()) return;
   if (PACKAGED_DAEMON) {
-    // Packaged: spawn the bundled binary, point it at the bundled resource dir.
+    // Packaged: spawn the bundled daemon binary.
     daemon = spawn(PACKAGED_DAEMON, [], {
       stdio: ["ignore", "inherit", "inherit"],
       windowsHide: true,
-      env: { ...process.env, HIVE_BUNDLED_ROOT: PACKAGED_BUNDLED ?? "" },
     });
   } else {
     // Dev: bun against the source tree. No shell:true so SIGKILL reaches

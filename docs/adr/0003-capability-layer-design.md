@@ -1,5 +1,8 @@
 # Capability Layer Design
 
+status: Deferred — the Capability-layer vision is parked with priority #2 (the
+agent scenarios) per ADR-0021. Not superseded; it returns when #2 is built.
+
 ## What this ADR records
 
 The shape and lifecycle of every **Capability** kind in Hive v1: what they are, how they're stored on disk, who consumes them, when they run, and how the CLI participates. Closes ADR-0001 blocker #6 (Agent Harness "template" vs "instance" disambiguation). Leaves open ADR-0001 blocker #2 (secrets) and the permission-system shape — those get their own ADRs. Blocker #3 (name-collision) is downgraded out of the active backlog: with `run_shell` as the default CLI path, MCP servers in v1 are sparse and naturally divergent, so collisions are unlikely until v1.1.

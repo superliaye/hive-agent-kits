@@ -102,12 +102,13 @@ bun run start
 Write-Host "`nVerifying (up to ~30s for first boot)..."
 $daemon = Wait-For 30 { (Invoke-WebRequest "http://127.0.0.1:$DaemonPort/api/ready" -UseBasicParsing -TimeoutSec 3).Content -match '"status"\s*:\s*"ok"' }
 
-$agents = @()
+# Health-check the deploy-manager's kit surface (the agent stack is gone — ADR-0021).
+$kitOk = $false
 if ($daemon) {
   try {
     $token = (Get-Content "$env:USERPROFILE\.hive\.token" -Raw).Trim()
-    $resp = Invoke-WebRequest "http://127.0.0.1:$DaemonPort/api/agents" -Headers @{ Authorization = "Bearer $token" } -UseBasicParsing -TimeoutSec 3
-    $agents = @(($resp.Content | ConvertFrom-Json) | ForEach-Object { $_.agentId })
+    $resp = Invoke-WebRequest "http://127.0.0.1:$DaemonPort/api/kit/catalog" -Headers @{ Authorization = "Bearer $token" } -UseBasicParsing -TimeoutSec 3
+    $kitOk = $resp.StatusCode -eq 200
   } catch { }
 }
 
@@ -121,12 +122,12 @@ if (-not $DaemonOnly) {
 
 # Electron gates PASS here (agent launcher — it can't see the window). The
 # human launcher, dev.ts, treats Electron as informational.
-$pass = $daemon -and ($agents.Count -gt 0)
+$pass = $daemon -and $kitOk
 if (-not $DaemonOnly) { $pass = $pass -and $vite -and $electronUp }
 
 Write-Host "`n=== Hive $(if ($DaemonOnly) { 'daemon' } else { 'dev stack' }) ==="
 Write-Host ("  daemon    :{0} /api/ready -> {1}" -f $DaemonPort, $(if ($daemon) { 'ok' } else { 'unreachable' }))
-Write-Host ("  agents    {0}" -f $(if ($agents.Count) { $agents -join ', ' } else { '(none)' }))
+Write-Host ("  kit       /api/kit/catalog -> {0}" -f $(if ($kitOk) { 'ok' } else { 'unreachable' }))
 if (-not $DaemonOnly) {
   Write-Host ("  vite      :{0} -> {1}" -f $VitePort, $(if ($vite) { 'ok' } else { 'unreachable' }))
   Write-Host ("  electron  {0}" -f $(if ($electronUp) { 'running (window visible)' } else { 'not detected' }))

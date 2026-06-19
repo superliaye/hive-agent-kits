@@ -1,7 +1,7 @@
 # CLI-only agent runtime over raw vendor Agent SDKs
 
 ---
-status: accepted
+status: Superseded by ADR-0021
 supersedes: ADR-0005, ADR-0010, ADR-0016, ADR-0017
 supersedes-in-part: ADR-0015
 resolves: ADR-0018

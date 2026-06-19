@@ -5,47 +5,27 @@
 // parameter and a `case` here when they ship — reading this file gives
 // the full graph of who feeds the audit log.
 
-import type { AgentPrefEvents } from "../agent-prefs/index.ts";
 import type { BackendUpdateEvents } from "../backend-probe/index.ts";
-import type { Registry } from "../capabilities/index.ts";
-import type { Catalog } from "../catalog/index.ts";
-import type { CatalogEvents } from "../catalog/types.ts";
 import type { Config, ConfigEvents } from "../config/types.ts";
+import type { DeployAuditEvents } from "../kit/index.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
-import type { RunExecutor } from "../runs/index.ts";
-import type { BackendEvents, RunModuleEvents } from "../runs/types.ts";
 import type { SecretEvents } from "../secrets/types.ts";
-import type { ThreadEvents } from "../threads/index.ts";
 import type { AuditSvc } from "./effect/audit-live.ts";
 import type { Normalizer } from "./types.ts";
 
 export type AuditSources<S extends Record<string, unknown> = Record<string, unknown>> = {
   config?: Config<S>;
-  registry?: Registry;
-  catalog?: Catalog;
   // Consumer-owned port: only the event stream is read here (audit attaches to
   // it). Satisfied by SecretsSvc and the server's legacy `Secrets` projection.
   secrets?: { events: TypedEmitter<SecretEvents> };
-  runs?: RunExecutor;
-  // Consumer-owned port: only the event stream is read here. Satisfied by the
-  // AgentModelPrefs service (its `.events`).
-  agentPrefs?: { events: TypedEmitter<AgentPrefEvents> };
-  // Consumer-owned port: only the event stream is read here. Satisfied by the
-  // Threads service (its `.events`). Only USER/explicit lifecycle actions
-  // (manual archive/rename, mark-unread, delete) flow here; auto-archive and
-  // auto-title are system-initiated → trace, not audit.
-  threads?: { events: TypedEmitter<ThreadEvents> };
-  // Dedicated `backend` source: the SDK-backend run + tool-observed audit.
-  // Consumer-owned port: only the event stream is read here. Satisfied by the
-  // Run executor's `backendEvents` emitter (separate from `events`/run source).
-  backend?: { events: TypedEmitter<BackendEvents> };
-  // Same dedicated `backend` source, second emitter: the user-triggered
-  // delegated CLI-update action. Satisfied by the BackendProbe service's
-  // `events`. Distinct event map from the spawn audit, attached separately.
+  // Dedicated `backend` source, the user-triggered delegated CLI-update action.
+  // Satisfied by the BackendProbe service's `events`.
   backendUpdate?: { events: TypedEmitter<BackendUpdateEvents> };
-  // Future:
-  //   mcp?:        { events: TypedEmitter<McpLifecycleEvents> }
-  //   memory?:     { events: TypedEmitter<MemoryEvents> }
+  // Dedicated `deploy` source: a Kit deploy is a user action. Consumer-owned
+  // port — only the event stream is read here. Payload is a refs-only allow-list
+  // {kitSha, perKindCounts, targetClis} (no file contents/secrets), and a deploy
+  // has neither run_id nor agent_id (both null).
+  deploy?: { events: TypedEmitter<DeployAuditEvents> };
 };
 
 // Generic over S so callers with a typed Config<AppConfig> don't need a cast.
@@ -72,21 +52,6 @@ function redactAppearance(value: unknown): unknown {
   return { mode: (value as { mode?: string }).mode };
 }
 
-// Catalog: only user/agent-driven side effects are audited. agent.created at
-// scan time is system inventory — that goes to trace via the log singleton.
-const catalogNormalizer: Partial<Normalizer<CatalogEvents>> = {
-  "harness.updated": (event) => ({
-    event_type: "harness.updated",
-    agent_id: event.agentId,
-    payload: { source: event.source, diff: event.diff },
-  }),
-};
-
-// Registry: all events today are scan-driven or hot-reload-driven (system,
-// not user). Trace captures them via the log singleton. When user-initiated
-// capability adds land (Settings UI drop-zone), add a normalizer here with
-// a filter on the source/origin.
-
 // Secrets: every event is user/agent-driven (read by agent for a Run,
 // write/refresh/remove by user via Settings). Payloads carry only the
 // provider key — never credential values or refs (ADR-0004 redaction).
@@ -111,66 +76,6 @@ const secretsNormalizer: Normalizer<SecretEvents> = {
   }),
 };
 
-// Agent preferences: a user picking an Agent's default model or thinking
-// effort is user-driven state. agentId + model id + effort level are
-// non-secret — safe in the payload. The event carries only the fields the
-// write touched (merge semantics), so the payload reflects exactly those.
-const agentPrefsNormalizer: Normalizer<AgentPrefEvents> = {
-  "agent_pref.set": (event) => ({
-    event_type: "agent_pref.set",
-    agent_id: event.agentId,
-    payload: {
-      ...(event.model !== undefined && { model: event.model }),
-      ...(event.effort !== undefined && { effort: event.effort }),
-      ...(event.backend !== undefined && { backend: event.backend }),
-      ...(event.cleared !== undefined && { cleared: event.cleared }),
-    },
-  }),
-};
-
-// Threads: user/explicit lifecycle actions on a conversation. Payloads carry
-// REFS only — threadId + agentId, and titleSource for a rename (never the
-// title string, ADR-0004 redaction). Auto-archive and auto-title don't emit
-// here (system-initiated → trace), so every row this normalizer produces is a
-// genuine user action.
-const threadsNormalizer: Normalizer<ThreadEvents> = {
-  "thread.archived": (event) => ({
-    event_type: "thread.archived",
-    agent_id: event.agentId,
-    payload: { thread_id: event.threadId },
-  }),
-  "thread.deleted": (event) => ({
-    event_type: "thread.deleted",
-    agent_id: event.agentId,
-    payload: { thread_id: event.threadId },
-  }),
-  "thread.title_set": (event) => ({
-    event_type: "thread.title_set",
-    agent_id: event.agentId,
-    payload: { thread_id: event.threadId, title_source: event.titleSource },
-  }),
-  "thread.marked_unread": (event) => ({
-    event_type: "thread.marked_unread",
-    agent_id: event.agentId,
-    payload: { thread_id: event.threadId },
-  }),
-  "thread.scope_set": (event) => ({
-    event_type: "thread.scope_set",
-    agent_id: event.agentId,
-    // model id / effort level / working-dir path / backend id are non-secret
-    // identifiers (same class as agent_pref.set); carry whichever axes the write
-    // touched.
-    payload: {
-      thread_id: event.threadId,
-      ...(event.model !== undefined ? { model: event.model } : {}),
-      ...(event.effort !== undefined ? { effort: event.effort } : {}),
-      ...(event.workingDir !== undefined ? { workingDir: event.workingDir } : {}),
-      ...(event.backend !== undefined ? { backend: event.backend } : {}),
-      ...(event.cleared !== undefined ? { cleared: event.cleared } : {}),
-    },
-  }),
-};
-
 // Attaches every present source's event stream to the audit log.
 // Returns a disposer that detaches all listeners.
 export function wireSubscriptions<S extends Record<string, unknown> = Record<string, unknown>>(
@@ -183,37 +88,16 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
     disposers.push(audit.attach("config", sources.config.events, configNormalizer<S>()));
   }
 
-  // registry intentionally not attached: its events are system-driven
-  // (startup / hot-reload), so they belong in the trace log, not the audit log.
-  // See "Audit vs trace" in ADR-0004.
-  void sources.registry;
-
-  if (sources.catalog) {
-    disposers.push(audit.attach("catalog", sources.catalog.events, catalogNormalizer));
-  }
-
   if (sources.secrets) {
     disposers.push(audit.attach("secrets", sources.secrets.events, secretsNormalizer));
   }
 
-  if (sources.agentPrefs) {
-    disposers.push(audit.attach("agent-prefs", sources.agentPrefs.events, agentPrefsNormalizer));
-  }
-
-  if (sources.threads) {
-    disposers.push(audit.attach("thread", sources.threads.events, threadsNormalizer));
-  }
-
-  if (sources.runs) {
-    disposers.push(audit.attach("run", sources.runs.events, runsNormalizer));
-  }
-
-  if (sources.backend) {
-    disposers.push(audit.attach("backend", sources.backend.events, backendNormalizer));
-  }
-
   if (sources.backendUpdate) {
     disposers.push(audit.attach("backend", sources.backendUpdate.events, backendUpdateNormalizer));
+  }
+
+  if (sources.deploy) {
+    disposers.push(audit.attach("deploy", sources.deploy.events, deployNormalizer));
   }
 
   return () => {
@@ -221,54 +105,19 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
   };
 }
 
-// Runs: lifecycle only (started/completed/failed/cancelled). Per-token
-// model events do NOT flow through the audit log — they're causally
-// owned by the streaming consumer (ADR-0004 "audit vs trace"). Run rows
-// in `hive.db` are the durable record of what happened; this normalizer
-// is for cross-module correlation in `audit.db`.
-const runsNormalizer: Normalizer<RunModuleEvents> = {
-  "run.started": (event) => ({
-    event_type: "run.started",
-    run_id: event.runId,
-    agent_id: event.agentId,
-    payload: { thread_id: event.threadId, model: event.model },
-  }),
-  "run.completed": (event) => ({
-    event_type: "run.completed",
-    run_id: event.runId,
-    payload: { finish_reason: event.finishReason },
-  }),
-  "run.failed": (event) => ({
-    event_type: "run.failed",
-    run_id: event.runId,
-    payload: { code: event.code, message: event.message },
-  }),
-  "run.cancelled": (event) => ({
-    event_type: "run.cancelled",
-    run_id: event.runId,
-    payload: {},
-  }),
-};
-
-// Backend: the dedicated `backend` AuditSource — an SDK-backed Run's dispatch.
-// Payload carries the backend kind + the resolved model (a non-secret ref). The
-// SDK owns argv now, so there is no binary/args to record.
-const backendNormalizer: Normalizer<BackendEvents> = {
-  "backend.run.started": (event) => ({
-    event_type: "backend.run.started",
-    run_id: event.runId,
-    agent_id: event.agentId,
-    payload: { backend: event.backend, model: event.model },
-  }),
-  // A tool the SDK backend ran, observed from its event stream. OBSERVED-after-
-  // the-fact (the SDK runs under its own bypass governance) — NOT a permission
-  // decision. Payload carries the tool NAME + the `is_error` flag (both refs),
-  // never args/output (ADR-0004 redaction).
-  "backend.tool_use.observed": (event) => ({
-    event_type: "backend.tool_use.observed",
-    run_id: event.runId,
-    agent_id: event.agentId,
-    payload: { backend: event.backend, tool: event.tool, is_error: event.isError },
+// Deploy: a Kit deploy is a user action. run_id/agent_id are NULL (a deploy has
+// neither). Payload is the exact refs-only allow-list — kitSha + per-kind applied
+// counts + the target CLIs — never file contents, marketplace tokens, or secrets.
+const deployNormalizer: Normalizer<DeployAuditEvents> = {
+  "deploy.applied": (event) => ({
+    event_type: "deploy.applied",
+    run_id: null,
+    agent_id: null,
+    payload: {
+      kitSha: event.kitSha,
+      perKindCounts: event.perKindCounts,
+      targetClis: event.targetClis,
+    },
   }),
 };
 

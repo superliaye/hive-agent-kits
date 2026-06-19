@@ -1,5 +1,8 @@
 # Run Pipeline Design
 
+status: Superseded by ADR-0021 — the Run/Thread pipeline is deleted with the
+agent-running stack (parked as deferred #2).
+
 ## What this ADR records
 
 How `Threads` + `Runs` work in Hive v1: the persisted Thread → Message history layer, the Run executor that drives `ModelGateway.complete()` with `Secrets`-resolved auth, and the event-stream contract between the executor and its consumers (Part 4 HTTP route, Part 5 UI). Establishes the boundary between Threads (data), Runs (process), and the future tool-execution loop (Part 7).

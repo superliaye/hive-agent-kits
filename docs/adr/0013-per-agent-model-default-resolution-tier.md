@@ -1,5 +1,8 @@
 # Per-agent model + effort defaults: a deployment-stored resolution tier, not the Harness
 
+status: Superseded by ADR-0021 — model/effort defaults are deleted with the
+agent-running stack (parked as deferred #2).
+
 ## What this ADR records
 
 Where a user's chosen **model** and **thinking effort** for an Agent's conversations are stored, and where each sits in the Run executor's resolution. Both resolve through the same shape of tiers, in order:

@@ -207,7 +207,7 @@ function electronStatus(): "running" | "not detected" | "unknown" {
 type Health = {
   daemon: boolean;
   vite: boolean;
-  agents: string[];
+  kitOk: boolean;
   electron: "running" | "not detected" | "unknown";
 };
 
@@ -221,31 +221,30 @@ async function verify(): Promise<Health> {
     ? false
     : await waitFor(15_000, async () => (await fetch(`http://127.0.0.1:${VITE_PORT}/`)).ok);
 
-  let agents: string[] = [];
+  // Health-check the deploy-manager's kit surface (the agent stack is gone — ADR-0021).
+  let kitOk = false;
   if (daemon) {
     try {
       const token = readFileSync(join(homedir(), ".hive", ".token"), "utf8").trim();
-      const res = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/agents`, {
+      const res = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/kit/catalog`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) agents = ((await res.json()) as Array<{ agentId: string }>).map((a) => a.agentId);
+      kitOk = res.ok;
     } catch {
-      // leave agents empty — reported as a failure below
+      // leave kitOk false — reported as a failure below
     }
   }
 
-  return { daemon, vite, agents, electron: daemonOnly ? "unknown" : electronStatus() };
+  return { daemon, vite, kitOk, electron: daemonOnly ? "unknown" : electronStatus() };
 }
 
 function printStatus(h: Health): void {
   // Electron is informational here (this is the human launcher — you can see
   // the window). The agent launcher, dev.ps1, gates PASS on the window instead.
-  const pass = daemonOnly
-    ? h.daemon && h.agents.length > 0
-    : h.daemon && h.vite && h.agents.length > 0;
+  const pass = daemonOnly ? h.daemon && h.kitOk : h.daemon && h.vite && h.kitOk;
   console.log(`\n=== Hive ${daemonOnly ? "daemon" : "dev stack"} ===`);
   console.log(`  daemon    :${DAEMON_PORT} /api/ready → ${h.daemon ? "ok" : "unreachable"}`);
-  console.log(`  agents    ${h.agents.length ? h.agents.join(", ") : "(none)"}`);
+  console.log(`  kit       /api/kit/catalog → ${h.kitOk ? "ok" : "unreachable"}`);
   if (!daemonOnly) {
     console.log(`  vite      :${VITE_PORT} → ${h.vite ? "ok" : "unreachable"}`);
     console.log(

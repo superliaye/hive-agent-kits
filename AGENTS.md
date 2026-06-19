@@ -9,16 +9,17 @@ Repo conventions for AI coding agents working in this repo.
 
 ## What Hive is
 
-A portable personal AI system. Capabilities carry an origin tag: Personal travels with the user; Workplace stays at the company. Two-sentence pitch; full vocabulary in CONTEXT.md.
+A capability deploy-manager for the my-agent-kits **Kit**: it syncs the latest Kit at runtime and deploys selected Capabilities into the CLI homes of Claude Code and Codex (`~/.claude/`, `~/.codex/`, `~/.agents/`), reproducing the upstream `agent-kit` deploy contract with control + visibility on top. Hive's own AI-conversation scenarios are deferred (#2 — ADR-0021). Full vocabulary in CONTEXT.md.
 
 ## Repo layout
 
-A Bun workspace: deployable units live under `packages/*` — `daemon` (`@hive/daemon`, source in `packages/daemon/src/`, vendored capabilities in `packages/daemon/bundled/`), `ui` (`@hive/ui`), `shell` (`@hive/shell`), and `contract` (`@hive/contract`, shared wire types). Root `package.json` is orchestration-only; one root `bun.lock`. See [ADR-0020](docs/adr/0020-monorepo-workspace-layout.md).
+A Bun workspace: deployable units live under `packages/*` — `daemon` (`@hive/daemon`, source in `packages/daemon/src/`; the capability deploy-manager lives in `packages/daemon/src/kit/`), `ui` (`@hive/ui`), `shell` (`@hive/shell`), and `contract` (`@hive/contract`, shared wire types). There is no longer a `packages/daemon/bundled/` (the app syncs the Kit at runtime) and no `capabilities/`, `catalog/`, `runs/`, or `threads/` daemon modules (the agent-running stack is parked as deferred #2 — ADR-0021). Root `package.json` is orchestration-only; one root `bun.lock`. See [ADR-0020](docs/adr/0020-monorepo-workspace-layout.md).
 
 ## Reference projects (architecture sources, not clones)
 
-- **OpenClaw** — `github.com/openclaw/openclaw`, local clone `E:\dev\GitRepos\openclaw`.
-- **Hermes Agent** — `github.com/NousResearch/hermes-agent`, local clone `E:\dev\GitRepos\hermes-agent`.
+- **my-agent-kits** — `github.com/superliaye/my-agent-kits`, local clone `D:\GitRepos\my-agent-kits`. The **Kit** Hive manages; its deploy contract (`lib/deploy.js`, `lib/agents.js`, `lib/capabilities.js`, `lib/manifest.js`, `lib/presets.js`) is the authority the `kit` module reproduces. **Verified against pinned SHA `d85d9902c1b2aa863b43d8acf8f9a1fbebb275bc`** (upstream has no usable release/tag — only `main` — so always re-validate the contract against this pinned clone, never from memory). Re-pin the SHA here whenever the deploy contract is re-checked.
+- **OpenClaw** — `github.com/openclaw/openclaw`, local clone `E:\dev\GitRepos\openclaw` (mostly informs deferred #2).
+- **Hermes Agent** — `github.com/NousResearch/hermes-agent`, local clone `E:\dev\GitRepos\hermes-agent` (mostly informs deferred #2).
 - **work-claw** — internal Microsoft project; `docs/inventory-workclaw.md` is a *feature wishlist*, not an architectural source.
 
 ## Always keep in mind
@@ -27,7 +28,7 @@ A Bun workspace: deployable units live under `packages/*` — `daemon` (`@hive/d
 
 Two distinct stores; don't conflate them.
 
-**Audit** = what users and agents did: tool calls (observed from a backend's stream), secret accesses, harness edits, backend run starts, Run lifecycle. SQLite-backed, retained, queryable. Subscribe pattern — modules emit typed events as side effects; the Audit module subscribes and persists. The Run-path emitter is now the SDK-backend adapter folding the vendor SDK's stream, not an in-process tool loop. Never called directly (no `audit.record(...)` API). When your code does something user-visible (mutates state, invokes a capability), check the relevant event is emitted from the module's internal write path. Refs, not values — never put sensitive values in payloads. (Governance/permission enforcement is deferred — the SDKs run under bypass mode — so there are no permission-decision audit rows; ADR-0019.)
+**Audit** = what the user did. In the deploy-manager (#1) the user action is a **Deploy**: one `source:'deploy'` row per Deploy, `run_id`/`agent_id` null, payload a refs-only allow-list (`{kitSha, perKindCounts, targetClis}`) — never file contents or secrets. SQLite-backed, retained, queryable. Subscribe pattern — the deploy path emits a typed event as a side effect; the Audit module subscribes and persists. (The old Run-path SDK-adapter emitter is gone with the agent-running stack — ADR-0021; the **deploy** path is the live audit emitter now.) Never called directly (no `audit.record(...)` API). When your code does something user-visible, check the relevant event is emitted from the module's internal write path. Refs, not values. (Governance/permission enforcement is deferred — ADR-0019, retained by ADR-0021.)
 
 **Trace** = system diagnostics: parse errors, watcher events, daemon startup chatter, perf counters. JSONL via Pino at `~/.hive/logs/daemon.log`. *No* subscribe pattern — import the `log()` singleton from `packages/daemon/src/lib/log.ts` and write at the call site with full context: `log().warn({ module, path, err }, "skipped malformed manifest")`. `console.log`/`.warn`/`.error` in non-test source is wrong; use the trace logger.
 

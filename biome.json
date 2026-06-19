@@ -2,7 +2,7 @@
   "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "files": {
-    "includes": ["packages/daemon/src/**", "scripts/**", "packages/ui/src/**"]
+    "includes": ["packages/daemon/src/**", "scripts/**", "packages/ui/src/**", "!**/.claude"]
   },
   "formatter": {
     "enabled": true,

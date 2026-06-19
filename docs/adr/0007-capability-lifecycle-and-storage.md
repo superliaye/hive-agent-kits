@@ -1,5 +1,11 @@
 # Capability Lifecycle and Storage
 
+status: Superseded-in-part by ADR-0021 — the two-tier bundled storage, the
+"Inclusion principle" (vendoring into `bundled/`), and "No CLI install path /
+Hive is not a package manager" no longer hold: the pivot syncs an upstream Kit at
+runtime and execs external package managers. The Capability lifecycle vocabulary
+is otherwise retained.
+
 ## What this ADR records
 
 How **Capabilities** live, get installed, get updated, and get configured per-Agent in Hive v1. Amends ADR-0003 on four axes: storage layout (now a two-tier bundled-vs-runtime split with parallel Personal/Workplace inside bundled), CLI surface (drops `hive caps install`), Agent Harness mutability (Settings UI edits bindings live), and name resolution rules. Also sharpens ADR-0003's "five Capability kinds" — **Agent Harness is not a Capability**; it's the on-disk artifact of an Agent, indexed in the **Agent Catalog**, not the **Capability Registry**.

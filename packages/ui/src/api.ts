@@ -2,46 +2,6 @@
 //   1. window.__hive (provided by Electron preload)
 //   2. URL query string ?baseUrl=...&token=... (dev mode in a browser tab)
 
-// AgentBackend ids the daemon knows. Mirrors the daemon's `AgentBackend` Zod
-// enum (src/lib/capability-types.ts); the UI is a separate Vite bundle, so this
-// literal is kept in sync by hand. Both are vendor-SDK backends (ADR-0019 dropped
-// the native in-process loop).
-export type AgentBackend = "claude-code" | "codex";
-
-const AGENT_BACKENDS: readonly AgentBackend[] = ["claude-code", "codex"];
-
-// Narrow an `unknown` (e.g. a stored scope backend or an agent's harness
-// `backend`) to an AgentBackend, cast-free.
-export function isAgentBackend(v: unknown): v is AgentBackend {
-  return typeof v === "string" && (AGENT_BACKENDS as readonly string[]).includes(v);
-}
-
-export type AgentSummary = {
-  agentId: string;
-  backend: string;
-  domain: string;
-  layer: "bundled" | "runtime";
-  hasFork: boolean;
-  bindingCounts: {
-    skills: number;
-    snippets: number;
-    tools: number;
-    mcp: number;
-  };
-};
-
-export type AgentDetail = AgentSummary & {
-  bindings: {
-    skills: string[];
-    snippets: string[];
-    tools: string[];
-    mcp: string[];
-  };
-  config: Record<string, unknown>;
-  promptBody: string;
-  forkError?: string;
-};
-
 // Backend availability status (GET /api/backends). Mirrors the daemon's
 // BackendStatus wire shape (src/backend-probe/types.ts). `backend` is a
 // CLI-driven (probeable) backend; `native` is never probed.
@@ -51,27 +11,6 @@ export type BackendStatus = {
   version: string | null;
   reason: "ok" | "not_installed" | "probe_failed" | "version_unreadable" | "timeout";
   checkedAt: number;
-};
-
-export type CapabilityWire = {
-  name: string;
-  kind: "skill" | "snippet" | "tool" | "mcp";
-  description: string;
-  origin: "personal" | "workplace";
-  layer: "bundled" | "runtime";
-  // How the Registry discovered this capability. Distinct from `upstream`
-  // (where it was vendored from) — see src/server/types.ts.
-  discovery: string;
-  workplaceId?: string;
-  shadows?: Array<{ layer: string; origin: string; workplaceId?: string }>;
-  tags?: string[];
-  upstream?: { url: string; ref: string };
-};
-
-export type BindingPatch = {
-  kind: "skill" | "snippet" | "tool" | "mcp";
-  name: string;
-  action: "bind" | "unbind";
 };
 
 // Backend Readiness (GET /api/backends/readiness). Hand-mirror of the daemon's
@@ -102,163 +41,109 @@ export type BackendReadiness = BackendStatus & {
   };
 };
 
-// Thinking-effort levels. Deliberate cross-package mirror of the daemon's
-// canonical `EFFORT_ORDER` / `ThinkingEffort` (src/lib/effort.ts):
-// the UI is a separate Vite bundle and does not import daemon source, so this
-// literal is kept in sync by hand. If `EFFORT_ORDER` is widened/narrowed there,
-// update this list to match.
-export type ThinkingEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+// ─── Kit (capability deploy-manager) ──────────────────────────────────
+// Hand-mirror of the daemon's kit wire types (packages/daemon/src/kit/types.ts).
+// The UI is a separate Vite bundle; kept in sync by hand, drift-guarded by
+// __tests__/kit-wire-mirror.test.ts.
 
-export const THINKING_EFFORTS: readonly ThinkingEffort[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-];
+export type KitCapabilityKind = "instruction" | "skill" | "agent" | "plugin" | "bundle";
+export type KitDeployTarget = "claude" | "codex";
 
-// Symbolic default tokens (ADR-0015 S2). A default tier (harness config, agent
-// default, or Thread scope) may carry one of these rule-tokens instead of a
-// pinned id; the daemon resolves them at Run start. Kept in sync with
-// src/runs/symbolic.ts by hand (the UI is a separate Vite bundle).
-export const SYMBOLIC_MODEL_LATEST = "latest";
-export const SYMBOLIC_EFFORT_HIGHEST = "highest";
-
-// Narrow an `unknown` (e.g. an Agent's harness `config.thinkingEffort`) to a
-// ThinkingEffort, cast-free.
-export function isThinkingEffort(v: unknown): v is ThinkingEffort {
-  return typeof v === "string" && (THINKING_EFFORTS as readonly string[]).includes(v);
-}
-
-// A model the daemon can route (configured + routable). `model` is the
-// "provider/modelId" string sent as a Run's modelOverride / agent pref.
-// Mirrors the daemon's AvailableModel wire shape (GET /api/models).
-export type AvailableModel = {
-  provider: string;
-  modelId: string;
-  model: string;
-  label?: string;
-  // Supported thinking-effort levels (always includes "off").
-  efforts: ThinkingEffort[];
+export type KitCapabilityEntry = {
+  kind: KitCapabilityKind;
+  name: string;
+  description: string;
+  group: string;
+  deployable: boolean;
+  blockedReason?: string;
 };
 
-// Which configured models actually take effect for a given Agent Backend, so a
-// UI can constrain its model picker rather than present an incoherent
-// backend+model pair (e.g. claude-code + an openai model). Each vendor SDK is
-// scoped to its own provider's models: `claude-code` forwards anthropic models;
-// `codex` forwards openai-codex models. A null backend (unresolved) shows all.
-export function forwardableModels(
-  models: AvailableModel[],
-  backend: AgentBackend | null,
-): AvailableModel[] {
-  if (backend === null) return models;
-  if (backend === "claude-code") return models.filter((m) => m.provider === "anthropic");
-  if (backend === "codex") return models.filter((m) => m.provider === "openai-codex");
-  return [];
-}
+export type KitPresetSummary = {
+  name: string;
+  description: string;
+  defaultAgents: KitDeployTarget[];
+  capabilities: {
+    instructions: string[];
+    skills: string[];
+    agents: string[];
+    plugins: string[];
+    bundles: string[];
+  };
+};
 
-// ─── Threads + Runs ────────────────────────────────────────────────────
+export type KitCatalogProblem = { kind: string; name: string; problem: string };
 
-// Canonical ContentBlock lives in the daemon's lib/messages. The UI imports it
-// directly (rather than mirroring) so a new block kind added on the server
-// surfaces as a TypeScript error in the UI's discriminated `renderBlock`
-// switches — no silent drift.
-import type { ContentBlock } from "../../daemon/src/lib/messages.ts";
+export type KitCatalog = {
+  entries: KitCapabilityEntry[];
+  presets: KitPresetSummary[];
+  problems: KitCatalogProblem[];
+};
+
+export type KitSyncStatusState = "up_to_date" | "check_failed" | "rate_limited";
+
+export type KitSyncStatus = {
+  state: KitSyncStatusState;
+  sha: string | null;
+  fetchedAt: number | null;
+  errorReason?: string;
+  rateLimitReset?: number;
+};
+
+export type KitLedger = {
+  kitVersion: string;
+  agents: string[];
+  skills: { name: string }[];
+  agentDefs: { name: string }[];
+  instructions: { name: string }[];
+  plugins: { name: string }[];
+  bundles: { name: string; pin: string | null }[];
+};
+
+export type KitState = { sync: KitSyncStatus; ledger: KitLedger | null };
+
+export type KitSelection = {
+  presets: string[];
+  add: {
+    instructions: string[];
+    skills: string[];
+    agents: string[];
+    plugins: string[];
+    bundles: string[];
+  };
+  remove: {
+    instructions: string[];
+    skills: string[];
+    agents: string[];
+    plugins: string[];
+    bundles: string[];
+  };
+  targets: KitDeployTarget[];
+};
+
+export type KitDiffEntry = {
+  kind: KitCapabilityKind;
+  name: string;
+  change: "added" | "removed" | "changed";
+  replacesUserFile?: boolean;
+};
+
+export type KitDeployDiff = { entries: KitDiffEntry[] };
+
+export type KitKindResult = {
+  kind: KitCapabilityKind;
+  applied: string[];
+  failed: { name: string; error: string }[];
+  pruneHint?: string[];
+};
+
+export type KitDeployResult = {
+  kitSha: string | null;
+  perKind: KitKindResult[];
+  pruned: { kind: KitCapabilityKind; name: string }[];
+  targets: KitDeployTarget[];
+};
+
 import type { Preferences } from "./theming/index.ts";
-
-export type { ContentBlock };
-
-export type ThreadSummary = {
-  id: string;
-  agentId: string;
-  createdAt: number;
-  updatedAt: number;
-  title: string | null;
-  titleSource: "auto" | "manual";
-  archivedAt: number | null;
-  status: "idle" | "running" | "unread" | "failed";
-};
-
-export type ThreadMessage = {
-  id: string;
-  idx: number;
-  role: "user" | "assistant";
-  content: ContentBlock[];
-  createdAt: number;
-};
-
-export type ThreadDetail = ThreadSummary & { messages: ThreadMessage[] };
-
-export type RunInfo = {
-  id: string;
-  threadId: string;
-  agentId: string;
-  model: string;
-  status: "running" | "completed" | "failed" | "cancelled";
-  startedAt: number;
-  endedAt?: number;
-  finishReason?: string;
-  errorCode?: string;
-  errorMessage?: string;
-};
-
-// ─── RunEvent types — match server's runs/types.ts. ─────────────────────
-
-export type BackendStreamEventWire =
-  | { type: "text_start"; blockIndex: number }
-  | { type: "text_delta"; blockIndex: number; delta: string }
-  | { type: "text_end"; blockIndex: number }
-  | { type: "thinking_start"; blockIndex: number }
-  | { type: "thinking_delta"; blockIndex: number; delta: string }
-  | { type: "thinking_end"; blockIndex: number; providerMetadata?: Record<string, unknown> }
-  | { type: "refusal_delta"; delta: string }
-  | { type: "tool_use_start"; blockIndex: number; id: string; name: string }
-  | { type: "tool_use_delta"; blockIndex: number; id: string; delta: string }
-  | { type: "tool_use_end"; blockIndex: number; id: string; args: unknown }
-  | {
-      type: "server_tool";
-      blockIndex: number;
-      id: string;
-      name: string;
-      phase: "start" | "progress" | "result";
-      payload?: unknown;
-    }
-  | {
-      type: "usage";
-      inputTokens: number;
-      outputTokens: number;
-      reasoningTokens?: number;
-      cacheReadTokens?: number;
-      cacheWriteTokens?: number;
-    }
-  | { type: "done"; finishReason: string }
-  | { type: "error"; code: string; message: string; retryable: boolean };
-
-export type RunEventWire =
-  | {
-      type: "run.started";
-      runId: string;
-      threadId: string;
-      agentId: string;
-      model: string;
-      ts: number;
-    }
-  | { type: "model.event"; runId: string; event: BackendStreamEventWire }
-  | {
-      type: "run.completed";
-      runId: string;
-      finishReason: string;
-      finalMessage: ThreadMessage;
-      ts: number;
-    }
-  | {
-      type: "run.failed";
-      runId: string;
-      error: { code: string; message: string };
-      ts: number;
-    }
-  | { type: "run.cancelled"; runId: string; ts: number };
 
 declare global {
   interface Window {
@@ -421,18 +306,6 @@ export async function consumeSSE(
 }
 
 export const api = {
-  listAgents: (cfg: ApiConfig) => call<AgentSummary[]>(cfg, "/api/agents"),
-  getAgent: (cfg: ApiConfig, id: string) => call<AgentDetail>(cfg, `/api/agents/${id}`),
-  patchBindings: (cfg: ApiConfig, id: string, patches: BindingPatch[]) =>
-    call<AgentDetail>(cfg, `/api/agents/${id}/bindings`, {
-      method: "PATCH",
-      body: JSON.stringify({ patches }),
-    }),
-  resetAgent: (cfg: ApiConfig, id: string) =>
-    call<AgentDetail>(cfg, `/api/agents/${id}/reset`, { method: "POST" }),
-  listCapabilities: (cfg: ApiConfig, kind?: CapabilityWire["kind"]) =>
-    call<CapabilityWire[]>(cfg, `/api/capabilities${kind ? `?kind=${kind}` : ""}`),
-
   // ─── Secrets ─────────────────────────────────────────────────────────
   // Backend-centric auth lives on the readiness projection (getBackendsReadiness
   // below); the all-providers listing has no UI consumer. setApiKey/removeSecret
@@ -444,33 +317,6 @@ export const api = {
     }),
   removeSecret: (cfg: ApiConfig, provider: string) =>
     callVoid(cfg, `/api/secrets/${encodeURIComponent(provider)}`, { method: "DELETE" }),
-
-  // ─── Models + per-agent model preference ─────────────────────────────
-  // Models the user can actually run (configured providers ∩ routable).
-  listModels: (cfg: ApiConfig) => call<AvailableModel[]>(cfg, "/api/models"),
-  // The agent's sticky model + effort defaults; each is null when unset (the
-  // executor then falls back to the harness config.model / config.thinkingEffort).
-  getAgentModelPref: (cfg: ApiConfig, agentId: string) =>
-    call<{ model: string | null; effort: ThinkingEffort | null; backend: AgentBackend | null }>(
-      cfg,
-      `/api/agents/${encodeURIComponent(agentId)}/model-pref`,
-    ),
-  // Merge semantics: omit a field to leave its stored value unchanged. Pass at
-  // least one of { model, effort, backend }. `backend: null` clears the stored
-  // backend default. Apply-to-default widens to the backend axis (OQ-2).
-  setAgentModelPref: (
-    cfg: ApiConfig,
-    agentId: string,
-    patch: { model?: string; effort?: ThinkingEffort; backend?: AgentBackend | null },
-  ) =>
-    call<{ model: string | null; effort: ThinkingEffort | null; backend: AgentBackend | null }>(
-      cfg,
-      `/api/agents/${encodeURIComponent(agentId)}/model-pref`,
-      {
-        method: "PUT",
-        body: JSON.stringify(patch),
-      },
-    ),
 
   // ─── Backends ────────────────────────────────────────────────────────
   // Detected CLI agent backends with health + version (ADR-0016). Re-probes
@@ -487,94 +333,6 @@ export const api = {
       method: "POST",
     }),
 
-  // ─── Threads ────────────────────────────────────────────────────────
-  listThreads: (cfg: ApiConfig) => call<ThreadSummary[]>(cfg, "/api/threads"),
-  createThread: (cfg: ApiConfig, agentId: string) =>
-    call<ThreadSummary>(cfg, "/api/threads", {
-      method: "POST",
-      body: JSON.stringify({ agentId }),
-    }),
-  getThread: (cfg: ApiConfig, threadId: string) =>
-    call<ThreadDetail>(cfg, `/api/threads/${encodeURIComponent(threadId)}`),
-  deleteThread: (cfg: ApiConfig, threadId: string) =>
-    callVoid(cfg, `/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
-  setThreadTitle: (cfg: ApiConfig, threadId: string, title: string) =>
-    call<ThreadSummary>(cfg, `/api/threads/${encodeURIComponent(threadId)}/title`, {
-      method: "PUT",
-      body: JSON.stringify({ title }),
-    }),
-  // The Thread's conversation-scope model/effort pick (ADR-0015 S1); each is
-  // null when unset (the executor then falls back to the agent default). May be
-  // a symbolic token ("latest"/"highest").
-  getThreadScope: (cfg: ApiConfig, threadId: string) =>
-    call<{ model: string | null; effort: string | null; backend: AgentBackend | null }>(
-      cfg,
-      `/api/threads/${encodeURIComponent(threadId)}/scope`,
-    ),
-  // Use-here: applies to THIS Thread only (sticks for its later Runs), without
-  // touching the agent default. Merge semantics — omit a field to leave it
-  // unchanged; pass null to clear an axis. Apply-to-default is the separate
-  // setAgentModelPref act. The backend axis is Worker-only (the daemon rejects a
-  // non-native backend for Root / Agent Manager).
-  setThreadScope: (
-    cfg: ApiConfig,
-    threadId: string,
-    patch: { model?: string | null; effort?: ThinkingEffort | null; backend?: AgentBackend | null },
-  ) =>
-    call<{ model: string | null; effort: string | null; backend: AgentBackend | null }>(
-      cfg,
-      `/api/threads/${encodeURIComponent(threadId)}/scope`,
-      {
-        method: "PUT",
-        body: JSON.stringify(patch),
-      },
-    ),
-  archiveThread: (cfg: ApiConfig, threadId: string) =>
-    call<ThreadSummary>(cfg, `/api/threads/${encodeURIComponent(threadId)}/archive`, {
-      method: "POST",
-    }),
-  markThreadRead: (cfg: ApiConfig, threadId: string) =>
-    callVoid(cfg, `/api/threads/${encodeURIComponent(threadId)}/read`, { method: "POST" }),
-  markThreadUnread: (cfg: ApiConfig, threadId: string) =>
-    callVoid(cfg, `/api/threads/${encodeURIComponent(threadId)}/unread`, { method: "POST" }),
-  listRuns: (cfg: ApiConfig, threadId: string) =>
-    call<RunInfo[]>(cfg, `/api/threads/${encodeURIComponent(threadId)}/runs`),
-
-  // ─── Runs ───────────────────────────────────────────────────────────
-  /**
-   * Start a Run on a thread. SSE: events are typed; consumer dispatches on
-   * `event.type` to apply lifecycle / model deltas to local state.
-   */
-  startRun: (
-    cfg: ApiConfig,
-    threadId: string,
-    userMessage: ContentBlock[],
-    onEvent: (event: RunEventWire) => void,
-    options: { modelOverride?: string; effortOverride?: ThinkingEffort; signal?: AbortSignal } = {},
-  ) => {
-    const body: {
-      userMessage: ContentBlock[];
-      modelOverride?: string;
-      effortOverride?: ThinkingEffort;
-    } = { userMessage };
-    if (options.modelOverride) body.modelOverride = options.modelOverride;
-    if (options.effortOverride) body.effortOverride = options.effortOverride;
-    return consumeSSE(
-      cfg,
-      `/api/threads/${encodeURIComponent(threadId)}/runs`,
-      { method: "POST", body: JSON.stringify(body) },
-      (_eventName, data) => {
-        // `data` is the JSON-parsed RunEvent; `event:` name matches `data.type`.
-        onEvent(data as RunEventWire);
-      },
-      options.signal,
-    );
-  },
-  cancelRun: (cfg: ApiConfig, runId: string) =>
-    callVoid(cfg, `/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
-  getRun: (cfg: ApiConfig, runId: string) =>
-    call<RunInfo>(cfg, `/api/runs/${encodeURIComponent(runId)}`),
-
   // ─── Appearance ────────────────────────────────────────────────────
   // Theming module talks to this through a thin wrapper in
   // `theming-hive-persistence.ts`. The wire shape IS the theming
@@ -586,5 +344,29 @@ export const api = {
     call<Preferences>(cfg, "/api/appearance", {
       method: "PUT",
       body: JSON.stringify(prefs),
+    }),
+
+  // ─── Kit (capability deploy-manager) ─────────────────────────────────
+  // Full catalog from the synced Mirror (entries + presets + load problems).
+  getKitCatalog: (cfg: ApiConfig) => call<KitCatalog>(cfg, "/api/kit/catalog"),
+  // Sync status (freshness state + SHA) + the Deployment Ledger.
+  getKitState: (cfg: ApiConfig) => call<KitState>(cfg, "/api/kit/state"),
+  // Check for updates: fetch the latest Kit into the Mirror. Returns the
+  // resulting sync state; the catalog/state queries are re-fetched after.
+  syncKit: (cfg: ApiConfig) =>
+    call<{ status: "synced" | "unchanged"; state: KitSyncStatus }>(cfg, "/api/kit/sync", {
+      method: "POST",
+    }),
+  // Compute the Deploy Diff for a Selection (added/removed/changed).
+  kitDiff: (cfg: ApiConfig, selection: KitSelection) =>
+    call<KitDeployDiff>(cfg, "/api/kit/diff", {
+      method: "POST",
+      body: JSON.stringify(selection),
+    }),
+  // Apply a Selection. Returns the per-kind result.
+  kitDeploy: (cfg: ApiConfig, selection: KitSelection) =>
+    call<KitDeployResult>(cfg, "/api/kit/deploy", {
+      method: "POST",
+      body: JSON.stringify(selection),
     }),
 };

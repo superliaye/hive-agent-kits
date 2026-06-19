@@ -1,32 +1,13 @@
-// SSE client. Subscribes to /api/events and invalidates TanStack Query
-// caches based on event source.
+// The daemon no longer exposes an /api/events SSE channel (removed in the
+// agent-system teardown). Kit sync/deploy freshness is poll-based: views drive
+// refresh via react-query invalidation, not server-pushed events.
+//
+// This stays a no-op so main.tsx keeps a stable mount/unmount lifecycle hook
+// to wire future event streaming into without touching the composition root.
 
 import type { QueryClient } from "@tanstack/react-query";
 import type { ApiConfig } from "./api.ts";
 
-export function startEventStream(cfg: ApiConfig, qc: QueryClient): () => void {
-  if (!cfg.token) return () => {};
-  const url = `${cfg.baseUrl}/api/events?token=${encodeURIComponent(cfg.token)}`;
-  const source = new EventSource(url);
-
-  source.addEventListener("catalog.harness.updated", () => {
-    qc.invalidateQueries({ queryKey: ["agents"] });
-  });
-  source.addEventListener("catalog.agent.created", () => {
-    qc.invalidateQueries({ queryKey: ["agents"] });
-  });
-  source.addEventListener("catalog.agent.destroyed", () => {
-    qc.invalidateQueries({ queryKey: ["agents"] });
-  });
-  source.addEventListener("registry.capability.registered", () => {
-    qc.invalidateQueries({ queryKey: ["capabilities"] });
-  });
-  source.addEventListener("registry.capability.unregistered", () => {
-    qc.invalidateQueries({ queryKey: ["capabilities"] });
-  });
-  source.addEventListener("registry.capability.changed", () => {
-    qc.invalidateQueries({ queryKey: ["capabilities"] });
-  });
-
-  return () => source.close();
+export function startEventStream(_cfg: ApiConfig, _qc: QueryClient): () => void {
+  return () => {};
 }

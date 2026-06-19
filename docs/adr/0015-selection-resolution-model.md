@@ -1,7 +1,7 @@
 # Selection resolution: per-conversation scope, apply-to-default promotion, symbolic defaults, and backend as a user axis
 
 ---
-status: proposed
+status: Superseded by ADR-0021
 supersedes: parts of ADR-0013
 ---
 

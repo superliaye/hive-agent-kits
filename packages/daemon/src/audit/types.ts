@@ -1,17 +1,6 @@
 // Audit module types per ADR-0004.
 
-export type ModuleSource =
-  | "run"
-  | "secrets"
-  | "mcp"
-  | "memory"
-  | "registry"
-  | "catalog"
-  | "lifecycle"
-  | "backend"
-  | "config"
-  | "agent-prefs"
-  | "thread";
+export type ModuleSource = "config" | "secrets" | "backend" | "deploy";
 
 export type AuditEvent = {
   id: string;

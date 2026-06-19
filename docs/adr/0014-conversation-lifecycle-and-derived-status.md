@@ -1,5 +1,8 @@
 # Conversation lifecycle and derived Thread status
 
+status: Superseded by ADR-0021 — the Thread/conversation lifecycle is deleted
+with the agent-running stack (parked as deferred #2).
+
 ## What this ADR records
 
 How a **Thread** (a _conversation_ in the UI) is shaped over its life and surfaced for display: that there is no context-reset (only an archival lifecycle), how its title is chosen and made sticky, how its four-state status is derived rather than stored, how the Thread list is paged and sorted, how stale Threads are auto-archived, and which Thread events are audited versus traced. These decisions landed across the threads-daemon phases; this ADR captures the trade-offs behind them.

@@ -18,17 +18,11 @@ async function main(): Promise<void> {
     {
       module: "daemon",
       port: server.port,
-      capabilities: server.registry.list().length,
-      agents: server.catalog.list().length,
     },
     "daemon listening",
   );
   // Also surface to stdout for a human watching the terminal in dev.
-  console.log(
-    `[daemon] listening on http://127.0.0.1:${server.port} | ` +
-      `registry=${server.registry.list().length} capabilities, ` +
-      `catalog=${server.catalog.list().length} agents`,
-  );
+  console.log(`[daemon] listening on http://127.0.0.1:${server.port}`);
 }
 
 function parsePort(raw: string): number {

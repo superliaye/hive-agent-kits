@@ -6,13 +6,8 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect";
 import type { Hono } from "hono";
-import {
-  AgentModelPrefsLive,
-  type AgentModelPrefsSvc,
-  AgentModelPrefs as AgentModelPrefsTag,
-} from "../agent-prefs/index.ts";
 import { AuditLive, Audit as AuditTag } from "../audit/effect/audit-live.ts";
 import type { Audit } from "../audit/index.ts";
 import { wireSubscriptions } from "../audit/subscriptions.ts";
@@ -30,14 +25,6 @@ import {
   type BackendReadinessSvc,
   BackendReadinessService as BackendReadinessTag,
 } from "../backend-readiness/index.ts";
-import {
-  BindingResolver,
-  BindingResolverLive,
-  createRegistry,
-  type Registry,
-} from "../capabilities/index.ts";
-import { CatalogLive, Catalog as CatalogTag } from "../catalog/effect/catalog-live.ts";
-import type { Catalog } from "../catalog/index.ts";
 import { ConfigLive, Config as ConfigTag } from "../config/effect/config-live.ts";
 import {
   APP_CONFIG_DEFAULTS,
@@ -45,31 +32,13 @@ import {
   AppConfigSchema,
   type Config,
 } from "../config/index.ts";
-import { HiveDb, HiveDbLive } from "../db/effect/hive-db-live.ts";
+import { Kit, KitLive, type KitSvc } from "../kit/index.ts";
+import { buildKitRoutes, type RunKit } from "../kit/routes.ts";
+import { productionFetch } from "../kit/sync.ts";
 import { createLogger, log, setLogger } from "../lib/log.ts";
-import { files, runtime as runtimePaths, runtimeRoot } from "../lib/paths.ts";
-import { createDefaultSkillFsCopy } from "../runs/backends/skills.ts";
-import {
-  type AgentLifecyclePort,
-  type BackendAdapters,
-  type CapabilityInvokePort,
-  createCapabilityMcpServer,
-  createClaudeAdapter,
-  createClaudeSkillProjector,
-  createCodexAdapter,
-  createCodexSkillProjector,
-  createRunExecutor,
-  createRunsStore,
-  type RunExecutor,
-  type RunnableCatalogPort,
-  runnableCatalog,
-  type SkillProjectionPort,
-} from "../runs/index.ts";
+import { files, runtimeRoot } from "../lib/paths.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
 import type { Secrets } from "../secrets/index.ts";
-import { autoArchiveSweep } from "../threads/auto-archive.ts";
-import { ThreadsLive, Threads as ThreadsTag } from "../threads/effect/threads-live.ts";
-import type { Threads } from "../threads/index.ts";
 import { buildRoutes } from "./routes.ts";
 
 export type ServerMode = "file" | "memory";
@@ -84,23 +53,15 @@ export type CreateServerOptions = {
   // `daemon.httpPort` — used by e2e tests for isolation. Bypasses Config so
   // a stale config.yaml value cannot fight the explicit choice.
   port?: number;
-  // TEST SEAM (memory mode): inject fake backend adapters so a route test can
-  // drive a Run without spawning a real vendor SDK. Production builds the real
-  // Claude/Codex adapters; this override replaces them when present.
-  adapters?: BackendAdapters;
 };
 
 export type ServerHandles = {
   app: Hono;
   audit: Audit;
   config: Config<AppConfig>;
-  registry: Registry;
-  catalog: Catalog;
   secrets: Secrets;
-  agentModelPrefs: AgentModelPrefsSvc;
-  threads: Threads;
-  runs: RunExecutor;
   backendProbe: BackendProbeSvc;
+  kit: KitSvc;
   token: string;
   port: number;
   dispose(): Promise<void>;
@@ -114,13 +75,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // Install the trace logger before any other module emits a log line.
   setLogger(createLogger({ mode: opts.mode === "memory" ? "silent" : "file" }));
 
-  // The six migrated modules compose into ONE root Layer owned by a single
+  // The surviving modules compose into ONE root Layer owned by a single
   // ManagedRuntime (ADR-0011). The `mode`-driven adapter choice stays here at
   // the composition root, feeding each Live constructor — root configuration,
-  // not a leaked requirement. Threads is built over the SAME `dataLayer` value
-  // (HiveDb), which stays exposed for the unmigrated Runs path; binding it once
-  // means ManagedRuntime memoizes ONE hive.db connection shared by both.
-  const dbPath = opts.mode === "memory" ? ":memory:" : files.hiveDb();
+  // not a leaked requirement.
   const configOpts =
     opts.mode === "memory"
       ? ({ mode: "memory", initial: APP_CONFIG_DEFAULTS, schema: AppConfigSchema } as const)
@@ -134,22 +92,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     opts.mode === "memory"
       ? ({ mode: "memory" } as const)
       : ({ mode: "file", path: files.secrets() } as const);
-  const agentPrefsOpts =
-    opts.mode === "memory"
-      ? ({ mode: "memory" } as const)
-      : ({ mode: "file", path: files.agentModelPrefs() } as const);
-  // Audit keeps its OWN sqlite file (~/.hive/audit.db); never routed onto hive.db.
+  // Audit keeps its OWN sqlite file (~/.hive/audit.db).
   const auditOpts =
     opts.mode === "memory"
       ? ({ mode: "memory" } as const)
       : ({ mode: "file", path: files.auditDb() } as const);
 
-  // Built ahead of the layer build so `BindingResolverLive(registry)` can fold
-  // into `rootLayer` and be discharged off the single composition-root runtime
-  // (no separate throwaway ManagedRuntime for skill resolution).
-  const registry = createRegistry({ watch: opts.mode === "file" });
-
-  const dataLayer = HiveDbLive(dbPath);
   // Memory mode (tests/fast-iter) reports every backend as not installed so
   // booting a server never spawns `claude`/`codex`. File mode uses the real
   // Bun.spawn runner (the module default). The probe and the sibling updater
@@ -157,35 +105,24 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const backendRunnerOpts = opts.mode === "memory" ? ({ runner: notInstalledRunner } as const) : {};
   const backendProbeLayer = BackendProbeLive(backendRunnerOpts);
   const rootLayer = Layer.mergeAll(
-    dataLayer,
     SecretsLive(secretsOpts),
-    AgentModelPrefsLive(agentPrefsOpts),
     ConfigLive(configOpts),
-    CatalogLive({ watch: opts.mode === "file" }),
     AuditLive(auditOpts),
-    ThreadsLive().pipe(Layer.provide(dataLayer)),
     backendProbeLayer,
     // The delegated-update verb lives on this sibling service (OQ-5), depending
     // on `BackendProbe` for the re-probe. Provide the probe layer so the
     // dependency is discharged at the module boundary, not leaked to the root.
     BackendUpdaterLive(backendRunnerOpts).pipe(Layer.provide(backendProbeLayer)),
-    // F2 binding resolver over the in-memory Registry — one composition-root
-    // runtime owns it (P-3), not a second ManagedRuntime.
-    BindingResolverLive(registry),
+    // Kit module (capability deploy-manager). Provides its own deploy-target
+    // port + exec adapter; the production HTTP fetch is the only edge injected.
+    KitLive({ fetch: productionFetch() }),
   );
   const runtime = ManagedRuntime.make(rootLayer);
 
   // The Live acquires are all synchronous, so `runSync` resolves the cached
   // service instances off the one runtime — the same live objects (including
   // their `.events` emitters) every consumer below shares.
-  const hiveDb = runtime.runSync(HiveDb);
   const config: Config<AppConfig> = runtime.runSync(ConfigTag);
-  const catalogSvc = runtime.runSync(CatalogTag);
-  // Project to the legacy `Catalog` shape with a no-op `dispose` — `runtime.dispose()`
-  // owns catalog teardown now, same pattern as the Secrets projection below.
-  // (Otherwise the handle keeps a live `dispose()`: an independent teardown the
-  // single root runtime should own.)
-  const catalog: Catalog = { ...catalogSvc, dispose: () => {} };
   const secretsSvc = runtime.runSync(SecretsTag);
   // The resolved SecretsSvc is the legacy `Secrets` surface minus `dispose()`
   // (the runtime owns teardown now). Project the legacy shape so the routes +
@@ -200,24 +137,31 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     status: (provider) => secretsSvc.status(provider),
     dispose: () => {},
   };
-  const agentModelPrefs: AgentModelPrefsSvc = runtime.runSync(AgentModelPrefsTag);
   const backendProbe: BackendProbeSvc = runtime.runSync(BackendProbeTag);
   const backendUpdater: BackendUpdaterSvc = runtime.runSync(BackendUpdaterTag);
   // AuditSvc is exactly the legacy `Audit` surface (attach/query/subscriptions);
   // the DB handle is closed by the layer's release, not exposed on the value.
   const audit: Audit = runtime.runSync(AuditTag);
 
-  // Threads + Runs consume the single Layer-owned `hive.db` handle. Threads
-  // resolves off the root runtime (built over `dataLayer`); Runs still wraps the
-  // raw `hiveDb` handle (unmigrated). Same connection, no second handle.
-  const threads = runtime.runSync(ThreadsTag);
-  const runsStore = createRunsStore(hiveDb);
-  // Boot-time stale-Run recovery: any Run still `running` from a previous
-  // process is flipped to `failed(daemon_restart)`. Per ADR for Part 3.
-  runsStore.markStaleAsFailed();
-  // Boot-time auto-archive sweep: threads idle past the idle window are
-  // archived (system-initiated → trace, never audit).
-  await autoArchiveSweep(threads);
+  // Kit module (capability deploy-manager). Resolved off the single root runtime
+  // like every other live service. `runKit` discharges a Kit Effect to a
+  // Promise<Either>-like for the routes — never throwing the typed error out.
+  const kit: KitSvc = runtime.runSync(Kit);
+  const runKit: RunKit = <A, E>(effect: Effect.Effect<A, E>) =>
+    runtime.runPromiseExit(effect).then((exit) =>
+      Exit.match(exit, {
+        onSuccess: (value): { ok: true; value: A } | { ok: false; error: E } => ({
+          ok: true,
+          value,
+        }),
+        // A typed `Fail` cause squashes to its `E` value; a defect would surface
+        // as the thrown value, which the routes treat as a 500.
+        onFailure: (cause): { ok: true; value: A } | { ok: false; error: E } => ({
+          ok: false,
+          error: Cause.squash(cause) as E,
+        }),
+      }),
+    );
 
   // Boot-time backend availability probe (doctor-style; ADR-0016 detect-not-
   // manage). A system diagnostic → trace, never audit. Fire-and-forget so a
@@ -241,32 +185,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     .catch((err) => {
       log().error({ module: "backend-probe", err }, "backend availability probe failed");
     });
-
-  // SkillProjectionPort adapter: adapt the F2 BindingResolver over the Capability
-  // Registry to the runs-owned port. `resolveSkills` is a synchronous,
-  // never-failing Effect, discharged with runSync at this composition root —
-  // runs/ never imports capabilities concretes. Surfaces `path`/`origin` (the
-  // file-system facts the per-Run skill projector needs). Reached only through
-  // the single composition-root runtime (BindingResolverLive folded into
-  // rootLayer above).
-  const bindingResolver = runtime.runSync(BindingResolver);
-  const skillProjection: SkillProjectionPort = {
-    resolve: (names) =>
-      Effect.runSync(bindingResolver.resolveSkills(names)).resolved.map((s) => ({
-        name: s.name,
-        path: s.path,
-        origin: s.origin,
-      })),
-  };
-
-  // RunnableCatalogPort adapter: the available models the symbolic-default
-  // resolver consumes, assembled by the SINGLE shared `runnableCatalog` helper
-  // (the same globally-ordered list title-gen and `GET /api/models` consume).
-  // The catalog SOURCE is a static per-backend table filtered to available
-  // providers — no live registry. Snapshot per Run/request.
-  const runnableCatalogPort: RunnableCatalogPort = {
-    snapshot: () => runnableCatalog(secrets),
-  };
 
   // Backend Readiness projection: the per-backend health ∩ provider-auth join
   // feeding the Settings "Backends" page. Its deps are adapted HERE onto the
@@ -295,147 +213,65 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     ),
   );
 
-  // The port is resolved here (before the executor) so the capability MCP
-  // endpoint URL both backends connect to is known. Explicit override > Config.
   const port = opts.port ?? config.get("daemon").httpPort;
-  const mcpEndpoint = `http://127.0.0.1:${port}/mcp`;
-
-  // The ONE Hive capability MCP server (spec §unified MCP surface): Memory (stub),
-  // capability invocation over the Registry, and the AM-lifecycle tools over the
-  // Catalog. Served over THIS daemon (mounted on app.all("/mcp") below); both SDK
-  // backends connect by `mcpEndpoint`.
-  const capabilityInvoke: CapabilityInvokePort = {
-    invoke: async (name, _args) => {
-      try {
-        const found = registry.get("tool", name);
-        if (!found) return { content: `unknown capability: ${name}`, isError: true };
-        // The capability exists in the Registry but there is no in-process tool
-        // runner to execute it yet (a follow-up). Report this honestly as an
-        // error rather than a false success.
-        return { content: "cannot run: no in-process tool runtime", isError: true };
-      } catch (err) {
-        return { content: `capability invoke failed: ${String(err)}`, isError: true };
-      }
-    },
-  };
-  const agentLifecycle: AgentLifecyclePort = {
-    createAgent: async (input) => {
-      const created = await catalog.createAgent(input);
-      return { agentId: created.agentId };
-    },
-    updateAgentHarness: async ({ agentId, bindings }) => {
-      const updated = await catalog.updateBindings(agentId, bindings, "agent-manager");
-      return { agentId: updated.agentId };
-    },
-    destroyAgent: async ({ agentId }) => {
-      await catalog.destroyAgent(agentId);
-    },
-  };
-  const capabilityMcp = createCapabilityMcpServer({
-    capabilities: capabilityInvoke,
-    agents: agentLifecycle,
-  });
-
-  // The two SDK backend adapters. Each backend's native skill-projection LAYOUT
-  // lives in its own SkillProjector adapter (beside the adapter); the fs-copy
-  // edge is shared. The adapter's `projectSkills`/`cleanupSkills` callbacks just
-  // dispatch to the projector.
-  const skillFsCopy = createDefaultSkillFsCopy();
-  const claudeSkillProjector = createClaudeSkillProjector({
-    copy: skillFsCopy,
-    paths: {
-      pluginRoot: runtimePaths.backendPluginRoot,
-      pluginSkillsDir: runtimePaths.backendPluginSkillsDir,
-    },
-  });
-  const codexSkillProjector = createCodexSkillProjector({ copy: skillFsCopy });
-  const claudeAdapter = createClaudeAdapter({
-    projectSkills: async (invocation) =>
-      (await claudeSkillProjector.project(invocation)).pluginPath,
-    cleanupSkills: (invocation) => claudeSkillProjector.cleanup(invocation),
-  });
-  const codexAdapter = createCodexAdapter({
-    projectSkills: async (invocation) => {
-      await codexSkillProjector.project(invocation);
-    },
-  });
-
-  const runs = createRunExecutor({
-    threads,
-    runs: runsStore,
-    catalog,
-    secrets,
-    // Production wires the real SDK adapters; a memory-mode test may inject fakes.
-    adapters: opts.adapters ?? { "claude-code": claudeAdapter, codex: codexAdapter },
-    mcpEndpoint,
-    prefs: agentModelPrefs,
-    runnableCatalog: runnableCatalogPort,
-    skillProjection,
-  });
 
   const dispose = wireSubscriptions<AppConfig>(audit, {
     config,
-    registry,
-    catalog,
     secrets,
-    agentPrefs: agentModelPrefs,
-    threads,
-    runs,
-    // Dedicated `backend` audit source — the executor's SDK-backend run +
-    // tool-observed emitter.
-    backend: { events: runs.backendEvents },
-    // Same `backend` source, second emitter — the user-triggered delegated
-    // CLI-update action (the sibling BackendUpdater service, OQ-5).
+    // Same `backend` source — the user-triggered delegated CLI-update action
+    // (the sibling BackendUpdater service, OQ-5).
     backendUpdate: { events: backendUpdater.events },
+    // Dedicated `deploy` source — a Kit deploy is a user action (refs-only).
+    deploy: { events: kit.events },
   });
-
-  await registry.start();
-  await catalog.start();
 
   const token = opts.token ?? (opts.mode === "memory" ? "test-token" : ensureToken());
 
   const app = buildRoutes({
-    registry,
-    catalog,
     audit,
-    threads,
-    runs,
     secrets,
-    agentModelPrefs,
     backendProbe,
     backendReadiness,
     backendUpdater,
     config,
     token,
-    runnableCatalog: runnableCatalogPort,
   });
 
-  // Mount the capability MCP server on the daemon (local HTTP). Both SDK
-  // backends connect to `${mcpEndpoint}`. Auth-exempt: it is bound to 127.0.0.1
-  // and consumed by the daemon's own child SDK processes.
-  app.all("/mcp", (c) => capabilityMcp.handle(c.req.raw));
+  // Kit deploy-manager routes, mounted additively behind the surviving server.
+  app.route("/", buildKitRoutes(kit, runKit));
+
+  // Auto fetch-on-launch: a NON-BLOCKING sync-check. A failure is traced + folds
+  // into the typed sync status (check_failed/rate_limited), never fatal and never
+  // reported as "up to date".
+  runKit(kit.sync())
+    .then((res) => {
+      if (res.ok) {
+        log().info({ module: "kit", status: res.value.status }, "kit launch sync-check complete");
+      } else {
+        log().warn(
+          { module: "kit", reason: (res.error as { reason?: string }).reason },
+          "kit launch sync-check failed (non-fatal)",
+        );
+      }
+    })
+    .catch((err) => {
+      log().error({ module: "kit", err: String(err) }, "kit launch sync-check threw");
+    });
 
   return {
     app,
     audit,
     config,
-    registry,
-    catalog,
     secrets,
-    agentModelPrefs,
-    threads,
-    runs,
     backendProbe,
+    kit,
     token,
     port,
     async dispose() {
       dispose();
-      await capabilityMcp.dispose();
-      registry.dispose();
       // ONE teardown: releases Config (watcher + ref scope), Secrets (no-op),
-      // Catalog (file watchers), Audit ($client.close), and HiveDb
-      // ($client.close) — each exactly once via Layer memoization. This also
-      // closes the previously-leaked hive.db and audit.db handles.
+      // Audit ($client.close), and the backend modules — each exactly once via
+      // Layer memoization.
       await runtime.dispose();
     },
   };

@@ -44,14 +44,14 @@ describe("AuditLive", () => {
     try {
       const svc = runtime.runSync(Audit);
       const emitter = new TypedEmitter<TestEvents>();
-      svc.attach("run", emitter, normalizer);
+      svc.attach("backend", emitter, normalizer);
       await emitter.emit("thing.happened", { id: "abc" });
 
       const rows = await svc.query({});
       expect(rows).toHaveLength(1);
-      expect(rows[0]?.source).toBe("run");
+      expect(rows[0]?.source).toBe("backend");
       expect(rows[0]?.payload).toEqual({ id: "abc" });
-      expect(svc.subscriptions()).toEqual(["run"]);
+      expect(svc.subscriptions()).toEqual(["backend"]);
     } finally {
       await runtime.dispose();
     }
