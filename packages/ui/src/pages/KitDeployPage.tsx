@@ -71,41 +71,22 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     queryFn: () => api.getKitState(apiConfig),
   });
 
-  // Selection state: preset names, per-kind individual add/remove toggles,
-  // target CLIs. Seeded by a preset; toggles layer on top.
-  const [presets, setPresets] = useState<string[]>([]);
-  const [add, setAdd] = useState<KitSelection["add"]>(emptyCaps());
-  const [remove, setRemove] = useState<KitSelection["remove"]>(emptyCaps());
+  // The concrete per-kind selected name set is the single source of truth.
+  // Presets are a convenience tool over it (seed / clear / active-overview), not
+  // stored selection — there is no preset provenance to persist (the Ledger
+  // records resolved names only), so a preset reads "active" purely by whether
+  // all its capabilities are currently selected.
+  const [selected, setSelected] = useState<KitSelection["add"]>(emptyCaps());
   const [targets, setTargets] = useState<KitDeployTarget[]>(["claude"]);
 
   const catalog = catalogQuery.data;
   const state = stateQuery.data;
 
-  // The concrete per-kind selected name set (preset seed + add − remove).
-  const selected = useMemo(() => {
-    const seed = emptyCaps();
-    if (catalog) {
-      for (const pn of presets) {
-        const preset = catalog.presets.find((p) => p.name === pn);
-        if (!preset) continue;
-        for (const k of KINDS) {
-          const cap = KIND_TO_CAP[k];
-          seed[cap].push(...preset.capabilities[cap]);
-        }
-      }
-    }
-    const out = emptyCaps();
-    for (const k of KINDS) {
-      const cap = KIND_TO_CAP[k];
-      const removed = new Set(remove[cap]);
-      out[cap] = Array.from(new Set([...seed[cap], ...add[cap]])).filter((n) => !removed.has(n));
-    }
-    return out;
-  }, [catalog, presets, add, remove]);
-
+  // Wire selection: presets/remove stay empty — the resolved `selected` set is
+  // sent as `add`, which the daemon resolves identically (presets ∪ add − remove).
   const selection: KitSelection = useMemo(
-    () => ({ presets, add, remove, targets }),
-    [presets, add, remove, targets],
+    () => ({ presets: [], add: selected, remove: emptyCaps(), targets }),
+    [selected, targets],
   );
 
   // On-disk self-check (Feature 1/2): runs on load and is re-fetched after every
@@ -134,17 +115,17 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     };
   }, [state]);
 
-  // Seed the working selection from the deployed Ledger — the single source of
-  // truth — once the state query first resolves, so the page opens reflecting
-  // what is actually deployed rather than blank. User edits then layer on top;
-  // the guard keeps a post-deploy refetch from clobbering those edits.
+  // Seed the working selection from the deployed Ledger once the state query
+  // first resolves, so the page opens reflecting what is actually deployed rather
+  // than blank. User edits then layer on top; the guard keeps a post-deploy
+  // refetch from clobbering those edits.
   const seededRef = useRef(false);
   useEffect(() => {
     if (seededRef.current || !stateQuery.isSuccess) return;
     seededRef.current = true;
     const ledger = stateQuery.data?.ledger;
     if (!ledger) return;
-    setAdd({
+    setSelected({
       instructions: ledger.instructions.map((e) => e.name),
       skills: ledger.skills.map((e) => e.name),
       agents: ledger.agentDefs.map((e) => e.name),
@@ -194,11 +175,40 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     };
   }, [deployPending]);
 
+  // A preset is just a tool over the selection: clicking an inactive preset
+  // selects all its capabilities; clicking an active one (all selected)
+  // deselects them — except any also covered by another still-active preset, so
+  // shared capabilities survive and that other preset stays active.
   function togglePreset(name: string): void {
-    setPresets((cur) => (cur.includes(name) ? cur.filter((p) => p !== name) : [...cur, name]));
-    // Reset manual overrides when the preset seed changes, so the seed is authoritative.
-    setAdd(emptyCaps());
-    setRemove(emptyCaps());
+    if (!catalog) return;
+    const preset = catalog.presets.find((p) => p.name === name);
+    if (!preset) return;
+    const allPresets = catalog.presets;
+    setSelected((cur) => {
+      if (!presetActive(preset, cur)) {
+        const next = emptyCaps();
+        for (const k of KINDS) {
+          const cap = KIND_TO_CAP[k];
+          next[cap] = Array.from(new Set([...cur[cap], ...preset.capabilities[cap]]));
+        }
+        return next;
+      }
+      const keep = emptyCapSets();
+      for (const other of allPresets) {
+        if (other.name === name || !presetActive(other, cur)) continue;
+        for (const k of KINDS) {
+          const cap = KIND_TO_CAP[k];
+          for (const n of other.capabilities[cap]) keep[cap].add(n);
+        }
+      }
+      const next = emptyCaps();
+      for (const k of KINDS) {
+        const cap = KIND_TO_CAP[k];
+        const drop = new Set(preset.capabilities[cap].filter((n) => !keep[cap].has(n)));
+        next[cap] = cur[cap].filter((n) => !drop.has(n));
+      }
+      return next;
+    });
   }
 
   function toggleTarget(t: KitDeployTarget): void {
@@ -211,24 +221,15 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     });
   }
 
-  function toggleIndividual(kind: KitCapabilityKind, name: string, isSeeded: boolean): void {
+  function toggleIndividual(kind: KitCapabilityKind, name: string): void {
     const cap = KIND_TO_CAP[kind];
-    const isSelected = selected[cap].includes(name);
-    if (isSelected) {
-      // Deselect: if seeded, push to remove; else drop from add.
-      if (isSeeded) {
-        setRemove((cur) => ({ ...cur, [cap]: Array.from(new Set([...cur[cap], name])) }));
-      } else {
-        setAdd((cur) => ({ ...cur, [cap]: cur[cap].filter((n) => n !== name) }));
-      }
-    } else {
-      // Select: drop from remove if present, else push to add.
-      if (remove[cap].includes(name)) {
-        setRemove((cur) => ({ ...cur, [cap]: cur[cap].filter((n) => n !== name) }));
-      } else {
-        setAdd((cur) => ({ ...cur, [cap]: Array.from(new Set([...cur[cap], name])) }));
-      }
-    }
+    setSelected((cur) => {
+      const has = cur[cap].includes(name);
+      return {
+        ...cur,
+        [cap]: has ? cur[cap].filter((n) => n !== name) : [...cur[cap], name],
+      };
+    });
   }
 
   const fresh = freshnessOf(state?.sync.state);
@@ -282,7 +283,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
             <button
               type="button"
               key={p.name}
-              className={`badge kit-preset ${presets.includes(p.name) ? "active" : ""}`}
+              className={`badge kit-preset ${presetActive(p, selected) ? "active" : ""}`}
               onClick={() => togglePreset(p.name)}
               title={p.description}
             >
@@ -337,8 +338,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               selected={new Set(selected[KIND_TO_CAP[kind]])}
               deployed={deployed[kind]}
               onDisk={onDisk[kind]}
-              onToggle={(name, seeded) => toggleIndividual(kind, name, seeded)}
-              seededNames={seededNames(catalog?.presets ?? [], presets, kind)}
+              onToggle={(name) => toggleIndividual(kind, name)}
             />
           );
         })}
@@ -354,15 +354,13 @@ function KindSection({
   deployed,
   onDisk,
   onToggle,
-  seededNames,
 }: {
   kind: KitCapabilityKind;
   entries: KitCapabilityEntry[];
   selected: Set<string>;
   deployed: Set<string>;
   onDisk: Map<string, KitVerifyStatus>;
-  onToggle: (name: string, seeded: boolean) => void;
-  seededNames: Set<string>;
+  onToggle: (name: string) => void;
 }): JSX.Element {
   // Group by @-namespace within the kind.
   const groups = useMemo(() => {
@@ -397,7 +395,7 @@ function KindSection({
                 type="button"
                 key={`${group}/${e.name}`}
                 className={`kit-row ${isSelected ? "selected" : ""} ${e.deployable ? "" : "blocked"}`}
-                onClick={() => e.deployable && onToggle(e.name, seededNames.has(e.name))}
+                onClick={() => e.deployable && onToggle(e.name)}
                 disabled={!e.deployable}
                 data-testid={`kit-row-${kind}-${e.name}`}
               >
@@ -542,20 +540,34 @@ function collapseVerify(
   return out;
 }
 
-function seededNames(
-  presets: { name: string; capabilities: KitSelection["add"] }[],
-  selectedPresets: string[],
-  kind: KitCapabilityKind,
-): Set<string> {
-  const cap = KIND_TO_CAP[kind];
-  const out = new Set<string>();
-  for (const pn of selectedPresets) {
-    const p = presets.find((x) => x.name === pn);
-    if (p) for (const n of p.capabilities[cap]) out.add(n);
+// A preset is active iff it has at least one capability and every one is in the
+// current selection. Empty presets never read active (nothing to reflect).
+function presetActive(
+  preset: { capabilities: KitSelection["add"] },
+  selected: KitSelection["add"],
+): boolean {
+  let any = false;
+  for (const k of KINDS) {
+    const cap = KIND_TO_CAP[k];
+    const sel = new Set(selected[cap]);
+    for (const n of preset.capabilities[cap]) {
+      any = true;
+      if (!sel.has(n)) return false;
+    }
   }
-  return out;
+  return any;
 }
 
 function emptyCaps(): KitSelection["add"] {
   return { instructions: [], skills: [], agents: [], plugins: [], bundles: [] };
+}
+
+function emptyCapSets(): Record<keyof KitSelection["add"], Set<string>> {
+  return {
+    instructions: new Set(),
+    skills: new Set(),
+    agents: new Set(),
+    plugins: new Set(),
+    bundles: new Set(),
+  };
 }
