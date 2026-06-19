@@ -1340,6 +1340,19 @@ pre.config {
   align-items: center;
   gap: 6px;
 }
+/* Transient affordance after Reset overrides — recover the cleared config. */
+.appearance-undo-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--color-fg-default);
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border-default);
+}
 .settings-card-modified-dot {
   width: 8px;
   height: 8px;
