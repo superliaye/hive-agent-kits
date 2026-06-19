@@ -13,7 +13,7 @@
 // One consumer today (AppearanceSettings.tsx). The deepening payoff is
 // separation of concerns, not reuse.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   exportPreferencesWire,
   findNamedTheme,
@@ -88,7 +88,8 @@ export type UseAppearanceSettingsReturn = {
   // Transient UI state (import errors, "Copied!" feedback)
   importError: string | null;
   copyStatus: string | null;
-  /** Set while the post-reset Undo affordance is live; null when dismissed. */
+  /** True while the post-reset Undo affordance is live (snapshot present and
+   * still in its mode); false once dismissed, undone, or after a mode switch. */
   canUndoReset: boolean;
   fileInputRef: React.RefObject<HTMLInputElement>;
   // Mutators
@@ -123,10 +124,13 @@ export function useAppearanceSettings(): UseAppearanceSettingsReturn {
   // Electron bridge is present (web/dev mode disables it).
   const systemAccentAvailable =
     typeof window !== "undefined" && typeof window.__hive?.getSystemAccent === "function";
-  // When system accent is on (and available), the OS accent overrides the
-  // per-mode accent app-wide — the Accent control locks and shows the applied
-  // value, not the dormant override.
-  const accentLockedBySystem = systemAccentAvailable && prefs.useSystemAccent;
+  // Lock the Accent control only when the OS accent is ACTUALLY overriding the
+  // per-mode accent — opted in AND a host accent resolved. Keying on the opt-in
+  // alone would lock while the per-mode override is still what's applied (the
+  // async-boot window, or a host that reports no accent), showing the dormant
+  // override under a "using your system accent" label — the exact confusion the
+  // lock exists to prevent.
+  const accentLockedBySystem = theme.resolved.systemAccentApplied;
 
   const patchPrefs = useCallback(
     (patch: Partial<Preferences>): void => {
@@ -175,6 +179,15 @@ export function useAppearanceSettings(): UseAppearanceSettingsReturn {
       return null;
     });
   }, [patchPrefs]);
+
+  // Cancel a pending auto-dismiss if the panel unmounts inside the undo window,
+  // so the timeout can't setState on an unmounted tree.
+  useEffect(
+    () => () => {
+      if (undoTimerRef.current !== null) window.clearTimeout(undoTimerRef.current);
+    },
+    [],
+  );
 
   const onExportFile = useCallback((): void => {
     const json = theme.exportPreferences();
@@ -246,7 +259,10 @@ export function useAppearanceSettings(): UseAppearanceSettingsReturn {
     }),
     importError,
     copyStatus,
-    canUndoReset: resetSnapshot !== null,
+    // Only offer Undo in the mode the snapshot was taken in — a mode switch
+    // between reset and undo strands the snapshot (undoReset would write to the
+    // other mode, invisible under the current card).
+    canUndoReset: resetSnapshot !== null && resetSnapshot.mode === editingMode,
     fileInputRef,
     patchPrefs,
     patchConfig,

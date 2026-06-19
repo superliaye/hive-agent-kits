@@ -1,8 +1,8 @@
 // Hook-level coverage for useAppearanceSettings that needs a React tree:
 //   - the displayed accent tracks the applied OS accent when system-accent is
-//     locked, and falls back to the per-mode override when it's off (item 1);
+//     locked, and falls back to the per-mode override when it's off;
 //   - resetOverrides() clears the per-mode config and undoReset() restores the
-//     exact pre-reset ThemeConfig (item 2).
+//     exact pre-reset ThemeConfig.
 //
 // Driven through a real ThemeProvider (in-memory persistence + injected
 // systemAccent) so the effective-config math is exercised end to end, not
@@ -135,6 +135,16 @@ describe("useAppearanceSettings — accent display", () => {
     expect(latest().accentLockedBySystem).toBe(false);
     expect(latest().accentDisplayValue).toBe("#ff0000");
   });
+
+  test("system-accent ON but no host accent → NOT locked, shows the per-mode override", async () => {
+    // The async-boot window / a host with no accent: opted in, but nothing
+    // applied. The control must not lock-and-show the dormant override under a
+    // "using your system accent" label.
+    const prefs: Preferences = { ...BASE, useSystemAccent: true };
+    const { latest } = await render(prefs, null);
+    expect(latest().accentLockedBySystem).toBe(false);
+    expect(latest().accentDisplayValue).toBe("#ff0000");
+  });
 });
 
 describe("useAppearanceSettings — reset / undo", () => {
@@ -179,6 +189,29 @@ describe("useAppearanceSettings — reset / undo", () => {
 
     // Exact pre-reset config restored, and the affordance is gone.
     expect(latest().editingConfig).toEqual(before);
+    expect(latest().canUndoReset).toBe(false);
+  });
+
+  test("switching mode after a reset strands the snapshot — canUndoReset goes false", async () => {
+    const prefs: Preferences = {
+      ...BASE,
+      mode: "light",
+      light: { themeId: "default", accent: "#ff0000" },
+    };
+    const { latest } = await render(prefs, null);
+
+    await act(async () => {
+      latest().resetOverrides();
+    });
+    await flush();
+    expect(latest().canUndoReset).toBe(true);
+
+    // Switch the edited mode to dark; the light-mode snapshot no longer applies.
+    await act(async () => {
+      latest().patchPrefs({ mode: "dark" });
+    });
+    await flush();
+    expect(latest().editingMode).toBe("dark");
     expect(latest().canUndoReset).toBe(false);
   });
 

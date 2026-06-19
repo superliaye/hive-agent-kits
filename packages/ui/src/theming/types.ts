@@ -114,6 +114,10 @@ export type ResolvedTheme = {
   resolvedMode: ResolvedMode;
   /** True when `Preferences.mode === "system"` and matchMedia picked the mode. */
   fromSystem: boolean;
+  /** True when the OS accent actually overrode the per-mode accent — i.e. the
+   * user opted in AND a host accent was available. False during the async boot
+   * window before the accent resolves, or when the host reports none. */
+  systemAccentApplied: boolean;
   /** Effective config (the matching mode's ThemeConfig). */
   config: ThemeConfig;
   /** Final token map after defaults + overrides + derived values. */
