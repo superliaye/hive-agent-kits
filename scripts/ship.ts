@@ -62,13 +62,10 @@ run(
   REPO_ROOT,
 );
 
-console.log("\n=== Staging UI + bundled into packages/shell/ ===");
+console.log("\n=== Staging UI into packages/shell/ ===");
 const uiDistTarget = join(REPO_ROOT, "packages", "shell", "ui-dist");
 rmSync(uiDistTarget, { recursive: true, force: true });
 cpSync(join(REPO_ROOT, "packages", "ui", "dist"), uiDistTarget, { recursive: true });
-cpSync(join(REPO_ROOT, "packages", "daemon", "bundled"), join(stagingDir, "bundled"), {
-  recursive: true,
-});
 
 // Stage the shell's production dependencies into its own node_modules so the
 // packaged app bundles them. The workspace's hoisted linker resolves @hive/shell's
@@ -124,11 +121,10 @@ run(
     // Curated app-dir node_modules (prod deps staged above); skip galactus's
     // prune walk, which fails to resolve the hoisted-to-root dep tree.
     "--no-prune",
-    // Renderer/main code lives under packages/shell/ (dist + ui-dist). Bundled
-    // and daemon go alongside as extraResource (sits in Resources/, accessible
-    // via process.resourcesPath).
+    // Renderer/main code lives under packages/shell/ (dist + ui-dist). The
+    // daemon binary goes alongside as extraResource (sits in Resources/,
+    // accessible via process.resourcesPath).
     `--extra-resource=${join(stagingDir, `hive-daemon${EXE}`)}`,
-    `--extra-resource=${join(stagingDir, "bundled")}`,
     // Exclude build artifacts and dev-only files. Plain regex strings
     // without `|`/`$` so the Windows shell doesn't mangle them. Patterns match
     // the path relative to the app dir, rooted with a leading slash.
@@ -150,13 +146,12 @@ run(
 
 console.log("\n=== Verifying build ===");
 const appDir = join(releaseDir, `Hive-${ELECTRON_PLATFORM}-x64`);
-// The three artifacts that make the folder actually runnable: the Electron
-// launcher, the bundled self-contained daemon (in Resources/), and the bundled
-// capabilities the daemon loads. Missing any means a broken ship.
+// The two artifacts that make the folder actually runnable: the Electron
+// launcher and the self-contained daemon binary (in Resources/). Missing
+// either means a broken ship.
 const artifacts: Array<[string, string]> = [
   [`Hive${EXE}`, join(appDir, `Hive${EXE}`)],
   [`resources/hive-daemon${EXE}`, join(appDir, "resources", `hive-daemon${EXE}`)],
-  ["resources/bundled", join(appDir, "resources", "bundled")],
 ];
 let ok = true;
 for (const [label, p] of artifacts) {

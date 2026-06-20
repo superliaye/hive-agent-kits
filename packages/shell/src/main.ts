@@ -2,8 +2,8 @@
 //
 // Two modes:
 //   - Packaged (app.isPackaged) — spawn the bundled daemon binary from
-//     <resources>/hive-daemon[.exe] and point it at <resources>/bundled.
-//     Load the UI from <appPath>/ui-dist/index.html.
+//     <resources>/hive-daemon[.exe] (it syncs the Kit at runtime — no bundled
+//     resource). Load the UI from <appPath>/ui-dist/index.html.
 //   - Dev — spawn `bun run src/server/start.ts` against the repo source.
 //     Load the UI from ui/dist (if built) or the Vite dev URL.
 
@@ -44,6 +44,14 @@ const TOKEN_PATH = join(RUNTIME_ROOT, ".token");
 // Only meaningful in dev mode — packaged apps don't have a repo root.
 const REPO_ROOT = resolve(__dirname, "..", "..");
 const UI_DEV_URL = process.env.HIVE_UI_DEV_URL ?? "http://127.0.0.1:5173";
+
+// Dev only — expose Chrome DevTools Protocol so the electron-visual-loop can
+// attach to the real window (agent-browser connect 9333). Gated on
+// !app.isPackaged so the port can never open in a shipped build, where the
+// renderer holds the daemon bearer token. Must run before app.whenReady().
+if (!app.isPackaged) {
+  app.commandLine.appendSwitch("remote-debugging-port", "9333");
+}
 
 // Packaged-mode resource paths. process.resourcesPath is where
 // electron-builder's `extraResources` writes; app.getAppPath() is the asar.
