@@ -13,7 +13,6 @@
 // One consumer today (AppearanceSettings.tsx). The deepening payoff is
 // separation of concerns, not reuse.
 
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
   exportPreferencesWire,
   findNamedTheme,
@@ -24,7 +23,8 @@ import {
   type ResolvedTheme,
   type ThemeConfig,
   useTheme,
-} from "../theming/index.ts";
+} from "@hive/theming";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // Keys on ThemeConfig that count as "overrides" the user can clear in
 // bulk. themeId is the named-palette selection — NOT an override.

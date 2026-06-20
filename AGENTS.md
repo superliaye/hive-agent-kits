@@ -13,7 +13,7 @@ A capability deploy-manager for the my-agent-kits **Kit**: it syncs the latest K
 
 ## Repo layout
 
-A Bun workspace: deployable units live under `packages/*` — `daemon` (`@hive/daemon`, source in `packages/daemon/src/`; the capability deploy-manager lives in `packages/daemon/src/kit/`), `ui` (`@hive/ui`), `shell` (`@hive/shell`), and `contract` (`@hive/contract`, shared wire types). There is no longer a `packages/daemon/bundled/` (the app syncs the Kit at runtime) and no `capabilities/`, `catalog/`, `runs/`, or `threads/` daemon modules (the agent-running stack is parked as deferred #2 — ADR-0021). Root `package.json` is orchestration-only; one root `bun.lock`. See [ADR-0020](docs/adr/0020-monorepo-workspace-layout.md).
+A Bun workspace: deployable units live under `packages/*` — `daemon` (`@hive/daemon`, source in `packages/daemon/src/`; the capability deploy-manager lives in `packages/daemon/src/kit/`), `ui` (`@hive/ui`), `shell` (`@hive/shell`), `contract` (`@hive/contract`, shared kit + backend wire schemas — Zod, daemon-independent), and `theming` (`@hive/theming`, the portable React theming module that owns the appearance schema; its React-free `@hive/theming/schema` subpath is what the daemon consumes — ADR-0022). There is no longer a `packages/daemon/bundled/` (the app syncs the Kit at runtime) and no `capabilities/`, `catalog/`, `runs/`, or `threads/` daemon modules (the agent-running stack is parked as deferred #2 — ADR-0021). Root `package.json` is orchestration-only; one root `bun.lock`. See [ADR-0020](docs/adr/0020-monorepo-workspace-layout.md).
 
 ## Reference projects (architecture sources, not clones)
 
@@ -81,7 +81,7 @@ Why these invocations, failure modes, and internals: the **`run-app` skill** ([.
 
 ## Checks
 
-- **Type-check:** `bun run typecheck` — fans out `tsc --noEmit` across `daemon`, `ui`, and `shell` (Bun-workspace `--filter`). `contract` is types-only and checked transitively by its consumers. Run a single package with `bun run typecheck` inside it.
+- **Type-check:** `bun run typecheck` — fans out `tsc --noEmit` across every workspace member with a `typecheck` script (`daemon`, `ui`, `shell`, `contract`, `theming`) via Bun-workspace `--filter`. `contract` and `theming` ship runtime Zod schemas (a `zod` dependency) and own their own type-checks and `bun test` suites — they are not types-only. Run a single package with `bun run typecheck` inside it.
 - **Test:** `bun test`. **Lint:** `bun run check` (Biome). **Format:** `bun run format` (Biome, writes).
 
 ## Where decisions live

@@ -16,10 +16,12 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { DeployTarget } from "@hive/contract";
 
-// Per-CLI deploy target. Two values (claude | codex) — distinct from the
-// AgentBackend wire enum (claude-code | codex). Routes to 3 home dirs.
-export type DeployTarget = "claude" | "codex";
+// `DeployTarget` (claude | codex) is the canonical wire enum in @hive/contract —
+// distinct from the AgentBackend enum (claude-code | codex). Re-exported here so
+// kit-internal modules keep importing it alongside the deploy-target port.
+export type { DeployTarget };
 
 export type DeployTargets = {
   claudeHome(): string;

@@ -1,15 +1,24 @@
 // Public API for the theming Module.
 //
 // To use:
-//   1. Import `./theming/tokens.css` (or your equivalent) once at app entry.
+//   1. Import `@hive/theming/tokens.css` (or your equivalent) once at app entry.
 //   2. Build a `Persistence` adapter that satisfies the type.
 //   3. Wrap your app in `<ThemeProvider persistence={...}>`.
 //   4. Consume `useTheme()` in your settings UI.
 //   5. Reference tokens via `var(--color-bg-base)` etc. in your CSS.
 //
-// Portability rule: this directory imports ONLY React + its own siblings.
-// Zero coupling to any app's API client, server, or domain types.
+// Portability rule: this package imports only React + `zod` + its own siblings.
+// Zero coupling to any app's API client, server, or domain types. The appearance
+// schema (the React-free `@hive/theming/schema` subpath) is the SSOT both this
+// UI barrel and the daemon validate against.
 
+export {
+  APPEARANCE_DEFAULTS,
+  AppearanceConfigLenient,
+  AppearanceConfigSchema,
+  ThemeConfigSchema,
+} from "./schema.ts";
+export type { AppearanceConfig } from "./schema.ts";
 export type { CacheStorage, CachingPersistence } from "./caching-persistence.ts";
 export { createCachingPersistence } from "./caching-persistence.ts";
 export type { PreferencesController, PreferencesSnapshot } from "./preferences.ts";

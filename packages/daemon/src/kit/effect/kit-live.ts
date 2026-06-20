@@ -3,6 +3,15 @@
 // deploy audit emitter. Discharges its own dependencies at the module boundary —
 // the composition root provides nothing but the mode-driven options.
 
+import type {
+  Catalog,
+  DeployDiff,
+  DeployResult,
+  KitState,
+  Selection,
+  SyncStatus,
+  VerifyReport,
+} from "@hive/contract";
 import { Context, Effect, Layer } from "effect";
 import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
@@ -15,20 +24,12 @@ import {
   type ExecPort,
 } from "../deploy/adapter.ts";
 import { type DeployInput, runDeploy } from "../deploy/engine.ts";
-import { type Ledger, readLedger } from "../ledger.ts";
+import { readLedger } from "../ledger.ts";
 import { mirrorExists, readProvenance, recoverMirror, sweepStaleTmp } from "../mirror.ts";
 import { computeDiff, resolveSelection } from "../selection.ts";
 import { type HttpFetch, productionFetch, runSync, type SyncOutcome } from "../sync.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
-import type {
-  Catalog,
-  DeployAuditEvents,
-  DeployDiff,
-  DeployResult,
-  Selection,
-  SyncStatus,
-  VerifyReport,
-} from "../types.ts";
+import type { DeployAuditEvents } from "../types.ts";
 import { runVerify } from "../verify.ts";
 import { DeployError, SyncError } from "./errors.ts";
 
@@ -36,7 +37,7 @@ export type KitSvc = {
   // Read the catalog from the Mirror (resilient; problems surfaced).
   catalog(): Catalog;
   // Current sync + ledger state.
-  state(): { sync: SyncStatus; ledger: Ledger | null };
+  state(): KitState;
   // Run a sync; returns the diff-from-deployed delta state via state() after.
   sync(): Effect.Effect<SyncOutcome, SyncError>;
   // Compute the Deploy Diff for a Selection.

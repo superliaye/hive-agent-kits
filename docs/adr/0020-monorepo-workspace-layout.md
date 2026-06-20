@@ -28,15 +28,13 @@ store. Hoisting lays out a flat root `node_modules` the packager can traverse.
   (Electron included) in root `node_modules`. The dev orchestration scripts scope
   their Electron process-kills to the repo root prefix so the sweep finds Electron
   wherever the linker places it.
-- `@hive/contract` (filled by a follow-on effort) becomes the single source of
-  truth for daemon↔UI wire types, replacing hand-mirrors and drift tests. Until
-  then it ships **empty but reserved** (a placeholder `export {}`, no tsconfig,
-  imported by nothing) so the workspace member exists.
-- The interim cross-package seam is a pair of relative reaches, deliberately
-  **type-only / test-only**: `packages/ui/src/api.ts` imports the daemon's
-  `ContentBlock` type, and the daemon's `appearance-shape-drift` test imports the
-  UI's theming types. Neither package declares the other as a dependency; the
-  follow-on `@hive/contract` replaces both reaches.
+- `@hive/contract` is the single source of truth for daemon↔UI kit + backend wire
+  types, replacing the UI hand-mirrors and the wire-mirror drift tests. The
+  appearance schema is owned separately by `@hive/theming` (ADR-0022), which both the
+  daemon and the UI depend on; the daemon consumes its React-free `@hive/theming/schema`
+  subpath. The interim cross-package reaches this layout once carried — the UI mirroring
+  daemon wire types by hand, and a daemon `appearance-shape-drift` test importing the
+  UI's theming types — are gone, replaced by these two shared packages.
 - The tooling scan targets repoint from `src/` to `packages/daemon/src/`:
   `biome.json` `includes`, the no-floating-promises gate's `SRC_ROOT`, and the
   daemon's `tsconfig.json`. The config files (`biome.json`, `tsconfig.base.json`)

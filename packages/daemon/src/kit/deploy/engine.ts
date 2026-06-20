@@ -8,6 +8,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { CapabilityKind, DeployResult, KindResult } from "@hive/contract";
 import { Effect } from "effect";
 import { log } from "../../lib/log.ts";
 import { DeployError } from "../effect/errors.ts";
@@ -19,8 +20,8 @@ import {
   readLedger,
   reconcilePrune,
 } from "../ledger.ts";
+import type { ResolvedSelection } from "../selection.ts";
 import type { DeployTarget, DeployTargets } from "../targets.ts";
-import type { CapabilityKind, DeployResult, KindResult, ResolvedSelection } from "../types.ts";
 import {
   backupIfExists,
   type DeployFsExec,

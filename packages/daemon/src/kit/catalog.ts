@@ -9,16 +9,16 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { parse as yamlParse } from "yaml";
-import { log } from "../lib/log.ts";
-import type { DeployTargets } from "./targets.ts";
 import type {
   CapabilityEntry,
   CapabilityKind,
   Catalog,
   CatalogProblem,
   PresetSummary,
-} from "./types.ts";
+} from "@hive/contract";
+import { parse as yamlParse } from "yaml";
+import { log } from "../lib/log.ts";
+import type { DeployTargets } from "./targets.ts";
 
 type RawEntry = {
   kind: CapabilityKind;

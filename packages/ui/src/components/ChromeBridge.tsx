@@ -5,8 +5,8 @@
 // In a plain browser tab (Vite dev), window.__hive is undefined and this
 // component is a silent no-op.
 
+import { useTheme } from "@hive/theming";
 import { useEffect } from "react";
-import { useTheme } from "../theming/index.ts";
 
 export function ChromeBridge(): null {
   const { resolved } = useTheme();

@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import type { CapabilityKind, Catalog, DeployDiff, DiffEntry, Selection } from "@hive/contract";
 import { readSkillSource } from "./deploy/adapter.ts";
 import {
   hashDeployedAgent,
@@ -28,14 +29,17 @@ import { transformAgent, transformInstructions, transformSkill } from "./deploy/
 import { DeployError } from "./effect/errors.ts";
 import { type Ledger, readLedger } from "./ledger.ts";
 import type { DeployTarget, DeployTargets } from "./targets.ts";
-import type {
-  CapabilityKind,
-  Catalog,
-  DeployDiff,
-  DiffEntry,
-  ResolvedSelection,
-  Selection,
-} from "./types.ts";
+
+// Concrete per-kind name set, resolved from a Selection against the catalog.
+// Daemon-internal (the resolved deploy plan) — not a wire type.
+export type ResolvedSelection = {
+  instructions: string[];
+  skills: string[];
+  agents: string[];
+  plugins: string[];
+  bundles: string[];
+  targets: DeployTarget[];
+};
 
 type CapList = {
   instructions: string[];

@@ -9,11 +9,11 @@
 // mocked.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import type { Persistence, Preferences } from "@hive/theming";
+import { ThemeProvider } from "@hive/theming";
 import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { mount, setupDom, teardownDom } from "../../__tests__/happy-dom-env.ts";
-import type { Persistence, Preferences } from "../../theming/index.ts";
-import { ThemeProvider } from "../../theming/index.ts";
 import {
   type UseAppearanceSettingsReturn,
   useAppearanceSettings,

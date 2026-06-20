@@ -1,158 +1,48 @@
 // Daemon API client. Reads baseUrl + token from:
 //   1. window.__hive (provided by Electron preload)
 //   2. URL query string ?baseUrl=...&token=... (dev mode in a browser tab)
-
-// Backend availability status (GET /api/backends). Mirrors the daemon's
-// BackendStatus wire shape (src/backend-probe/types.ts). `backend` is a
-// CLI-driven (probeable) backend; `native` is never probed.
-export type BackendStatus = {
-  backend: "claude-code" | "codex";
-  installed: boolean;
-  version: string | null;
-  reason: "ok" | "not_installed" | "probe_failed" | "version_unreadable" | "timeout";
-  checkedAt: number;
-};
-
-// Backend Readiness (GET /api/backends/readiness). Hand-mirror of the daemon's
-// BackendReadiness Zod schema (src/backend-readiness/types.ts); the UI is a
-// separate Vite bundle, so this is kept in sync by hand (drift-guarded by
-// backend-readiness-wire-mirror.test.ts). Composes BackendStatus's health
-// fields with the mapped provider + auth state.
 //
-// auth.state — what actually authenticates a Run:
-//   api-key      — Hive injects a stored API key (operative).
-//   cli-managed  — the Run falls back to the CLI's ambient login. Covers BOTH
-//                  no stored secret AND a stored OAuth token (fetched but NOT
-//                  injected — see ADR-0019).
-export type BackendAuthState = "api-key" | "cli-managed";
+// Wire types are sourced from @hive/contract (the single source of truth). The
+// kit names use the contract's canonical unprefixed form.
 
-export type StoredSecretMeta = {
-  kind: "apiKey" | "oauth";
-  status: "ok" | "expired";
-  addedAt: number;
-  refreshedAt?: number;
-};
-
-export type BackendReadiness = BackendStatus & {
-  provider: string;
-  auth: {
-    state: BackendAuthState;
-    stored?: StoredSecretMeta;
-  };
-};
-
-// ─── Kit (capability deploy-manager) ──────────────────────────────────
-// Hand-mirror of the daemon's kit wire types (packages/daemon/src/kit/types.ts).
-// The UI is a separate Vite bundle; kept in sync by hand, drift-guarded by
-// __tests__/kit-wire-mirror.test.ts. The kind/target enums + the verify shapes
-// live in the DOM-free kit-wire.ts so the daemon's drift guard can import them.
-
-import type { KitCapabilityKind, KitDeployTarget, KitVerifyReport } from "./kit-wire.ts";
+import type {
+  BackendReadiness,
+  BackendStatus,
+  Catalog,
+  DeployDiff,
+  DeployResult,
+  KitState,
+  Selection,
+  SyncStatus,
+  VerifyReport,
+} from "@hive/contract";
+import type { Preferences } from "@hive/theming";
 
 export type {
-  KitCapabilityKind,
-  KitDeployTarget,
-  KitVerifyEntry,
-  KitVerifyReport,
-  KitVerifyStatus,
-  KitVerifyTargetStatus,
-} from "./kit-wire.ts";
-
-export type KitCapabilityEntry = {
-  kind: KitCapabilityKind;
-  name: string;
-  description: string;
-  group: string;
-  deployable: boolean;
-  blockedReason?: string;
-};
-
-export type KitPresetSummary = {
-  name: string;
-  description: string;
-  defaultAgents: KitDeployTarget[];
-  capabilities: {
-    instructions: string[];
-    skills: string[];
-    agents: string[];
-    plugins: string[];
-    bundles: string[];
-  };
-};
-
-export type KitCatalogProblem = { kind: string; name: string; problem: string };
-
-export type KitCatalog = {
-  entries: KitCapabilityEntry[];
-  presets: KitPresetSummary[];
-  problems: KitCatalogProblem[];
-};
-
-export type KitSyncStatusState = "up_to_date" | "check_failed" | "rate_limited";
-
-export type KitSyncStatus = {
-  state: KitSyncStatusState;
-  sha: string | null;
-  fetchedAt: number | null;
-  errorReason?: string;
-  rateLimitReset?: number;
-};
-
-export type KitLedger = {
-  kitVersion: string;
-  agents: string[];
-  skills: { name: string }[];
-  agentDefs: { name: string }[];
-  instructions: { name: string }[];
-  plugins: { name: string }[];
-  bundles: { name: string; pin: string | null }[];
-};
-
-export type KitState = { sync: KitSyncStatus; ledger: KitLedger | null };
-
-export type KitSelection = {
-  presets: string[];
-  add: {
-    instructions: string[];
-    skills: string[];
-    agents: string[];
-    plugins: string[];
-    bundles: string[];
-  };
-  remove: {
-    instructions: string[];
-    skills: string[];
-    agents: string[];
-    plugins: string[];
-    bundles: string[];
-  };
-  targets: KitDeployTarget[];
-};
-
-export type KitDiffEntry = {
-  kind: KitCapabilityKind;
-  name: string;
-  change: "added" | "removed" | "changed";
-  replacesUserFile?: boolean;
-};
-
-export type KitDeployDiff = { entries: KitDiffEntry[] };
-
-export type KitKindResult = {
-  kind: KitCapabilityKind;
-  applied: string[];
-  failed: { name: string; error: string }[];
-  pruneHint?: string[];
-};
-
-export type KitDeployResult = {
-  kitSha: string | null;
-  perKind: KitKindResult[];
-  pruned: { kind: KitCapabilityKind; name: string }[];
-  targets: KitDeployTarget[];
-};
-
-import type { Preferences } from "./theming/index.ts";
+  BackendAuthState,
+  BackendReadiness,
+  BackendStatus,
+  CapabilityEntry,
+  CapabilityKind,
+  Catalog,
+  CatalogProblem,
+  DeployDiff,
+  DeployResult,
+  DeployTarget,
+  DiffEntry,
+  KindResult,
+  KitState,
+  Ledger,
+  PresetSummary,
+  Selection,
+  StoredSecretMeta,
+  SyncStatus,
+  SyncStatusState,
+  VerifyEntry,
+  VerifyReport,
+  VerifyStatus,
+  VerifyTargetStatus,
+} from "@hive/contract";
 
 declare global {
   interface Window {
@@ -360,27 +250,27 @@ export const api = {
 
   // ─── Kit (capability deploy-manager) ─────────────────────────────────
   // Full catalog from the synced Mirror (entries + presets + load problems).
-  getKitCatalog: (cfg: ApiConfig) => call<KitCatalog>(cfg, "/api/kit/catalog"),
+  getKitCatalog: (cfg: ApiConfig) => call<Catalog>(cfg, "/api/kit/catalog"),
   // Sync status (freshness state + SHA) + the Deployment Ledger.
   getKitState: (cfg: ApiConfig) => call<KitState>(cfg, "/api/kit/state"),
   // On-disk self-check: per-capability per-target status (present/missing/drifted/
   // recorded). Read-only — no audit row. The page runs this on load and after deploy.
-  getKitVerify: (cfg: ApiConfig) => call<KitVerifyReport>(cfg, "/api/kit/verify"),
+  getKitVerify: (cfg: ApiConfig) => call<VerifyReport>(cfg, "/api/kit/verify"),
   // Check for updates: fetch the latest Kit into the Mirror. Returns the
   // resulting sync state; the catalog/state queries are re-fetched after.
   syncKit: (cfg: ApiConfig) =>
-    call<{ status: "synced" | "unchanged"; state: KitSyncStatus }>(cfg, "/api/kit/sync", {
+    call<{ status: "synced" | "unchanged"; state: SyncStatus }>(cfg, "/api/kit/sync", {
       method: "POST",
     }),
   // Compute the Deploy Diff for a Selection (added/removed/changed).
-  kitDiff: (cfg: ApiConfig, selection: KitSelection) =>
-    call<KitDeployDiff>(cfg, "/api/kit/diff", {
+  kitDiff: (cfg: ApiConfig, selection: Selection) =>
+    call<DeployDiff>(cfg, "/api/kit/diff", {
       method: "POST",
       body: JSON.stringify(selection),
     }),
   // Apply a Selection. Returns the per-kind result.
-  kitDeploy: (cfg: ApiConfig, selection: KitSelection) =>
-    call<KitDeployResult>(cfg, "/api/kit/deploy", {
+  kitDeploy: (cfg: ApiConfig, selection: Selection) =>
+    call<DeployResult>(cfg, "/api/kit/deploy", {
       method: "POST",
       body: JSON.stringify(selection),
     }),

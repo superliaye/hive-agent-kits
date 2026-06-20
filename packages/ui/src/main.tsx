@@ -6,7 +6,7 @@ import { resolveApiConfig } from "./api.ts";
 import { ChromeBridge } from "./components/ChromeBridge.tsx";
 import { startEventStream } from "./events.ts";
 import "./styles.css";
-import { ThemeProvider } from "./theming/index.ts";
+import { ThemeProvider } from "@hive/theming";
 import { createHivePersistence } from "./theming-hive-persistence.ts";
 
 const queryClient = new QueryClient({

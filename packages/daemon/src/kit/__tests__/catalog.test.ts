@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Selection } from "@hive/contract";
 import { readCatalog } from "../catalog.ts";
 import { DeployError } from "../effect/errors.ts";
 import { resolveSelection } from "../selection.ts";
 import { defaultDeployTargets } from "../targets.ts";
-import type { Selection } from "../types.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const CLONE = "D:/GitRepos/my-agent-kits";

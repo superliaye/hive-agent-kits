@@ -3,7 +3,6 @@
 // and toggles. Share group (Export to file / Copy theme / Import) sits
 // below.
 
-import { useEffect, useId, useRef, useState } from "react";
 import {
   DEFAULT_CONTRAST,
   DEFAULT_FONT_CODE_SIZE,
@@ -12,7 +11,8 @@ import {
   type Mode,
   type NamedTheme,
   type ReduceMotion,
-} from "../theming/index.ts";
+} from "@hive/theming";
+import { useEffect, useId, useRef, useState } from "react";
 import { useAppearanceSettings } from "./useAppearanceSettings.ts";
 
 export function AppearanceSettings(): JSX.Element {

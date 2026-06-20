@@ -6,7 +6,10 @@ Modeled after Codex desktop's theming: `mode` picker + per-mode `ThemeConfig`. E
 
 ## What's portable
 
-- Zero imports outside this directory or React.
+- The only outward imports are React and `zod` (the appearance schema in
+  `schema.ts`). This package owns the appearance schema, exported React-free as
+  `@hive/theming/schema`; the daemon consumes that subpath for its
+  `/api/appearance` boundary, and import validation (`serialize.ts`) reuses it.
 - Persistence is **injected** — the module never touches `localStorage`, `fetch`, `electron-store`, or any specific storage.
 - Tokens are flat string maps — no CSS-in-JS lock-in.
 

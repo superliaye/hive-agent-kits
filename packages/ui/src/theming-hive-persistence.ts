@@ -14,13 +14,13 @@
 // (Tauri, browser-only, mobile shell) can swap the storage adapter
 // without rediscovering the dance.
 
-import { type ApiConfig, api } from "./api.ts";
-import type { Persistence } from "./theming/index.ts";
+import type { Persistence } from "@hive/theming";
 import {
   type CacheStorage,
   type CachingPersistence,
   createCachingPersistence,
-} from "./theming/index.ts";
+} from "@hive/theming";
+import { type ApiConfig, api } from "./api.ts";
 
 const CACHE_KEY = "hive.appearance.preferences.v2";
 

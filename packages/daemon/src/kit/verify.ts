@@ -9,6 +9,7 @@
 // Read-only: emits NO audit row; diagnostics go to the trace logger only.
 
 import { existsSync } from "node:fs";
+import type { VerifyEntry, VerifyReport, VerifyStatus, VerifyTargetStatus } from "@hive/contract";
 import { log } from "../lib/log.ts";
 import {
   deployedAgentPath,
@@ -21,7 +22,6 @@ import {
 import { type FingerprintFile, fingerprintFor, readFingerprints } from "./fingerprint.ts";
 import { type Ledger, readLedger } from "./ledger.ts";
 import type { DeployTarget, DeployTargets } from "./targets.ts";
-import type { VerifyEntry, VerifyReport, VerifyStatus, VerifyTargetStatus } from "./types.ts";
 
 // The CLI targets a ledger records (its top-level `agents` host list). Narrow to
 // the two known deploy targets; an unknown string is ignored rather than trusted.

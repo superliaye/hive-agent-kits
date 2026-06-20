@@ -16,12 +16,17 @@
     "packages/contract": {
       "name": "@hive/contract",
       "version": "0.0.0",
+      "dependencies": {
+        "zod": "^3.23.8",
+      },
     },
     "packages/daemon": {
       "name": "@hive/daemon",
       "version": "0.0.0",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.178",
+        "@hive/contract": "workspace:*",
+        "@hive/theming": "workspace:*",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@openai/codex-sdk": "0.140.0",
         "drizzle-orm": "^0.45.2",
@@ -54,10 +59,22 @@
         "typescript": "^5.6.3",
       },
     },
+    "packages/theming": {
+      "name": "@hive/theming",
+      "version": "0.0.0",
+      "dependencies": {
+        "zod": "^3.23.8",
+      },
+      "peerDependencies": {
+        "react": "^18.3.1",
+      },
+    },
     "packages/ui": {
       "name": "@hive/ui",
       "version": "0.0.0",
       "dependencies": {
+        "@hive/contract": "workspace:*",
+        "@hive/theming": "workspace:*",
         "@tanstack/react-query": "^5.59.0",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
@@ -233,6 +250,8 @@
     "@hive/daemon": ["@hive/daemon@workspace:packages/daemon"],
 
     "@hive/shell": ["@hive/shell@workspace:packages/shell"],
+
+    "@hive/theming": ["@hive/theming@workspace:packages/theming"],
 
     "@hive/ui": ["@hive/ui@workspace:packages/ui"],
 

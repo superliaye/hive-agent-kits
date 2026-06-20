@@ -12,18 +12,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   type ApiConfig,
   api,
-  type KitCapabilityEntry,
-  type KitCapabilityKind,
-  type KitDeployDiff,
-  type KitDeployTarget,
-  type KitSelection,
-  type KitVerifyReport,
-  type KitVerifyStatus,
+  type CapabilityEntry,
+  type CapabilityKind,
+  type DeployDiff,
+  type DeployTarget,
+  type Selection,
+  type VerifyReport,
+  type VerifyStatus,
 } from "../api.ts";
 import { signalDeployInFlight } from "../platform/deploy-in-flight.ts";
 
-const KINDS: KitCapabilityKind[] = ["instruction", "skill", "agent", "plugin", "bundle"];
-const KIND_LABEL: Record<KitCapabilityKind, string> = {
+const KINDS: CapabilityKind[] = ["instruction", "skill", "agent", "plugin", "bundle"];
+const KIND_LABEL: Record<CapabilityKind, string> = {
   instruction: "Instructions",
   skill: "Skills",
   agent: "Agents",
@@ -31,7 +31,7 @@ const KIND_LABEL: Record<KitCapabilityKind, string> = {
   bundle: "Bundles",
 };
 
-const KIND_TO_CAP: Record<KitCapabilityKind, keyof KitSelection["add"]> = {
+const KIND_TO_CAP: Record<CapabilityKind, keyof Selection["add"]> = {
   instruction: "instructions",
   skill: "skills",
   agent: "agents",
@@ -76,15 +76,15 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   // stored selection — there is no preset provenance to persist (the Ledger
   // records resolved names only), so a preset reads "active" purely by whether
   // all its capabilities are currently selected.
-  const [selected, setSelected] = useState<KitSelection["add"]>(emptyCaps());
-  const [targets, setTargets] = useState<KitDeployTarget[]>(["claude"]);
+  const [selected, setSelected] = useState<Selection["add"]>(emptyCaps());
+  const [targets, setTargets] = useState<DeployTarget[]>(["claude"]);
 
   const catalog = catalogQuery.data;
   const state = stateQuery.data;
 
   // Wire selection: presets/remove stay empty — the resolved `selected` set is
   // sent as `add`, which the daemon resolves identically (presets ∪ add − remove).
-  const selection: KitSelection = useMemo(
+  const selection: Selection = useMemo(
     () => ({ presets: [], add: selected, remove: emptyCaps(), targets }),
     [selected, targets],
   );
@@ -133,7 +133,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       bundles: ledger.bundles.map((e) => e.name),
     });
     const seededTargets = ledger.agents.filter(
-      (a): a is KitDeployTarget => a === "claude" || a === "codex",
+      (a): a is DeployTarget => a === "claude" || a === "codex",
     );
     if (seededTargets.length > 0) setTargets(seededTargets);
   }, [stateQuery.isSuccess, stateQuery.data]);
@@ -211,7 +211,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     });
   }
 
-  function toggleTarget(t: KitDeployTarget): void {
+  function toggleTarget(t: DeployTarget): void {
     setTargets((cur) => {
       if (cur.includes(t)) {
         const next = cur.filter((x) => x !== t);
@@ -221,7 +221,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     });
   }
 
-  function toggleIndividual(kind: KitCapabilityKind, name: string): void {
+  function toggleIndividual(kind: CapabilityKind, name: string): void {
     const cap = KIND_TO_CAP[kind];
     setSelected((cur) => {
       const has = cur[cap].includes(name);
@@ -293,7 +293,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
         </div>
         <div className="kit-targets" data-testid="kit-targets">
           <span className="kit-control-label">Targets</span>
-          {(["claude", "codex"] as KitDeployTarget[]).map((t) => (
+          {(["claude", "codex"] as DeployTarget[]).map((t) => (
             <label key={t} className="kit-target-toggle">
               <input
                 type="checkbox"
@@ -355,16 +355,16 @@ function KindSection({
   onDisk,
   onToggle,
 }: {
-  kind: KitCapabilityKind;
-  entries: KitCapabilityEntry[];
+  kind: CapabilityKind;
+  entries: CapabilityEntry[];
   selected: Set<string>;
   deployed: Set<string>;
-  onDisk: Map<string, KitVerifyStatus>;
+  onDisk: Map<string, VerifyStatus>;
   onToggle: (name: string) => void;
 }): JSX.Element {
   // Group by @-namespace within the kind.
   const groups = useMemo(() => {
-    const map = new Map<string, KitCapabilityEntry[]>();
+    const map = new Map<string, CapabilityEntry[]>();
     for (const e of entries) {
       const g = e.group || "";
       const arr = map.get(g) ?? [];
@@ -428,7 +428,7 @@ function KindSection({
   );
 }
 
-function DeployDiffPanel({ diff }: { diff: KitDeployDiff }): JSX.Element {
+function DeployDiffPanel({ diff }: { diff: DeployDiff }): JSX.Element {
   const added = diff.entries.filter((e) => e.change === "added");
   const removed = diff.entries.filter((e) => e.change === "removed");
   const changed = diff.entries.filter((e) => e.change === "changed");
@@ -458,7 +458,7 @@ function DiffCol({
 }: {
   label: string;
   tone: string;
-  entries: KitDeployDiff["entries"];
+  entries: DeployDiff["entries"];
 }): JSX.Element {
   return (
     <div className={`kit-diff-col kit-diff-${tone}`} data-testid={`kit-diff-${tone}`}>
@@ -496,7 +496,7 @@ function rowIndicator(args: {
   deployable: boolean;
   isSelected: boolean;
   isDeployed: boolean;
-  disk: KitVerifyStatus | undefined;
+  disk: VerifyStatus | undefined;
 }): Indicator {
   const { deployable, isSelected, isDeployed, disk } = args;
   if (!deployable) return "blocked";
@@ -512,7 +512,7 @@ function rowIndicator(args: {
 // Collapse the per-target verify report into a per-kind, per-name single status.
 // Worst-state wins so a row split across targets still flags a problem:
 // drifted > missing > present > recorded.
-const STATUS_RANK: Record<KitVerifyStatus, number> = {
+const STATUS_RANK: Record<VerifyStatus, number> = {
   drifted: 3,
   missing: 2,
   present: 1,
@@ -520,9 +520,9 @@ const STATUS_RANK: Record<KitVerifyStatus, number> = {
 };
 
 function collapseVerify(
-  report: KitVerifyReport | undefined,
-): Record<KitCapabilityKind, Map<string, KitVerifyStatus>> {
-  const out: Record<KitCapabilityKind, Map<string, KitVerifyStatus>> = {
+  report: VerifyReport | undefined,
+): Record<CapabilityKind, Map<string, VerifyStatus>> {
+  const out: Record<CapabilityKind, Map<string, VerifyStatus>> = {
     instruction: new Map(),
     skill: new Map(),
     agent: new Map(),
@@ -531,7 +531,7 @@ function collapseVerify(
   };
   if (!report) return out;
   for (const e of report.entries) {
-    let worst: KitVerifyStatus | undefined;
+    let worst: VerifyStatus | undefined;
     for (const t of e.targets) {
       if (!worst || STATUS_RANK[t.status] > STATUS_RANK[worst]) worst = t.status;
     }
@@ -543,8 +543,8 @@ function collapseVerify(
 // A preset is active iff it has at least one capability and every one is in the
 // current selection. Empty presets never read active (nothing to reflect).
 function presetActive(
-  preset: { capabilities: KitSelection["add"] },
-  selected: KitSelection["add"],
+  preset: { capabilities: Selection["add"] },
+  selected: Selection["add"],
 ): boolean {
   let any = false;
   for (const k of KINDS) {
@@ -558,11 +558,11 @@ function presetActive(
   return any;
 }
 
-function emptyCaps(): KitSelection["add"] {
+function emptyCaps(): Selection["add"] {
   return { instructions: [], skills: [], agents: [], plugins: [], bundles: [] };
 }
 
-function emptyCapSets(): Record<keyof KitSelection["add"], Set<string>> {
+function emptyCapSets(): Record<keyof Selection["add"], Set<string>> {
   return {
     instructions: new Set(),
     skills: new Set(),

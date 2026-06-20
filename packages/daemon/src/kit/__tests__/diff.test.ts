@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Catalog } from "@hive/contract";
 import { Effect } from "effect";
 import { readCatalog } from "../catalog.ts";
 import type { DeployFsExec } from "../deploy/adapter.ts";
 import { runDeploy } from "../deploy/engine.ts";
+import type { ResolvedSelection } from "../selection.ts";
 import { computeDiff } from "../selection.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
-import type { Catalog, ResolvedSelection } from "../types.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 let tmpRoot: string;

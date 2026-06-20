@@ -5,27 +5,12 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { z } from "zod";
+import { type Ledger, LedgerSchema } from "@hive/contract";
 import type { DeployTarget, DeployTargets } from "./targets.ts";
 
-// agent-kit's exact manifest schema (lib/manifest.js buildManifest).
-const NameEntry = z.object({ name: z.string() });
-const BundleEntry = z.object({ name: z.string(), pin: z.string().nullable() });
-
-export const LedgerSchema = z.object({
-  kitVersion: z.string(),
-  // `agents` = the deploy-target CLIs (["claude","codex"]), per the agent-kit
-  // manifest's top-level `agents` host list — NOT the agent CAPABILITIES, which
-  // live in `agentDefs` below. The two never collide in the manifest object;
-  // this naming is the fixed upstream interop contract, kept verbatim.
-  agents: z.array(z.string()),
-  skills: z.array(NameEntry),
-  agentDefs: z.array(NameEntry),
-  instructions: z.array(NameEntry),
-  plugins: z.array(NameEntry),
-  bundles: z.array(BundleEntry),
-});
-export type Ledger = z.infer<typeof LedgerSchema>;
+// The wire schema + type live in @hive/contract; re-exported so kit-internal
+// modules keep importing the ledger shape from this module alongside its fs verbs.
+export { type Ledger, LedgerSchema };
 
 export function emptyLedger(): Ledger {
   return {

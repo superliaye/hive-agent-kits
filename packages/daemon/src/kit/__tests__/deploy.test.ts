@@ -7,8 +7,8 @@ import type { DeployFsExec, ExecPort, ExecRequest } from "../deploy/adapter.ts";
 import { runDeploy } from "../deploy/engine.ts";
 import { DeployError } from "../effect/errors.ts";
 import { readLedger } from "../ledger.ts";
+import type { ResolvedSelection } from "../selection.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
-import type { ResolvedSelection } from "../types.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 let tmpRoot: string;

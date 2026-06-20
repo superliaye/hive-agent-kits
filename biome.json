@@ -25,5 +25,24 @@
         "noFloatingPromises": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["packages/daemon/src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "@hive/theming": "Daemon must import only the React-free @hive/theming/schema subpath, never the bare barrel (which pulls React). Keeps the daemon dependency graph React-free (ADR-0022)."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

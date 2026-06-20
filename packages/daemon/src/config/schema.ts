@@ -1,6 +1,7 @@
 // The deployment-wide config schema for Hive. Per ADR-0006: single Zod
 // schema, nested by domain. Other modules read their slice via `config.watch`.
 
+import { APPEARANCE_DEFAULTS, AppearanceConfigSchema } from "@hive/theming/schema";
 import { z } from "zod";
 
 export const AuditRetentionSchema = z.object({
@@ -29,42 +30,10 @@ export const RunsConfigSchema = z.object({
   maxIterations: z.number().int().min(0),
 });
 
-// Theme/font preferences — what CONTEXT.md calls "UI theme". A single
-// nested subtree under the top-level `appearance` key. Per-mode configs
-// persist independently (the user can customize Light and Dark without
-// either clobbering the other).
-const ColorString = z.string().min(1).max(64);
-const FontString = z.string().min(1).max(256);
-
-export const ThemeConfigSchema = z
-  .object({
-    themeId: z.string().min(1).max(64).optional(),
-    accent: ColorString.optional(),
-    background: ColorString.optional(),
-    foreground: ColorString.optional(),
-    fontUi: FontString.optional(),
-    fontCode: FontString.optional(),
-    fontUiSize: z.number().int().min(8).max(48).optional(),
-    fontCodeSize: z.number().int().min(8).max(48).optional(),
-    contrast: z.number().min(0).max(100).optional(),
-    translucentSidebar: z.boolean().optional(),
-  })
-  .strict();
-
-export const AppearanceConfigSchema = z
-  .object({
-    mode: z.enum(["light", "dark", "system"]),
-    light: ThemeConfigSchema,
-    dark: ThemeConfigSchema,
-    reduceMotion: z.enum(["system", "on", "off"]),
-    pointerCursors: z.boolean(),
-    useSystemAccent: z.boolean(),
-  })
-  .strict();
-
-export type AppearanceConfig = z.infer<typeof AppearanceConfigSchema>;
-export type ThemeConfig = z.infer<typeof ThemeConfigSchema>;
-
+// Theme/font preferences — what CONTEXT.md calls "UI theme". The appearance
+// schema + defaults are owned by `@hive/theming/schema` (ADR-0022); the daemon
+// consumes them here and folds them into the deployment-wide config. The strict
+// `AppearanceConfigSchema` governs both directions of /api/appearance.
 export const AppConfigSchema = z.object({
   audit: AuditConfigSchema,
   ui: UiConfigSchema,
@@ -88,14 +57,7 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
   ui: {
     language: "en",
   },
-  appearance: {
-    mode: "system",
-    light: {},
-    dark: {},
-    reduceMotion: "system",
-    pointerCursors: false,
-    useSystemAccent: false,
-  },
+  appearance: APPEARANCE_DEFAULTS,
   daemon: {
     httpPort: 3117,
     logLevel: "info",

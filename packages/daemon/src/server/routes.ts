@@ -1,5 +1,6 @@
 // Hono route definitions. Pure routing — module dependencies are passed in.
 
+import { AppearanceConfigSchema } from "@hive/theming/schema";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { ZodError } from "zod";
@@ -8,7 +9,7 @@ import type { BackendProbeSvc, BackendUpdaterSvc } from "../backend-probe/index.
 import { BackendStatus, ProbeableBackend } from "../backend-probe/index.ts";
 import type { BackendReadinessSvc } from "../backend-readiness/index.ts";
 import { BackendReadiness } from "../backend-readiness/index.ts";
-import { type AppConfig, AppearanceConfigSchema } from "../config/schema.ts";
+import type { AppConfig } from "../config/schema.ts";
 import type { Config } from "../config/types.ts";
 import type { Secrets } from "../secrets/index.ts";
 import type { ConfiguredProvider } from "../secrets/types.ts";

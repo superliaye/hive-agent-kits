@@ -1,13 +1,13 @@
 // Kit HTTP routes (Plan A6). Mounted additively behind the surviving server.
 // Zod at the boundary; typed errors mapped to wire codes.
 
+import { SelectionSchema } from "@hive/contract";
 import { Effect } from "effect";
 import { Hono } from "hono";
 import { ZodError } from "zod";
 import { log } from "../lib/log.ts";
 import { DeployError, SyncError } from "./effect/errors.ts";
 import type { KitSvc } from "./effect/kit-live.ts";
-import { SelectionSchema } from "./types.ts";
 
 // Discharge a Kit Effect off the root runtime. Returns a Promise<Either>-like.
 export type RunKit = <A, E>(

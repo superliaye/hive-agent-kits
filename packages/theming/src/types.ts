@@ -1,5 +1,7 @@
-// Theming module — types. ZERO hive-specific imports; the module is
-// portable to any React+Vite (or React+anything) app.
+// Theming module — types. The only outward imports are React (in sibling
+// .tsx files) and `zod` (via ./schema.ts, the appearance SSOT). `Preferences`
+// and `ThemeConfig` are inferred from `./schema.ts`, so the appearance bounds
+// are defined once, not hand-mirrored.
 //
 // Model:
 //   - Preferences has three parts: a `mode` picker, two ThemeConfigs
@@ -49,6 +51,8 @@ export type TokenName =
 
 export type TokenMap = Partial<Record<TokenName, string>> & Record<string, string>;
 
+import type { AppearanceConfig, ThemeConfig } from "./schema.ts";
+
 export type Mode = "light" | "dark" | "system";
 export type ResolvedMode = "light" | "dark";
 export type ReduceMotion = "system" | "on" | "off";
@@ -57,26 +61,9 @@ export type ReduceMotion = "system" | "on" | "off";
  * Per-mode user-customizable settings. Everything optional — empty means
  * "use the mode's defaults". Persisted separately for light and dark so
  * the user customizes each independently (matches Codex desktop's model).
+ * Inferred from `./schema.ts` (the appearance SSOT).
  */
-export type ThemeConfig = {
-  /** Named palette id (see presets.ts: LIGHT_THEMES / DARK_THEMES). */
-  themeId?: string;
-  accent?: string;
-  background?: string;
-  foreground?: string;
-  fontUi?: string;
-  fontCode?: string;
-  /** Base UI font size in px. Default 14. */
-  fontUiSize?: number;
-  /** Base code font size in px. Default 13. */
-  fontCodeSize?: number;
-  /**
-   * Contrast 0..100. 50 is neutral. Higher values darken the muted
-   * foreground (more contrast). Applied via `color-mix` on `--color-fg-muted`.
-   */
-  contrast?: number;
-  translucentSidebar?: boolean;
-};
+export type { ThemeConfig };
 
 /** Default base palette for one mode. Pure data — adapters override. */
 export type ModePalette = {
@@ -84,15 +71,13 @@ export type ModePalette = {
   tokens: TokenMap;
 };
 
-export type Preferences = {
-  mode: Mode;
-  light: ThemeConfig;
-  dark: ThemeConfig;
-  reduceMotion: ReduceMotion;
-  pointerCursors: boolean;
-  /** Match the OS accent color app-wide (overrides each mode's accent). */
-  useSystemAccent: boolean;
-};
+/**
+ * The full appearance shape — a `mode` picker, two per-mode ThemeConfigs, and
+ * app-wide accessibility toggles. A pure alias of the schema-inferred
+ * `AppearanceConfig`: one underlying type, zero structural duplication. The name
+ * `Preferences` is kept for the module's ergonomic React API.
+ */
+export type Preferences = AppearanceConfig;
 
 /**
  * Persistence adapter. Caller provides one; the theming module never

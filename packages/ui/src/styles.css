@@ -1,11 +1,11 @@
-/* Token defaults are imported from ./theming/tokens.css.
+/* Token defaults are imported from @hive/theming/tokens.css.
  * Application styles below reference the tokens via var(--…).
  * App-specific colorful surfaces (user-message bubble, tool_use card,
  * etc.) keep their visual identity via [data-theme="dark"] overrides
  * at the bottom of this file — the portable theming Module isn't aware
  * of these surfaces. */
 
-@import "./theming/tokens.css";
+@import "@hive/theming/tokens.css";
 
 * {
   box-sizing: border-box;
