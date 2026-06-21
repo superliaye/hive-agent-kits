@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type ApiConfig, api, type BackendReadiness, type BackendStatus } from "../api.ts";
+import { Skeleton, SkeletonGroup } from "./Skeleton.tsx";
 
 // Friendly display name per backend. Internal ids stay machine-named; this is
 // copy only.
@@ -120,6 +121,10 @@ type RowBusy = { kind: "idle" } | { kind: "updating" } | { kind: "rechecking" };
 
 export function BackendsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
   const [rows, setRows] = useState<BackendReadiness[]>([]);
+  // Starts true so the first readiness fetch shows skeletons, not the empty
+  // copy: an empty `rows` during the initial load is the pending window, not a
+  // genuine zero-result. Cleared once the first fetch settles (success OR error).
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<string, RowBusy>>({});
   const [rowError, setRowError] = useState<Record<string, string>>({});
@@ -144,6 +149,8 @@ export function BackendsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
     } catch (err) {
       if (!mounted.current) return;
       setLoadError((err as Error).message);
+    } finally {
+      if (mounted.current) setLoading(false);
     }
   }, [apiConfig]);
 
@@ -203,7 +210,9 @@ export function BackendsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
           <code>claude login</code> / <code>codex login</code>), Hive uses that automatically; you
           only need an API key if you'd rather not sign in to the CLI.
         </p>
-        {rows.length === 0 ? (
+        {loading ? (
+          <BackendsSkeleton />
+        ) : rows.length === 0 ? (
           <p className="empty">No CLI backends detected.</p>
         ) : (
           rows.map((row) => (
@@ -222,6 +231,28 @@ export function BackendsSettings({ apiConfig }: { apiConfig: ApiConfig }): JSX.E
         )}
       </div>
     </>
+  );
+}
+
+// Content-shaped placeholder for the loading readiness fetch: ~2 cards mirroring
+// .backend-card → header + health + auth zones.
+function BackendsSkeleton(): JSX.Element {
+  return (
+    <SkeletonGroup label="Loading backends…" testId="backends-skeleton">
+      {["a", "b"].map((id) => (
+        <div className="card skeleton-backend-card" key={`backend-skel-${id}`}>
+          <div className="skeleton-backend-header">
+            <Skeleton width="40%" height="18px" />
+            <Skeleton width="90px" height="22px" radius="999px" />
+          </div>
+          <Skeleton width="60%" height="13px" />
+          <div className="skeleton-backend-auth">
+            <Skeleton width="80%" height="12px" />
+            <Skeleton width="120px" height="28px" />
+          </div>
+        </div>
+      ))}
+    </SkeletonGroup>
   );
 }
 

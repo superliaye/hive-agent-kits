@@ -1324,3 +1324,103 @@ pre.config {
   background: color-mix(in srgb, var(--color-danger) 18%, transparent);
   color: var(--color-danger);
 }
+
+/* ─── Skeleton loading placeholders ────────────────────────────────────
+ * Content-shaped placeholders shown while async/backend data is pending.
+ * A static placeholder is the base; the shimmer is an enhancement gated
+ * behind both the OS preference and the app's reduce-motion attribute. */
+.skeleton {
+  display: block;
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+}
+[data-theme="dark"] .skeleton {
+  background: color-mix(in srgb, var(--color-fg-muted) 14%, var(--color-bg-surface));
+  border-color: var(--color-border-default);
+}
+/* Shimmer gated by both the OS preference and the app's reduce-motion
+ * attribute (tokens.css also flattens it when data-reduce-motion="on"),
+ * mirroring .theme-dropdown-list. Static placeholder under reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-reduce-motion="on"]) .skeleton {
+    background: linear-gradient(
+      90deg,
+      var(--color-bg-hover) 0%,
+      var(--color-bg-surface) 50%,
+      var(--color-bg-hover) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  }
+  :root[data-theme="dark"]:not([data-reduce-motion="on"]) .skeleton {
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-fg-muted) 14%, var(--color-bg-surface)) 0%,
+      color-mix(in srgb, var(--color-fg-muted) 22%, var(--color-bg-surface)) 50%,
+      color-mix(in srgb, var(--color-fg-muted) 14%, var(--color-bg-surface)) 100%
+    );
+    background-size: 200% 100%;
+  }
+}
+@keyframes skeleton-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* Catalog skeleton — mimics .kit-kind → .kit-kind-title → .kit-row. */
+.kit-catalog-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.skeleton-kind {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--color-bg-base);
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.skeleton-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+/* Backends skeleton — mimics .backend-card header + health + auth zones. */
+.skeleton-backend-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 12px;
+}
+.skeleton-backend-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.skeleton-backend-auth {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border-default);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

@@ -20,6 +20,7 @@ import {
   type VerifyReport,
   type VerifyStatus,
 } from "../api.ts";
+import { Skeleton, SkeletonGroup } from "../components/Skeleton.tsx";
 import { signalDeployInFlight } from "../platform/deploy-in-flight.ts";
 
 const KINDS: CapabilityKind[] = ["instruction", "skill", "agent", "plugin", "bundle"];
@@ -321,7 +322,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       )}
 
       <div className="kit-catalog" data-testid="kit-catalog">
-        {catalogQuery.isLoading && <div className="empty">Loading catalog…</div>}
+        {catalogQuery.isLoading && <CatalogSkeleton />}
         {catalog && catalog.entries.length === 0 && !catalogQuery.isLoading && (
           <div className="empty" data-testid="kit-empty">
             No capabilities yet — Check for updates to sync the latest Kit.
@@ -344,6 +345,39 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
         })}
       </div>
     </div>
+  );
+}
+
+// Content-shaped placeholder for the loading catalog: a couple of skeleton
+// "kind sections" (title + a few rows) mirroring .kit-kind → .kit-row.
+function CatalogSkeleton(): JSX.Element {
+  // Two skeleton kind-sections, identified by stable synthetic names so the
+  // placeholder rows carry non-index keys.
+  const sections = [
+    { id: "a", rows: ["a1", "a2", "a3"] },
+    { id: "b", rows: ["b1", "b2"] },
+  ];
+  return (
+    <SkeletonGroup
+      label="Loading catalog…"
+      testId="kit-catalog-skeleton"
+      className="kit-catalog-skeleton"
+    >
+      {sections.map((section) => (
+        <div className="skeleton-kind" key={section.id}>
+          <Skeleton width="40%" height="18px" />
+          {section.rows.map((rowId) => (
+            <div className="skeleton-row" key={rowId}>
+              <Skeleton width="16px" height="16px" radius="4px" />
+              <div className="skeleton-row-main">
+                <Skeleton width="35%" height="13px" />
+                <Skeleton width="70%" height="12px" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </SkeletonGroup>
   );
 }
 
