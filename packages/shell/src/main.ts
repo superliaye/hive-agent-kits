@@ -45,12 +45,15 @@ const TOKEN_PATH = join(RUNTIME_ROOT, ".token");
 const REPO_ROOT = resolve(__dirname, "..", "..");
 const UI_DEV_URL = process.env.HIVE_UI_DEV_URL ?? "http://127.0.0.1:5173";
 
-// Dev only — expose Chrome DevTools Protocol so the electron-visual-loop can
-// attach to the real window (agent-browser connect 9333). Gated on
-// !app.isPackaged so the port can never open in a shipped build, where the
-// renderer holds the daemon bearer token. Must run before app.whenReady().
+// Dev only — expose Chrome DevTools Protocol so the visual loop can attach to
+// the real window (Playwright connectOverCDP, or `agent-browser connect`).
+// Default port 9333; HIVE_CDP_PORT lets parallel dev instances each open a
+// distinct port (dev.ps1/dev.ts derive it per -Instance, alongside HIVE_PORT
+// and the Vite URL, so isolated stacks never collide). Gated on !app.isPackaged
+// so the port can never open in a shipped build, where the renderer holds the
+// daemon bearer token. Must run before app.whenReady().
 if (!app.isPackaged) {
-  app.commandLine.appendSwitch("remote-debugging-port", "9333");
+  app.commandLine.appendSwitch("remote-debugging-port", process.env.HIVE_CDP_PORT ?? "9333");
 }
 
 // Packaged-mode resource paths. process.resourcesPath is where

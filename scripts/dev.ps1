@@ -1,10 +1,22 @@
-# Windows dev launcher: prepare deps, tear down any prior stack, open the stack
-# terminals + Electron window (minimized, so they don't steal focus), then
-# verify health and print one STATUS block. Run it directly (not through bun) so
-# Start-Process creates real windows even from an agent's PowerShell tool:
+# Windows dev launcher: prepare deps, tear down any prior stack FOR THIS
+# INSTANCE, open the stack terminals + Electron window (minimized, so they don't
+# steal focus), then verify health and print one STATUS block. Run it directly
+# (not through bun) so Start-Process creates real windows even from an agent's
+# PowerShell tool:
 #
-#   pwsh -NoProfile -File scripts\dev.ps1              # full GUI stack (default)
-#   pwsh -NoProfile -File scripts\dev.ps1 -DaemonOnly  # daemon API only, no GUI
+#   pwsh -NoProfile -File scripts\dev.ps1                 # full GUI stack (instance 0)
+#   pwsh -NoProfile -File scripts\dev.ps1 -DaemonOnly     # daemon API only, no GUI
+#   pwsh -NoProfile -File scripts\dev.ps1 -Instance 1     # a second, isolated stack
+#
+# -Instance N (default 0) shifts every port by N and gives the stack its own
+# runtime root, so multiple agents can each run a full stack in parallel without
+# colliding:
+#       daemon 3117+N    vite 5173+N    electron CDP 9333+N
+#       runtime root  ~/.hive  (N=0)  |  ~/.hive-N  (N>0)
+# Attach the visual loop to this instance's REAL window on CDP 9333+N
+# (scripts/screenshot.ts --cdp 9333+N, or agent-browser connect 9333+N).
+# Teardown is scoped to the instance — relaunching instance 0 never disturbs a
+# running instance 1. Different clones/agents must pick different -Instance.
 #
 # Windows open minimized to the taskbar; the Electron app window shows unfocused
 # (see shell/src/main.ts) so a launch never pulls you out of what you're doing.
@@ -13,16 +25,27 @@
 # bun-spawned child does not survive a non-interactive agent session.
 
 param(
-  # Launch only the daemon (port 3117) and verify its API; skip Vite + Electron.
-  # If a healthy daemon is already running, reuse it instead of restarting, so
-  # testing the API doesn't disturb an open GUI stack.
-  [switch]$DaemonOnly
+  # Launch only the daemon and verify its API; skip Vite + Electron. If a
+  # healthy daemon is already running for this instance, reuse it instead of
+  # restarting, so testing the API doesn't disturb an open GUI stack.
+  [switch]$DaemonOnly,
+  # Instance number (default 0). Shifts all ports by this amount and isolates
+  # the runtime root so parallel stacks never collide. Keep it small (0..99).
+  [int]$Instance = 0
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$DaemonPort = 3117
-$VitePort = 5173
+if ($Instance -lt 0 -or $Instance -gt 99) { Write-Host "Instance must be 0..99 (got $Instance)"; exit 1 }
+$DaemonPort = 3117 + $Instance
+$VitePort = 5173 + $Instance
+$CdpPort = 9333 + $Instance
+$RuntimeRoot = if ($Instance -eq 0) { Join-Path $env:USERPROFILE '.hive' } else { Join-Path $env:USERPROFILE ".hive-$Instance" }
+# Per-instance launcher .bat files (one `set` per line — chaining `set VAR=val &&`
+# inline in cmd captures the trailing space into the value, which silently
+# corrupts a path like HIVE_RUNTIME_ROOT).
+$daemonBatName = "hive-daemon-launch-$Instance.bat"
+$batName = "hive-shell-launch-$Instance.bat"
 
 function Wait-For($timeoutSec, $check) {
   $deadline = (Get-Date).AddSeconds($timeoutSec)
@@ -33,11 +56,12 @@ function Wait-For($timeoutSec, $check) {
   return $false
 }
 
-# Daemon-only: reuse a healthy daemon if one is already up (don't restart it).
+# Daemon-only: reuse a healthy daemon if one is already up for this instance
+# (don't restart it).
 $reuse = $false
 if ($DaemonOnly) {
   try { $reuse = (Invoke-WebRequest "http://127.0.0.1:$DaemonPort/api/ready" -UseBasicParsing -TimeoutSec 2).Content -match '"status"\s*:\s*"ok"' } catch { $reuse = $false }
-  if ($reuse) { Write-Host "Daemon already healthy on :$DaemonPort - reusing (no restart)." }
+  if ($reuse) { Write-Host "Daemon already healthy on :$DaemonPort (instance $Instance) - reusing (no restart)." }
 }
 
 if (-not $reuse) {
@@ -51,47 +75,59 @@ if (-not $reuse) {
   Pop-Location
   if ($code -ne 0) { Write-Host "bun install failed (exit $code)"; exit 1 }
 
-  # 2. Fully tear down any prior Hive stack so relaunching restarts cleanly
-  #    instead of piling up windows. taskkill /T on the titled cmd hosts
-  #    cascades to their bun + Electron children; we then sweep any Electron
-  #    orphaned from an already-closed window (scoped to this repo's binary, so
-  #    other Electron apps like VS Code are untouched) and clear the ports.
-  # Scope the Electron sweep to the repo root (trailing separator so a sibling
-  # clone like hive-v2-experiment isn't matched). Bun nests electron under
-  # packages\shell\node_modules; this prefix survives a future Bun that hoists
-  # it to root node_modules.
-  $electronDir = $repo + [IO.Path]::DirectorySeparatorChar
-  # Scope the daemon/Vite cmd kill to this repo (their command line contains
-  # `cd /d <repo>`) so a second clone or a stray window that merely mentions
-  # "Hive Daemon" isn't force-killed. The Electron host goes through the temp
-  # hive-shell-launch.bat, matched by name.
-  $repoRe = [regex]::Escape($repo)
+  # 2. Tear down any prior stack FOR THIS INSTANCE only. Each instance's
+  #    processes are identified by unique strings in their command lines: the
+  #    daemon carries `HIVE_PORT=<port>`, Vite `--port <port>`, and the Electron
+  #    daemon + Electron hosts launch via this instance's per-instance .bat
+  #    files; Vite is inline and carries `--port <port>` in its command line.
+  #    taskkill /T cascades each titled cmd host to its bun + electron children;
+  #    the port sweep is the backstop that also reaps an Electron orphaned from
+  #    an already-closed window (it still holds the CDP port until it exits).
   Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" |
-    Where-Object { $_.CommandLine -match 'hive-shell-launch\.bat' -or ($_.CommandLine -match $repoRe -and $_.CommandLine -match 'Hive Daemon|Hive UI Vite') } |
+    Where-Object {
+      $_.CommandLine -and (
+        $_.CommandLine -match [regex]::Escape($daemonBatName) -or
+        $_.CommandLine -match [regex]::Escape($batName) -or
+        $_.CommandLine -match "--port $VitePort\b"
+      )
+    } |
     ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }
-  Get-CimInstance Win32_Process -Filter "Name='electron.exe'" |
-    Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($electronDir, [System.StringComparison]::OrdinalIgnoreCase) } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-  Get-NetTCPConnection -State Listen -LocalPort $DaemonPort, $VitePort -ErrorAction SilentlyContinue |
+  Get-NetTCPConnection -State Listen -LocalPort $DaemonPort, $VitePort, $CdpPort -ErrorAction SilentlyContinue |
     ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
 
   # 3. Launch (minimized, so windows land in the taskbar without stealing focus).
   #    Stagger so the daemon and Vite are serving before Electron probes them.
-  #    The Electron job goes through a .bat because clearing ELECTRON_RUN_AS_NODE
-  #    inline (set VAR= && ...) is unreliable in cmd; if it stays set, Electron
-  #    boots in plain-Node mode and never opens a window.
-  Write-Host "`nStarting Hive $(if ($DaemonOnly) { 'daemon' } else { 'dev stack' })..."
-  Start-Process -FilePath cmd.exe -ArgumentList '/k', "title Hive Daemon && cd /d $repo && bun --watch packages/daemon/src/server/start.ts" -WindowStyle Minimized
+  #    Per-instance env (HIVE_PORT / HIVE_RUNTIME_ROOT / HIVE_UI_DEV_URL /
+  #    HIVE_CDP_PORT) goes through a .bat (one `set` per line) so a parallel
+  #    instance stays fully separate AND no value picks up the trailing space
+  #    that inline `set VAR=val && ...` chaining would capture. Electron also
+  #    needs the .bat to *clear* ELECTRON_RUN_AS_NODE (if it stays set, Electron
+  #    boots in plain-Node mode and never opens a window). Vite needs no env, so
+  #    it stays inline.
+  Write-Host "`nStarting Hive $(if ($DaemonOnly) { 'daemon' } else { 'dev stack' }) (instance $Instance)..."
+  $daemonBat = Join-Path $env:TEMP $daemonBatName
+  @"
+title Hive Daemon [i$Instance]
+cd /d $repo
+set HIVE_PORT=$DaemonPort
+set HIVE_RUNTIME_ROOT=$RuntimeRoot
+bun --watch packages/daemon/src/server/start.ts
+"@ | Out-File -Encoding ASCII -FilePath $daemonBat
+  Start-Process -FilePath cmd.exe -ArgumentList '/k', $daemonBat -WindowStyle Minimized
   if (-not $DaemonOnly) {
     Start-Sleep -Seconds 2
-    Start-Process -FilePath cmd.exe -ArgumentList '/k', "title Hive UI Vite && cd /d $repo\packages\ui && bun run dev" -WindowStyle Minimized
+    Start-Process -FilePath cmd.exe -ArgumentList '/k', "title Hive UI Vite [i$Instance] && cd /d $repo\packages\ui && bun run dev --port $VitePort" -WindowStyle Minimized
     Start-Sleep -Seconds 2
-    $bat = "$env:TEMP\hive-shell-launch.bat"
+    $bat = Join-Path $env:TEMP $batName
     @"
-title Hive Shell Electron
+title Hive Shell Electron [i$Instance]
 cd /d $repo\packages\shell
 set ELECTRON_RUN_AS_NODE=
 set HIVE_UI_MODE=dev
+set HIVE_PORT=$DaemonPort
+set HIVE_RUNTIME_ROOT=$RuntimeRoot
+set HIVE_UI_DEV_URL=http://127.0.0.1:$VitePort
+set HIVE_CDP_PORT=$CdpPort
 bun run start
 "@ | Out-File -Encoding ASCII -FilePath $bat
     Start-Process -FilePath cmd.exe -ArgumentList '/k', $bat -WindowStyle Minimized
@@ -106,31 +142,34 @@ $daemon = Wait-For 30 { (Invoke-WebRequest "http://127.0.0.1:$DaemonPort/api/rea
 $kitOk = $false
 if ($daemon) {
   try {
-    $token = (Get-Content "$env:USERPROFILE\.hive\.token" -Raw).Trim()
+    $token = (Get-Content (Join-Path $RuntimeRoot '.token') -Raw).Trim()
     $resp = Invoke-WebRequest "http://127.0.0.1:$DaemonPort/api/kit/catalog" -Headers @{ Authorization = "Bearer $token" } -UseBasicParsing -TimeoutSec 3
     $kitOk = $resp.StatusCode -eq 200
   } catch { }
 }
 
 $vite = $false
-$electronUp = $false
+$cdpUp = $false
 if (-not $DaemonOnly) {
   $vite = Wait-For 15 { (Invoke-WebRequest "http://127.0.0.1:$VitePort/" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200 }
-  # Electron boots its window a few seconds slower than Vite serves, so poll.
-  $electronUp = Wait-For 30 { [bool](Get-Process | Where-Object { $_.MainWindowTitle -like '*Hive*' -and $_.ProcessName -like 'electron*' }) }
+  # The Electron window exposes the dev CDP port once its renderer is up. Probe
+  # /json/version (not just the window title): it proves the visual loop can
+  # actually attach, and is instance-scoped (each window owns a distinct port).
+  $cdpUp = Wait-For 30 { (Invoke-WebRequest "http://127.0.0.1:$CdpPort/json/version" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200 }
 }
 
-# Electron gates PASS here (agent launcher — it can't see the window). The
-# human launcher, dev.ts, treats Electron as informational.
+# Electron gates PASS here via its CDP port (agent launcher — it can't see the
+# window). The human launcher, dev.ts, treats Electron as informational.
 $pass = $daemon -and $kitOk
-if (-not $DaemonOnly) { $pass = $pass -and $vite -and $electronUp }
+if (-not $DaemonOnly) { $pass = $pass -and $vite -and $cdpUp }
 
-Write-Host "`n=== Hive $(if ($DaemonOnly) { 'daemon' } else { 'dev stack' }) ==="
+Write-Host "`n=== Hive $(if ($DaemonOnly) { 'daemon' } else { 'dev stack' }) (instance $Instance) ==="
 Write-Host ("  daemon    :{0} /api/ready -> {1}" -f $DaemonPort, $(if ($daemon) { 'ok' } else { 'unreachable' }))
 Write-Host ("  kit       /api/kit/catalog -> {0}" -f $(if ($kitOk) { 'ok' } else { 'unreachable' }))
 if (-not $DaemonOnly) {
   Write-Host ("  vite      :{0} -> {1}" -f $VitePort, $(if ($vite) { 'ok' } else { 'unreachable' }))
-  Write-Host ("  electron  {0}" -f $(if ($electronUp) { 'running (window visible)' } else { 'not detected' }))
+  Write-Host ("  electron  CDP :{0} -> {1}" -f $CdpPort, $(if ($cdpUp) { 'ok (visual loop ready)' } else { 'unreachable' }))
 }
+Write-Host ("  runtime   {0}" -f $RuntimeRoot)
 Write-Host ("  STATUS: {0}" -f $(if ($pass) { 'PASS' } else { 'FAIL' }))
 if (-not $pass) { exit 1 }

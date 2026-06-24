@@ -1,10 +1,16 @@
-// Dev orchestrator: prepares deps, tears down any prior stack, opens one
-// terminal per stack piece (minimized on Windows so they don't steal focus),
-// then verifies health and prints a STATUS block. Each terminal owns its
+// Dev orchestrator: prepares deps, tears down any prior stack for this instance,
+// opens one terminal per stack piece (minimized on Windows so they don't steal
+// focus), then verifies health and prints a STATUS block. Each terminal owns its
 // piece's lifecycle — close the window to stop it.
 //
-//   bun run dev:full                  full GUI stack (default)
+//   bun run dev:full                   full GUI stack (instance 0)
 //   bun run dev:full -- --daemon-only  daemon API only, no Vite/Electron
+//   bun run dev:full -- --instance 1   a second, isolated stack
+//
+// --instance N (default 0) shifts every port by N (daemon 3117+N, vite 5173+N,
+// electron CDP 9333+N) and isolates the runtime root (~/.hive, else ~/.hive-N),
+// so a second stack runs in parallel without colliding. Attach the visual loop
+// to the real window on CDP 9333+N (scripts/screenshot.ts --cdp 9333+N).
 //
 // Windows: cmd.exe windows opened via `start "title" /min cmd /k …`
 // macOS:   Terminal.app via osascript
@@ -13,7 +19,7 @@
 import { type SpawnOptions, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 
 type Job = {
   title: string;
@@ -22,31 +28,55 @@ type Job = {
   env?: Record<string, string>;
 };
 
+function parseInstance(argv: string[]): number {
+  const i = argv.indexOf("--instance");
+  if (i === -1) return 0;
+  const raw = argv[i + 1];
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 99) {
+    throw new Error(`--instance must be 0..99 (got ${raw})`);
+  }
+  return n;
+}
+
 const REPO_ROOT = resolve(import.meta.dir, "..");
-const DAEMON_PORT = 3117;
-const VITE_PORT = 5173;
 const daemonOnly = process.argv.includes("--daemon-only");
+const instance = parseInstance(process.argv);
+const DAEMON_PORT = 3117 + instance;
+const VITE_PORT = 5173 + instance;
+const CDP_PORT = 9333 + instance;
+const RUNTIME_ROOT =
+  instance === 0 ? join(homedir(), ".hive") : join(homedir(), `.hive-${instance}`);
 
 const jobs: Job[] = [
   {
     title: "Hive Daemon",
     cmd: "bun --watch packages/daemon/src/server/start.ts",
+    env: { HIVE_PORT: String(DAEMON_PORT), HIVE_RUNTIME_ROOT: RUNTIME_ROOT },
   },
   {
     title: "Hive UI (Vite)",
-    cmd: "bun run dev",
+    cmd: `bun run dev --port ${VITE_PORT}`,
     cwd: "packages/ui",
   },
   // Shell runs last so daemon + Vite are already serving by the time Electron
   // probes them. HIVE_UI_MODE=dev tells main.ts to load from the Vite URL
   // instead of ui/dist/. ELECTRON_RUN_AS_NODE is unset here because if it's
   // set globally in the user's env (Microsoft default, see e2e harness),
-  // Electron starts in plain-Node mode and never creates a window.
+  // Electron starts in plain-Node mode and never creates a window. HIVE_CDP_PORT
+  // opens the per-instance DevTools port the visual loop attaches to.
   {
     title: "Hive Shell (Electron)",
     cmd: "bun run start",
     cwd: "packages/shell",
-    env: { HIVE_UI_MODE: "dev", ELECTRON_RUN_AS_NODE: "" },
+    env: {
+      HIVE_UI_MODE: "dev",
+      ELECTRON_RUN_AS_NODE: "",
+      HIVE_PORT: String(DAEMON_PORT),
+      HIVE_RUNTIME_ROOT: RUNTIME_ROOT,
+      HIVE_UI_DEV_URL: `http://127.0.0.1:${VITE_PORT}`,
+      HIVE_CDP_PORT: String(CDP_PORT),
+    },
   },
 ];
 
@@ -57,7 +87,7 @@ const isMac = process.platform === "darwin";
 // own file (`.bat` on Windows, `.sh` elsewhere) sidesteps quoting and `&&`
 // pitfalls — most importantly, `set VAR=` (clear an env var) is unreliable
 // when chained with `&&` on Windows cmd.
-const stageDir = mkdtempSync(join(tmpdir(), "hive-dev-"));
+const stageDir = mkdtempSync(join(tmpdir(), `hive-dev-i${instance}-`));
 
 function writeBat(job: Job, fullCwd: string): string {
   const path = join(stageDir, `${job.title.replace(/\W+/g, "-")}.bat`);
@@ -138,25 +168,22 @@ function installAll(): void {
 // ports would leave the empty cmd /k windows and the Electron behind.
 function stopPriorStack(): void {
   if (isWin) {
-    // Kill the titled cmd host windows (taskkill /T cascades to their bun +
-    // Electron children), sweep any Electron orphaned from an already-closed
-    // window (scoped to this repo's tree so other Electron apps are spared),
-    // then clear the ports as a backstop. Scoped to the repo root (with a
-    // trailing separator so a sibling clone like hive-v2-experiment isn't
-    // matched) — Bun nests electron under packages/shell/node_modules, and
-    // this prefix survives a future Bun that hoists it to root node_modules.
-    const electronDir = REPO_ROOT.endsWith(sep) ? REPO_ROOT : REPO_ROOT + sep;
+    // Tear down only THIS instance. Its cmd host windows are staged under a
+    // per-instance temp prefix (hive-dev-i<N>-); taskkill /T cascades each to
+    // its bun + Electron children. The port sweep is the backstop that also
+    // reaps an Electron orphaned from an already-closed window — it still holds
+    // the CDP port (9333+N) until it exits. A parallel instance uses different
+    // ports and a different prefix, so it's untouched.
     const cmd = [
-      `Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | Where-Object { $_.CommandLine -match 'hive-dev-|hive-shell-launch\\.bat' } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }`,
-      `Get-CimInstance Win32_Process -Filter "Name='electron.exe'" | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith('${electronDir}', [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`,
-      `Get-NetTCPConnection -State Listen -LocalPort ${DAEMON_PORT},${VITE_PORT} -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`,
+      `Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" | Where-Object { $_.CommandLine -match 'hive-dev-i${instance}-' } | ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }`,
+      `Get-NetTCPConnection -State Listen -LocalPort ${DAEMON_PORT},${VITE_PORT},${CDP_PORT} -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`,
     ].join("; ");
     spawnSync("powershell", ["-NoProfile", "-Command", cmd], { stdio: "ignore" });
     return;
   }
   // mac/linux: a launcher can't reliably close terminal windows, but it can
-  // free the ports by killing whatever bun is bound to them.
-  for (const port of [DAEMON_PORT, VITE_PORT]) {
+  // free this instance's ports by killing whatever is bound to them.
+  for (const port of [DAEMON_PORT, VITE_PORT, CDP_PORT]) {
     const found = spawnSync("lsof", ["-ti", `tcp:${port}`], { encoding: "utf8" });
     for (const pid of (found.stdout ?? "")
       .split("\n")
@@ -189,26 +216,11 @@ async function daemonHealthy(): Promise<boolean> {
   }
 }
 
-function electronStatus(): "running" | "not detected" | "unknown" {
-  try {
-    if (isWin) {
-      const r = spawnSync("tasklist", ["/FI", "IMAGENAME eq electron.exe", "/NH"], {
-        encoding: "utf8",
-      });
-      return (r.stdout ?? "").toLowerCase().includes("electron.exe") ? "running" : "not detected";
-    }
-    const r = spawnSync("pgrep", ["-x", isMac ? "Electron" : "electron"], { encoding: "utf8" });
-    return (r.stdout ?? "").trim().length > 0 ? "running" : "not detected";
-  } catch {
-    return "unknown";
-  }
-}
-
 type Health = {
   daemon: boolean;
   vite: boolean;
   kitOk: boolean;
-  electron: "running" | "not detected" | "unknown";
+  cdp: boolean;
 };
 
 async function verify(): Promise<Health> {
@@ -221,11 +233,21 @@ async function verify(): Promise<Health> {
     ? false
     : await waitFor(15_000, async () => (await fetch(`http://127.0.0.1:${VITE_PORT}/`)).ok);
 
+  // The Electron window exposes its dev CDP port once the renderer is up; the
+  // /json/version probe proves the visual loop can actually attach (and is
+  // instance-scoped — each window owns a distinct port).
+  const cdp = daemonOnly
+    ? false
+    : await waitFor(
+        30_000,
+        async () => (await fetch(`http://127.0.0.1:${CDP_PORT}/json/version`)).ok,
+      );
+
   // Health-check the deploy-manager's kit surface (the agent stack is gone — ADR-0021).
   let kitOk = false;
   if (daemon) {
     try {
-      const token = readFileSync(join(homedir(), ".hive", ".token"), "utf8").trim();
+      const token = readFileSync(join(RUNTIME_ROOT, ".token"), "utf8").trim();
       const res = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/kit/catalog`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -235,22 +257,23 @@ async function verify(): Promise<Health> {
     }
   }
 
-  return { daemon, vite, kitOk, electron: daemonOnly ? "unknown" : electronStatus() };
+  return { daemon, vite, kitOk, cdp };
 }
 
 function printStatus(h: Health): void {
-  // Electron is informational here (this is the human launcher — you can see
-  // the window). The agent launcher, dev.ps1, gates PASS on the window instead.
+  // The CDP port is informational here (this is the human launcher — you can see
+  // the window). The agent launcher, dev.ps1, gates PASS on it instead.
   const pass = daemonOnly ? h.daemon && h.kitOk : h.daemon && h.vite && h.kitOk;
-  console.log(`\n=== Hive ${daemonOnly ? "daemon" : "dev stack"} ===`);
+  console.log(`\n=== Hive ${daemonOnly ? "daemon" : "dev stack"} (instance ${instance}) ===`);
   console.log(`  daemon    :${DAEMON_PORT} /api/ready → ${h.daemon ? "ok" : "unreachable"}`);
   console.log(`  kit       /api/kit/catalog → ${h.kitOk ? "ok" : "unreachable"}`);
   if (!daemonOnly) {
     console.log(`  vite      :${VITE_PORT} → ${h.vite ? "ok" : "unreachable"}`);
     console.log(
-      `  electron  ${h.electron}${h.electron === "running" ? " (window should be visible)" : ""}`,
+      `  electron  CDP :${CDP_PORT} → ${h.cdp ? "ok (visual loop ready)" : "unreachable"}`,
     );
   }
+  console.log(`  runtime   ${RUNTIME_ROOT}`);
   console.log(`  STATUS: ${pass ? "PASS" : "FAIL"}`);
   if (!pass) process.exitCode = 1;
 }

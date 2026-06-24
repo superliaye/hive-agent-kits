@@ -17,25 +17,28 @@ The scripts derive the repo root themselves, so this works from any clone path o
 ### Agent: run via the PowerShell tool
 
 ```
-pwsh -NoProfile -File scripts/dev.ps1              # full GUI stack (default)
+pwsh -NoProfile -File scripts/dev.ps1              # full GUI stack (instance 0)
 pwsh -NoProfile -File scripts/dev.ps1 -DaemonOnly  # daemon API only, no GUI
+pwsh -NoProfile -File scripts/dev.ps1 -Instance 1  # a second, isolated stack
 ```
 
-It installs deps, tears down any prior stack, launches, and verifies, then prints a STATUS block (specifics are in `scripts/dev.ps1`):
+It installs deps, tears down any prior stack **for this instance**, launches, and verifies, then prints a STATUS block (specifics are in `scripts/dev.ps1`):
 
 ```
-=== Hive dev stack ===
+=== Hive dev stack (instance 0) ===
   daemon    :3117 /api/ready -> ok
-  agents    agent-manager, root
+  kit       /api/kit/catalog -> ok
   vite      :5173 -> ok
-  electron  running (window visible)
+  electron  CDP :9333 -> ok (visual loop ready)
+  runtime   C:\Users\<you>\.hive
   STATUS: PASS
 ```
 
 Read that block. `STATUS: PASS` means everything it launched is up; `STATUS: FAIL` names what's missing. Exit code matches (0 / 1).
 
-- **Default = full GUI stack** (daemon + Vite + Electron window), for full-loop verification. Windows open **minimized to the taskbar** and the Electron window shows **unfocused** (see [packages/shell/src/main.ts](../../../packages/shell/src/main.ts)), so a launch never steals focus from what you're doing.
-- **`-DaemonOnly`** launches just the daemon and verifies `/api/ready` + agents — no Vite, no Electron. If a daemon is already healthy it reuses it (won't disturb a running GUI stack). Use when you only need the HTTP API.
+- **Default = full GUI stack** (daemon + Vite + Electron window), for full-loop verification. Windows open **minimized to the taskbar** and the Electron window shows **unfocused** (see [packages/shell/src/main.ts](../../../packages/shell/src/main.ts)), so a launch never steals focus from what you're doing. The Electron window also opens a dev-only DevTools port (`9333`, `!app.isPackaged`) that the visual loop attaches to — STATUS gates PASS on it.
+- **`-DaemonOnly`** launches just the daemon and verifies `/api/ready` + the kit catalog — no Vite, no Electron. If a daemon is already healthy it reuses it (won't disturb a running GUI stack). Use when you only need the HTTP API.
+- **`-Instance N`** (default 0) runs a **fully isolated** parallel stack: every port shifts by N (daemon `3117+N`, vite `5173+N`, electron CDP `9333+N`) and the runtime root becomes `~/.hive-N` (its own token, audit DB, deployed state). Teardown is instance-scoped, so relaunching one instance never disturbs another. This is how **multiple agents test in parallel** — each picks a distinct N. The cross-platform human launcher takes `--instance N` (`bun run dev:full -- --instance 1`).
 
 Two hard rules are why this is a PowerShell `.ps1` and not the Bash tool or `bun run dev:full`:
 
@@ -55,16 +58,33 @@ Cross-platform (`scripts/dev.ts` — cmd windows on Windows, Terminal.app on mac
 
 Rerun the script (it tears down any prior stack first) or close the cmd windows. The daemon writes to `~/.hive/`.
 
-## Headless screenshot (dev-in-browser visual loop)
+## Visual loop
 
-With the dev stack up, capture the live UI from Vite as a PNG — no interactive login:
+Hive is a **desktop app first** (it also renders as a plain web page). There are two ways to get pixels — **default to capturing the real Electron window**, and only drop to browser mode for a quick layout check.
+
+### Capture the real desktop window (CDP) — the default
+
+With the dev stack up, the Electron window exposes a DevTools port (`9333`, or `9333+N` for `-Instance N`). Attach to it and screenshot the **actual app** — live `window.__hive`, the real renderer and deployed state:
+
+```
+bun run scripts/screenshot.ts --cdp 9333 --out window.png            # instance 0
+bun run scripts/screenshot.ts --cdp 9334 --out window.png            # instance 1
+```
+
+This is what to use when verifying anything desktop-specific (native title bar, system-accent, close-guard, IPC features). It needs the full stack up (the shell, so NOT `-DaemonOnly`). No token handling — the shell already authed the renderer. (Known caveat: under CDP, Playwright's color-scheme emulation renders **light** even though the window chrome is dark, so it isn't yet a faithful dark-theme capture — the DOM/state are the real window's.)
+
+For **interactive** driving (clicks, typing, multi-step flows), the `electron-visual-loop` skill drives the same port with `agent-browser connect 9333`. `agent-browser` is **not installed by default** — use `npx agent-browser …` or `npm i -g agent-browser`. For a one-shot screenshot, `--cdp` above needs no extra install.
+
+### Quick browser-mode check (the web rendering)
+
+When you only need a fast layout/light-theme look and don't care about Electron-only surface, capture the Vite page headlessly instead — no interactive login:
 
 ```
 bun run scripts/screenshot.ts [route] --out <path> [--full-page] [--wait <selector>] [--viewport WxH] [--vite <url>] [--daemon <url>]
 bun run scripts/screenshot.ts / --out shot.png            # the app's root, default viewport
 ```
 
-It seeds auth from `~/.hive/.token` (`HIVE_TOKEN` env overrides), folding the token plus the daemon URL into `?baseUrl=&token=` exactly as the UI's `resolveApiConfig()` reads them, then waits for the React app to mount in `#root` and writes the PNG. The token value is never printed. Requires the dev stack running (`scripts/dev.ps1`) so Vite (:5173) and the daemon (:3117) are serving; defaults match those ports. Exits non-zero on a missing token, a failed nav (stack down), or an empty render.
+It seeds auth from `~/.hive/.token` (`HIVE_TOKEN` env overrides), folding the token plus the daemon URL into `?baseUrl=&token=` exactly as the UI's `resolveApiConfig()` reads them, then waits for the React app to mount in `#root` and writes the PNG. The token value is never printed. This is the **web** rendering: light theme, and `window.__hive` is absent so Electron-only features render their "unavailable" state — don't use it to judge desktop behavior. Requires Vite (:5173) and the daemon (:3117) serving; for `-Instance N` pass `--vite http://localhost:5173+N --daemon http://127.0.0.1:3117+N`. Exits non-zero on a missing token, a failed nav (stack down), or an empty render.
 
 ## Ship mode
 
