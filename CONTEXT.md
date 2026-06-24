@@ -1,7 +1,8 @@
 # Hive — Capability Deploy-Manager
 
-A control surface for the [my-agent-kits](https://github.com/superliaye/my-agent-kits)
-**Kit**: it **syncs** the latest Kit at runtime and **deploys** selected
+A control surface for managing **agent capabilities** across one or more
+**Sources** — git repositories of **Capabilities** that conform to Hive's
+capability format. Hive **syncs** each Source at runtime and **deploys** selected
 **Capabilities** into the **CLI homes** of Claude Code and Codex — with visibility,
 explicit control, and easy reconfigure on top of what the upstream `agent-kit`
 wizard does. Priority #1 is managing and deploying Capabilities at scale; Hive's
@@ -10,21 +11,28 @@ that section below, which keeps (does not delete) the agent vocabulary.
 
 ## Language (current — the deploy-manager)
 
-**Kit**:
-The my-agent-kits upstream repo — the single library of Capability artifacts Hive
-manages. Hive tracks its `main` tip; there is no app-level version pinning.
-_Avoid_: "the repo", "the package" (Kit is the specific upstream library).
+**Source**:
+A tracked git repository of **Capabilities** — a *kit* of capabilities — that
+conforms to Hive's capability format. Hive manages one or more Sources; each is
+**synced** independently into its own **Mirror**. A Source can be activated,
+deactivated, and deleted. Hive tracks each Source's last synced revision; there is
+no app-level version pinning (every Source tracks its own tip). How multiple active
+Sources reconcile (a bundled default Source, ordering, duplicate handling) is a
+product decision recorded in the multi-source ADR, not here.
+_Avoid_: "the repo", "the package" (a Source is the tracked, conformant
+repository). "Kit" stays fine informally — a Source is a kit of Capabilities — but
+"Source" is the precise term once more than one is in play.
 
 **Capability**:
-A deployable unit in a **Kit**. Five kinds, the upstream taxonomy:
+A deployable unit in a **Source**. Five kinds, the upstream taxonomy:
 - **instruction** — a body of rules that is concatenated into a CLI's global
   instruction file (whole-file ownership — a Deploy overwrites it).
 - **skill** — an on-demand technique folder copied into a CLI's skills location.
-- **agent** (lowercase, Kit-namespaced) — a CLI **subagent** artifact: a Claude
+- **agent** (lowercase, Source-namespaced) — a CLI **subagent** artifact: a Claude
   subagent file, or its translation for Codex. **This is NOT the title-case
   Agent** of the deferred #2 vocabulary (a persistent Hive identity). The two
-  share a word and nothing else — `agent` here is a deployable Capability the
-  Kit ships; **Agent** there is a Hive entity that does not exist in #1. When the
+  share a word and nothing else — `agent` here is a deployable Capability a
+  Source ships; **Agent** there is a Hive entity that does not exist in #1. When the
   word matters, say "the `agent` capability" vs "the Hive **Agent**".
 - **plugin** — a Claude Code plugin, installed via the Claude CLI (Claude-only).
 - **bundle** — a wrapper around an external installer that vends its own skills.
@@ -43,48 +51,54 @@ live apart from the rest of its config).
 _Avoid_: "config dir" (CLI home is the specific per-CLI global root a Deploy writes to).
 
 **Sync**:
-Fetching the latest **Kit** tree into Hive's private **Mirror** — a runtime
-refresh with no rebuild. A Sync records the exact upstream revision it fetched and
-keeps the previous Mirror until the new one is fully in place. A Sync that fails
-(offline, rate-limited, or a bad download) keeps the last good Mirror and is
-surfaced as a distinct freshness state — never as "up to date".
+Fetching the latest tree of a **Source** into that Source's private **Mirror** — a
+runtime refresh with no rebuild. Each active Source is synced independently. A Sync
+records the exact upstream revision it fetched and keeps the previous Mirror until
+the new one is fully in place. A Sync that fails (offline, rate-limited, or a bad
+download) keeps the last good Mirror and is surfaced as a distinct freshness state —
+never as "up to date".
 
 **Mirror**:
-Hive's private, read-only copy of a synced **Kit** — the source every **Deploy**
-reads from. Distinct from the **CLI homes** a Deploy writes to.
+A **Source**'s private, read-only copy under the Hive home — what a **Deploy** reads
+its artifacts from. Each Source has its own Mirror; Hive never physically merges
+Sources into one tree (the unified view across Sources is computed, not stored).
+Distinct from the **CLI homes** a Deploy writes to.
 
 **Deploy**:
-Writing a selected set of **Capabilities** from the **Mirror** into the **CLI
-homes**, reproducing the upstream contract with full fidelity. Always explicit
-(never automatic). Ordered best-effort: each kind is applied in turn and the
-**Deployment Ledger** records what actually landed, so a partial failure leaves a
-consistent record and a re-Deploy is idempotent.
+Writing a selected set of **Capabilities** from the active Sources' **Mirrors**
+into the **CLI homes**, reproducing the upstream contract with full fidelity.
+Always explicit (never automatic). Ordered best-effort: each kind is applied in
+turn and the **Deployment Ledger** records what actually landed, so a partial
+failure leaves a consistent record and a re-Deploy is idempotent.
 
 **Deployment Ledger**:
 The shared, durable record of what is currently deployed on the machine — reused
 for interop with the `agent-kit` CLI (both write it). A name in the Ledger is
-Kit-owned and may be reconciled away when deselected; anything on disk but absent
+Hive-owned and may be reconciled away when deselected; anything on disk but absent
 from the Ledger is the user's and is never touched. Skills and `agent`
 capabilities are pruned by name on reconcile; plugins and bundles are never
-auto-removed (Hive only hints).
+auto-removed (Hive only hints). Which **Source** a deployed name came from is
+recorded in Hive-private deploy metadata, never in this interop Ledger.
 
 **Preset**:
-A named selection of **Capabilities** from the **Kit**. Selecting a Preset seeds a
+A named selection of **Capabilities** from a **Source**. Selecting a Preset seeds a
 **Selection**. Presets may extend one another (the child's set unions the
 parent's). Hive consumes Presets; authoring them is upstream (no preset editor).
 
 **Selection**:
 The user's chosen set to **Deploy** — a Preset seed plus individual toggles plus
-the target CLIs. Resolves to a concrete per-kind set of names. A Selection that
-includes a name blocked by a within-kind collision is refused.
+the target CLIs. Resolves to a concrete per-kind set of names across the active
+**Sources**. How a cross-Source name clash resolves is a product decision recorded
+in the multi-source ADR.
 
 **Deploy Diff**:
 The difference between the currently-deployed state and a pending **Selection**:
 what would be **added**, **removed**, or **changed**. *Changed* is detected by
 content, not just by name — a Capability whose upstream body changed under the
-same name still shows as changed. The Diff also warns when a Deploy would replace
-a user-authored instruction file (e.g. an existing hand-written global instruction
-file the user owns).
+same name still shows as changed. The Diff also warns when a Deploy would replace a
+user-authored instruction file (e.g. an existing hand-written global instruction
+file the user owns). How it surfaces a duplicate displaced across **Sources** is a
+product decision recorded in the multi-source ADR.
 
 ## Audit and trace (current)
 
@@ -136,12 +150,13 @@ tokens) live in the Secrets primitive, not in Configuration.
 
 ## Relationships (current)
 
-- A **Sync** fetches a **Kit** into the **Mirror**; a **Deploy** writes selected
-  **Capabilities** from the **Mirror** into the **CLI homes** of the chosen targets.
+- A **Sync** fetches a **Source** into that Source's **Mirror**; a **Deploy** writes
+  selected **Capabilities** from the active Sources' Mirrors into the **CLI homes**
+  of the chosen targets.
 - A **Preset** seeds a **Selection**; individual toggles and target CLIs adjust it.
 - A **Deploy Diff** compares the current deployed state (the **Deployment Ledger**
   + on-disk content) to a pending **Selection**.
-- The **Deployment Ledger** is the ownership boundary: Kit-owned names may be
+- The **Deployment Ledger** is the ownership boundary: Hive-owned names may be
   reconciled; user files are untouched.
 - A **Capability** is one of five kinds; the lowercase `agent` capability is a CLI
   subagent artifact and is **not** the deferred Hive **Agent**.
@@ -230,11 +245,11 @@ External systems that inform Hive's design. We borrow specific patterns; we are
 not cloning any.
 
 **my-agent-kits** — [github.com/superliaye/my-agent-kits](https://github.com/superliaye/my-agent-kits).
-The **Kit** Hive manages: the upstream library of deployable Capabilities and the
-`agent-kit` CLI whose deploy contract Hive reproduces. The deploy contract (target
-locations per kind, the include/sidecar/translation rules, the Deployment Ledger
-schema) is read from a pinned clone — see AGENTS.md "Reference projects" for the
-local path and the exact verified SHA.
+The original **Source** of Capabilities and the `agent-kit` CLI whose deploy
+contract Hive reproduces. The deploy contract (target locations per kind, the
+include/sidecar/translation rules, the Deployment Ledger schema) is read from a
+pinned clone — see AGENTS.md "Reference projects" for the local path and the exact
+verified SHA.
 
 **OpenClaw** — [github.com/openclaw/openclaw](https://github.com/openclaw/openclaw).
 Public TypeScript personal-AI assistant on the `pi-*` package family. Reference
