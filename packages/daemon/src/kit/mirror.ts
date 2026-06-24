@@ -16,13 +16,12 @@ import {
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { log } from "../lib/log.ts";
 import { parseTar, topFolder } from "./tar.ts";
-import type { DeployTargets } from "./targets.ts";
 import { MirrorProvenance } from "./types.ts";
 
 const PROVENANCE_FILE = ".hive-mirror.json";
 
-export function readProvenance(targets: DeployTargets): MirrorProvenance | null {
-  const p = join(targets.mirrorRoot(), PROVENANCE_FILE);
+export function readProvenance(mirrorRoot: string): MirrorProvenance | null {
+  const p = join(mirrorRoot, PROVENANCE_FILE);
   if (!existsSync(p)) return null;
   try {
     return MirrorProvenance.parse(JSON.parse(readFileSync(p, "utf8")));
@@ -31,14 +30,15 @@ export function readProvenance(targets: DeployTargets): MirrorProvenance | null 
   }
 }
 
-export function mirrorExists(targets: DeployTargets): boolean {
-  return existsSync(join(targets.mirrorRoot(), "capabilities"));
+export function mirrorExists(mirrorRoot: string): boolean {
+  return existsSync(join(mirrorRoot, "capabilities"));
 }
 
 // Sweep stale partial temp extract dirs from a prior aborted sync. Called on
-// startup and before each new extraction.
-export function sweepStaleTmp(targets: DeployTargets): void {
-  const root = targets.kitTmpRoot();
+// startup and before each new extraction. The tmp root is shared across Sources
+// (each extraction stages into a uniquely-named extract-<sha>-<ts> dir).
+export function sweepStaleTmp(tmpRoot: string): void {
+  const root = tmpRoot;
   if (!existsSync(root)) return;
   for (const entry of readdirSync(root)) {
     if (entry.startsWith("extract-")) {
@@ -55,8 +55,7 @@ export function sweepStaleTmp(targets: DeployTargets): void {
 // stage→mirror; a crash between the two leaves the only copy under .prev). If
 // mirrorRoot is missing but a `.prev-*` backup exists, restore the newest one;
 // then sweep any leftover `.prev-*` backups so they don't accumulate.
-export function recoverMirror(targets: DeployTargets): void {
-  const mirrorRoot = targets.mirrorRoot();
+export function recoverMirror(mirrorRoot: string): void {
   const parent = dirname(mirrorRoot);
   if (!existsSync(parent)) return;
   const base = mirrorRoot.split(/[\\/]/).pop() ?? "mirror";
@@ -105,12 +104,12 @@ function destEscapes(stageDir: string, rel: string): boolean {
 // Extract a gzip'd codeload tarball into the mirror, atomically. The top-folder
 // strip is content-derived (topFolder). Returns the provenance written.
 export function writeMirror(
-  targets: DeployTargets,
+  mirrorRoot: string,
+  tmpRoot: string,
   tarBuf: Uint8Array,
   sha: string,
 ): MirrorProvenance {
-  sweepStaleTmp(targets);
-  const tmpRoot = targets.kitTmpRoot();
+  sweepStaleTmp(tmpRoot);
   mkdirSync(tmpRoot, { recursive: true });
   const stageDir = join(tmpRoot, `extract-${sha.slice(0, 12)}-${Date.now()}`);
   mkdirSync(stageDir, { recursive: true });
@@ -142,7 +141,6 @@ export function writeMirror(
 
   // Atomic swap: move the current mirror aside, move the stage in, then drop the
   // old one. Retains last-good until the new tree is in place.
-  const mirrorRoot = targets.mirrorRoot();
   mkdirSync(dirname(mirrorRoot), { recursive: true });
   const backup = `${mirrorRoot}.prev-${Date.now()}`;
   const hadPrior = existsSync(mirrorRoot);

@@ -19,7 +19,7 @@ function fakeTargets(redirected: boolean): DeployTargets {
     codexHome: () => "/tmp/cx",
     agentsHome: () => "/tmp/a",
     ledgerPath: () => "/tmp/l",
-    mirrorRoot: () => "/tmp/m",
+    mirrorRoot: (sourceId: string) => `/tmp/m/${sourceId}`,
     fingerprintPath: () => "/tmp/f",
     kitTmpRoot: () => "/tmp/t",
     childEnv: (base) => ({ ...base }),

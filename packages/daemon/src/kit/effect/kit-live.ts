@@ -9,12 +9,15 @@ import type {
   DeployResult,
   KitState,
   Selection,
-  SyncStatus,
+  Source,
+  SourceSyncStatus,
+  SyncRunResult,
   VerifyReport,
 } from "@hive/contract";
 import { Context, Effect, Layer } from "effect";
 import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
+import { SourceRegistry, type SourceRegistrySvc } from "../../sources/effect/sources-live.ts";
 import { readCatalog } from "../catalog.ts";
 import {
   type BinaryProbe,
@@ -25,21 +28,27 @@ import {
 } from "../deploy/adapter.ts";
 import { type DeployInput, runDeploy } from "../deploy/engine.ts";
 import { readLedger } from "../ledger.ts";
-import { mirrorExists, readProvenance, recoverMirror, sweepStaleTmp } from "../mirror.ts";
+import { readProvenance, recoverMirror, sweepStaleTmp } from "../mirror.ts";
 import { computeDiff, resolveSelection } from "../selection.ts";
-import { type HttpFetch, productionFetch, runSync, type SyncOutcome } from "../sync.ts";
+import { type HttpFetch, productionFetch, syncSource } from "../sync.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
 import type { DeployAuditEvents } from "../types.ts";
 import { runVerify } from "../verify.ts";
-import { DeployError, SyncError } from "./errors.ts";
+import { DeployError, SyncError, type SyncFailureReason } from "./errors.ts";
+
+// The last sync error for a Source, surfaced in its freshness state. `reason`
+// stays on the typed channel (the wire `errorReason` is free-form, but the
+// in-process branch is a checked discriminant).
+type LastSyncError = { reason: SyncFailureReason; rateLimitReset?: number };
 
 export type KitSvc = {
   // Read the catalog from the Mirror (resilient; problems surfaced).
   catalog(): Catalog;
-  // Current sync + ledger state.
+  // Current sync + ledger state (per-Source freshness array).
   state(): KitState;
-  // Run a sync; returns the diff-from-deployed delta state via state() after.
-  sync(): Effect.Effect<SyncOutcome, SyncError>;
+  // Run a per-Source sync over the active Sources; one Source's failure never
+  // fails the whole run. Returns the per-Source outcomes.
+  sync(): Effect.Effect<SyncRunResult>;
   // Compute the Deploy Diff for a Selection.
   diff(selection: Selection): Effect.Effect<DeployDiff, DeployError>;
   // On-disk self-check: per-capability per-target status (present/missing/drifted/
@@ -62,15 +71,19 @@ export type CreateKitOptions = {
   probe?: BinaryProbe;
 };
 
-// Build the last-sync status. A failed/rate-limited check is surfaced distinctly
-// and never reports "up to date".
-function buildSyncStatus(
-  targets: DeployTargets,
-  lastError: { reason: string; rateLimitReset?: number } | null,
-): SyncStatus {
-  const prov = readProvenance(targets);
+// Build one Source's freshness status. A failed/rate-limited check is surfaced
+// distinctly and never reports "up to date". `origin` is read live from the
+// current registry entry, not a cached value.
+function buildSourceSyncStatus(
+  source: Source,
+  mirrorRoot: string,
+  lastError: LastSyncError | undefined,
+): SourceSyncStatus {
+  const prov = readProvenance(mirrorRoot);
+  const base = { sourceId: source.id, origin: source.origin };
   if (lastError) {
     return {
+      ...base,
       state: lastError.reason === "rate_limited" ? "rate_limited" : "check_failed",
       sha: prov?.sha ?? null,
       fetchedAt: prov?.fetchedAt ?? null,
@@ -81,6 +94,7 @@ function buildSyncStatus(
     };
   }
   return {
+    ...base,
     state: prov ? "up_to_date" : "check_failed",
     sha: prov?.sha ?? null,
     fetchedAt: prov?.fetchedAt ?? null,
@@ -88,7 +102,11 @@ function buildSyncStatus(
   };
 }
 
-function buildSvc(opts: CreateKitOptions): KitSvc {
+function activeSources(registry: SourceRegistrySvc): readonly Source[] {
+  return registry.currentSources().filter((s) => s.active);
+}
+
+function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
   const targets = opts.targets ?? defaultDeployTargets();
   const fetchImpl = opts.fetch ?? productionFetch();
   const fx: DeployFsExec = {
@@ -98,37 +116,74 @@ function buildSvc(opts: CreateKitOptions): KitSvc {
   };
   const events = new TypedEmitter<DeployAuditEvents>();
 
-  // Last sync error, for the freshness state surfaced by state().
-  let lastSyncError: { reason: string; rateLimitReset?: number } | null = null;
+  // Per-Source last sync error, keyed by Source id. A Map so a lookup miss is a
+  // clean `undefined` under noUncheckedIndexedAccess — never an `as`.
+  const lastSyncError = new Map<string, LastSyncError>();
+
+  // Mirror roots for a captured active-Source snapshot, in registry order — the
+  // deploy/diff read path unions content across these. Derive both the catalog
+  // input and the mirror roots from ONE snapshot per verb so a concurrent
+  // registry mutation can't make them diverge mid-operation.
+  const mirrorRootsOf = (active: readonly Source[]): readonly string[] =>
+    active.map((s) => targets.mirrorRoot(s.id));
 
   return {
     events,
-    catalog: () =>
-      mirrorExists(targets) ? readCatalog(targets) : { entries: [], presets: [], problems: [] },
-    state: () => ({ sync: buildSyncStatus(targets, lastSyncError), ledger: readLedger(targets) }),
+    catalog: () => readCatalog(targets, activeSources(registry)),
+    state: () => ({
+      sync: activeSources(registry).map((s) =>
+        buildSourceSyncStatus(s, targets.mirrorRoot(s.id), lastSyncError.get(s.id)),
+      ),
+      ledger: readLedger(targets),
+    }),
     verify: () => runVerify(targets),
     sync: () =>
-      runSync(targets, fetchImpl).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            lastSyncError = null;
-          }),
-        ),
-        Effect.tapError((err: SyncError) =>
-          Effect.sync(() => {
-            lastSyncError = {
-              reason: err.reason,
-              ...(err.rateLimitReset !== undefined ? { rateLimitReset: err.rateLimitReset } : {}),
-            };
-          }),
-        ),
-      ),
+      Effect.gen(function* () {
+        const sources = activeSources(registry);
+        const outcomes = yield* Effect.forEach(
+          sources,
+          (source) =>
+            Effect.gen(function* () {
+              const result = yield* Effect.result(
+                syncSource(
+                  targets.mirrorRoot(source.id),
+                  targets.kitTmpRoot(),
+                  source.origin,
+                  fetchImpl,
+                ),
+              );
+              if (result._tag === "Success") {
+                lastSyncError.delete(source.id);
+                return {
+                  sourceId: source.id,
+                  origin: source.origin,
+                  status: result.success.status,
+                } satisfies SyncRunResult["sources"][number];
+              }
+              const err: SyncError = result.failure;
+              lastSyncError.set(source.id, {
+                reason: err.reason,
+                ...(err.rateLimitReset !== undefined ? { rateLimitReset: err.rateLimitReset } : {}),
+              });
+              return {
+                sourceId: source.id,
+                origin: source.origin,
+                status: "failed",
+                errorReason: err.reason,
+                ...(err.rateLimitReset !== undefined ? { rateLimitReset: err.rateLimitReset } : {}),
+              } satisfies SyncRunResult["sources"][number];
+            }),
+          { concurrency: 1 },
+        );
+        return { sources: outcomes };
+      }),
     diff: (selection) =>
       Effect.try({
         try: () => {
-          const catalog = readCatalog(targets);
+          const active = activeSources(registry);
+          const catalog = readCatalog(targets, active);
           const resolved = resolveSelection(catalog, selection);
-          return computeDiff(targets, catalog, resolved);
+          return computeDiff(targets, mirrorRootsOf(active), catalog, resolved);
         },
         catch: (err) =>
           err instanceof DeployError
@@ -137,7 +192,8 @@ function buildSvc(opts: CreateKitOptions): KitSvc {
       }),
     deploy: (selection) =>
       Effect.gen(function* () {
-        const catalog = readCatalog(targets);
+        const active = activeSources(registry);
+        const catalog = readCatalog(targets, active);
         const resolved = yield* Effect.try({
           try: () => resolveSelection(catalog, selection),
           catch: (err) =>
@@ -145,11 +201,15 @@ function buildSvc(opts: CreateKitOptions): KitSvc {
               ? err
               : new DeployError({ reason: "io", message: String(err) }),
         });
-        const prov = readProvenance(targets);
+        // The multi-Source world has no single kit SHA: the deploy audit kitSha
+        // and the interop Ledger kitVersion are retired unconditionally (both
+        // N==1 and N>1). Winner-per-key in the fingerprint sidecar is the
+        // deferred AggregationService.
         const input: DeployInput = {
           selection: resolved,
-          kitSha: prov?.sha ?? null,
-          kitVersion: prov?.sha ?? "",
+          kitSha: null,
+          kitVersion: "",
+          mirrorRoots: mirrorRootsOf(active),
         };
         const result = yield* runDeploy(fx, input);
         // Exactly one audit event, refs-only allow-list payload.
@@ -169,28 +229,33 @@ function buildSvc(opts: CreateKitOptions): KitSvc {
 
 export class Kit extends Context.Service<Kit, KitSvc>()("kit/Kit") {}
 
-export function KitLive(opts: CreateKitOptions = {}): Layer.Layer<Kit> {
+// KitLive requires SourceRegistry. Kit cannot self-satisfy it: the Sources routes
+// must share the SAME store instance, so the composition root provides the one
+// shared registry layer (Effect memoizes a Layer by reference). Leaking the
+// SourceRegistry requirement to the root is correct here, not an AGENTS.md
+// discharge-at-the-boundary violation.
+export function KitLive(opts: CreateKitOptions = {}): Layer.Layer<Kit, never, SourceRegistry> {
   return Layer.effect(
     Kit,
-    Effect.acquireRelease(
-      Effect.gen(function* () {
-        const svc = buildSvc(opts);
-        const targets = opts.targets ?? defaultDeployTargets();
-        // Startup disk maintenance, modeled as an explicit I/O edge (not folded
-        // into the pure service construction): recover a crash-interrupted mirror
-        // swap and sweep stale temp + leftover backups. An fs fault is contained,
-        // never a Layer-build defect.
-        yield* Effect.sync(() => {
-          try {
-            recoverMirror(targets);
-            sweepStaleTmp(targets);
-          } catch (err) {
-            log().warn({ module: "kit", err: String(err) }, "kit startup maintenance failed");
+    Effect.gen(function* () {
+      const registry = yield* SourceRegistry;
+      const svc = buildSvc(opts, registry);
+      const targets = opts.targets ?? defaultDeployTargets();
+      // Startup disk maintenance, modeled as an explicit I/O edge: recover a
+      // crash-interrupted mirror swap for each active Source's Mirror and sweep
+      // the shared stale temp. An fs fault is contained, never a Layer-build
+      // defect.
+      yield* Effect.sync(() => {
+        try {
+          for (const s of registry.currentSources().filter((src) => src.active)) {
+            recoverMirror(targets.mirrorRoot(s.id));
           }
-        });
-        return svc;
-      }),
-      () => Effect.void,
-    ),
+          sweepStaleTmp(targets.kitTmpRoot());
+        } catch (err) {
+          log().warn({ module: "kit", err: String(err) }, "kit startup maintenance failed");
+        }
+      });
+      return svc;
+    }),
   );
 }

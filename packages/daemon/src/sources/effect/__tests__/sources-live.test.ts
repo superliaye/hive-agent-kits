@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, ManagedRuntime } from "effect";
+import { SOURCES_FILE_VERSION } from "../../types.ts";
 import { DuplicateOrigin, SourceNotFound } from "../errors.ts";
 import { SourceRegistry, SourceRegistryLive } from "../sources-live.ts";
+
+const DEFAULT_ORIGIN = "https://github.com/superliaye/my-agent-kits";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -15,6 +18,10 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "hive-sources-live-"));
     path = join(root, "sources.json");
+    // These tests exercise the lifecycle verbs in isolation, not first-run
+    // seeding: write an empty file so the `!persist.exists()` seed gate is skipped
+    // (seeding has its own describe block below).
+    writeFileSync(path, JSON.stringify({ version: SOURCES_FILE_VERSION, sources: [] }), "utf8");
   });
 
   afterEach(() => {
@@ -116,6 +123,68 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
   });
 });
 
+describe("SourceRegistryLive — first-run default seeding (#30)", () => {
+  let root: string;
+  let path: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "hive-sources-seed-"));
+    path = join(root, "sources.json");
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function svc() {
+    const rt = ManagedRuntime.make(SourceRegistryLive({ mode: "file", path }));
+    return { svc: rt.runSync(SourceRegistry), rt };
+  }
+
+  test("missing file (persist.exists()===false) → one active default Source", async () => {
+    expect(existsSync(path)).toBe(false);
+    const { svc: s, rt } = svc();
+    const list = await Effect.runPromise(s.list());
+    expect(list).toHaveLength(1);
+    expect(list[0]?.origin).toBe(DEFAULT_ORIGIN);
+    expect(list[0]?.active).toBe(true);
+    // currentSources() returns the in-memory list synchronously, matching list().
+    expect(s.currentSources().map((x) => x.id)).toEqual(list.map((x) => x.id));
+    expect(existsSync(path)).toBe(true); // seeded + persisted
+    rt.dispose();
+  });
+
+  test("exists-but-empty file (`{version,sources:[]}`) → NO re-seed", async () => {
+    writeFileSync(path, JSON.stringify({ version: SOURCES_FILE_VERSION, sources: [] }), "utf8");
+    const { svc: s, rt } = svc();
+    expect(await Effect.runPromise(s.list())).toHaveLength(0);
+    rt.dispose();
+  });
+
+  test("deleting the default then re-constructing does NOT re-seed", async () => {
+    // First run seeds.
+    const first = svc();
+    const list = await Effect.runPromise(first.svc.list());
+    const seeded = list[0];
+    expect(seeded).toBeDefined();
+    if (!seeded) throw new Error("setup failed");
+    await Effect.runPromise(first.svc.delete(seeded.id));
+    first.rt.dispose();
+
+    // The file now exists with sources:[] — a re-construct must NOT re-seed.
+    const second = svc();
+    expect(await Effect.runPromise(second.svc.list())).toHaveLength(0);
+    second.rt.dispose();
+  });
+
+  test("currentSources() returns the in-memory list synchronously", async () => {
+    const { svc: s, rt } = svc();
+    const fromList = await Effect.runPromise(s.list());
+    expect(s.currentSources()).toEqual(fromList);
+    rt.dispose();
+  });
+});
+
 describe("SourceRegistryLive — memory mode writes no file", () => {
   let root: string;
   let prevRoot: string | undefined;
@@ -136,6 +205,9 @@ describe("SourceRegistryLive — memory mode writes no file", () => {
   test("memory-mode full lifecycle writes NO file under the Hive home", async () => {
     const rt = ManagedRuntime.make(SourceRegistryLive({ mode: "memory" }));
     const s = rt.runSync(SourceRegistry);
+
+    // Memory mode never seeds the default Source.
+    expect(await Effect.runPromise(s.list())).toHaveLength(0);
 
     const created = await Effect.runPromise(s.add("https://github.com/a/b"));
     await Effect.runPromise(s.deactivate(created.id));

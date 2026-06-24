@@ -88,7 +88,7 @@ export function resolveSelection(catalog: Catalog, selection: Selection): Resolv
   // Refuse any selected name the catalog marked un-deployable (collision).
   const undeployable = new Map<string, string>();
   for (const e of catalog.entries) {
-    if (!e.deployable) undeployable.set(`${kindToWire(e.kind)}:${e.name}`, e.name);
+    if (!e.deployable) undeployable.set(`${e.kind}:${e.name}`, e.name);
   }
   const kinds: { kind: CapabilityKind; names: string[] }[] = [
     { kind: "instruction", names: resolved.instructions },
@@ -111,25 +111,20 @@ export function resolveSelection(catalog: Catalog, selection: Selection): Resolv
   return resolved;
 }
 
-function kindToWire(kind: CapabilityKind): string {
-  return kind;
-}
-
 // Hash the rendered content a deploy WOULD write for a name under `target`, so a
 // same-name new-body change is detectable. Mirrors what the engine writes per
 // target (incl. the Codex sidecar) so the hash is comparable to `deployedHash`.
 // Returns null when the source isn't in the Mirror.
 function renderedHash(
-  targets: DeployTargets,
+  mirrorRoots: readonly string[],
+  snippets: Map<string, string>,
   kind: CapabilityKind,
   name: string,
   allInstructions: string[],
   target: DeployTarget,
 ): string | null {
-  const mirror = targets.mirrorRoot();
-  const snippets = loadSnippets(mirror);
   if (kind === "skill") {
-    const src = skillSources(mirror).get(name);
+    const src = skillSources(mirrorRoots).get(name);
     if (!src) return null;
     const out = transformSkill(
       {
@@ -144,7 +139,7 @@ function renderedHash(
     return hashSkillFiles(written);
   }
   if (kind === "agent") {
-    const src = agentSources(mirror).get(name);
+    const src = agentSources(mirrorRoots).get(name);
     if (!src) return null;
     const raw = readFileSync(join(src, "AGENT.md"), "utf8");
     const rendered = transformAgent({ name, raw }, snippets);
@@ -152,7 +147,7 @@ function renderedHash(
   }
   if (kind === "instruction") {
     const bodies = allInstructions
-      .map((n) => instructionBody(mirror, n))
+      .map((n) => instructionBody(mirrorRoots, n))
       .filter((b): b is string => b !== null);
     // Both targets write the identical concatenated body.
     return sha256(transformInstructions(bodies));
@@ -210,6 +205,7 @@ function overwritesUserInstructionFile(
 // Compute the Deploy Diff: added/removed by name, changed by content hash.
 export function computeDiff(
   targets: DeployTargets,
+  mirrorRoots: readonly string[],
   _catalog: Catalog,
   resolved: ResolvedSelection,
 ): DeployDiff {
@@ -223,6 +219,11 @@ export function computeDiff(
   // Diff against the homes the deploy actually writes to: claude when selected,
   // else codex. deployedHash + renderedHash use the same target so they compare.
   const target = refTarget(resolved.targets);
+
+  // Load snippets once up front (like runDeploy) so a cross-Source snippet
+  // collision surfaces as a typed DeployError in the DIFF path too — the diff
+  // preview must not say "ok" for a selection the deploy would reject.
+  const snippets = loadSnippets(mirrorRoots);
 
   const entries: DiffEntry[] = [];
 
@@ -238,7 +239,14 @@ export function computeDiff(
       if (!owned.has(name)) {
         entries.push({ kind, name, change: "added" });
       } else if (hashable) {
-        const newHash = renderedHash(targets, kind, name, resolved.instructions, target);
+        const newHash = renderedHash(
+          mirrorRoots,
+          snippets,
+          kind,
+          name,
+          resolved.instructions,
+          target,
+        );
         const oldHash = deployedHash(targets, kind, name, target);
         if (newHash && oldHash && newHash !== oldHash) {
           entries.push({ kind, name, change: "changed" });
@@ -280,7 +288,14 @@ export function computeDiff(
     [...selInstr].every((n) => ownedInstr.has(n)) &&
     ownedInstr.size > 0
   ) {
-    const newHash = renderedHash(targets, "instruction", "", resolved.instructions, target);
+    const newHash = renderedHash(
+      mirrorRoots,
+      snippets,
+      "instruction",
+      "",
+      resolved.instructions,
+      target,
+    );
     const oldHash = deployedHash(targets, "instruction", "", target);
     if (newHash && oldHash && newHash !== oldHash) {
       entries.push({

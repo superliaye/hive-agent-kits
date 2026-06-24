@@ -20,6 +20,8 @@ import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
 import { runVerify } from "../verify.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
+const SOURCE_ID = "src-1";
+
 let tmpRoot: string;
 let targets: DeployTargets;
 let mirror: string;
@@ -28,7 +30,7 @@ beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "kit-verify-"));
   redirectHomeEnv(tmpRoot);
   targets = defaultDeployTargets();
-  mirror = targets.mirrorRoot();
+  mirror = targets.mirrorRoot(SOURCE_ID);
   mkdirSync(mirror, { recursive: true });
 });
 
@@ -72,6 +74,7 @@ async function deploy(sel: Partial<ResolvedSelection>): Promise<void> {
       selection: resolved(sel),
       kitSha: "sha1",
       kitVersion: "1.0.0",
+      mirrorRoots: [mirror],
     }),
   );
 }
@@ -110,7 +113,7 @@ describe("verify — on-disk existence (Feature 1)", () => {
     tmpRoot = mkdtempSync(join(tmpdir(), "kit-verify-"));
     redirectHomeEnv(tmpRoot);
     targets = defaultDeployTargets();
-    mirror = targets.mirrorRoot();
+    mirror = targets.mirrorRoot(SOURCE_ID);
     mkdirSync(mirror, { recursive: true });
     seedSkill("solo");
     await deploy({ skills: ["solo"], targets: ["claude"] });

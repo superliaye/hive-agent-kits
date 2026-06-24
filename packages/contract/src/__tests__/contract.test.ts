@@ -48,9 +48,17 @@ describe("kit contract", () => {
     expect(SelectionSchema.safeParse(bad).success).toBe(false);
   });
 
-  test("KitState accepts a null ledger", () => {
+  test("KitState accepts a null ledger and a per-Source sync array", () => {
     const sample = {
-      sync: { state: "up_to_date", sha: "abc", fetchedAt: 1 },
+      sync: [
+        {
+          state: "up_to_date",
+          sha: "abc",
+          fetchedAt: 1,
+          sourceId: "src-1",
+          origin: "https://github.com/owner/repo",
+        },
+      ],
       ledger: null,
     };
     expect(() => KitStateSchema.parse(sample)).not.toThrow();

@@ -28,7 +28,10 @@ export type DeployTargets = {
   codexHome(): string;
   agentsHome(): string;
   ledgerPath(): string;
-  mirrorRoot(): string;
+  // Per-Source mirror root, keyed by the opaque Source id
+  // (<hiveHome>/kit/mirrors/<sourceId>). Each active Source gets its own Mirror;
+  // there is no single-kit mirror anymore.
+  mirrorRoot(sourceId: string): string;
   // Hive-PRIVATE integrity fingerprint sidecar (<hiveHome>/kit/fingerprints.json).
   // Distinct from the ledger — the ledger is the fixed agent-kit interop schema
   // and cannot carry Hive deploy-time hashes; this is where they live instead.
@@ -60,7 +63,7 @@ export function defaultDeployTargets(): DeployTargets {
   const ledgerPath = () =>
     envOr("HIVE_LEDGER_PATH", join(homedir(), ".agent-kit", "manifest.json"));
   const hiveHome = () => envOr("HIVE_RUNTIME_ROOT", join(homedir(), ".hive"));
-  const mirrorRoot = () => join(hiveHome(), "kit", "mirror");
+  const mirrorRoot = (sourceId: string) => join(hiveHome(), "kit", "mirrors", sourceId);
   const fingerprintPath = () => join(hiveHome(), "kit", "fingerprints.json");
   const kitTmpRoot = () => join(hiveHome(), "kit", "tmp");
 

@@ -11,10 +11,18 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "@hive/capability-schema-tools";
 import { nodeFsSourceTree } from "@hive/capability-schema-tools/node";
-import type { CapabilityEntry, Catalog, CatalogProblem, PresetSummary } from "@hive/contract";
+import type {
+  CapabilityEntry,
+  Catalog,
+  CatalogProblem,
+  PresetSummary,
+  Source,
+} from "@hive/contract";
 import { parse as yamlParse } from "yaml";
 import { log } from "../lib/log.ts";
 import type { DeployTargets } from "./targets.ts";
+
+const CROSS_SOURCE_COLLISION = "cross-source CapabilityKey collision — un-deployable";
 
 function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
@@ -106,35 +114,122 @@ function parentCaps(p: PresetSummary): Record<string, string[]> {
   };
 }
 
-// Read the full catalog from the Mirror. Never throws on a single malformed
-// entry — collects problems and loads the rest.
-export function readCatalog(targets: DeployTargets): Catalog {
-  const mirror = targets.mirrorRoot();
+// A parsed capability entry tagged with the providing Source — used by the
+// cross-Source collision pass. `sourceId` never reaches the wire Catalog (deploy
+// resolves the Mirror via the union-resolver; provenance labels are deferred).
+type SourcedEntry = CapabilityEntry & { sourceId: string };
 
-  // The capability bytes live under <mirror>/capabilities; the SourceTree's
-  // kind dirs (skills/, agents/, instructions/, …) are relative to that root.
-  const tree = nodeFsSourceTree(join(mirror, "capabilities"));
-  const parsed = parse(tree);
+// Read the full catalog by AGGREGATING across each active Source's Mirror. Never
+// throws on a single malformed entry — collects problems and loads the rest. An
+// empty source list → an empty catalog. With a single active Source there are no
+// cross-Source collisions and behavior is byte-identical to the single-Mirror
+// read.
+export function readCatalog(targets: DeployTargets, sources: readonly Source[]): Catalog {
+  const sourcedEntries: SourcedEntry[] = [];
+  const problems: CatalogProblem[] = [];
+  // Union of presets across mirrors, plus a same-name detector (drop both).
+  const presetByName = new Map<string, PresetSummary>();
+  const presetCollisions = new Set<string>();
 
-  // Translate format-native → contract wire (anti-corruption seam): `resolvable`
-  // → `deployable`, `collisionReason` → `blockedReason`.
-  const entries: CapabilityEntry[] = parsed.capabilities.map((cap) => ({
-    kind: cap.kind,
-    name: cap.name,
-    description: cap.description,
-    group: cap.group,
-    deployable: cap.resolvable,
-    ...(cap.collisionReason ? { blockedReason: cap.collisionReason } : {}),
-  }));
+  for (const source of sources) {
+    const mirror = targets.mirrorRoot(source.id);
+    // The capability bytes live under <mirror>/capabilities; the SourceTree's
+    // kind dirs (skills/, agents/, instructions/, …) are relative to that root.
+    const tree = nodeFsSourceTree(join(mirror, "capabilities"));
+    const parsed = parse(tree);
 
-  // Parse problems first (preserving the existing array order: collect/collision
-  // problems before the preset loop), then re-emit each as a trace — the pure
-  // tools package can't write the daemon's diagnostic log.
-  const problems: CatalogProblem[] = parsed.problems.map((p) => ({
-    kind: p.kind,
-    name: p.name,
-    problem: p.problem,
-  }));
+    // Translate format-native → contract wire (anti-corruption seam): `resolvable`
+    // → `deployable`, `collisionReason` → `blockedReason`. Tag with the Source.
+    for (const cap of parsed.capabilities) {
+      sourcedEntries.push({
+        kind: cap.kind,
+        name: cap.name,
+        description: cap.description,
+        group: cap.group,
+        deployable: cap.resolvable,
+        sourceId: source.id,
+        ...(cap.collisionReason ? { blockedReason: cap.collisionReason } : {}),
+      });
+    }
+
+    // Per-Source parse problems first (preserving each parse().problems order).
+    for (const p of parsed.problems) {
+      problems.push({ kind: p.kind, name: p.name, problem: p.problem });
+    }
+
+    // Presets (daemon-owned selection-seed concept). Union across mirrors; a
+    // same-named preset in >1 Source drops BOTH (symmetric with the
+    // CapabilityKey collision rule — never first-wins, which would bake in an
+    // unratified precedence guess).
+    const presetsDir = join(mirror, "presets");
+    for (const file of readdirSafe(presetsDir)) {
+      if (!file.endsWith(".yaml")) continue;
+      const name = file.slice(0, -5);
+      try {
+        const resolved = resolvePreset(presetsDir, name, new Set());
+        if (!resolved) {
+          problems.push({
+            kind: "preset",
+            name,
+            problem: "missing/cyclic extends or invalid shape",
+          });
+          continue;
+        }
+        if (presetByName.has(name) || presetCollisions.has(name)) {
+          presetCollisions.add(name);
+          presetByName.delete(name);
+        } else {
+          presetByName.set(name, resolved);
+        }
+      } catch (err) {
+        problems.push({ kind: "preset", name, problem: String(err) });
+      }
+    }
+  }
+
+  // Cross-Source CapabilityKey collision pass (interim): group the unioned
+  // capabilities by CapabilityKey (kind, name). A key provided by >1 Source →
+  // mark ALL those entries un-deployable. Covers EVERY deployable kind, since the
+  // #7 deploy resolver reads instructions/plugins/bundles as "first mirror that
+  // has the file" and relies on this guard as its sole cross-Source arbiter.
+  const sourcesByKey = new Map<string, Set<string>>();
+  for (const e of sourcedEntries) {
+    const key = `${e.kind}:${e.name}`;
+    const set = sourcesByKey.get(key) ?? new Set<string>();
+    set.add(e.sourceId);
+    sourcesByKey.set(key, set);
+  }
+  const collidingKeys = new Set<string>();
+  for (const [key, providers] of sourcesByKey) {
+    if (providers.size > 1) collidingKeys.add(key);
+  }
+
+  const entries: CapabilityEntry[] = sourcedEntries.map(({ sourceId: _sourceId, ...e }) => {
+    if (collidingKeys.has(`${e.kind}:${e.name}`)) {
+      return { ...e, deployable: false, blockedReason: CROSS_SOURCE_COLLISION };
+    }
+    return e;
+  });
+
+  // Cross-Source collision problems, then preset-collision problems.
+  const reportedCollisions = new Set<string>();
+  for (const e of sourcedEntries) {
+    const key = `${e.kind}:${e.name}`;
+    if (collidingKeys.has(key) && !reportedCollisions.has(key)) {
+      reportedCollisions.add(key);
+      problems.push({ kind: e.kind, name: e.name, problem: CROSS_SOURCE_COLLISION });
+    }
+  }
+  for (const name of presetCollisions) {
+    problems.push({
+      kind: "preset",
+      name,
+      problem: "cross-source preset name collision — dropped (un-selectable)",
+    });
+  }
+
+  // Re-emit problems as traces — the pure tools package can't write the daemon's
+  // diagnostic log.
   for (const p of problems) {
     log().warn(
       { module: "kit/catalog", kind: p.kind, name: p.name, problem: p.problem },
@@ -142,25 +237,7 @@ export function readCatalog(targets: DeployTargets): Catalog {
     );
   }
 
-  // Presets (daemon-owned selection-seed concept).
-  const presetsDir = join(mirror, "presets");
-  const presets: PresetSummary[] = [];
-  for (const file of readdirSafe(presetsDir)) {
-    if (!file.endsWith(".yaml")) continue;
-    const name = file.slice(0, -5);
-    try {
-      const resolved = resolvePreset(presetsDir, name, new Set());
-      if (resolved) {
-        presets.push(resolved);
-      } else {
-        problems.push({ kind: "preset", name, problem: "missing/cyclic extends or invalid shape" });
-      }
-    } catch (err) {
-      problems.push({ kind: "preset", name, problem: String(err) });
-    }
-  }
-
-  return { entries, presets, problems };
+  return { entries, presets: [...presetByName.values()], problems };
 }
 
 function readdirSafe(p: string): string[] {

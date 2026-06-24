@@ -59,7 +59,7 @@ function emptyKind(kind: CapabilityKind): KindResult {
 function preflight(
   fx: DeployFsExec,
   sel: ResolvedSelection,
-  mirrorRoot: string,
+  mirrorRoots: readonly string[],
 ): DeployError | null {
   const needs: { tool: string; reason: string }[] = [];
   if (sel.plugins.length > 0 && sel.targets.includes("claude") && !skipPlugin()) {
@@ -67,7 +67,7 @@ function preflight(
   }
   if (!skipBundle()) {
     for (const name of sel.bundles) {
-      const meta = bundleMeta(mirrorRoot, name);
+      const meta = bundleMeta(mirrorRoots, name);
       if (!meta) continue;
       if (meta.installerKind === "setup-script")
         needs.push({ tool: "git", reason: `bundle ${name}` });
@@ -91,13 +91,13 @@ function preflight(
 function applyInstructions(
   fx: DeployFsExec,
   sel: ResolvedSelection,
-  mirrorRoot: string,
+  mirrorRoots: readonly string[],
 ): KindResult {
   const res = emptyKind("instruction");
   const bodies: string[] = [];
   const resolvedNames: string[] = [];
   for (const name of sel.instructions) {
-    const body = instructionBody(mirrorRoot, name);
+    const body = instructionBody(mirrorRoots, name);
     if (body === null) {
       res.failed.push({ name, error: "source not found in mirror" });
       continue;
@@ -127,10 +127,14 @@ function applyInstructions(
   return res;
 }
 
-function applySkills(fx: DeployFsExec, sel: ResolvedSelection, mirrorRoot: string): KindResult {
+function applySkills(
+  fx: DeployFsExec,
+  sel: ResolvedSelection,
+  mirrorRoots: readonly string[],
+  snippets: Map<string, string>,
+): KindResult {
   const res = emptyKind("skill");
-  const sources = skillSources(mirrorRoot);
-  const snippets = loadSnippets(mirrorRoot);
+  const sources = skillSources(mirrorRoots);
   for (const name of sel.skills) {
     const srcDir = sources.get(name);
     if (!srcDir) {
@@ -157,10 +161,14 @@ function applySkills(fx: DeployFsExec, sel: ResolvedSelection, mirrorRoot: strin
   return res;
 }
 
-function applyAgents(fx: DeployFsExec, sel: ResolvedSelection, mirrorRoot: string): KindResult {
+function applyAgents(
+  fx: DeployFsExec,
+  sel: ResolvedSelection,
+  mirrorRoots: readonly string[],
+  snippets: Map<string, string>,
+): KindResult {
   const res = emptyKind("agent");
-  const sources = agentSources(mirrorRoot);
-  const snippets = loadSnippets(mirrorRoot);
+  const sources = agentSources(mirrorRoots);
   for (const name of sel.agents) {
     const srcDir = sources.get(name);
     if (!srcDir) {
@@ -184,12 +192,16 @@ function applyAgents(fx: DeployFsExec, sel: ResolvedSelection, mirrorRoot: strin
   return res;
 }
 
-function applyPlugins(fx: DeployFsExec, sel: ResolvedSelection, mirrorRoot: string): KindResult {
+function applyPlugins(
+  fx: DeployFsExec,
+  sel: ResolvedSelection,
+  mirrorRoots: readonly string[],
+): KindResult {
   const res = emptyKind("plugin");
   // Claude-only.
   if (!sel.targets.includes("claude")) return res;
   for (const name of sel.plugins) {
-    const meta = pluginMeta(mirrorRoot, name);
+    const meta = pluginMeta(mirrorRoots, name);
     if (!meta) {
       res.failed.push({ name, error: "plugin source not found in mirror" });
       continue;
@@ -242,12 +254,12 @@ function applyPlugins(fx: DeployFsExec, sel: ResolvedSelection, mirrorRoot: stri
 function applyBundles(
   fx: DeployFsExec,
   sel: ResolvedSelection,
-  mirrorRoot: string,
+  mirrorRoots: readonly string[],
 ): { result: KindResult; pins: Record<string, string | null> } {
   const res = emptyKind("bundle");
   const pins: Record<string, string | null> = {};
   for (const name of sel.bundles) {
-    const meta = bundleMeta(mirrorRoot, name);
+    const meta = bundleMeta(mirrorRoots, name);
     if (!meta) {
       res.failed.push({ name, error: "bundle source not found in mirror" });
       continue;
@@ -351,6 +363,9 @@ export type DeployInput = {
   selection: ResolvedSelection;
   kitSha: string | null;
   kitVersion: string;
+  // Active-Source mirror roots, in registry order — the deploy reads source
+  // content from the union of these (a deployable name maps to exactly one).
+  mirrorRoots: readonly string[];
 };
 
 export function runDeploy(
@@ -358,8 +373,20 @@ export function runDeploy(
   input: DeployInput,
 ): Effect.Effect<DeployResult, DeployError> {
   return Effect.gen(function* () {
-    const mirrorRoot = fx.targets.mirrorRoot();
+    const mirrorRoots = input.mirrorRoots;
     const sel = input.selection;
+
+    // Load snippets once, up front: a cross-Source snippet collision is a typed
+    // DeployError that must ABORT the deploy (snippets aren't capabilities, so the
+    // catalog's CapabilityKey guard never covered them) — never a swallowed
+    // per-kind failure. Surfaced before any write.
+    const snippets = yield* Effect.try({
+      try: () => loadSnippets(mirrorRoots),
+      catch: (err) =>
+        err instanceof DeployError
+          ? err
+          : new DeployError({ reason: "io", message: `snippet load failed: ${String(err)}` }),
+    });
 
     // Snapshot the names Hive owns BEFORE applying — the only names this deploy
     // is allowed to prune. A skill the agent-kit CLI adds concurrently is not in
@@ -367,21 +394,21 @@ export function runDeploy(
     const priorOwned = ownedNamesSnapshot(fx.targets);
 
     // Pre-flight binaries BEFORE any write.
-    const missing = preflight(fx, sel, mirrorRoot);
+    const missing = preflight(fx, sel, mirrorRoots);
     if (missing) return yield* Effect.fail(missing);
 
     const perKind: KindResult[] = [];
 
     // Ordered best-effort: instructions, skills, agents, plugins, bundles.
-    perKind.push(applyInstructions(fx, sel, mirrorRoot));
-    perKind.push(applySkills(fx, sel, mirrorRoot));
-    perKind.push(applyAgents(fx, sel, mirrorRoot));
+    perKind.push(applyInstructions(fx, sel, mirrorRoots));
+    perKind.push(applySkills(fx, sel, mirrorRoots, snippets));
+    perKind.push(applyAgents(fx, sel, mirrorRoots, snippets));
 
     let pluginResult: KindResult;
     let bundlePins: Record<string, string | null> = {};
     let bundleResult: KindResult;
     try {
-      pluginResult = applyPlugins(fx, sel, mirrorRoot);
+      pluginResult = applyPlugins(fx, sel, mirrorRoots);
     } catch (err) {
       // A not_redirected guard throw aborts the deploy (it's a real safety stop).
       if (err instanceof DeployError && err.reason === "not_redirected") {
@@ -392,7 +419,7 @@ export function runDeploy(
     perKind.push(pluginResult);
 
     try {
-      const b = applyBundles(fx, sel, mirrorRoot);
+      const b = applyBundles(fx, sel, mirrorRoots);
       bundleResult = b.result;
       bundlePins = b.pins;
     } catch (err) {

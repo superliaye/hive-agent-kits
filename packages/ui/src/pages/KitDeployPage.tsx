@@ -44,6 +44,21 @@ function shortSha(sha: string | null): string {
   return sha ? sha.slice(0, 7) : "—";
 }
 
+// Short, human-readable origin label (owner/repo for a GitHub URL, else the
+// last path segment / host).
+function shortOrigin(origin: string): string {
+  try {
+    const url = new URL(origin);
+    const segments = url.pathname.split("/").filter((s) => s.length > 0);
+    if (segments.length >= 2)
+      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
+    if (segments.length === 1) return segments[0] ?? url.hostname;
+    return url.hostname;
+  } catch {
+    return origin;
+  }
+}
+
 type Freshness = {
   label: string;
   className: string;
@@ -233,7 +248,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     });
   }
 
-  const fresh = freshnessOf(state?.sync.state);
+  const sourceStatuses = state?.sync ?? [];
   const diff = diffQuery.data;
 
   return (
@@ -241,17 +256,43 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       <header className="kit-header">
         <div className="kit-header-version">
           <h1>Capabilities</h1>
-          <span className="kit-sha" data-testid="kit-sha" title={state?.sync.sha ?? ""}>
-            {shortSha(state?.sync.sha ?? null)}
-          </span>
-          <span className={`kit-fresh ${fresh.className}`} data-testid="kit-freshness">
-            {fresh.label}
-          </span>
-          {state?.sync.rateLimitReset !== undefined && (
-            <span className="kit-rate-reset">
-              resets {new Date(state.sync.rateLimitReset * 1000).toLocaleTimeString()}
-            </span>
-          )}
+          <div className="kit-sources" data-testid="kit-sources">
+            {sourceStatuses.map((s, idx) => {
+              const fresh = freshnessOf(s.state);
+              // Preserve the stable single-Source testids on the FIRST row so
+              // existing selectors still resolve; add per-Source testids too.
+              const first = idx === 0;
+              return (
+                <div
+                  className="kit-source-row"
+                  key={s.sourceId}
+                  data-testid={`kit-source-${s.sourceId}`}
+                >
+                  <span className="kit-source-origin" title={s.origin}>
+                    {shortOrigin(s.origin)}
+                  </span>
+                  <span
+                    className="kit-sha"
+                    data-testid={first ? "kit-sha" : `kit-sha-${s.sourceId}`}
+                    title={s.sha ?? ""}
+                  >
+                    {shortSha(s.sha)}
+                  </span>
+                  <span
+                    className={`kit-fresh ${fresh.className}`}
+                    data-testid={first ? "kit-freshness" : `kit-freshness-${s.sourceId}`}
+                  >
+                    {fresh.label}
+                  </span>
+                  {s.rateLimitReset !== undefined && (
+                    <span className="kit-rate-reset">
+                      resets {new Date(s.rateLimitReset * 1000).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
         <div className="kit-header-actions">
           <button

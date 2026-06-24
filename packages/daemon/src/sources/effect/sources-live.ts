@@ -29,6 +29,12 @@ export type CreateSourceRegistryOptions =
 
 export type SourceRegistrySvc = {
   list(): Effect.Effect<readonly Source[], SourceIoError>;
+  // Synchronous getter of the in-memory state, no I/O. The Effect `list()` stays
+  // the audited/route read; `currentSources()` feeds the deliberately-sync Kit
+  // read model (catalog()/state()/sync()) which has no I/O and thus no
+  // SourceIoError to channel. NOT named `snapshot` — the store already has a
+  // `snapshot(): SourcesFile` of a different type.
+  currentSources(): readonly Source[];
   add(origin: string): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
   activate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   deactivate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
@@ -41,15 +47,39 @@ export class SourceRegistry extends Context.Service<SourceRegistry, SourceRegist
   "sources/SourceRegistry",
 ) {}
 
+// The default Source pre-added on a truly-first file-mode run (q6-preadd-default):
+// keeps a fresh install non-empty and the interop catalog test meaningful. Minted
+// through the normal `add` path so it gets a real id + createdAt.
+const DEFAULT_SOURCE_ORIGIN = "https://github.com/superliaye/my-agent-kits";
+
 function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
   if (opts.mode === "memory") {
+    // Memory mode never seeds and writes no file.
     return createSourcesStore({
       version: SOURCES_FILE_VERSION,
       sources: opts.initial ?? [],
     });
   }
   const persist = new SourcesPersistence(opts.path);
-  return createSourcesStore(persist.read(), persist);
+  // First-run seeding: gate on persist.exists() — NOT read()-returns-empty,
+  // which can't distinguish a missing file from an empty one. A user who DELETES
+  // the default (leaving `{version,sources:[]}` on disk) must not see it
+  // re-seeded, so only a truly-absent file seeds.
+  const store = createSourcesStore(persist.read(), persist);
+  if (!persist.exists()) {
+    // Seed the default Source. A write fault here must NOT crash daemon boot
+    // (openStore runs inside the Layer build) — degrade to the unseeded store and
+    // trace it, matching how the route verbs ioGuard their persistence faults.
+    try {
+      store.add(DEFAULT_SOURCE_ORIGIN);
+    } catch (err) {
+      log().warn(
+        { module: "sources", err: String(err) },
+        "first-run default seed write failed; starting with an empty registry",
+      );
+    }
+  }
+  return store;
 }
 
 // Run a synchronous store verb, mapping a thrown persistence fault into the
@@ -74,6 +104,8 @@ function buildSvc(store: SourcesStore): SourceRegistrySvc {
     events,
 
     list: () => ioGuard(() => store.list()),
+
+    currentSources: () => store.list(),
 
     add: (origin) =>
       Effect.flatMap(

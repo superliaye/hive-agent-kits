@@ -61,7 +61,15 @@ afterEach(async () => {
 
 const emptyCatalog: Catalog = { entries: [], presets: [], problems: [] };
 const kitState: KitState = {
-  sync: { state: "up_to_date", sha: null, fetchedAt: null },
+  sync: [
+    {
+      state: "up_to_date",
+      sha: null,
+      fetchedAt: null,
+      sourceId: "src-1",
+      origin: "https://github.com/superliaye/my-agent-kits",
+    },
+  ],
   ledger: {
     kitVersion: "test",
     agents: [],

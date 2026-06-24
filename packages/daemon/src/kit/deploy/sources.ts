@@ -5,6 +5,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse as yamlParse } from "yaml";
+import { DeployError } from "../effect/errors.ts";
 
 function readDirSafe(p: string): string[] {
   try {
@@ -44,21 +45,62 @@ function resolveFolderSources(kindDir: string, marker: string): Map<string, stri
   return out;
 }
 
-export function skillSources(mirrorRoot: string): Map<string, string> {
-  return resolveFolderSources(join(mirrorRoot, "capabilities", "skills"), "SKILL.md");
+// Union the per-mirror leaf-name → source-dir maps across active Source mirrors.
+// A name colliding across mirrors is refused upstream by the catalog's
+// cross-Source CapabilityKey pass, so a name that reaches deploy has exactly one
+// providing Mirror — the union is unambiguous for anything deployable.
+export function skillSources(mirrorRoots: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const root of mirrorRoots) {
+    for (const [name, dir] of resolveFolderSources(
+      join(root, "capabilities", "skills"),
+      "SKILL.md",
+    )) {
+      out.set(name, dir);
+    }
+  }
+  return out;
 }
 
-export function agentSources(mirrorRoot: string): Map<string, string> {
-  return resolveFolderSources(join(mirrorRoot, "capabilities", "agents"), "AGENT.md");
+export function agentSources(mirrorRoots: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const root of mirrorRoots) {
+    for (const [name, dir] of resolveFolderSources(
+      join(root, "capabilities", "agents"),
+      "AGENT.md",
+    )) {
+      out.set(name, dir);
+    }
+  }
+  return out;
 }
 
-// Load reusable snippets (capabilities/snippets/*.md) into name → body.
-export function loadSnippets(mirrorRoot: string): Map<string, string> {
-  const dir = join(mirrorRoot, "capabilities", "snippets");
+// Load reusable snippets (capabilities/snippets/*.md) into name → body, unioned
+// across active Source mirrors. Snippets are NOT capabilities (a build-time
+// include), so the catalog's CapabilityKey collision pass never covers them — a
+// naive union would let one mirror's snippet silently clobber another's, changing
+// rendered skill/agent bodies. So a same-named snippet provided by >1 mirror
+// FAILS the deploy with a typed DeployError(collision) naming it; never a silent
+// winner.
+export function loadSnippets(mirrorRoots: readonly string[]): Map<string, string> {
   const map = new Map<string, string>();
-  for (const f of readDirSafe(dir)) {
-    if (!f.endsWith(".md")) continue;
-    map.set(f.slice(0, -3), readFileSync(join(dir, f), "utf8").trim());
+  const provider = new Map<string, string>();
+  for (const root of mirrorRoots) {
+    const dir = join(root, "capabilities", "snippets");
+    for (const f of readDirSafe(dir)) {
+      if (!f.endsWith(".md")) continue;
+      const name = f.slice(0, -3);
+      const prior = provider.get(name);
+      if (prior !== undefined && prior !== root) {
+        throw new DeployError({
+          reason: "collision",
+          message: `snippet '${name}' is provided by more than one Source — un-deployable`,
+          name,
+        });
+      }
+      provider.set(name, root);
+      map.set(name, readFileSync(join(dir, f), "utf8").trim());
+    }
   }
   return map;
 }
@@ -75,20 +117,31 @@ export function skillDisablesModelInvocation(srcDir: string): boolean {
   return /^\s*disable-model-invocation:\s*true\s*$/m.test(content.slice(3, end));
 }
 
+// First mirror (in active-Source order) that provides a file under a kind dir.
+// A cross-Source same-name collision is refused upstream by the catalog pass, so
+// the first match is the only match for anything that reaches deploy.
+function firstMirrorWith(mirrorRoots: readonly string[], ...relSegments: string[]): string | null {
+  for (const root of mirrorRoots) {
+    const p = join(root, ...relSegments);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 // Instruction source file content (capabilities/instructions/<name>.instructions.md).
-export function instructionBody(mirrorRoot: string, name: string): string | null {
-  const p = join(mirrorRoot, "capabilities", "instructions", `${name}.instructions.md`);
-  if (!existsSync(p)) return null;
+export function instructionBody(mirrorRoots: readonly string[], name: string): string | null {
+  const p = firstMirrorWith(mirrorRoots, "capabilities", "instructions", `${name}.instructions.md`);
+  if (!p) return null;
   return readFileSync(p, "utf8");
 }
 
 // Plugin frontmatter (marketplace_source / marketplace_name / plugin_name).
 export function pluginMeta(
-  mirrorRoot: string,
+  mirrorRoots: readonly string[],
   name: string,
 ): { source: string; market: string; pluginName: string } | null {
-  const p = join(mirrorRoot, "capabilities", "plugins", `${name}.plugin.md`);
-  if (!existsSync(p)) return null;
+  const p = firstMirrorWith(mirrorRoots, "capabilities", "plugins", `${name}.plugin.md`);
+  if (!p) return null;
   const content = readFileSync(p, "utf8");
   const fm = parseFlatFrontmatter(content);
   return {
@@ -111,9 +164,9 @@ export type BundleMeta = {
   requires: string[];
 };
 
-export function bundleMeta(mirrorRoot: string, name: string): BundleMeta | null {
-  const p = join(mirrorRoot, "capabilities", "bundles", `${name}.bundle.md`);
-  if (!existsSync(p)) return null;
+export function bundleMeta(mirrorRoots: readonly string[], name: string): BundleMeta | null {
+  const p = firstMirrorWith(mirrorRoots, "capabilities", "bundles", `${name}.bundle.md`);
+  if (!p) return null;
   const content = readFileSync(p, "utf8");
   // Bundles carry nested YAML (installer block); a full parse is warranted here.
   const fm = parseYamlFrontmatter(content);

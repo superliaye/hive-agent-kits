@@ -11,6 +11,8 @@ export type {
   DeployResult,
   PresetSummary,
   Selection,
+  SourceSyncStatus,
+  SyncRunResult,
   SyncStatus,
   VerifyEntry,
   VerifyReport,

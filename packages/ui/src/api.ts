@@ -13,7 +13,7 @@ import type {
   DeployResult,
   KitState,
   Selection,
-  SyncStatus,
+  SyncRunResult,
   VerifyReport,
 } from "@hive/contract";
 import type { Preferences } from "@hive/theming";
@@ -35,7 +35,9 @@ export type {
   Ledger,
   PresetSummary,
   Selection,
+  SourceSyncStatus,
   StoredSecretMeta,
+  SyncRunResult,
   SyncStatus,
   SyncStatusState,
   VerifyEntry,
@@ -256,10 +258,10 @@ export const api = {
   // On-disk self-check: per-capability per-target status (present/missing/drifted/
   // recorded). Read-only — no audit row. The page runs this on load and after deploy.
   getKitVerify: (cfg: ApiConfig) => call<VerifyReport>(cfg, "/api/kit/verify"),
-  // Check for updates: fetch the latest Kit into the Mirror. Returns the
-  // resulting sync state; the catalog/state queries are re-fetched after.
+  // Check for updates: sync every active Source into its Mirror. Returns the
+  // per-Source outcomes; the catalog/state queries are re-fetched after.
   syncKit: (cfg: ApiConfig) =>
-    call<{ status: "synced" | "unchanged"; state: SyncStatus }>(cfg, "/api/kit/sync", {
+    call<SyncRunResult>(cfg, "/api/kit/sync", {
       method: "POST",
     }),
   // Compute the Deploy Diff for a Selection (added/removed/changed).

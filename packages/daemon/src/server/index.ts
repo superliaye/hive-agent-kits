@@ -114,6 +114,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // (OQ-5) share the SAME runner option so a memory-mode probe and updater agree.
   const backendRunnerOpts = opts.mode === "memory" ? ({ runner: notInstalledRunner } as const) : {};
   const backendProbeLayer = BackendProbeLive(backendRunnerOpts);
+  // One shared Sources registry layer. Kit depends on SourceRegistry and must
+  // read the SAME store the Sources routes mutate, so we provide this single
+  // instance to Kit (Effect memoizes a Layer by reference → one acquire / one
+  // store) AND merge it for the routes' own resolution.
+  const sourcesLayer = SourceRegistryLive(sourcesOpts);
   const rootLayer = Layer.mergeAll(
     SecretsLive(secretsOpts),
     ConfigLive(configOpts),
@@ -125,10 +130,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     BackendUpdaterLive(backendRunnerOpts).pipe(Layer.provide(backendProbeLayer)),
     // Kit module (capability deploy-manager). Provides its own deploy-target
     // port + exec adapter; the production HTTP fetch is the only edge injected.
-    KitLive({ fetch: productionFetch() }),
+    // SourceRegistry is provided from the one shared layer (see above).
+    KitLive({ fetch: productionFetch() }).pipe(Layer.provide(sourcesLayer)),
     // Sources registry (ADR-0023). Hive-private JSON store; memory mode in
-    // tests/dev writes no real ~/.hive/sources.json.
-    SourceRegistryLive(sourcesOpts),
+    // tests/dev writes no real ~/.hive/sources.json. Same shared instance.
+    sourcesLayer,
   );
   const runtime = ManagedRuntime.make(rootLayer);
 
@@ -261,18 +267,21 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const runSources: RunSources = runKit;
   app.route("/", buildSourcesRoutes(sourceRegistry, runSources));
 
-  // Auto fetch-on-launch: a NON-BLOCKING sync-check. A failure is traced + folds
-  // into the typed sync status (check_failed/rate_limited), never fatal and never
-  // reported as "up to date".
+  // Auto fetch-on-launch: a NON-BLOCKING per-Source sync-check. A Source failure
+  // folds into its typed sync status (check_failed/rate_limited), never fatal and
+  // never reported as "up to date"; the whole run never fails.
   runKit(kit.sync())
     .then((res) => {
       if (res.ok) {
-        log().info({ module: "kit", status: res.value.status }, "kit launch sync-check complete");
-      } else {
-        log().warn(
-          { module: "kit", reason: (res.error as { reason?: string }).reason },
-          "kit launch sync-check failed (non-fatal)",
+        log().info(
+          {
+            module: "kit",
+            sources: res.value.sources.map((s) => ({ sourceId: s.sourceId, status: s.status })),
+          },
+          "kit launch sync-check complete",
         );
+      } else {
+        log().warn({ module: "kit", err: String(res.error) }, "kit launch sync-check defect");
       }
     })
     .catch((err) => {

@@ -79,6 +79,29 @@ export const SyncStatus = z.object({
 });
 export type SyncStatus = z.infer<typeof SyncStatus>;
 
+// Per-Source freshness: a `SyncStatus` tagged with the Source it describes.
+// `KitState.sync` is an array of these — one failed Source must not collapse
+// another's freshness (each active Source syncs into its own Mirror).
+export const SourceSyncStatus = SyncStatus.extend({
+  sourceId: z.string(),
+  origin: z.string(),
+});
+export type SourceSyncStatus = z.infer<typeof SourceSyncStatus>;
+
+// POST /api/kit/sync response: the per-Source outcome of one sync run.
+export const SyncRunResult = z.object({
+  sources: z.array(
+    z.object({
+      sourceId: z.string(),
+      origin: z.string(),
+      status: z.enum(["synced", "unchanged", "failed"]),
+      errorReason: z.string().optional(),
+      rateLimitReset: z.number().optional(),
+    }),
+  ),
+});
+export type SyncRunResult = z.infer<typeof SyncRunResult>;
+
 // ---- Selection (wire boundary) ----
 
 const NameSets = z.object({
@@ -121,7 +144,7 @@ export type Ledger = z.infer<typeof LedgerSchema>;
 
 // Kit state surfaced by GET /api/kit/state: sync freshness + the ledger.
 export const KitStateSchema = z.object({
-  sync: SyncStatus,
+  sync: z.array(SourceSyncStatus),
   ledger: LedgerSchema.nullable(),
 });
 export type KitState = z.infer<typeof KitStateSchema>;

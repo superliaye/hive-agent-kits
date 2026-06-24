@@ -20,13 +20,17 @@ import { mirrorExists, recoverMirror } from "../mirror.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
+const SOURCE_ID = "src-1";
+
 let tmpRoot: string;
 let targets: DeployTargets;
+let mirrorRoot: string;
 
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "kit-test-"));
   redirectHomeEnv(tmpRoot);
   targets = defaultDeployTargets();
+  mirrorRoot = targets.mirrorRoot(SOURCE_ID);
 });
 
 afterEach(() => {
@@ -37,7 +41,6 @@ afterEach(() => {
 // Simulate a crash mid-swap: a good mirror was renamed to `.prev-<ts>` and the
 // process died before stage->mirror, so mirrorRoot is absent.
 function simulateCrashedSwap(): void {
-  const mirrorRoot = targets.mirrorRoot();
   mkdirSync(mirrorRoot, { recursive: true });
   mkdirSync(join(mirrorRoot, "capabilities"), { recursive: true });
   writeFileSync(join(mirrorRoot, "capabilities", "marker"), "good");
@@ -48,27 +51,26 @@ function simulateCrashedSwap(): void {
 describe("recoverMirror", () => {
   test("restores the mirror from a .prev-* backup when mirrorRoot is missing", () => {
     simulateCrashedSwap();
-    expect(mirrorExists(targets)).toBe(false);
+    expect(mirrorExists(mirrorRoot)).toBe(false);
 
-    recoverMirror(targets);
+    recoverMirror(mirrorRoot);
 
-    expect(mirrorExists(targets)).toBe(true);
-    expect(existsSync(join(targets.mirrorRoot(), "capabilities", "marker"))).toBe(true);
+    expect(mirrorExists(mirrorRoot)).toBe(true);
+    expect(existsSync(join(mirrorRoot, "capabilities", "marker"))).toBe(true);
   });
 
   test("sweeps leftover .prev-* backups (no orphan accumulation)", () => {
-    const mirrorRoot = targets.mirrorRoot();
     mkdirSync(join(mirrorRoot, "capabilities"), { recursive: true });
     // Two orphaned backups alongside a healthy mirror.
     mkdirSync(`${mirrorRoot}.prev-100`, { recursive: true });
     mkdirSync(`${mirrorRoot}.prev-200`, { recursive: true });
 
-    recoverMirror(targets);
+    recoverMirror(mirrorRoot);
 
     const parent = dirname(mirrorRoot);
     const base = mirrorRoot.split(/[\\/]/).pop() ?? "mirror";
     const leftover = readdirSync(parent).filter((e) => e.startsWith(`${base}.prev-`));
     expect(leftover).toEqual([]);
-    expect(mirrorExists(targets)).toBe(true);
+    expect(mirrorExists(mirrorRoot)).toBe(true);
   });
 });

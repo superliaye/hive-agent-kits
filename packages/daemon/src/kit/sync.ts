@@ -12,12 +12,30 @@ import { Effect } from "effect";
 import { log } from "../lib/log.ts";
 import { SyncError } from "./effect/errors.ts";
 import { mirrorExists, readProvenance, writeMirror } from "./mirror.ts";
-import type { DeployTargets } from "./targets.ts";
 import type { MirrorProvenance } from "./types.ts";
 
-const REPO = "superliaye/my-agent-kits";
-const COMMITS_URL = `https://api.github.com/repos/${REPO}/commits/main`;
-const codeloadUrl = (sha: string) => `https://codeload.github.com/${REPO}/tar.gz/${sha}`;
+// Parse a normalized https GitHub origin into owner/repo. The Source registry
+// (#26) already strips a trailing `/` / `.git` and lowercases scheme+host, so we
+// only validate host + extract the two path segments. Any non-GitHub host, or a
+// path that isn't exactly `<owner>/<repo>`, yields `null` (the caller maps that
+// to a typed parse SyncError — this slice is GitHub-only).
+export function parseGithubOrigin(origin: string): { owner: string; repo: string } | null {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:") return null;
+  if (url.hostname.toLowerCase() !== "github.com") return null;
+  const segments = url.pathname.split("/").filter((s) => s.length > 0);
+  if (segments.length !== 2) return null;
+  const [owner, rawRepo] = segments;
+  if (!owner || !rawRepo) return null;
+  const repo = rawRepo.endsWith(".git") ? rawRepo.slice(0, -4) : rawRepo;
+  if (!repo) return null;
+  return { owner, repo };
+}
 
 // Injectable HTTP port so tests drive offline / 403 / fixture-tarball without
 // real network. Production wires `globalThis.fetch`.
@@ -33,10 +51,10 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 
 // Resolve main's full 40-hex SHA. 403 → rate_limited (surface X-RateLimit-Reset);
 // network throw → offline; bad body → parse.
-function resolveSha(fetchImpl: HttpFetch): Effect.Effect<string, SyncError> {
+function resolveSha(fetchImpl: HttpFetch, commitsUrl: string): Effect.Effect<string, SyncError> {
   return Effect.tryPromise({
     try: async () => {
-      const res = await fetchImpl(COMMITS_URL, {
+      const res = await fetchImpl(commitsUrl, {
         headers: { accept: "application/vnd.github+json", "user-agent": "hive-kit-sync" },
       });
       if (res.status === 403) {
@@ -65,10 +83,13 @@ function offlineFrom(err: unknown): SyncError {
   return new SyncError({ reason: "offline", message: `network unreachable: ${String(err)}` });
 }
 
-function downloadTar(fetchImpl: HttpFetch, sha: string): Effect.Effect<Uint8Array, SyncError> {
+function downloadTar(
+  fetchImpl: HttpFetch,
+  codeloadUrl: string,
+): Effect.Effect<Uint8Array, SyncError> {
   return Effect.tryPromise({
     try: async () => {
-      const res = await fetchImpl(codeloadUrl(sha), {
+      const res = await fetchImpl(codeloadUrl, {
         headers: { "user-agent": "hive-kit-sync" },
       });
       if (res.status === 403) {
@@ -94,26 +115,43 @@ function downloadTar(fetchImpl: HttpFetch, sha: string): Effect.Effect<Uint8Arra
   });
 }
 
-// Run a full sync. Short-circuits when the resolved SHA matches the recorded
-// mirror. On extraction failure the prior mirror is retained (writeMirror is
-// atomic), surfaced as a typed SyncError — never thrown out of the daemon.
-export function runSync(
-  targets: DeployTargets,
+// Sync one Source into its own Mirror. Derives the GitHub commits-API +
+// codeload-tarball URLs from the Source origin (GitHub-only this slice; a
+// non-GitHub origin is a typed parse SyncError, never a throw). Short-circuits
+// when the resolved SHA matches the recorded mirror. On extraction failure the
+// prior Mirror is retained (writeMirror is atomic), surfaced as a typed
+// SyncError — never thrown out of the daemon.
+export function syncSource(
+  mirrorRoot: string,
+  tmpRoot: string,
+  origin: string,
   fetchImpl: HttpFetch,
 ): Effect.Effect<SyncOutcome, SyncError> {
   return Effect.gen(function* () {
-    const sha = yield* resolveSha(fetchImpl);
-    const prior = readProvenance(targets);
-    if (prior && prior.sha === sha && mirrorExists(targets)) {
+    const parsed = parseGithubOrigin(origin);
+    if (!parsed) {
+      return yield* Effect.fail(
+        new SyncError({ reason: "parse", message: "unsupported origin (only https GitHub)" }),
+      );
+    }
+    const { owner, repo } = parsed;
+    const commitsUrl = `https://api.github.com/repos/${owner}/${repo}/commits/main`;
+    const sha = yield* resolveSha(fetchImpl, commitsUrl);
+    const prior = readProvenance(mirrorRoot);
+    if (prior && prior.sha === sha && mirrorExists(mirrorRoot)) {
       return { status: "unchanged", provenance: prior } as const;
     }
-    const tarBuf = yield* downloadTar(fetchImpl, sha);
+    const codeloadUrl = `https://codeload.github.com/${owner}/${repo}/tar.gz/${sha}`;
+    const tarBuf = yield* downloadTar(fetchImpl, codeloadUrl);
     const provenance = yield* Effect.try({
-      try: () => writeMirror(targets, tarBuf, sha),
+      try: () => writeMirror(mirrorRoot, tmpRoot, tarBuf, sha),
       catch: (err) =>
         new SyncError({ reason: "io", message: `mirror write failed: ${String(err)}` }),
     });
-    log().info({ module: "kit/sync", sha, fetchedAt: provenance.fetchedAt }, "kit mirror synced");
+    log().info(
+      { module: "kit/sync", origin, sha, fetchedAt: provenance.fetchedAt },
+      "source mirror synced",
+    );
     return { status: "synced", provenance } as const;
   });
 }
