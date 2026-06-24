@@ -51,15 +51,24 @@ function seedInstruction(name: string, body: string): void {
   writeFileSync(join(dir, `${name}.instructions.md`), `---\ndescription: ${name}\n---\n${body}\n`);
 }
 
-function resolved(over: Partial<ResolvedSelection>): ResolvedSelection {
+type NameOver = {
+  instructions?: string[];
+  skills?: string[];
+  agents?: string[];
+  plugins?: string[];
+  bundles?: string[];
+  targets?: ("claude" | "codex")[];
+};
+
+function resolved(over: NameOver): ResolvedSelection {
+  const item = (n: string) => ({ name: n, sourceId: SOURCE_ID });
   return {
-    instructions: [],
-    skills: [],
-    agents: [],
-    plugins: [],
-    bundles: [],
-    targets: ["claude"],
-    ...over,
+    instructions: (over.instructions ?? []).map(item),
+    skills: (over.skills ?? []).map(item),
+    agents: (over.agents ?? []).map(item),
+    plugins: (over.plugins ?? []).map(item),
+    bundles: (over.bundles ?? []).map(item),
+    targets: over.targets ?? ["claude"],
   };
 }
 
@@ -68,13 +77,13 @@ function fx(): DeployFsExec {
   return { targets, exec: okExec, probe: () => true };
 }
 
-async function deploy(sel: Partial<ResolvedSelection>): Promise<void> {
+async function deploy(sel: NameOver): Promise<void> {
   await Effect.runPromise(
     runDeploy(fx(), {
       selection: resolved(sel),
       kitSha: "sha1",
       kitVersion: "1.0.0",
-      mirrorRoots: [mirror],
+      activeMirrorRoots: [mirror],
     }),
   );
 }
@@ -204,6 +213,38 @@ describe("fingerprint sidecar — Hive-private + lockstep prune (Feature 2)", ()
     expect(Object.keys(raw).sort()).toEqual(
       ["agentDefs", "agents", "bundles", "instructions", "kitVersion", "plugins", "skills"].sort(),
     );
+  });
+
+  test("sidecar is version 2; skill/agent carry winnerSourceId; instruction sentinel carries none", async () => {
+    seedSkill("sk");
+    seedInstruction("core", "core body");
+    await deploy({ skills: ["sk"], instructions: ["core"], targets: ["claude"] });
+
+    // Raw sidecar JSON: version 2.
+    const raw = JSON.parse(readFileSync(targets.fingerprintPath(), "utf8")) as {
+      version: number;
+    };
+    expect(raw.version).toBe(2);
+
+    const fp = readFingerprints(targets);
+    const skill = fp.entries.find((e) => e.kind === "skill" && e.name === "sk");
+    expect(skill?.winnerSourceId).toBe(SOURCE_ID);
+    const instr = fp.entries.find((e) => e.kind === "instruction");
+    expect(instr).toBeDefined();
+    expect(instr?.winnerSourceId).toBeUndefined();
+  });
+
+  test("an on-disk v1 sidecar is read as empty (discarded); verify reports present (no false drift)", async () => {
+    seedSkill("legacy");
+    await deploy({ skills: ["legacy"], targets: ["claude"] });
+    // Overwrite the sidecar with a v1 shape (the pre-bump schema). It must be
+    // discarded on read → verify falls back to present (no recorded hash → no drift).
+    writeFileSync(
+      targets.fingerprintPath(),
+      `${JSON.stringify({ version: 1, entries: [] }, null, 2)}\n`,
+    );
+    expect(readFingerprints(targets).entries).toEqual([]);
+    expect(statusOn(entryFor(runVerify(targets).entries, "legacy"), "claude")).toBe("present");
   });
 
   test("only landed items fingerprinted; redeploy {a} after {a,b} prunes b in lockstep", async () => {

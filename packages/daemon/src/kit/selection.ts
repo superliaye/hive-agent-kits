@@ -9,7 +9,9 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { serializeCapabilityKey } from "@hive/capability-schema";
 import type { CapabilityKind, Catalog, DeployDiff, DiffEntry, Selection } from "@hive/contract";
+import { log } from "../lib/log.ts";
 import { readSkillSource } from "./deploy/adapter.ts";
 import {
   hashDeployedAgent,
@@ -19,25 +21,31 @@ import {
   sha256,
 } from "./deploy/artifact-hash.ts";
 import {
-  agentSources,
+  agentSourceDir,
   instructionBody,
   loadSnippets,
   skillDisablesModelInvocation,
-  skillSources,
+  skillSourceDir,
 } from "./deploy/sources.ts";
 import { transformAgent, transformInstructions, transformSkill } from "./deploy/transforms.ts";
 import { DeployError } from "./effect/errors.ts";
 import { type Ledger, readLedger } from "./ledger.ts";
 import type { DeployTarget, DeployTargets } from "./targets.ts";
 
-// Concrete per-kind name set, resolved from a Selection against the catalog.
-// Daemon-internal (the resolved deploy plan) — not a wire type.
+// A resolved deploy item: the leaf name plus the WINNING Source's id (whose Mirror
+// the Deploy reads). Self-describing — the anti-corruption seam (ADR-0023:85-86):
+// Deploy never recomputes precedence or counts Sources.
+export type ResolvedItem = { name: string; sourceId: string };
+
+// Concrete per-kind resolved deploy plan, resolved from a Selection against the
+// catalog. Each selected name carries its winner Source. Daemon-internal — not a
+// wire type.
 export type ResolvedSelection = {
-  instructions: string[];
-  skills: string[];
-  agents: string[];
-  plugins: string[];
-  bundles: string[];
+  instructions: ResolvedItem[];
+  skills: ResolvedItem[];
+  agents: ResolvedItem[];
+  plugins: ResolvedItem[];
+  bundles: ResolvedItem[];
   targets: DeployTarget[];
 };
 
@@ -57,8 +65,13 @@ function uniq(arr: string[]): string[] {
   return Array.from(new Set(arr));
 }
 
-// Resolve a Selection against the catalog into a concrete per-kind name set.
-// Throws DeployError(collision) when any selected name is un-deployable.
+// Resolve a Selection against the AggregatedCatalog into a concrete per-kind
+// resolved plan, attaching each selected name's WINNING Source. Throws
+// DeployError(collision) when a selected name has catalog entries but NONE
+// deployable (a single-Source malformed key). A cross-Source collision no longer
+// throws — the winner resolves (ADR-0023:91). A selected name no Source provides
+// is dropped from the deploy plan + traced (the diff's `removed` pass still prunes
+// a stale ledger-owned phantom).
 export function resolveSelection(catalog: Catalog, selection: Selection): ResolvedSelection {
   const seed = emptyCaps();
   for (const presetName of selection.presets) {
@@ -76,55 +89,77 @@ export function resolveSelection(catalog: Catalog, selection: Selection): Resolv
     return uniq([...seed[kind], ...selection.add[kind]]).filter((n) => !removed.has(n));
   };
 
-  const resolved: ResolvedSelection = {
-    instructions: apply("instructions"),
-    skills: apply("skills"),
-    agents: apply("agents"),
-    plugins: apply("plugins"),
-    bundles: apply("bundles"),
-    targets: Array.from(new Set(selection.targets)),
-  };
-
-  // Refuse any selected name the catalog marked un-deployable (collision).
-  const undeployable = new Map<string, string>();
+  // The winner index: ONLY the deployable entries, keyed by CapabilityKey. The
+  // catalog now emits TWO entries for a collided key (one deployable, one
+  // shadowed); indexing all entries by (kind,name) would let the shadow clobber
+  // the winner. Filtering to deployable first maps each key to exactly one Source.
+  const winnerIndex = new Map<string, string>(); // key -> winner sourceId
+  // Every key that has ANY entry (deployable or not) — to distinguish a malformed
+  // (entries-but-none-deployable) key from a phantom (no entry at all).
+  const keyHasEntry = new Set<string>();
   for (const e of catalog.entries) {
-    if (!e.deployable) undeployable.set(`${e.kind}:${e.name}`, e.name);
-  }
-  const kinds: { kind: CapabilityKind; names: string[] }[] = [
-    { kind: "instruction", names: resolved.instructions },
-    { kind: "skill", names: resolved.skills },
-    { kind: "agent", names: resolved.agents },
-    { kind: "plugin", names: resolved.plugins },
-    { kind: "bundle", names: resolved.bundles },
-  ];
-  for (const { kind, names } of kinds) {
-    for (const n of names) {
-      if (undeployable.has(`${kind}:${n}`)) {
-        throw new DeployError({
-          reason: "collision",
-          message: `'${n}' (${kind}) is un-deployable: within-kind leaf-name collision`,
-          name: n,
-        });
-      }
+    const key = serializeCapabilityKey({ kind: e.kind, name: e.name });
+    keyHasEntry.add(key);
+    if (e.deployable) {
+      // sourceIds[0] is the winner Source under noUncheckedIndexedAccess
+      // (string | undefined); the .min(1) schema makes undefined a
+      // should-never-happen — treat it as the no-deployable-entry branch below.
+      const winner = e.sourceIds[0];
+      if (winner !== undefined) winnerIndex.set(key, winner);
     }
   }
-  return resolved;
+
+  const resolveKind = (kind: CapabilityKind, names: string[]): ResolvedItem[] => {
+    const out: ResolvedItem[] = [];
+    for (const name of names) {
+      const key = serializeCapabilityKey({ kind, name });
+      const winner = winnerIndex.get(key);
+      if (winner !== undefined) {
+        out.push({ name, sourceId: winner });
+        continue;
+      }
+      if (keyHasEntry.has(key)) {
+        // Has entries but none deployable — a single-Source malformed key.
+        throw new DeployError({
+          reason: "collision",
+          message: `'${name}' (${kind}) is un-deployable (malformed source)`,
+          name,
+        });
+      }
+      // No catalog entry at all — drop from the deploy/add plan + trace. The
+      // diff's removed pass still surfaces a stale ledger-owned phantom.
+      log().warn(
+        { module: "kit/selection", kind, name },
+        "selected capability not provided by any active Source; dropped from deploy plan",
+      );
+    }
+    return out;
+  };
+
+  return {
+    instructions: resolveKind("instruction", apply("instructions")),
+    skills: resolveKind("skill", apply("skills")),
+    agents: resolveKind("agent", apply("agents")),
+    plugins: resolveKind("plugin", apply("plugins")),
+    bundles: resolveKind("bundle", apply("bundles")),
+    targets: Array.from(new Set(selection.targets)),
+  };
 }
 
-// Hash the rendered content a deploy WOULD write for a name under `target`, so a
-// same-name new-body change is detectable. Mirrors what the engine writes per
+// Hash the rendered content a deploy WOULD write for a skill/agent under `target`,
+// reading from the WINNER's Mirror (the single resolved mirrorRoot for this name),
+// so a same-name new-body change is detectable. Mirrors what the engine writes per
 // target (incl. the Codex sidecar) so the hash is comparable to `deployedHash`.
-// Returns null when the source isn't in the Mirror.
-function renderedHash(
-  mirrorRoots: readonly string[],
+// Returns null when the source isn't in the winner's Mirror.
+function renderedNamedHash(
+  mirrorRoot: string,
   snippets: Map<string, string>,
-  kind: CapabilityKind,
+  kind: "skill" | "agent",
   name: string,
-  allInstructions: string[],
   target: DeployTarget,
 ): string | null {
   if (kind === "skill") {
-    const src = skillSources(mirrorRoots).get(name);
+    const src = skillSourceDir(mirrorRoot, name);
     if (!src) return null;
     const out = transformSkill(
       {
@@ -138,21 +173,23 @@ function renderedHash(
     const written = out.sidecar && target === "codex" ? [...out.files, out.sidecar] : out.files;
     return hashSkillFiles(written);
   }
-  if (kind === "agent") {
-    const src = agentSources(mirrorRoots).get(name);
-    if (!src) return null;
-    const raw = readFileSync(join(src, "AGENT.md"), "utf8");
-    const rendered = transformAgent({ name, raw }, snippets);
-    return sha256(target === "claude" ? rendered.claudeMd : rendered.codexToml);
-  }
-  if (kind === "instruction") {
-    const bodies = allInstructions
-      .map((n) => instructionBody(mirrorRoots, n))
-      .filter((b): b is string => b !== null);
-    // Both targets write the identical concatenated body.
-    return sha256(transformInstructions(bodies));
-  }
-  return null;
+  const src = agentSourceDir(mirrorRoot, name);
+  if (!src) return null;
+  const raw = readFileSync(join(src, "AGENT.md"), "utf8");
+  const rendered = transformAgent({ name, raw }, snippets);
+  return sha256(target === "claude" ? rendered.claudeMd : rendered.codexToml);
+}
+
+// Hash the concatenated instruction whole-file a deploy WOULD write. Each
+// instruction resolves to ITS OWN winner Mirror — two instructions in one
+// selection may be won by different Sources, so a single shared mirrorRoot would
+// hash the wrong bytes. Concatenation order is the resolved-array order
+// (deterministic, identical to the deploy path).
+function renderedInstructionHash(items: readonly ResolvedItem[], targets: DeployTargets): string {
+  const bodies = items
+    .map((item) => instructionBody(targets.mirrorRoot(item.sourceId), item.name))
+    .filter((b): b is string => b !== null);
+  return sha256(transformInstructions(bodies));
 }
 
 // The reference target for the content diff — claude when selected, else codex.
@@ -160,22 +197,6 @@ function renderedHash(
 // comparable (a codex-only selection diffs against the codex homes, not claude).
 function refTarget(deployTargets: DeployTarget[]): DeployTarget {
   return deployTargets.includes("claude") ? "claude" : "codex";
-}
-
-// Hash what is currently deployed on disk for a name under the reference target.
-// Returns null when nothing is deployed there. Delegates to the shared
-// artifact-hash util so the diff and the verify/fingerprint passes never compute
-// two incompatible hashes for the same on-disk artifact.
-function deployedHash(
-  targets: DeployTargets,
-  kind: CapabilityKind,
-  name: string,
-  target: DeployTarget,
-): string | null {
-  if (kind === "skill") return hashDeployedSkill(targets, name, target);
-  if (kind === "agent") return hashDeployedAgent(targets, name, target);
-  if (kind === "instruction") return hashDeployedInstruction(targets, target);
-  return null;
 }
 
 // Would this deploy overwrite a user-authored (non-Kit) instruction file on ANY
@@ -202,19 +223,19 @@ function overwritesUserInstructionFile(
   return false;
 }
 
-// Compute the Deploy Diff: added/removed by name, changed by content hash.
+// Compute the Deploy Diff: added/removed by name, changed by content hash. Each
+// selected name reads from ITS winner's Mirror (the resolved item's sourceId), so
+// a "changed" verdict is honest under multi-Source precedence. `activeMirrorRoots`
+// is used ONLY for snippet loading (snippets aren't Capabilities — no winner).
 export function computeDiff(
   targets: DeployTargets,
-  mirrorRoots: readonly string[],
-  _catalog: Catalog,
+  activeMirrorRoots: readonly string[],
   resolved: ResolvedSelection,
 ): DeployDiff {
   const ledger = readLedger(targets);
   const ownedSkills = new Set((ledger?.skills ?? []).map((e) => e.name));
   const ownedAgents = new Set((ledger?.agentDefs ?? []).map((e) => e.name));
   const ownedInstr = new Set((ledger?.instructions ?? []).map((e) => e.name));
-  const ownedPlugins = new Set((ledger?.plugins ?? []).map((e) => e.name));
-  const ownedBundles = new Set((ledger?.bundles ?? []).map((e) => e.name));
 
   // Diff against the homes the deploy actually writes to: claude when selected,
   // else codex. deployedHash + renderedHash use the same target so they compare.
@@ -223,33 +244,34 @@ export function computeDiff(
   // Load snippets once up front (like runDeploy) so a cross-Source snippet
   // collision surfaces as a typed DeployError in the DIFF path too — the diff
   // preview must not say "ok" for a selection the deploy would reject.
-  const snippets = loadSnippets(mirrorRoots);
+  const snippets = loadSnippets(activeMirrorRoots);
 
   const entries: DiffEntry[] = [];
 
   const diffNamed = (
-    kind: CapabilityKind,
-    selected: string[],
+    kind: "skill" | "agent",
+    selected: readonly ResolvedItem[],
     owned: Set<string>,
-    hashable: boolean,
   ) => {
-    const sel = new Set(selected);
+    const sel = new Set(selected.map((i) => i.name));
     // added / changed
-    for (const name of selected) {
-      if (!owned.has(name)) {
-        entries.push({ kind, name, change: "added" });
-      } else if (hashable) {
-        const newHash = renderedHash(
-          mirrorRoots,
+    for (const item of selected) {
+      if (!owned.has(item.name)) {
+        entries.push({ kind, name: item.name, change: "added" });
+      } else {
+        const newHash = renderedNamedHash(
+          targets.mirrorRoot(item.sourceId),
           snippets,
           kind,
-          name,
-          resolved.instructions,
+          item.name,
           target,
         );
-        const oldHash = deployedHash(targets, kind, name, target);
+        const oldHash =
+          kind === "skill"
+            ? hashDeployedSkill(targets, item.name, target)
+            : hashDeployedAgent(targets, item.name, target);
         if (newHash && oldHash && newHash !== oldHash) {
-          entries.push({ kind, name, change: "changed" });
+          entries.push({ kind, name: item.name, change: "changed" });
         }
       }
     }
@@ -259,21 +281,36 @@ export function computeDiff(
     }
   };
 
-  diffNamed("skill", resolved.skills, ownedSkills, true);
-  diffNamed("agent", resolved.agents, ownedAgents, true);
-  diffNamed("plugin", resolved.plugins, ownedPlugins, false);
-  diffNamed("bundle", resolved.bundles, ownedBundles, false);
+  // plugin / bundle: name-set diff only (no content hash — external-installer owned).
+  const diffUnhashed = (
+    kind: "plugin" | "bundle",
+    selected: readonly ResolvedItem[],
+    owned: Set<string>,
+  ) => {
+    const sel = new Set(selected.map((i) => i.name));
+    for (const item of selected) {
+      if (!owned.has(item.name)) entries.push({ kind, name: item.name, change: "added" });
+    }
+    for (const name of owned) {
+      if (!sel.has(name)) entries.push({ kind, name, change: "removed" });
+    }
+  };
+
+  diffNamed("skill", resolved.skills, ownedSkills);
+  diffNamed("agent", resolved.agents, ownedAgents);
+  diffUnhashed("plugin", resolved.plugins, new Set((ledger?.plugins ?? []).map((e) => e.name)));
+  diffUnhashed("bundle", resolved.bundles, new Set((ledger?.bundles ?? []).map((e) => e.name)));
 
   // Instructions: whole-file overwrite. added/changed/removed by name, plus the
   // user-authored-replacement warning when a selected target's instruction file
   // (CLAUDE.md / AGENTS.md) exists but isn't Kit-owned.
   const userAuthored = overwritesUserInstructionFile(targets, ledger, resolved.targets);
-  const selInstr = new Set(resolved.instructions);
-  for (const name of resolved.instructions) {
-    if (!ownedInstr.has(name)) {
+  const selInstr = new Set(resolved.instructions.map((i) => i.name));
+  for (const item of resolved.instructions) {
+    if (!ownedInstr.has(item.name)) {
       entries.push({
         kind: "instruction",
-        name,
+        name: item.name,
         change: "added",
         ...(userAuthored ? { replacesUserFile: true } : {}),
       });
@@ -283,20 +320,14 @@ export function computeDiff(
     if (!selInstr.has(name)) entries.push({ kind: "instruction", name, change: "removed" });
   }
   // Content-changed instruction set (same names, different concatenated body).
+  // Each instruction hashes against its OWN winner Mirror (split-winner safe).
   if (
     resolved.instructions.length > 0 &&
     [...selInstr].every((n) => ownedInstr.has(n)) &&
     ownedInstr.size > 0
   ) {
-    const newHash = renderedHash(
-      mirrorRoots,
-      snippets,
-      "instruction",
-      "",
-      resolved.instructions,
-      target,
-    );
-    const oldHash = deployedHash(targets, "instruction", "", target);
+    const newHash = renderedInstructionHash(resolved.instructions, targets);
+    const oldHash = hashDeployedInstruction(targets, target);
     if (newHash && oldHash && newHash !== oldHash) {
       entries.push({
         kind: "instruction",

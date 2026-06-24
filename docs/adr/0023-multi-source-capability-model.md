@@ -55,11 +55,21 @@ unified, deduped catalog is **computed in memory** over the set of Mirrors.
 
 **Source precedence + Shadowed Capability.** On a different-ContentSha,
 same-CapabilityKey collision, the **highest-precedence active Source wins** the
-Deploy; the losers are **Shadowed** — visible, clearly badged "not deployed
-(duplicate)", **non-blocking**. This *replaces* the old hard "within-kind collision
-is un-deployable / refuse the Deploy" rule (`kit/catalog.ts` `withCollisions`,
-`kit/selection.ts` `resolveSelection`). A duplicate CapabilityKey **inside a single
-Source** is still treated as a malformed-source problem and marked un-deployable.
+Deploy; the losers are **Shadowed**. A Shadowed loser is realized as a **distinct
+non-deployable catalog entry** — its own content Variant (one `CapabilityEntry` per
+ContentSha, sharing `(kind, name)` with the winner) carrying `shadowed:true`, NOT a
+side list and NOT collapsed onto the winner. It is **visible as its own row**,
+clearly badged "not deployed (duplicate)", **non-blocking**. This *replaces* the old
+hard "within-kind collision is un-deployable / refuse the Deploy" rule
+(`kit/catalog.ts` `withCollisions`, `kit/selection.ts` `resolveSelection` — which no
+longer throws on a cross-Source collision; it resolves the winner). A duplicate
+CapabilityKey **inside a single Source** is still treated as a malformed-source
+problem and marked un-deployable (and is NOT `shadowed`).
+
+The AggregationService ships as a **pure Core module** (`sources/aggregation.ts`),
+called from the kit read path; the `KitSvc.catalog()/sync()` → Sources-service
+context-split is **consciously deferred**, so this upstream/downstream seam is
+half-realized by design (a functional core, not yet a new Effect service Tag).
 
 **Default precedence order (decided).** When the user has not manually ranked,
 **user-added Sources outrank the Starter Source** — the Starter is the overridable
@@ -138,8 +148,10 @@ The Starter Source ships as the workspace package
 
 ## Open (not yet decided)
 
-- Whether "merge" requires byte-identical ContentSha or tolerates trivial
-  normalization (line endings, frontmatter key order).
+- (Resolved — **byte-identical**.) "Merge" requires a **byte-identical** ContentSha;
+  no normalization now. A CRLF / frontmatter-key-order difference surfaces as a
+  Collision (winner + Shadowed), not a Merge — visible, non-blocking, and
+  forward-compatible (normalizing later can only merge more, never un-merge).
 
 ## Consequences
 

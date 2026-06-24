@@ -16,7 +16,11 @@ function readDirSafe(p: string): string[] {
 }
 
 // Walk a folder-marker kind (skills/agents), returning leaf name → source dir.
-function resolveFolderSources(kindDir: string, marker: string): Map<string, string> {
+// Exported as the shared capability-locator so the content-hash producer
+// (kit/content-sha.ts) and the deploy readers resolve the on-disk Mirror layout
+// through ONE function — a layout change can't silently desync the merge hash
+// from what deploy reads.
+export function resolveFolderSources(kindDir: string, marker: string): Map<string, string> {
   const out = new Map<string, string>();
   const walk = (dir: string, leaf: string): void => {
     if (existsSync(join(dir, marker))) {
@@ -45,34 +49,52 @@ function resolveFolderSources(kindDir: string, marker: string): Map<string, stri
   return out;
 }
 
-// Union the per-mirror leaf-name → source-dir maps across active Source mirrors.
-// A name colliding across mirrors is refused upstream by the catalog's
-// cross-Source CapabilityKey pass, so a name that reaches deploy has exactly one
-// providing Mirror — the union is unambiguous for anything deployable.
-export function skillSources(mirrorRoots: readonly string[]): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const root of mirrorRoots) {
-    for (const [name, dir] of resolveFolderSources(
-      join(root, "capabilities", "skills"),
-      "SKILL.md",
-    )) {
-      out.set(name, dir);
-    }
-  }
-  return out;
+// Per-Mirror folder-marker resolution (one winner Mirror per name, not a union).
+// Cross-Source precedence is resolved upstream (the resolved selection carries the
+// winning SourceId per name), so each deployed name reads from EXACTLY its winner's
+// Mirror — never a first/last-mirror-wins union. Memoized per mirrorRoot so a
+// multi-skill deploy walks each winner Mirror once.
+const skillSourceCache = new Map<string, Map<string, string>>();
+const agentSourceCache = new Map<string, Map<string, string>>();
+
+function folderSourcesFor(
+  cache: Map<string, Map<string, string>>,
+  mirrorRoot: string,
+  kindDir: string,
+  marker: string,
+): Map<string, string> {
+  const cached = cache.get(mirrorRoot);
+  if (cached) return cached;
+  const map = resolveFolderSources(join(mirrorRoot, "capabilities", kindDir), marker);
+  cache.set(mirrorRoot, map);
+  return map;
 }
 
-export function agentSources(mirrorRoots: readonly string[]): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const root of mirrorRoots) {
-    for (const [name, dir] of resolveFolderSources(
-      join(root, "capabilities", "agents"),
-      "AGENT.md",
-    )) {
-      out.set(name, dir);
-    }
-  }
-  return out;
+// The winner Mirror's source dir for a skill leaf name, or null when absent.
+export function skillSourceDir(mirrorRoot: string, name: string): string | null {
+  return folderSourcesFor(skillSourceCache, mirrorRoot, "skills", "SKILL.md").get(name) ?? null;
+}
+
+// The winner Mirror's source dir for an agent leaf name, or null when absent.
+export function agentSourceDir(mirrorRoot: string, name: string): string | null {
+  return folderSourcesFor(agentSourceCache, mirrorRoot, "agents", "AGENT.md").get(name) ?? null;
+}
+
+// The on-disk path of a single-file Capability (instruction/plugin/bundle) in one
+// Mirror — the shared locator both the content-hash producer and the deploy
+// readers use, so a layout change touches one place. Null arg-shapes (a leaf name
+// with a path separator) can't occur: names are validated leaf names upstream.
+export function capabilityFilePath(
+  mirrorRoot: string,
+  kind: "instruction" | "plugin" | "bundle",
+  name: string,
+): string {
+  const layout = {
+    instruction: { dir: "instructions", ext: ".instructions.md" },
+    plugin: { dir: "plugins", ext: ".plugin.md" },
+    bundle: { dir: "bundles", ext: ".bundle.md" },
+  }[kind];
+  return join(mirrorRoot, "capabilities", layout.dir, `${name}${layout.ext}`);
 }
 
 // Load reusable snippets (capabilities/snippets/*.md) into name → body, unioned
@@ -117,31 +139,22 @@ export function skillDisablesModelInvocation(srcDir: string): boolean {
   return /^\s*disable-model-invocation:\s*true\s*$/m.test(content.slice(3, end));
 }
 
-// First mirror (in active-Source order) that provides a file under a kind dir.
-// A cross-Source same-name collision is refused upstream by the catalog pass, so
-// the first match is the only match for anything that reaches deploy.
-function firstMirrorWith(mirrorRoots: readonly string[], ...relSegments: string[]): string | null {
-  for (const root of mirrorRoots) {
-    const p = join(root, ...relSegments);
-    if (existsSync(p)) return p;
-  }
-  return null;
-}
-
-// Instruction source file content (capabilities/instructions/<name>.instructions.md).
-export function instructionBody(mirrorRoots: readonly string[], name: string): string | null {
-  const p = firstMirrorWith(mirrorRoots, "capabilities", "instructions", `${name}.instructions.md`);
-  if (!p) return null;
+// Instruction source file content from the winner's Mirror
+// (capabilities/instructions/<name>.instructions.md).
+export function instructionBody(mirrorRoot: string, name: string): string | null {
+  const p = capabilityFilePath(mirrorRoot, "instruction", name);
+  if (!existsSync(p)) return null;
   return readFileSync(p, "utf8");
 }
 
-// Plugin frontmatter (marketplace_source / marketplace_name / plugin_name).
+// Plugin frontmatter (marketplace_source / marketplace_name / plugin_name) from
+// the winner's Mirror.
 export function pluginMeta(
-  mirrorRoots: readonly string[],
+  mirrorRoot: string,
   name: string,
 ): { source: string; market: string; pluginName: string } | null {
-  const p = firstMirrorWith(mirrorRoots, "capabilities", "plugins", `${name}.plugin.md`);
-  if (!p) return null;
+  const p = capabilityFilePath(mirrorRoot, "plugin", name);
+  if (!existsSync(p)) return null;
   const content = readFileSync(p, "utf8");
   const fm = parseFlatFrontmatter(content);
   return {
@@ -164,9 +177,9 @@ export type BundleMeta = {
   requires: string[];
 };
 
-export function bundleMeta(mirrorRoots: readonly string[], name: string): BundleMeta | null {
-  const p = firstMirrorWith(mirrorRoots, "capabilities", "bundles", `${name}.bundle.md`);
-  if (!p) return null;
+export function bundleMeta(mirrorRoot: string, name: string): BundleMeta | null {
+  const p = capabilityFilePath(mirrorRoot, "bundle", name);
+  if (!existsSync(p)) return null;
   const content = readFileSync(p, "utf8");
   // Bundles carry nested YAML (installer block); a full parse is warranted here.
   const fm = parseYamlFrontmatter(content);

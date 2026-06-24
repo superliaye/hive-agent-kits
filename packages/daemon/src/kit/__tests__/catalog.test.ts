@@ -159,7 +159,7 @@ describe("readCatalog (single Source)", () => {
   });
 });
 
-describe("readCatalog (cross-Source aggregation)", () => {
+describe("readCatalog (cross-Source aggregation — merge / collision / shadow)", () => {
   const SRC_A = source("src-a");
   const SRC_B = source("src-b");
   let mirrorA: string;
@@ -172,49 +172,107 @@ describe("readCatalog (cross-Source aggregation)", () => {
     mkdirSync(join(mirrorB, "capabilities"), { recursive: true });
   });
 
-  test("(a) disjoint capability names across two Sources -> all deployable", () => {
+  test("(a) disjoint capability names across two Sources -> all deployable, single-variant", () => {
     writeSkillIn(mirrorA, "alpha", "description: a");
     writeSkillIn(mirrorB, "beta", "description: b");
     const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
     const alpha = cat.entries.find((e) => e.name === "alpha");
     const beta = cat.entries.find((e) => e.name === "beta");
     expect(alpha?.deployable).toBe(true);
+    expect(alpha?.shadowed).toBe(false);
+    expect(alpha?.sourceIds).toEqual(["src-a"]);
     expect(beta?.deployable).toBe(true);
   });
 
-  test("(b) same skill name in two Sources -> both un-deployable + a collision problem", () => {
-    writeSkillIn(mirrorA, "foo", "description: a-foo");
-    writeSkillIn(mirrorB, "foo", "description: b-foo");
+  test("(b) MERGE: byte-identical skill in two Sources -> ONE entry, two sourceIds (winner-first)", () => {
+    // Identical frontmatter + body → identical Mirror bytes → same ContentSha.
+    writeSkillIn(mirrorA, "foo", "description: same", "identical body");
+    writeSkillIn(mirrorB, "foo", "description: same", "identical body");
+    const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
+    const foos = cat.entries.filter((e) => e.kind === "skill" && e.name === "foo");
+    expect(foos.length).toBe(1);
+    const foo = foos[0];
+    expect(foo?.deployable).toBe(true);
+    expect(foo?.shadowed).toBe(false);
+    // Both Sources are git; src-b inserted later → higher precedence → winner-first.
+    expect(foo?.sourceIds).toEqual(["src-b", "src-a"]);
+    expect(cat.problems.some((p) => p.kind === "skill" && p.name === "foo")).toBe(false);
+  });
+
+  test("(c) COLLISION: different-content skill in two Sources -> winner + shadow, no problem", () => {
+    writeSkillIn(mirrorA, "foo", "description: a-foo", "body A");
+    writeSkillIn(mirrorB, "foo", "description: b-foo", "body B");
     const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
     const foos = cat.entries.filter((e) => e.kind === "skill" && e.name === "foo");
     expect(foos.length).toBe(2);
-    for (const f of foos) {
-      expect(f.deployable).toBe(false);
-      expect(f.blockedReason).toBe("cross-source CapabilityKey collision — un-deployable");
-    }
-    expect(
-      cat.problems.some(
-        (p) =>
-          p.kind === "skill" &&
-          p.name === "foo" &&
-          p.problem === "cross-source CapabilityKey collision — un-deployable",
-      ),
-    ).toBe(true);
+    const deployable = foos.filter((f) => f.deployable);
+    const shadowed = foos.filter((f) => f.shadowed);
+    expect(deployable.length).toBe(1);
+    expect(shadowed.length).toBe(1);
+    expect(deployable[0]?.shadowed).toBe(false);
+    expect(shadowed[0]?.deployable).toBe(false);
+    // src-b (later git) wins.
+    expect(deployable[0]?.sourceIds[0]).toBe("src-b");
+    // Cross-Source collision is no longer a problem.
+    expect(cat.problems.some((p) => p.kind === "skill" && p.name === "foo")).toBe(false);
   });
 
-  test("(c) same-named instruction across two Sources -> both un-deployable (file-marker kind)", () => {
+  test("(c2) COLLISION on a file-marker kind (instruction) -> winner + shadow (ContentSha covers all kinds)", () => {
     writeInstructionIn(mirrorA, "core", "a-core");
     writeInstructionIn(mirrorB, "core", "b-core");
     const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
     const instrs = cat.entries.filter((e) => e.kind === "instruction" && e.name === "core");
     expect(instrs.length).toBe(2);
-    for (const i of instrs) expect(i.deployable).toBe(false);
-    expect(cat.problems.some((p) => p.kind === "instruction" && p.name === "core")).toBe(true);
+    expect(instrs.filter((i) => i.deployable).length).toBe(1);
+    expect(instrs.filter((i) => i.shadowed).length).toBe(1);
+    expect(cat.problems.some((p) => p.kind === "instruction" && p.name === "core")).toBe(false);
   });
 
-  test("(d) same-named preset across two Sources -> dropped + problem (not first-wins)", () => {
+  test("(d) entry-count conservation: {A,A,B} -> 2 entries (1 merged deployable, 1 shadowed B)", () => {
+    const SRC_C = source("src-c");
+    const mirrorC = defaultDeployTargets().mirrorRoot(SRC_C.id);
+    mkdirSync(join(mirrorC, "capabilities"), { recursive: true });
+    // A and A' identical; B different.
+    writeSkillIn(mirrorA, "foo", "description: x", "content A");
+    writeSkillIn(mirrorB, "foo", "description: x", "content A");
+    writeSkillIn(mirrorC, "foo", "description: x", "content B");
+    const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B, SRC_C]);
+    const foos = cat.entries.filter((e) => e.kind === "skill" && e.name === "foo");
+    expect(foos.length).toBe(2);
+    const merged = foos.find((f) => f.sourceIds.length === 2);
+    expect(merged).toBeDefined();
+    expect(foos.filter((f) => f.shadowed).length).toBe(1);
+  });
+
+  test("(e) single-Source malformed dup stays blocked (deployable:false, NOT shadowed)", () => {
+    // Two skills named foo INSIDE one Source -> parse marks both not-resolvable.
+    writeSkillIn(mirrorA, "@x/foo", "description: a");
+    writeSkillIn(mirrorA, "@y/foo", "description: b");
+    const cat = readCatalog(defaultDeployTargets(), [SRC_A]);
+    const foos = cat.entries.filter((e) => e.kind === "skill" && e.name === "foo");
+    expect(foos.length).toBe(2);
+    for (const f of foos) {
+      expect(f.deployable).toBe(false);
+      expect(f.shadowed).toBe(false);
+      expect(f.blockedReason).toBeDefined();
+    }
+  });
+
+  test("(f) PRECEDENCE: a git Source outranks the local Starter on a collision", () => {
+    const STARTER = source("starter", { kind: "local" });
+    const mirrorStarter = defaultDeployTargets().mirrorRoot(STARTER.id);
+    mkdirSync(join(mirrorStarter, "capabilities"), { recursive: true });
+    writeSkillIn(mirrorStarter, "foo", "description: starter", "starter body");
+    writeSkillIn(mirrorA, "foo", "description: git", "git body");
+    // Registration order: starter first (local), then the git Source.
+    const cat = readCatalog(defaultDeployTargets(), [STARTER, SRC_A]);
+    const winner = cat.entries.find((e) => e.kind === "skill" && e.name === "foo" && e.deployable);
+    expect(winner?.sourceIds[0]).toBe("src-a");
+  });
+
+  test("(g) preset cross-Source name clash still drops both (unchanged from #30)", () => {
     writeSkillIn(mirrorA, "alpha", "description: a");
-    writeSkillIn(mirrorB, "alpha", "description: b2");
+    writeSkillIn(mirrorB, "beta", "description: b");
     writePresetIn(
       mirrorA,
       "shared",
@@ -223,7 +281,7 @@ describe("readCatalog (cross-Source aggregation)", () => {
     writePresetIn(
       mirrorB,
       "shared",
-      "name: shared\ndefault_agents: [claude]\ncapabilities:\n  skills: [alpha]\n",
+      "name: shared\ndefault_agents: [claude]\ncapabilities:\n  skills: [beta]\n",
     );
     const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
     expect(cat.presets.some((p) => p.name === "shared")).toBe(false);

@@ -79,6 +79,33 @@ its artifacts from. Each Source has its own Mirror; Hive never physically merges
 Sources into one tree (the unified view across Sources is computed, not stored).
 Distinct from the **CLI homes** a Deploy writes to.
 
+**CapabilityKey**:
+A Capability's **deploy identity**: its `(kind, leaf-name)`. A leaf name must be
+unique within its kind inside a **CLI home**, so the CapabilityKey is what a Deploy
+treats as "the same capability" — the unit precedence and duplicate-handling reason
+over. Two **Sources** providing the same CapabilityKey are a duplicate to reconcile.
+_Avoid_: "name" alone (the kind is part of the identity).
+
+**ContentSha**:
+The **content identity** of a Capability — a hash of its **Mirror** bytes. Two
+Capabilities under the same **CapabilityKey** are "the same content" iff their
+ContentSha matches **byte-for-byte** (no normalization). The signal that decides
+**Merge** vs **Collision** across **Sources**.
+
+**Variant**:
+A distinct **ContentSha** under one **CapabilityKey**. Identical-ContentSha across N
+Sources is a single Variant (a **Merge**, carrying N Source labels); a differing
+ContentSha is a separate Variant. The aggregated catalog surfaces one entry per
+Variant, so two entries may share a CapabilityKey.
+
+**Shadowed Capability**:
+A **Variant** that lost the **Source precedence** contest for its **CapabilityKey** —
+a different-content sibling of the winning Variant. It is a **distinct, visible,
+non-deployable catalog entry** badged "not deployed (duplicate)", **non-blocking**
+(it never refuses a Deploy). Distinct from a **blocked** Capability (a malformed,
+un-deployable single-Source duplicate): a Shadowed loser is well-formed; it simply
+lost precedence.
+
 **Deploy**:
 Writing a selected set of **Capabilities** from the active Sources' **Mirrors**
 into the **CLI homes**, reproducing the upstream contract with full fidelity.

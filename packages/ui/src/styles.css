@@ -1324,6 +1324,31 @@ pre.config {
   background: color-mix(in srgb, var(--color-danger) 18%, transparent);
   color: var(--color-danger);
 }
+/* Shadowed (precedence-loser) variant: a third visible state, distinct from
+ * blocked. The row stays fully legible (not dimmed like blocked) but isn't
+ * selectable; the badge reads "not deployed (duplicate)". */
+.kit-row.shadowed {
+  cursor: default;
+  border-style: dashed;
+}
+.kit-indicator-duplicate {
+  background: color-mix(in srgb, var(--color-fg-muted) 16%, transparent);
+  color: var(--color-fg-muted);
+}
+/* Merge labels: the Source(s) providing a variant, shown on the row. */
+.kit-row-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.kit-source-label {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  color: var(--color-fg-muted);
+}
 
 /* ─── Skeleton loading placeholders ────────────────────────────────────
  * Content-shaped placeholders shown while async/backend data is pending.

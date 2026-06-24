@@ -12,6 +12,9 @@ describe("kit contract", () => {
           description: "debug loop",
           group: "@loop",
           deployable: true,
+          shadowed: false,
+          sourceIds: ["src-1"],
+          contentSha: "a".repeat(64),
         },
       ],
       presets: [

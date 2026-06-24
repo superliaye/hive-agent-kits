@@ -139,10 +139,11 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
   // clean `undefined` under noUncheckedIndexedAccess — never an `as`.
   const lastSyncError = new Map<string, LastSyncError>();
 
-  // Mirror roots for a captured active-Source snapshot, in registry order — the
-  // deploy/diff read path unions content across these. Derive both the catalog
-  // input and the mirror roots from ONE snapshot per verb so a concurrent
-  // registry mutation can't make them diverge mid-operation.
+  // Active-Source mirror roots for a captured snapshot, in registry order — used
+  // for SNIPPET loading only (snippets aren't Capabilities, so they have no
+  // winner). Each Capability's winner Mirror travels in the resolved selection.
+  // Derive both the catalog input and the mirror roots from ONE snapshot per verb
+  // so a concurrent registry mutation can't make them diverge mid-operation.
   const mirrorRootsOf = (active: readonly Source[]): readonly string[] =>
     active.map((s) => targets.mirrorRoot(s.id));
 
@@ -218,7 +219,7 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
           const active = activeSources(registry);
           const catalog = readCatalog(targets, active);
           const resolved = resolveSelection(catalog, selection);
-          return computeDiff(targets, mirrorRootsOf(active), catalog, resolved);
+          return computeDiff(targets, mirrorRootsOf(active), resolved);
         },
         catch: (err) =>
           err instanceof DeployError
@@ -238,13 +239,13 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
         });
         // The multi-Source world has no single kit SHA: the deploy audit kitSha
         // and the interop Ledger kitVersion are retired unconditionally (both
-        // N==1 and N>1). Winner-per-key in the fingerprint sidecar is the
-        // deferred AggregationService.
+        // N==1 and N>1). The resolved selection carries each name's winner Source,
+        // so the only mirror roots threaded are the active set for snippet loading.
         const input: DeployInput = {
           selection: resolved,
           kitSha: null,
           kitVersion: "",
-          mirrorRoots: mirrorRootsOf(active),
+          activeMirrorRoots: mirrorRootsOf(active),
         };
         const result = yield* runDeploy(fx, input);
         // Exactly one audit event, refs-only allow-list payload.

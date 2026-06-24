@@ -2,9 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Catalog, Source } from "@hive/contract";
 import { Effect } from "effect";
-import { readCatalog } from "../catalog.ts";
 import type { DeployFsExec } from "../deploy/adapter.ts";
 import { runDeploy } from "../deploy/engine.ts";
 import { DeployError } from "../effect/errors.ts";
@@ -44,15 +42,22 @@ function seedInstruction(name: string, body: string): void {
   writeFileSync(join(dir, `${name}.instructions.md`), `---\ndescription: ${name}\n---\n${body}\n`);
 }
 
-function resolved(over: Partial<ResolvedSelection>): ResolvedSelection {
+function resolved(over: {
+  instructions?: string[];
+  skills?: string[];
+  agents?: string[];
+  plugins?: string[];
+  bundles?: string[];
+  targets?: ("claude" | "codex")[];
+}): ResolvedSelection {
+  const item = (n: string) => ({ name: n, sourceId: SOURCE_ID });
   return {
-    instructions: [],
-    skills: [],
-    agents: [],
-    plugins: [],
-    bundles: [],
-    targets: ["claude"],
-    ...over,
+    instructions: (over.instructions ?? []).map(item),
+    skills: (over.skills ?? []).map(item),
+    agents: (over.agents ?? []).map(item),
+    plugins: (over.plugins ?? []).map(item),
+    bundles: (over.bundles ?? []).map(item),
+    targets: over.targets ?? ["claude"],
   };
 }
 
@@ -62,18 +67,14 @@ const fx = (): DeployFsExec => ({
   probe: () => true,
 });
 
-const SOURCE: Source = {
-  id: SOURCE_ID,
-  origin: "https://github.com/owner/repo",
-  kind: "git",
-  active: true,
-  createdAt: 0,
-};
-const cat = (): Catalog => readCatalog(targets, [SOURCE]);
-
 async function deploy(sel: ResolvedSelection): Promise<void> {
   await Effect.runPromise(
-    runDeploy(fx(), { selection: sel, kitSha: "sha1", kitVersion: "1.0.0", mirrorRoots: [mirror] }),
+    runDeploy(fx(), {
+      selection: sel,
+      kitSha: "sha1",
+      kitVersion: "1.0.0",
+      activeMirrorRoots: [mirror],
+    }),
   );
 }
 
@@ -81,7 +82,7 @@ describe("computeDiff", () => {
   test("(a) added: nothing deployed, select skills -> all added", () => {
     seedSkill("x");
     seedSkill("y");
-    const diff = computeDiff(targets, [mirror], cat(), resolved({ skills: ["x", "y"] }));
+    const diff = computeDiff(targets, [mirror], resolved({ skills: ["x", "y"] }));
     const added = diff.entries.filter((e) => e.change === "added").map((e) => e.name);
     expect(new Set(added)).toEqual(new Set(["x", "y"]));
     expect(diff.entries.every((e) => e.change === "added")).toBe(true);
@@ -92,7 +93,7 @@ describe("computeDiff", () => {
     seedSkill("b");
     await deploy(resolved({ skills: ["a", "b"] }));
 
-    const diff = computeDiff(targets, [mirror], cat(), resolved({ skills: ["a"] }));
+    const diff = computeDiff(targets, [mirror], resolved({ skills: ["a"] }));
     const removed = diff.entries.filter((e) => e.change === "removed");
     expect(removed.map((e) => e.name)).toEqual(["b"]);
   });
@@ -103,7 +104,7 @@ describe("computeDiff", () => {
     // Mutate the mirror source so a re-deploy WOULD write different bytes.
     seedSkill("c", "MUTATED body");
 
-    const diff = computeDiff(targets, [mirror], cat(), resolved({ skills: ["c"] }));
+    const diff = computeDiff(targets, [mirror], resolved({ skills: ["c"] }));
     const changed = diff.entries.find((e) => e.kind === "skill" && e.name === "c");
     expect(changed).toBeDefined();
     expect(changed?.change).toBe("changed");
@@ -115,7 +116,7 @@ describe("computeDiff", () => {
     mkdirSync(targets.claudeHome(), { recursive: true });
     writeFileSync(join(targets.claudeHome(), "CLAUDE.md"), "USER WROTE THIS");
 
-    const diff = computeDiff(targets, [mirror], cat(), resolved({ instructions: ["core"] }));
+    const diff = computeDiff(targets, [mirror], resolved({ instructions: ["core"] }));
     const instr = diff.entries.find((e) => e.kind === "instruction" && e.name === "core");
     expect(instr).toBeDefined();
     expect(instr?.change).toBe("added");
@@ -129,7 +130,7 @@ describe("computeDiff", () => {
     // Re-diff the SAME selection with no source change: it must be unchanged
     // (no entries), proving the diff reads the codex home (agentsHome) the deploy
     // wrote to — not claudeHome (which a codex-only deploy never touches).
-    const diff = computeDiff(targets, [mirror], cat(), codexOnly);
+    const diff = computeDiff(targets, [mirror], codexOnly);
     expect(diff.entries.filter((d) => d.kind === "skill")).toEqual([]);
   });
 
@@ -140,7 +141,6 @@ describe("computeDiff", () => {
     const diff = computeDiff(
       targets,
       [mirror],
-      cat(),
       resolved({ instructions: ["core"], targets: ["codex"] }),
     );
     const instr = diff.entries.find((e) => e.kind === "instruction" && e.name === "core");
@@ -160,7 +160,7 @@ describe("computeDiff", () => {
 
     let thrown: unknown;
     try {
-      computeDiff(targets, [mirrorA, mirrorB], cat(), resolved({ skills: [] }));
+      computeDiff(targets, [mirrorA, mirrorB], resolved({ skills: [] }));
     } catch (e) {
       thrown = e;
     }

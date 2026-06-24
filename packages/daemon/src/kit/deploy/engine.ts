@@ -35,13 +35,13 @@ import {
 } from "./adapter.ts";
 import { deployedAgentPath, deployedInstructionPath, deployedSkillDir } from "./artifact-hash.ts";
 import {
-  agentSources,
+  agentSourceDir,
   bundleMeta,
   instructionBody,
   loadSnippets,
   pluginMeta,
   skillDisablesModelInvocation,
-  skillSources,
+  skillSourceDir,
 } from "./sources.ts";
 import { transformAgent, transformInstructions, transformSkill } from "./transforms.ts";
 
@@ -56,22 +56,18 @@ function emptyKind(kind: CapabilityKind): KindResult {
 // Pre-flight: which binaries does this selection require, and are they present?
 // claude iff a plugin; git iff a setup-script bundle; npx iff an npx-skills
 // bundle. A missing tool is a typed DeployError BEFORE any write.
-function preflight(
-  fx: DeployFsExec,
-  sel: ResolvedSelection,
-  mirrorRoots: readonly string[],
-): DeployError | null {
+function preflight(fx: DeployFsExec, sel: ResolvedSelection): DeployError | null {
   const needs: { tool: string; reason: string }[] = [];
   if (sel.plugins.length > 0 && sel.targets.includes("claude") && !skipPlugin()) {
     needs.push({ tool: "claude", reason: "plugin install" });
   }
   if (!skipBundle()) {
-    for (const name of sel.bundles) {
-      const meta = bundleMeta(mirrorRoots, name);
+    for (const item of sel.bundles) {
+      const meta = bundleMeta(fx.targets.mirrorRoot(item.sourceId), item.name);
       if (!meta) continue;
       if (meta.installerKind === "setup-script")
-        needs.push({ tool: "git", reason: `bundle ${name}` });
-      else needs.push({ tool: "npx", reason: `bundle ${name}` });
+        needs.push({ tool: "git", reason: `bundle ${item.name}` });
+      else needs.push({ tool: "npx", reason: `bundle ${item.name}` });
     }
   }
   for (const n of needs) {
@@ -88,22 +84,21 @@ function preflight(
 
 // ---- per-kind apply ----
 
-function applyInstructions(
-  fx: DeployFsExec,
-  sel: ResolvedSelection,
-  mirrorRoots: readonly string[],
-): KindResult {
+function applyInstructions(fx: DeployFsExec, sel: ResolvedSelection): KindResult {
   const res = emptyKind("instruction");
   const bodies: string[] = [];
   const resolvedNames: string[] = [];
-  for (const name of sel.instructions) {
-    const body = instructionBody(mirrorRoots, name);
+  // Each instruction concatenates from ITS OWN winner Mirror — different
+  // instructions in one selection may be won by different Sources. Order stays the
+  // resolved-array order (deterministic, identical to the diff path).
+  for (const item of sel.instructions) {
+    const body = instructionBody(fx.targets.mirrorRoot(item.sourceId), item.name);
     if (body === null) {
-      res.failed.push({ name, error: "source not found in mirror" });
+      res.failed.push({ name: item.name, error: "source not found in mirror" });
       continue;
     }
     bodies.push(body);
-    resolvedNames.push(name);
+    resolvedNames.push(item.name);
   }
   const compiled = transformInstructions(bodies);
   // The whole-file write is the unit of success — only mark the names applied
@@ -130,32 +125,30 @@ function applyInstructions(
 function applySkills(
   fx: DeployFsExec,
   sel: ResolvedSelection,
-  mirrorRoots: readonly string[],
   snippets: Map<string, string>,
 ): KindResult {
   const res = emptyKind("skill");
-  const sources = skillSources(mirrorRoots);
-  for (const name of sel.skills) {
-    const srcDir = sources.get(name);
+  for (const item of sel.skills) {
+    const srcDir = skillSourceDir(fx.targets.mirrorRoot(item.sourceId), item.name);
     if (!srcDir) {
-      res.failed.push({ name, error: "source not found in mirror" });
+      res.failed.push({ name: item.name, error: "source not found in mirror" });
       continue;
     }
     try {
       const files = readSkillSource(srcDir);
       const out = transformSkill(
-        { name, files, disableModelInvocation: skillDisablesModelInvocation(srcDir) },
+        { name: item.name, files, disableModelInvocation: skillDisablesModelInvocation(srcDir) },
         snippets,
       );
       for (const target of sel.targets) {
-        const skillsDir = deployedSkillDir(fx.targets, name, target);
+        const skillsDir = deployedSkillDir(fx.targets, item.name, target);
         const allFiles =
           out.sidecar && target === "codex" ? [...out.files, out.sidecar] : out.files;
         writeSkillFolder(skillsDir, allFiles);
       }
-      res.applied.push(name);
+      res.applied.push(item.name);
     } catch (err) {
-      res.failed.push({ name, error: String(err) });
+      res.failed.push({ name: item.name, error: String(err) });
     }
   }
   return res;
@@ -164,44 +157,39 @@ function applySkills(
 function applyAgents(
   fx: DeployFsExec,
   sel: ResolvedSelection,
-  mirrorRoots: readonly string[],
   snippets: Map<string, string>,
 ): KindResult {
   const res = emptyKind("agent");
-  const sources = agentSources(mirrorRoots);
-  for (const name of sel.agents) {
-    const srcDir = sources.get(name);
+  for (const item of sel.agents) {
+    const srcDir = agentSourceDir(fx.targets.mirrorRoot(item.sourceId), item.name);
     if (!srcDir) {
-      res.failed.push({ name, error: "source not found in mirror" });
+      res.failed.push({ name: item.name, error: "source not found in mirror" });
       continue;
     }
     try {
       const content = readFileSync(join(srcDir, "AGENT.md"), "utf8");
-      const out = transformAgent({ name, raw: content }, snippets);
+      const out = transformAgent({ name: item.name, raw: content }, snippets);
       if (sel.targets.includes("claude")) {
-        writeFileAt(deployedAgentPath(fx.targets, name, "claude"), out.claudeMd);
+        writeFileAt(deployedAgentPath(fx.targets, item.name, "claude"), out.claudeMd);
       }
       if (sel.targets.includes("codex")) {
-        writeFileAt(deployedAgentPath(fx.targets, name, "codex"), out.codexToml);
+        writeFileAt(deployedAgentPath(fx.targets, item.name, "codex"), out.codexToml);
       }
-      res.applied.push(name);
+      res.applied.push(item.name);
     } catch (err) {
-      res.failed.push({ name, error: String(err) });
+      res.failed.push({ name: item.name, error: String(err) });
     }
   }
   return res;
 }
 
-function applyPlugins(
-  fx: DeployFsExec,
-  sel: ResolvedSelection,
-  mirrorRoots: readonly string[],
-): KindResult {
+function applyPlugins(fx: DeployFsExec, sel: ResolvedSelection): KindResult {
   const res = emptyKind("plugin");
   // Claude-only.
   if (!sel.targets.includes("claude")) return res;
-  for (const name of sel.plugins) {
-    const meta = pluginMeta(mirrorRoots, name);
+  for (const item of sel.plugins) {
+    const name = item.name;
+    const meta = pluginMeta(fx.targets.mirrorRoot(item.sourceId), name);
     if (!meta) {
       res.failed.push({ name, error: "plugin source not found in mirror" });
       continue;
@@ -254,12 +242,12 @@ function applyPlugins(
 function applyBundles(
   fx: DeployFsExec,
   sel: ResolvedSelection,
-  mirrorRoots: readonly string[],
 ): { result: KindResult; pins: Record<string, string | null> } {
   const res = emptyKind("bundle");
   const pins: Record<string, string | null> = {};
-  for (const name of sel.bundles) {
-    const meta = bundleMeta(mirrorRoots, name);
+  for (const item of sel.bundles) {
+    const name = item.name;
+    const meta = bundleMeta(fx.targets.mirrorRoot(item.sourceId), name);
     if (!meta) {
       res.failed.push({ name, error: "bundle source not found in mirror" });
       continue;
@@ -363,9 +351,10 @@ export type DeployInput = {
   selection: ResolvedSelection;
   kitSha: string | null;
   kitVersion: string;
-  // Active-Source mirror roots, in registry order — the deploy reads source
-  // content from the union of these (a deployable name maps to exactly one).
-  mirrorRoots: readonly string[];
+  // Active-Source mirror roots, in registry order — used ONLY for snippet loading
+  // (snippets aren't Capabilities, so they have no winner). Each Capability's
+  // winner Mirror travels in `selection` (the resolved item's sourceId).
+  activeMirrorRoots: readonly string[];
 };
 
 export function runDeploy(
@@ -373,7 +362,6 @@ export function runDeploy(
   input: DeployInput,
 ): Effect.Effect<DeployResult, DeployError> {
   return Effect.gen(function* () {
-    const mirrorRoots = input.mirrorRoots;
     const sel = input.selection;
 
     // Load snippets once, up front: a cross-Source snippet collision is a typed
@@ -381,7 +369,7 @@ export function runDeploy(
     // catalog's CapabilityKey guard never covered them) — never a swallowed
     // per-kind failure. Surfaced before any write.
     const snippets = yield* Effect.try({
-      try: () => loadSnippets(mirrorRoots),
+      try: () => loadSnippets(input.activeMirrorRoots),
       catch: (err) =>
         err instanceof DeployError
           ? err
@@ -394,21 +382,21 @@ export function runDeploy(
     const priorOwned = ownedNamesSnapshot(fx.targets);
 
     // Pre-flight binaries BEFORE any write.
-    const missing = preflight(fx, sel, mirrorRoots);
+    const missing = preflight(fx, sel);
     if (missing) return yield* Effect.fail(missing);
 
     const perKind: KindResult[] = [];
 
     // Ordered best-effort: instructions, skills, agents, plugins, bundles.
-    perKind.push(applyInstructions(fx, sel, mirrorRoots));
-    perKind.push(applySkills(fx, sel, mirrorRoots, snippets));
-    perKind.push(applyAgents(fx, sel, mirrorRoots, snippets));
+    perKind.push(applyInstructions(fx, sel));
+    perKind.push(applySkills(fx, sel, snippets));
+    perKind.push(applyAgents(fx, sel, snippets));
 
     let pluginResult: KindResult;
     let bundlePins: Record<string, string | null> = {};
     let bundleResult: KindResult;
     try {
-      pluginResult = applyPlugins(fx, sel, mirrorRoots);
+      pluginResult = applyPlugins(fx, sel);
     } catch (err) {
       // A not_redirected guard throw aborts the deploy (it's a real safety stop).
       if (err instanceof DeployError && err.reason === "not_redirected") {
@@ -419,7 +407,7 @@ export function runDeploy(
     perKind.push(pluginResult);
 
     try {
-      const b = applyBundles(fx, sel, mirrorRoots);
+      const b = applyBundles(fx, sel);
       bundleResult = b.result;
       bundlePins = b.pins;
     } catch (err) {
@@ -432,14 +420,32 @@ export function runDeploy(
 
     // Reconcile: re-read the ledger NOW, prune only names that were Hive-owned at
     // request start AND are now deselected — never a concurrently-CLI-added name.
-    const orphan = reconcilePrune(fx.targets, sel.skills, sel.agents, priorOwned);
+    const orphan = reconcilePrune(
+      fx.targets,
+      sel.skills.map((i) => i.name),
+      sel.agents.map((i) => i.name),
+      priorOwned,
+    );
     const pruned = pruneOrphans(fx, orphan.skills, orphan.agents, sel.targets);
 
     // Plugins/bundles are never auto-removed: hint when one is owned-but-deselected.
-    const bundleHint = deselectedBundleHint(fx.targets, sel.bundles);
+    const bundleHint = deselectedBundleHint(
+      fx.targets,
+      sel.bundles.map((i) => i.name),
+    );
     if (bundleHint.length > 0) bundleResult.pruneHint = bundleHint;
-    const pluginHint = deselectedPluginHint(fx.targets, sel.plugins);
+    const pluginHint = deselectedPluginHint(
+      fx.targets,
+      sel.plugins.map((i) => i.name),
+    );
     if (pluginHint.length > 0) pluginResult.pruneHint = pluginHint;
+
+    // Winner SourceId per landed skill/agent — provenance for the fingerprint
+    // sidecar. A landed name is in the resolved selection, so the lookup hits.
+    const skillWinner = new Map(sel.skills.map((i) => [i.name, i.sourceId]));
+    const agentWinner = new Map(sel.agents.map((i) => [i.name, i.sourceId]));
+    const landedWithWinner = (names: string[], winner: Map<string, string>) =>
+      names.map((name) => ({ name, sourceId: winner.get(name) ?? "" }));
 
     // Write the ledger to reflect what ACTUALLY landed (applied lists), merging
     // concurrent external writes and dropping only the freshly-confirmed orphans.
@@ -468,8 +474,8 @@ export function runDeploy(
         recordFingerprints(
           fx.targets,
           {
-            skills: skillResultApplied(perKind),
-            agents: agentResultApplied(perKind),
+            skills: landedWithWinner(skillResultApplied(perKind), skillWinner),
+            agents: landedWithWinner(agentResultApplied(perKind), agentWinner),
             instructions: instructionResultApplied(perKind),
             targets: sel.targets,
           },

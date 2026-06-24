@@ -453,6 +453,15 @@ function KindSection({
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [entries]);
 
+  // CapabilityKeys with >1 variant (same (kind,name), different ContentSha). A
+  // multi-variant row disambiguates its testid by a short contentSha suffix; the
+  // common single-variant row keeps the stable bare testid.
+  const variantCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const e of entries) counts.set(e.name, (counts.get(e.name) ?? 0) + 1);
+    return counts;
+  }, [entries]);
+
   return (
     <section className="kit-kind" data-testid={`kit-kind-${kind}`}>
       <h2 className="kit-kind-title">{KIND_LABEL[kind]}</h2>
@@ -465,18 +474,34 @@ function KindSection({
             const disk = onDisk.get(e.name);
             const indicator = rowIndicator({
               deployable: e.deployable,
+              shadowed: e.shadowed,
               isSelected,
               isDeployed,
               disk,
             });
+            const blocked = !e.deployable && !e.shadowed;
+            const selectable = e.deployable;
+            // Multi-variant rows key uniformly on the short contentSha (winner and
+            // losers alike) so React keys + testids are unique across ≥3 variants.
+            const multi = (variantCount.get(e.name) ?? 1) > 1;
+            const shortSha = e.contentSha.slice(0, 8);
+            const rowKey = multi ? `${group}/${e.name}/${shortSha}` : `${group}/${e.name}`;
+            const rowTestId = multi
+              ? `kit-row-${kind}-${e.name}-${shortSha}`
+              : `kit-row-${kind}-${e.name}`;
+            const indicatorTestId = multi
+              ? `kit-indicator-${e.name}-${shortSha}`
+              : `kit-indicator-${e.name}`;
             return (
               <button
                 type="button"
-                key={`${group}/${e.name}`}
-                className={`kit-row ${isSelected ? "selected" : ""} ${e.deployable ? "" : "blocked"}`}
-                onClick={() => e.deployable && onToggle(e.name)}
-                disabled={!e.deployable}
-                data-testid={`kit-row-${kind}-${e.name}`}
+                key={rowKey}
+                className={`kit-row ${isSelected ? "selected" : ""} ${blocked ? "blocked" : ""} ${
+                  e.shadowed ? "shadowed" : ""
+                }`}
+                onClick={() => selectable && onToggle(e.name)}
+                disabled={!selectable}
+                data-testid={rowTestId}
               >
                 <span
                   className={`kit-row-check ${isSelected ? "checked" : ""}`}
@@ -485,14 +510,24 @@ function KindSection({
                 <span className="kit-row-main">
                   <span className="kit-row-name">{e.name}</span>
                   {e.description && <span className="kit-row-desc">{e.description}</span>}
-                  {!e.deployable && (
+                  {/* Merge labels: the Source(s) providing this variant. */}
+                  {e.sourceIds.length > 1 && (
+                    <span className="kit-row-sources" data-testid={`kit-row-sources-${e.name}`}>
+                      {e.sourceIds.map((sid) => (
+                        <span className="kit-source-label" key={sid}>
+                          {sid}
+                        </span>
+                      ))}
+                    </span>
+                  )}
+                  {blocked && (
                     <span className="kit-row-blocked">{e.blockedReason ?? "un-deployable"}</span>
                   )}
                 </span>
                 {indicator && (
                   <span
                     className={`kit-indicator kit-indicator-${indicator}`}
-                    data-testid={`kit-indicator-${e.name}`}
+                    data-testid={indicatorTestId}
                     data-status={indicator}
                   >
                     {INDICATOR_LABEL[indicator]}
@@ -555,12 +590,22 @@ function DiffCol({
   );
 }
 
-// Row indicator states. The first four are the original ledger/selection-derived
-// states; `missing` and `drifted` are the disk-truth states from the verify pass.
-type Indicator = "blocked" | "deployed" | "pending" | "removing" | "missing" | "drifted" | "";
+// Row indicator states. `blocked` and `duplicate` are the non-deployable states
+// (malformed vs precedence-shadowed); the next four are ledger/selection-derived;
+// `missing` and `drifted` are the disk-truth states from the verify pass.
+type Indicator =
+  | "blocked"
+  | "duplicate"
+  | "deployed"
+  | "pending"
+  | "removing"
+  | "missing"
+  | "drifted"
+  | "";
 
 const INDICATOR_LABEL: Record<Exclude<Indicator, "">, string> = {
   blocked: "blocked",
+  duplicate: "not deployed (duplicate)",
   deployed: "deployed",
   pending: "pending",
   removing: "removing",
@@ -569,15 +614,19 @@ const INDICATOR_LABEL: Record<Exclude<Indicator, "">, string> = {
 };
 
 // Fold ledger ownership + working selection + on-disk verify status into one
-// indicator. Disk truth WINS for a deployed capability: a ledger-owned row whose
-// files were removed reads `missing`; one edited since deploy reads `drifted`.
+// indicator. A shadowed variant (lost precedence) reads `duplicate` — a third
+// state distinct from `blocked` (malformed). Disk truth WINS for a deployed
+// capability: a ledger-owned row whose files were removed reads `missing`; one
+// edited since deploy reads `drifted`.
 function rowIndicator(args: {
   deployable: boolean;
+  shadowed: boolean;
   isSelected: boolean;
   isDeployed: boolean;
   disk: VerifyStatus | undefined;
 }): Indicator {
-  const { deployable, isSelected, isDeployed, disk } = args;
+  const { deployable, shadowed, isSelected, isDeployed, disk } = args;
+  if (shadowed) return "duplicate";
   if (!deployable) return "blocked";
   if (isDeployed) {
     if (disk === "missing") return "missing";

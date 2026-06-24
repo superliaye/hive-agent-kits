@@ -95,15 +95,26 @@ function seedSnippetIn(mirrorRoot: string, name: string, body = "snippet"): void
   writeFileSync(join(dir, `${name}.md`), body);
 }
 
-function resolved(over: Partial<ResolvedSelection>): ResolvedSelection {
+// Build a ResolvedSelection from plain name lists, attaching the default Source as
+// the winner for every name (single-Source tests). Pass `targets` directly.
+function resolved(over: {
+  instructions?: string[];
+  skills?: string[];
+  agents?: string[];
+  plugins?: string[];
+  bundles?: string[];
+  targets?: ("claude" | "codex")[];
+  winnerById?: string;
+}): ResolvedSelection {
+  const sid = over.winnerById ?? SOURCE_ID;
+  const item = (n: string) => ({ name: n, sourceId: sid });
   return {
-    instructions: [],
-    skills: [],
-    agents: [],
-    plugins: [],
-    bundles: [],
-    targets: ["claude"],
-    ...over,
+    instructions: (over.instructions ?? []).map(item),
+    skills: (over.skills ?? []).map(item),
+    agents: (over.agents ?? []).map(item),
+    plugins: (over.plugins ?? []).map(item),
+    bundles: (over.bundles ?? []).map(item),
+    targets: over.targets ?? ["claude"],
   };
 }
 
@@ -133,7 +144,7 @@ describe("runDeploy", () => {
         selection: resolved({ skills: ["alpha"], targets: ["claude", "codex"] }),
         kitSha: "sha1",
         kitVersion: "1.0.0",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
 
@@ -155,7 +166,7 @@ describe("runDeploy", () => {
         selection: resolved({ skills: ["manual"], targets: ["claude", "codex"] }),
         kitSha: "sha1",
         kitVersion: "1.0.0",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
     const sidecar = join(targets.agentsHome(), "skills", "manual", "agents", "openai.yaml");
@@ -179,7 +190,7 @@ describe("runDeploy", () => {
         selection: resolved({ instructions: ["core"], targets: ["claude"] }),
         kitSha: "sha1",
         kitVersion: "1.0.0",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
 
@@ -200,7 +211,7 @@ describe("runDeploy", () => {
           selection: resolved({ instructions: ["core"], targets: ["claude"] }),
           kitSha: "sha1",
           kitVersion: "1.0.0",
-          mirrorRoots: [mirror],
+          activeMirrorRoots: [mirror],
         }),
       );
     await deployOnce(); // backup = original
@@ -221,7 +232,7 @@ describe("runDeploy", () => {
         selection: resolved({ plugins: ["plg"], bundles: ["bnd"], targets: ["claude"] }),
         kitSha: "sha1",
         kitVersion: "1.0.0",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
 
@@ -243,7 +254,7 @@ describe("runDeploy", () => {
           selection: resolved({ plugins: ["plg"], targets: ["claude"] }),
           kitSha: "sha1",
           kitVersion: "1.0.0",
-          mirrorRoots: [mirror],
+          activeMirrorRoots: [mirror],
         },
       ),
     );
@@ -275,7 +286,7 @@ describe("runDeploy", () => {
         selection: resolved({ plugins: ["plg"], targets: ["claude"] }),
         kitSha: "sha1",
         kitVersion: "1.0.0",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
 
@@ -297,7 +308,7 @@ describe("runDeploy", () => {
         selection: resolved({ skills: ["a", "b"], targets: ["claude"] }),
         kitSha: "sha1",
         kitVersion: "1.0.0",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
     expect(existsSync(join(targets.claudeHome(), "skills", "a", "SKILL.md"))).toBe(true);
@@ -308,7 +319,7 @@ describe("runDeploy", () => {
         selection: resolved({ skills: ["a"], targets: ["claude"] }),
         kitSha: "sha1",
         kitVersion: "1.0.0",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
 
@@ -335,7 +346,7 @@ describe("runDeploy", () => {
         }),
         kitSha: "sha1",
         kitVersion: "1.0.0",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
 
@@ -366,7 +377,7 @@ describe("runDeploy", () => {
         }),
         kitSha: "sha1",
         kitVersion: "1.0.0",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
     expect(result2.perKind.find((k) => k.kind === "bundle")?.applied).toContain("bnd");
@@ -375,19 +386,28 @@ describe("runDeploy", () => {
 });
 
 describe("runDeploy — cross-Source (#30)", () => {
-  test("union-resolver: a skill from Source A's mirror + an agent from Source B's mirror both deploy", async () => {
+  test("winner-per-name: a skill won by Source A + an agent won by Source B each deploy from their own Mirror", async () => {
     const mirrorA = targets.mirrorRoot("src-a");
     const mirrorB = targets.mirrorRoot("src-b");
     seedSkillIn(mirrorA, "from-a");
     seedAgentIn(mirrorB, "from-b");
     const spy = makeSpy();
 
+    // The resolved selection carries each name's winner Source — A wins the skill,
+    // B wins the agent.
     const result = await Effect.runPromise(
       runDeploy(fx(spy.port), {
-        selection: resolved({ skills: ["from-a"], agents: ["from-b"], targets: ["claude"] }),
+        selection: {
+          instructions: [],
+          skills: [{ name: "from-a", sourceId: "src-a" }],
+          agents: [{ name: "from-b", sourceId: "src-b" }],
+          plugins: [],
+          bundles: [],
+          targets: ["claude"],
+        },
         kitSha: null,
         kitVersion: "",
-        mirrorRoots: [mirrorA, mirrorB],
+        activeMirrorRoots: [mirrorA, mirrorB],
       }),
     );
 
@@ -395,6 +415,89 @@ describe("runDeploy — cross-Source (#30)", () => {
     expect(result.perKind.find((k) => k.kind === "agent")?.applied).toContain("from-b");
     expect(existsSync(join(targets.claudeHome(), "skills", "from-a", "SKILL.md"))).toBe(true);
     expect(existsSync(join(targets.claudeHome(), "agents", "from-b.md"))).toBe(true);
+  });
+
+  test("collision winner deploys the WINNER's bytes (not the loser's)", async () => {
+    // Source A and Source B both ship a skill `dup` with DIFFERENT content. A wins
+    // (its resolved sourceId), so A's bytes land — never B's first-mirror bytes.
+    const mirrorA = targets.mirrorRoot("src-a");
+    const mirrorB = targets.mirrorRoot("src-b");
+    const dirA = join(mirrorA, "capabilities", "skills", "dup");
+    const dirB = join(mirrorB, "capabilities", "skills", "dup");
+    mkdirSync(dirA, { recursive: true });
+    mkdirSync(dirB, { recursive: true });
+    writeFileSync(join(dirA, "SKILL.md"), "---\ndescription: s\n---\nFROM SOURCE A\n");
+    writeFileSync(join(dirB, "SKILL.md"), "---\ndescription: s\n---\nFROM SOURCE B\n");
+
+    await Effect.runPromise(
+      runDeploy(fx(makeSpy().port), {
+        selection: {
+          instructions: [],
+          skills: [{ name: "dup", sourceId: "src-a" }],
+          agents: [],
+          plugins: [],
+          bundles: [],
+          targets: ["claude"],
+        },
+        kitSha: null,
+        kitVersion: "",
+        activeMirrorRoots: [mirrorA, mirrorB],
+      }),
+    );
+
+    const landed = readFileSync(join(targets.claudeHome(), "skills", "dup", "SKILL.md"), "utf8");
+    expect(landed).toContain("FROM SOURCE A");
+    expect(landed).not.toContain("FROM SOURCE B");
+  });
+
+  test("colliding plugin + bundle each deploy from their winner's Mirror (the kinds the deleted guard arbitrated)", async () => {
+    process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL = "1";
+    process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL = "1";
+    const mirrorA = targets.mirrorRoot("src-a");
+    const mirrorB = targets.mirrorRoot("src-b");
+    // Both Sources ship plugin `p` and bundle `b`; winners are A (plugin) and B
+    // (bundle). bundleMeta/pluginMeta must read each winner's Mirror.
+    for (const m of [mirrorA, mirrorB]) {
+      mkdirSync(join(m, "capabilities", "plugins"), { recursive: true });
+      mkdirSync(join(m, "capabilities", "bundles"), { recursive: true });
+    }
+    writeFileSync(
+      join(mirrorA, "capabilities", "plugins", "p.plugin.md"),
+      "---\ndescription: p\nmarketplace_source: a/m\nmarketplace_name: m\nplugin_name: p\n---\n",
+    );
+    writeFileSync(
+      join(mirrorB, "capabilities", "plugins", "p.plugin.md"),
+      "---\ndescription: p\nmarketplace_source: b/m\nmarketplace_name: m\nplugin_name: p\n---\n",
+    );
+    writeFileSync(
+      join(mirrorA, "capabilities", "bundles", "b.bundle.md"),
+      "---\ndescription: b\nsource: https://a.example/b.git\npinned_commit: aaa\ninstaller:\n  command: ./a\n---\n",
+    );
+    writeFileSync(
+      join(mirrorB, "capabilities", "bundles", "b.bundle.md"),
+      "---\ndescription: b\nsource: https://b.example/b.git\npinned_commit: bbb\ninstaller:\n  command: ./b\n---\n",
+    );
+
+    const result = await Effect.runPromise(
+      runDeploy(fx(makeSpy().port), {
+        selection: {
+          instructions: [],
+          skills: [],
+          agents: [],
+          plugins: [{ name: "p", sourceId: "src-a" }],
+          bundles: [{ name: "b", sourceId: "src-b" }],
+          targets: ["claude"],
+        },
+        kitSha: null,
+        kitVersion: "",
+        activeMirrorRoots: [mirrorA, mirrorB],
+      }),
+    );
+
+    expect(result.perKind.find((k) => k.kind === "plugin")?.applied).toContain("p");
+    expect(result.perKind.find((k) => k.kind === "bundle")?.applied).toContain("b");
+    // The bundle pin recorded is B's pinned_commit (B won the bundle).
+    expect(readLedger(targets)?.bundles.find((x) => x.name === "b")?.pin).toBe("bbb");
   });
 
   test("cross-Source snippet collision -> typed DeployError(collision) naming the snippet", async () => {
@@ -407,10 +510,17 @@ describe("runDeploy — cross-Source (#30)", () => {
 
     const exit = await Effect.runPromiseExit(
       runDeploy(fx(spy.port), {
-        selection: resolved({ skills: ["uses-snippet"], targets: ["claude"] }),
+        selection: {
+          instructions: [],
+          skills: [{ name: "uses-snippet", sourceId: "src-a" }],
+          agents: [],
+          plugins: [],
+          bundles: [],
+          targets: ["claude"],
+        },
         kitSha: null,
         kitVersion: "",
-        mirrorRoots: [mirrorA, mirrorB],
+        activeMirrorRoots: [mirrorA, mirrorB],
       }),
     );
 
@@ -431,7 +541,7 @@ describe("runDeploy — cross-Source (#30)", () => {
         selection: resolved({ skills: ["solo"], targets: ["claude"] }),
         kitSha: null,
         kitVersion: "",
-        mirrorRoots: [mirror],
+        activeMirrorRoots: [mirror],
       }),
     );
     expect(result1.kitSha).toBeNull();
@@ -449,10 +559,20 @@ describe("runDeploy — cross-Source (#30)", () => {
     seedSkillIn(mirrorB, "b-skill");
     const result2 = await Effect.runPromise(
       runDeploy(fx(makeSpy().port), {
-        selection: resolved({ skills: ["a-skill", "b-skill"], targets: ["claude"] }),
+        selection: {
+          instructions: [],
+          skills: [
+            { name: "a-skill", sourceId: "src-a" },
+            { name: "b-skill", sourceId: "src-b" },
+          ],
+          agents: [],
+          plugins: [],
+          bundles: [],
+          targets: ["claude"],
+        },
         kitSha: null,
         kitVersion: "",
-        mirrorRoots: [mirrorA, mirrorB],
+        activeMirrorRoots: [mirrorA, mirrorB],
       }),
     );
     expect(result2.kitSha).toBeNull();

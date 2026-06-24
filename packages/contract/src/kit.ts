@@ -19,15 +19,32 @@ export { CapabilityKind };
 export const DeployTarget = z.enum(["claude", "codex"]);
 export type DeployTarget = z.infer<typeof DeployTarget>;
 
-// A single catalog entry as surfaced to the UI. `group` is the @-namespace path
-// (display only); `name` is the deployed leaf name. `deployable:false` means a
-// within-kind leaf-name collision blocks it.
+// A single catalog entry (one content Variant of a CapabilityKey) as surfaced to
+// the UI. `group` is the @-namespace path (display only); `name` is the deployed
+// leaf name. Two entries may now share `(kind, name)` — distinct content Variants
+// of one CapabilityKey — disambiguated by `contentSha`.
+//
+//   sourceIds  — the Source(s) providing THIS Variant (same ContentSha), ordered
+//                winner-first (highest precedence at index 0). length > 1 = a Merge.
+//                The `.min(1)` floor is a runtime guard ("every entry has ≥1
+//                provider") that TS can't narrow from the tuple.
+//   contentSha — the Variant's content identity; its stable wire identity now that
+//                `(kind, name)` is no longer unique.
+//   shadowed   — true = this Variant lost precedence to a sibling Variant under the
+//                same CapabilityKey (a non-blocking duplicate, "not deployed
+//                (duplicate)"). Distinct from `blockedReason` (malformed/un-deployable).
+//
+// Exactly one Variant per CapabilityKey is `deployable:true`; shadowed and blocked
+// Variants are `deployable:false`.
 export const CapabilityEntry = z.object({
   kind: CapabilityKind,
   name: z.string(),
   description: z.string(),
   group: z.string(),
   deployable: z.boolean(),
+  shadowed: z.boolean(),
+  sourceIds: z.array(z.string()).min(1),
+  contentSha: z.string(),
   blockedReason: z.string().optional(),
 });
 export type CapabilityEntry = z.infer<typeof CapabilityEntry>;

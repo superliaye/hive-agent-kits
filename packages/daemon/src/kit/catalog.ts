@@ -11,18 +11,12 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "@hive/capability-schema-tools";
 import { nodeFsSourceTree } from "@hive/capability-schema-tools/node";
-import type {
-  CapabilityEntry,
-  Catalog,
-  CatalogProblem,
-  PresetSummary,
-  Source,
-} from "@hive/contract";
+import type { Catalog, CatalogProblem, PresetSummary, Source } from "@hive/contract";
 import { parse as yamlParse } from "yaml";
 import { log } from "../lib/log.ts";
+import { type AggInput, aggregate, sourcePrecedence } from "../sources/aggregation.ts";
+import { mirrorContentSha } from "./content-sha.ts";
 import type { DeployTargets } from "./targets.ts";
-
-const CROSS_SOURCE_COLLISION = "cross-source CapabilityKey collision — un-deployable";
 
 function asString(v: unknown): string {
   return typeof v === "string" ? v : "";
@@ -114,18 +108,14 @@ function parentCaps(p: PresetSummary): Record<string, string[]> {
   };
 }
 
-// A parsed capability entry tagged with the providing Source — used by the
-// cross-Source collision pass. `sourceId` never reaches the wire Catalog (deploy
-// resolves the Mirror via the union-resolver; provenance labels are deferred).
-type SourcedEntry = CapabilityEntry & { sourceId: string };
-
-// Read the full catalog by AGGREGATING across each active Source's Mirror. Never
-// throws on a single malformed entry — collects problems and loads the rest. An
-// empty source list → an empty catalog. With a single active Source there are no
-// cross-Source collisions and behavior is byte-identical to the single-Mirror
-// read.
+// Read the full catalog as the AggregatedCatalog (ADR-0023): merge-by-ContentSha
+// + Source precedence → one winner Variant per CapabilityKey, the rest Shadowed.
+// Never throws on a single malformed entry — collects problems and loads the rest.
+// An empty source list → an empty catalog. With a single active Source every key
+// has one Variant from one Source → deployable:true, shadowed:false, sourceIds:[id]
+// — byte-identical to the single-Mirror read (the interop anchor holds).
 export function readCatalog(targets: DeployTargets, sources: readonly Source[]): Catalog {
-  const sourcedEntries: SourcedEntry[] = [];
+  const aggInputs: AggInput[] = [];
   const problems: CatalogProblem[] = [];
   // Union of presets across mirrors, plus a same-name detector (drop both).
   const presetByName = new Map<string, PresetSummary>();
@@ -138,16 +128,19 @@ export function readCatalog(targets: DeployTargets, sources: readonly Source[]):
     const tree = nodeFsSourceTree(join(mirror, "capabilities"));
     const parsed = parse(tree);
 
-    // Translate format-native → contract wire (anti-corruption seam): `resolvable`
-    // → `deployable`, `collisionReason` → `blockedReason`. Tag with the Source.
+    // Build an AggInput per parsed Capability: tag the Source, hash its Mirror
+    // bytes (the merge identity), and carry the format-native `resolvable` /
+    // `collisionReason` through to the aggregator (which owns the anti-corruption
+    // translation to `deployable` / `blockedReason`).
     for (const cap of parsed.capabilities) {
-      sourcedEntries.push({
+      aggInputs.push({
         kind: cap.kind,
         name: cap.name,
         description: cap.description,
         group: cap.group,
-        deployable: cap.resolvable,
         sourceId: source.id,
+        contentSha: mirrorContentSha(mirror, cap.kind, cap.name),
+        resolvable: cap.resolvable,
         ...(cap.collisionReason ? { blockedReason: cap.collisionReason } : {}),
       });
     }
@@ -187,39 +180,27 @@ export function readCatalog(targets: DeployTargets, sources: readonly Source[]):
     }
   }
 
-  // Cross-Source CapabilityKey collision pass (interim): group the unioned
-  // capabilities by CapabilityKey (kind, name). A key provided by >1 Source →
-  // mark ALL those entries un-deployable. Covers EVERY deployable kind, since the
-  // #7 deploy resolver reads instructions/plugins/bundles as "first mirror that
-  // has the file" and relies on this guard as its sole cross-Source arbiter.
-  const sourcesByKey = new Map<string, Set<string>>();
-  for (const e of sourcedEntries) {
-    const key = `${e.kind}:${e.name}`;
-    const set = sourcesByKey.get(key) ?? new Set<string>();
-    set.add(e.sourceId);
-    sourcesByKey.set(key, set);
-  }
-  const collidingKeys = new Set<string>();
-  for (const [key, providers] of sourcesByKey) {
-    if (providers.size > 1) collidingKeys.add(key);
-  }
+  // Aggregate: merge identical-ContentSha Variants, pick the precedence winner per
+  // CapabilityKey, Shadow the losers. A cross-Source collision is no longer a
+  // problem — it is a resolved winner + shadow, so it pushes NO `problems` entry.
+  // Precedence is derived from registration order (sources arrives in insertion
+  // order; the aggregator keys on index, not createdAt).
+  const rank = sourcePrecedence(sources);
+  const aggEntries = aggregate(aggInputs, rank);
+  const entries = aggEntries.map((e) => ({
+    kind: e.kind,
+    name: e.name,
+    description: e.description,
+    group: e.group,
+    deployable: e.deployable,
+    shadowed: e.shadowed,
+    sourceIds: e.sourceIds,
+    contentSha: e.contentSha,
+    ...(e.blockedReason ? { blockedReason: e.blockedReason } : {}),
+  }));
 
-  const entries: CapabilityEntry[] = sourcedEntries.map(({ sourceId: _sourceId, ...e }) => {
-    if (collidingKeys.has(`${e.kind}:${e.name}`)) {
-      return { ...e, deployable: false, blockedReason: CROSS_SOURCE_COLLISION };
-    }
-    return e;
-  });
-
-  // Cross-Source collision problems, then preset-collision problems.
-  const reportedCollisions = new Set<string>();
-  for (const e of sourcedEntries) {
-    const key = `${e.kind}:${e.name}`;
-    if (collidingKeys.has(key) && !reportedCollisions.has(key)) {
-      reportedCollisions.add(key);
-      problems.push({ kind: e.kind, name: e.name, problem: CROSS_SOURCE_COLLISION });
-    }
-  }
+  // Preset-collision problems (preset precedence/merge is out of scope — presets
+  // aren't Capabilities; they keep #30's symmetric drop-both).
   for (const name of presetCollisions) {
     problems.push({
       kind: "preset",
