@@ -52,32 +52,28 @@ export function resolveFolderSources(kindDir: string, marker: string): Map<strin
 // Per-Mirror folder-marker resolution (one winner Mirror per name, not a union).
 // Cross-Source precedence is resolved upstream (the resolved selection carries the
 // winning SourceId per name), so each deployed name reads from EXACTLY its winner's
-// Mirror — never a first/last-mirror-wins union. Memoized per mirrorRoot so a
-// multi-skill deploy walks each winner Mirror once.
-const skillSourceCache = new Map<string, Map<string, string>>();
-const agentSourceCache = new Map<string, Map<string, string>>();
-
-function folderSourcesFor(
-  cache: Map<string, Map<string, string>>,
-  mirrorRoot: string,
-  kindDir: string,
-  marker: string,
-): Map<string, string> {
-  const cached = cache.get(mirrorRoot);
-  if (cached) return cached;
-  const map = resolveFolderSources(join(mirrorRoot, "capabilities", kindDir), marker);
-  cache.set(mirrorRoot, map);
-  return map;
-}
+// Mirror — never a first/last-mirror-wins union.
+//
+// STATELESS by design: a Mirror's bytes are mutated in place by Sync (stage→swap
+// under a stable `~/.hive/kit/mirrors/<id>` path), so a process-lifetime cache keyed
+// by mirrorRoot would serve a stale leaf→dir map after any re-sync — a freshly-synced
+// skill reading as "source not found", a removed one pointing at a deleted dir. The
+// walk is one shallow readdir per kind dir; callers that resolve many names from one
+// Mirror in a single pass can hoist `resolveFolderSources` themselves (see the deploy
+// engine), but the shared accessor never holds cross-operation state.
 
 // The winner Mirror's source dir for a skill leaf name, or null when absent.
 export function skillSourceDir(mirrorRoot: string, name: string): string | null {
-  return folderSourcesFor(skillSourceCache, mirrorRoot, "skills", "SKILL.md").get(name) ?? null;
+  return (
+    resolveFolderSources(join(mirrorRoot, "capabilities", "skills"), "SKILL.md").get(name) ?? null
+  );
 }
 
 // The winner Mirror's source dir for an agent leaf name, or null when absent.
 export function agentSourceDir(mirrorRoot: string, name: string): string | null {
-  return folderSourcesFor(agentSourceCache, mirrorRoot, "agents", "AGENT.md").get(name) ?? null;
+  return (
+    resolveFolderSources(join(mirrorRoot, "capabilities", "agents"), "AGENT.md").get(name) ?? null
+  );
 }
 
 // The on-disk path of a single-file Capability (instruction/plugin/bundle) in one

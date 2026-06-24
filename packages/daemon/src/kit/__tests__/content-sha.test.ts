@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mirrorContentSha } from "../content-sha.ts";
+import { skillSourceDir } from "../deploy/sources.ts";
 
 let tmpRoot: string;
 let mirrorA: string;
@@ -102,5 +103,15 @@ describe("mirrorContentSha — byte-identical equality across Mirrors, per kind"
   test("missing file -> null", () => {
     expect(mirrorContentSha(mirrorA, "skill", "nope")).toBeNull();
     expect(mirrorContentSha(mirrorA, "instruction", "nope")).toBeNull();
+  });
+
+  test("locator is stateless: a skill added to the SAME mirrorRoot after a first read is found (no stale cache)", () => {
+    // A re-sync mutates a Mirror in place under a stable path. The locator must
+    // re-walk, never serve a cached pre-sync leaf map.
+    expect(skillSourceDir(mirrorA, "late")).toBeNull();
+    expect(mirrorContentSha(mirrorA, "skill", "late")).toBeNull();
+    writeSkill(mirrorA, "late", "added after first read");
+    expect(skillSourceDir(mirrorA, "late")).not.toBeNull();
+    expect(mirrorContentSha(mirrorA, "skill", "late")).not.toBeNull();
   });
 });

@@ -253,6 +253,14 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   }
 
   const sourceStatuses = state?.sync ?? [];
+  // Human label per Source id (owner/repo), so a Merge row names its Sources the
+  // way the header does — never the opaque sourceId. Falls back to the id when a
+  // Source isn't in the freshness array.
+  const sourceLabels = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of sourceStatuses) map.set(s.sourceId, shortOrigin(s.origin));
+    return map;
+  }, [sourceStatuses]);
   const diff = diffQuery.data;
 
   return (
@@ -384,6 +392,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               selected={new Set(selected[KIND_TO_CAP[kind]])}
               deployed={deployed[kind]}
               onDisk={onDisk[kind]}
+              sourceLabels={sourceLabels}
               onToggle={(name) => toggleIndividual(kind, name)}
             />
           );
@@ -432,6 +441,7 @@ function KindSection({
   selected,
   deployed,
   onDisk,
+  sourceLabels,
   onToggle,
 }: {
   kind: CapabilityKind;
@@ -439,6 +449,7 @@ function KindSection({
   selected: Set<string>;
   deployed: Set<string>;
   onDisk: Map<string, VerifyStatus>;
+  sourceLabels: Map<string, string>;
   onToggle: (name: string) => void;
 }): JSX.Element {
   // Group by @-namespace within the kind.
@@ -510,12 +521,13 @@ function KindSection({
                 <span className="kit-row-main">
                   <span className="kit-row-name">{e.name}</span>
                   {e.description && <span className="kit-row-desc">{e.description}</span>}
-                  {/* Merge labels: the Source(s) providing this variant. */}
+                  {/* Merge labels: the Source(s) providing this variant, by their
+                      human owner/repo label (the same the header uses). */}
                   {e.sourceIds.length > 1 && (
                     <span className="kit-row-sources" data-testid={`kit-row-sources-${e.name}`}>
                       {e.sourceIds.map((sid) => (
                         <span className="kit-source-label" key={sid}>
-                          {sid}
+                          {sourceLabels.get(sid) ?? sid}
                         </span>
                       ))}
                     </span>

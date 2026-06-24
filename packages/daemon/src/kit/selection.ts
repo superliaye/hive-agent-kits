@@ -185,10 +185,16 @@ function renderedNamedHash(
 // selection may be won by different Sources, so a single shared mirrorRoot would
 // hash the wrong bytes. Concatenation order is the resolved-array order
 // (deterministic, identical to the deploy path).
-function renderedInstructionHash(items: readonly ResolvedItem[], targets: DeployTargets): string {
+function renderedInstructionHash(
+  items: readonly ResolvedItem[],
+  targets: DeployTargets,
+): string | null {
   const bodies = items
     .map((item) => instructionBody(targets.mirrorRoot(item.sourceId), item.name))
     .filter((b): b is string => b !== null);
+  // No surviving body (every winner Mirror lost its files post-sync) → null, so the
+  // caller skips a spurious "changed" verdict (mirrors the skill/agent guard).
+  if (bodies.length === 0) return null;
   return sha256(transformInstructions(bodies));
 }
 

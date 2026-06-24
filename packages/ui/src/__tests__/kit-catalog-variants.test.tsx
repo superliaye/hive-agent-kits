@@ -58,13 +58,16 @@ afterEach(async () => {
   }
 });
 
-async function renderCatalog(entries: CapabilityEntry[]): Promise<HTMLElement> {
+async function renderCatalog(
+  entries: CapabilityEntry[],
+  state: KitState = emptyState,
+): Promise<HTMLElement> {
   const catalog: Catalog = { entries, presets: [], problems: [] };
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     if (path === "/api/kit/catalog") return json(catalog);
-    if (path === "/api/kit/state") return json(emptyState);
+    if (path === "/api/kit/state") return json(state);
     if (path === "/api/kit/verify") return json(emptyVerify);
     return json({});
   }) as typeof fetch;
@@ -121,6 +124,35 @@ describe("KitDeployPage — AggregatedCatalog variants", () => {
       '[data-testid="kit-row-sources-merged"] .kit-source-label',
     );
     expect(labels.length).toBe(2);
+  });
+
+  test("a merged row labels Sources by their human owner/repo, not the opaque id", async () => {
+    const host = await renderCatalog(
+      [entry({ name: "merged", sourceIds: ["src-b", "src-a"], contentSha: "c".repeat(64) })],
+      {
+        sync: [
+          {
+            state: "up_to_date",
+            sha: "abc",
+            fetchedAt: 1,
+            sourceId: "src-a",
+            origin: "https://github.com/owner/repo-a",
+          },
+          {
+            state: "up_to_date",
+            sha: "def",
+            fetchedAt: 1,
+            sourceId: "src-b",
+            origin: "https://github.com/owner/repo-b",
+          },
+        ],
+        ledger: null,
+      },
+    );
+    const labels = [
+      ...host.querySelectorAll('[data-testid="kit-row-sources-merged"] .kit-source-label'),
+    ].map((el) => el.textContent);
+    expect(new Set(labels)).toEqual(new Set(["owner/repo-a", "owner/repo-b"]));
   });
 
   test("a single-variant row keeps the stable kit-row-<kind>-<name> testid", async () => {

@@ -1324,16 +1324,25 @@ pre.config {
   background: color-mix(in srgb, var(--color-danger) 18%, transparent);
   color: var(--color-danger);
 }
-/* Shadowed (precedence-loser) variant: a third visible state, distinct from
- * blocked. The row stays fully legible (not dimmed like blocked) but isn't
- * selectable; the badge reads "not deployed (duplicate)". */
+/* Shadowed (precedence-loser) variant: a third visible state, distinct from both
+ * the deployable rows and the blocked/malformed rows. The row stays legible (not
+ * heavily dimmed like blocked) but reads as clearly subordinate — a tinted fill,
+ * a dashed left accent, and a muted name — so the eye lands on the winning row
+ * first and never mistakes the loser for the one that deploys. Not selectable. */
 .kit-row.shadowed {
-  cursor: default;
+  cursor: not-allowed;
   border-style: dashed;
+  background: color-mix(in srgb, var(--color-fg-muted) 6%, var(--color-bg-base));
+  border-left: 3px solid color-mix(in srgb, var(--color-fg-muted) 45%, transparent);
+}
+.kit-row.shadowed .kit-row-name {
+  color: var(--color-fg-muted);
+  font-weight: 500;
 }
 .kit-indicator-duplicate {
-  background: color-mix(in srgb, var(--color-fg-muted) 16%, transparent);
-  color: var(--color-fg-muted);
+  background: color-mix(in srgb, var(--color-fg-muted) 22%, transparent);
+  color: var(--color-fg-default);
+  font-weight: 600;
 }
 /* Merge labels: the Source(s) providing a variant, shown on the row. */
 .kit-row-sources {
