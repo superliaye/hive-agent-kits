@@ -39,6 +39,12 @@ import { createLogger, log, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
 import type { Secrets } from "../secrets/index.ts";
+import {
+  SourceRegistryLive,
+  type SourceRegistrySvc,
+  SourceRegistry as SourceRegistryTag,
+} from "../sources/effect/sources-live.ts";
+import { buildSourcesRoutes, type RunSources } from "../sources/routes.ts";
 import { buildRoutes } from "./routes.ts";
 
 export type ServerMode = "file" | "memory";
@@ -92,6 +98,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     opts.mode === "memory"
       ? ({ mode: "memory" } as const)
       : ({ mode: "file", path: files.secrets() } as const);
+  const sourcesOpts =
+    opts.mode === "memory"
+      ? ({ mode: "memory" } as const)
+      : ({ mode: "file", path: files.sources() } as const);
   // Audit keeps its OWN sqlite file (~/.hive/audit.db).
   const auditOpts =
     opts.mode === "memory"
@@ -116,6 +126,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // Kit module (capability deploy-manager). Provides its own deploy-target
     // port + exec adapter; the production HTTP fetch is the only edge injected.
     KitLive({ fetch: productionFetch() }),
+    // Sources registry (ADR-0023). Hive-private JSON store; memory mode in
+    // tests/dev writes no real ~/.hive/sources.json.
+    SourceRegistryLive(sourcesOpts),
   );
   const runtime = ManagedRuntime.make(rootLayer);
 
@@ -147,6 +160,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // like every other live service. `runKit` discharges a Kit Effect to a
   // Promise<Either>-like for the routes — never throwing the typed error out.
   const kit: KitSvc = runtime.runSync(Kit);
+  // Sources registry — resolved off the same root runtime.
+  const sourceRegistry: SourceRegistrySvc = runtime.runSync(SourceRegistryTag);
   const runKit: RunKit = <A, E>(effect: Effect.Effect<A, E>) =>
     runtime.runPromiseExit(effect).then((exit) =>
       Exit.match(exit, {
@@ -223,6 +238,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     backendUpdate: { events: backendUpdater.events },
     // Dedicated `deploy` source — a Kit deploy is a user action (refs-only).
     deploy: { events: kit.events },
+    // Dedicated `sources` source — a Source registry mutation is a user action (refs-only).
+    sourceRegistry: { events: sourceRegistry.events },
   });
 
   const token = opts.token ?? (opts.mode === "memory" ? "test-token" : ensureToken());
@@ -239,6 +256,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
 
   // Kit deploy-manager routes, mounted additively behind the surviving server.
   app.route("/", buildKitRoutes(kit, runKit));
+
+  // Sources registry routes (ADR-0023). Reuse the same Effect-discharge runner.
+  const runSources: RunSources = runKit;
+  app.route("/", buildSourcesRoutes(sourceRegistry, runSources));
 
   // Auto fetch-on-launch: a NON-BLOCKING sync-check. A failure is traced + folds
   // into the typed sync status (check_failed/rate_limited), never fatal and never

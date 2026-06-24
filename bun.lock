@@ -13,6 +13,13 @@
         "typescript": "^5",
       },
     },
+    "packages/capability-schema": {
+      "name": "@hive/capability-schema",
+      "version": "0.0.0",
+      "dependencies": {
+        "zod": "^3.23.8",
+      },
+    },
     "packages/contract": {
       "name": "@hive/contract",
       "version": "0.0.0",
@@ -244,6 +251,8 @@
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
 
     "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.10.5", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.10.5" } }, "sha512-U64VYxPsoO4RxNHzzp7N+sMHmXaY+GDzcc272mTfZFt0LKuuf7hoNCxna4+T472p+GRKUOtYlLLnVlxCWAcobw=="],
+
+    "@hive/capability-schema": ["@hive/capability-schema@workspace:packages/capability-schema"],
 
     "@hive/contract": ["@hive/contract@workspace:packages/contract"],
 

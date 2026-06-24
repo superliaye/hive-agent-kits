@@ -219,13 +219,13 @@ cannot dispatch, cannot manage.
 **Skill / Prompt Snippet / Tool / MCP Server** (deferred):
 The Capability kinds an **Agent Harness** binds in #2 — an on-demand technique, a
 reusable prompt block consulted by the Agent Manager, a callable function, and an
-external Model-Context-Protocol integration. (In #1 these map onto the Kit's
+external Model-Context-Protocol integration. (In #1 these map onto a Source's
 `skill` / `snippet` / plugin-and-bundle Capabilities the user deploys to a CLI.)
 
 ### Deferred flagged ambiguities
 
 - **The `agent` Capability kind vs the Hive Agent.** Kept distinct by namespace +
-  case: lowercase Kit-namespaced `agent` (a deployable CLI subagent Capability,
+  case: lowercase Source-namespaced `agent` (a deployable CLI subagent Capability,
   #1) vs title-case **Agent** (a persistent Hive identity, #2). This collision is
   flagged for human ratification; the default above (keep both, distinguish by
   namespace + case) is in force.
@@ -245,11 +245,12 @@ External systems that inform Hive's design. We borrow specific patterns; we are
 not cloning any.
 
 **my-agent-kits** — [github.com/superliaye/my-agent-kits](https://github.com/superliaye/my-agent-kits).
-The original **Source** of Capabilities and the `agent-kit` CLI whose deploy
-contract Hive reproduces. The deploy contract (target locations per kind, the
-include/sidecar/translation rules, the Deployment Ledger schema) is read from a
-pinned clone — see AGENTS.md "Reference projects" for the local path and the exact
-verified SHA.
+Reference content — a **Source** of Capabilities like any other, and the
+`agent-kit` CLI. It is not the capability-format authority (that SSOT is the
+`capability-schema` package); what Hive validates against it is the deploy
+contract — target locations per kind, the include/sidecar/translation rules, the
+Deployment Ledger schema — read from a pinned clone. See AGENTS.md "Reference
+projects" for the local path and the exact verified SHA.
 
 **OpenClaw** — [github.com/openclaw/openclaw](https://github.com/openclaw/openclaw).
 Public TypeScript personal-AI assistant on the `pi-*` package family. Reference

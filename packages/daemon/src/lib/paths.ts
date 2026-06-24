@@ -17,6 +17,7 @@ export const files = {
   config: () => join(runtimeRoot(), "config.yaml"),
   token: () => join(runtimeRoot(), ".token"),
   secrets: () => join(runtimeRoot(), "secrets.json"),
+  sources: () => join(runtimeRoot(), "sources.json"),
   auditDb: () => join(runtimeRoot(), "audit.db"),
   logsDir: () => join(runtimeRoot(), "logs"),
 };

@@ -1,0 +1,59 @@
+// Sources module — disk file schema for the Hive-private Source registry.
+//
+// On-disk format (`~/.hive/sources.json`):
+//
+//   { "version": 1, "sources": [ { id, origin, active, createdAt }, ... ] }
+//
+// Zod-validated at the disk boundary (AGENTS.md: "Zod at every external
+// boundary"). `version` is for schema migrations. The `Source` shape itself is
+// the wire DTO from `@hive/contract` — the disk store reuses it verbatim.
+
+import { Source } from "@hive/contract";
+import { z } from "zod";
+
+export const SOURCES_FILE_VERSION = 1;
+
+export const SourcesFileSchema = z.object({
+  version: z.literal(SOURCES_FILE_VERSION),
+  sources: z.array(Source),
+});
+
+export type SourcesFile = z.infer<typeof SourcesFileSchema>;
+
+// ---- Audit events (source: 'sources') ----
+//
+// Source add/activate/deactivate/delete are user actions, so each emits one
+// audit event. Payloads are refs-only — the opaque SourceId, plus the (already
+// normalized, credential-free) origin on add. A registry mutation has neither a
+// Run nor an Agent, so run_id/agent_id are null at the normalizer.
+export type SourcesAuditEvents = {
+  "source.added": { id: string; origin: string };
+  "source.activated": { id: string };
+  "source.deactivated": { id: string };
+  "source.removed": { id: string };
+};
+
+// Normalize an origin for storage / duplicate comparison so that clones of the
+// same repo collapse to one entry: lowercase the scheme + host (both
+// case-insensitive; the path is left as-is, significant on some forges), strip a
+// trailing `.git`, and strip any trailing slashes. `https://x/y`,
+// `https://X/y/`, `https://x/y.git`, and `https://x/y//` all become the same
+// origin for the duplicate check. Falls back to a plain string strip if the
+// input doesn't parse as a URL (the wire schema already rejects non-URLs, but
+// the store must not throw on a malformed persisted value).
+export function normalizeOrigin(origin: string): string {
+  const trimmed = origin.trim();
+  let s = trimmed;
+  try {
+    const url = new URL(trimmed);
+    url.protocol = url.protocol.toLowerCase();
+    url.hostname = url.hostname.toLowerCase();
+    s = url.toString();
+  } catch {
+    // Not a URL — normalize the raw string below.
+  }
+  while (s.endsWith("/")) s = s.slice(0, -1);
+  if (s.endsWith(".git")) s = s.slice(0, -4);
+  while (s.endsWith("/")) s = s.slice(0, -1);
+  return s;
+}

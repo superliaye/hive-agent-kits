@@ -10,6 +10,7 @@ import type { Config, ConfigEvents } from "../config/types.ts";
 import type { DeployAuditEvents } from "../kit/index.ts";
 import type { TypedEmitter } from "../lib/typed-emitter.ts";
 import type { SecretEvents } from "../secrets/types.ts";
+import type { SourcesAuditEvents } from "../sources/types.ts";
 import type { AuditSvc } from "./effect/audit-live.ts";
 import type { Normalizer } from "./types.ts";
 
@@ -26,6 +27,12 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   // {kitSha, perKindCounts, targetClis} (no file contents/secrets), and a deploy
   // has neither run_id nor agent_id (both null).
   deploy?: { events: TypedEmitter<DeployAuditEvents> };
+  // Dedicated `sources` source: a Source registry mutation is a user action.
+  // Consumer-owned port — only the event stream is read here. Payload is
+  // refs-only (SourceId, plus the credential-free origin on add); a registry
+  // mutation has neither run_id nor agent_id (both null). Satisfied by
+  // SourceRegistrySvc's `events`.
+  sourceRegistry?: { events: TypedEmitter<SourcesAuditEvents> };
 };
 
 // Generic over S so callers with a typed Config<AppConfig> don't need a cast.
@@ -100,6 +107,10 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
     disposers.push(audit.attach("deploy", sources.deploy.events, deployNormalizer));
   }
 
+  if (sources.sourceRegistry) {
+    disposers.push(audit.attach("sources", sources.sourceRegistry.events, sourcesNormalizer));
+  }
+
   return () => {
     for (const d of disposers) d();
   };
@@ -128,5 +139,36 @@ const backendUpdateNormalizer: Normalizer<BackendUpdateEvents> = {
   "backend.update.requested": (event) => ({
     event_type: "backend.update.requested",
     payload: { backend: event.backend, binary: event.binary },
+  }),
+};
+
+// Sources (registry mutation): add/activate/deactivate/delete are user actions.
+// run_id/agent_id are NULL (a registry mutation has neither). Payload is REFS
+// only — the opaque SourceId, plus the normalized credential-free origin on add
+// (the wire schema already rejects `user:token@` origins).
+const sourcesNormalizer: Normalizer<SourcesAuditEvents> = {
+  "source.added": (event) => ({
+    event_type: "source.added",
+    run_id: null,
+    agent_id: null,
+    payload: { id: event.id, origin: event.origin },
+  }),
+  "source.activated": (event) => ({
+    event_type: "source.activated",
+    run_id: null,
+    agent_id: null,
+    payload: { id: event.id },
+  }),
+  "source.deactivated": (event) => ({
+    event_type: "source.deactivated",
+    run_id: null,
+    agent_id: null,
+    payload: { id: event.id },
+  }),
+  "source.removed": (event) => ({
+    event_type: "source.removed",
+    run_id: null,
+    agent_id: null,
+    payload: { id: event.id },
   }),
 };
