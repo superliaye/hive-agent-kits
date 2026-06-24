@@ -61,6 +61,12 @@ is un-deployable / refuse the Deploy" rule (`kit/catalog.ts` `withCollisions`,
 `kit/selection.ts` `resolveSelection`). A duplicate CapabilityKey **inside a single
 Source** is still treated as a malformed-source problem and marked un-deployable.
 
+**Default precedence order (decided).** When the user has not manually ranked,
+**user-added Sources outrank the Starter Source** — the Starter is the overridable
+baseline, so anything the user deliberately adds wins a collision against it. Among
+user-added Sources, ties break by registration order (earliest-added is lower; a
+newly-added Source outranks existing ones). The user may re-rank at any time.
+
 **Toggle/delete semantics.** Deactivating or deleting a Source deactivates and
 hides its Capabilities. A *merged* Capability survives as long as ≥1 active Source
 still provides its ContentSha (only its Source-label set shrinks).
@@ -132,9 +138,6 @@ The Starter Source ships as the workspace package
 
 ## Open (not yet decided)
 
-- **Default precedence order** when the user hasn't ranked — e.g. user-added Sources
-  above the Starter Source, or registration order. Decide before shipping the
-  collision path.
 - Whether "merge" requires byte-identical ContentSha or tolerates trivial
   normalization (line endings, frontmatter key order).
 
