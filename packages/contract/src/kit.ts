@@ -4,12 +4,13 @@
 // only `zod` — no daemon internals, so the UI's Vite bundle can pull this in
 // without dragging Effect/Hono/vendor SDKs into the renderer.
 
+import { CapabilityKind } from "@hive/capability-schema";
 import { z } from "zod";
 
-// The five deployable capability kinds (upstream taxonomy). `snippet` is a
+// The five deployable capability kinds (upstream taxonomy) — re-exported from the
+// capability-format SSOT (also used below in the wire envelopes). `snippet` is a
 // build-time include, not a deploy kind.
-export const CapabilityKind = z.enum(["instruction", "skill", "agent", "plugin", "bundle"]);
-export type CapabilityKind = z.infer<typeof CapabilityKind>;
+export { CapabilityKind };
 
 // Per-CLI deploy target. The canonical enum — distinct from the AgentBackend
 // wire enum (claude-code | codex), which is a separate domain. Routes to 3 home

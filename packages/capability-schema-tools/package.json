@@ -1,0 +1,22 @@
+{
+  "name": "@hive/capability-schema-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts"
+  },
+  "bin": {
+    "capability-validate": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hive/capability-schema": "workspace:*",
+    "zod": "^3.23.8",
+    "yaml": "^2.9.0"
+  }
+}

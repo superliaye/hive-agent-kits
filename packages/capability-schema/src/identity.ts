@@ -5,9 +5,9 @@
 
 import { z } from "zod";
 
-// The five deployable capability kinds (upstream taxonomy). New SSOT copy;
-// `@hive/contract`'s `kit.ts` keeps its own until #29 collapses the duplication.
-// `snippet` is a build-time include, not a deploy kind.
+// The five deployable capability kinds (upstream taxonomy) — the SSOT;
+// `@hive/contract` re-exports this. `snippet` is a build-time include, not a
+// deploy kind.
 export const CapabilityKind = z.enum(["instruction", "skill", "agent", "plugin", "bundle"]);
 export type CapabilityKind = z.infer<typeof CapabilityKind>;
 

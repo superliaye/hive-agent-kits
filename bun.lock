@@ -20,10 +20,23 @@
         "zod": "^3.23.8",
       },
     },
+    "packages/capability-schema-tools": {
+      "name": "@hive/capability-schema-tools",
+      "version": "0.0.0",
+      "bin": {
+        "capability-validate": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@hive/capability-schema": "workspace:*",
+        "yaml": "^2.9.0",
+        "zod": "^3.23.8",
+      },
+    },
     "packages/contract": {
       "name": "@hive/contract",
       "version": "0.0.0",
       "dependencies": {
+        "@hive/capability-schema": "workspace:*",
         "zod": "^3.23.8",
       },
     },
@@ -32,6 +45,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.178",
+        "@hive/capability-schema-tools": "workspace:*",
         "@hive/contract": "workspace:*",
         "@hive/theming": "workspace:*",
         "@modelcontextprotocol/sdk": "1.29.0",
@@ -253,6 +267,8 @@
     "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.10.5", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.10.5" } }, "sha512-U64VYxPsoO4RxNHzzp7N+sMHmXaY+GDzcc272mTfZFt0LKuuf7hoNCxna4+T472p+GRKUOtYlLLnVlxCWAcobw=="],
 
     "@hive/capability-schema": ["@hive/capability-schema@workspace:packages/capability-schema"],
+
+    "@hive/capability-schema-tools": ["@hive/capability-schema-tools@workspace:packages/capability-schema-tools"],
 
     "@hive/contract": ["@hive/contract@workspace:packages/contract"],
 

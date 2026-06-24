@@ -1,8 +1,7 @@
 // Source wire contract — the daemon↔UI types for the Sources bounded context
 // (ADR-0023). A Source is a git repository of Capabilities the user has added.
 // Zod only — daemon-independent, so the UI bundles it without dragging Effect/
-// Hono in. Uses no capability-schema types, so `@hive/contract` adds no
-// dependency on it in this slice (that edge is #29).
+// Hono in. The Source DTO uses no capability-schema types.
 
 import { z } from "zod";
 

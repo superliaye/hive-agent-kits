@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hive/capability-schema": "workspace:*",
     "zod": "^3.23.8"
   }
 }
