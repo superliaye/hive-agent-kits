@@ -39,16 +39,30 @@ function join(...parts: string[]): string {
   return parts.filter((p) => p.length > 0).join("/");
 }
 
+// Walk kinds folder-first (skill, agent) then file (instruction, plugin,
+// bundle), matching the daemon's original collect order so entries/problems land
+// in the same array order as before the extraction.
+const KIND_ORDER: readonly CapabilityKind[] = [
+  "skill",
+  "agent",
+  "instruction",
+  "plugin",
+  "bundle",
+];
+
 export function enumerateLeaves(tree: SourceTree): WalkResult {
   const leaves: LeafHit[] = [];
   const problems: WalkProblem[] = [];
 
-  for (const kind of Object.keys(capabilityLayout) as CapabilityKind[]) {
+  for (const kind of KIND_ORDER) {
     const layout = capabilityLayout[kind];
-    if (layout.style === "folder") {
-      collectFolderKind(tree, kind, layout.dir, layout.marker, leaves, problems);
-    } else {
-      collectFileKind(tree, kind, layout.dir, layout.suffix, leaves, problems);
+    switch (layout.style) {
+      case "folder":
+        collectFolderKind(tree, kind, layout.dir, layout.marker, leaves, problems);
+        break;
+      case "file":
+        collectFileKind(tree, kind, layout.dir, layout.suffix, leaves, problems);
+        break;
     }
   }
 

@@ -3,10 +3,10 @@
 // schemas from capability-schema. Never throws: the assertNameMatchesDir throw is
 // caught into a located ConformanceError.
 //
-// Scope: skills are the only ratified per-kind strict schema in this slice
-// (ADR-0024), so only `skill` leaves are strictly gated. Other kinds are accepted
-// (no strict schema yet). The real clone is NOT expected to be conformant —
-// migrating it is a separate issue (#38).
+// Scope: skills are the only ratified per-kind strict schema (ADR-0024), so only
+// `skill` leaves are strictly gated; other kinds are accepted (no strict schema
+// yet). Real-world Source content is not assumed conformant — `validate` reports
+// violations, it does not reject the Source.
 
 import { SkillFrontmatter, assertNameMatchesDir } from "@hive/capability-schema";
 import { parse as yamlParse } from "yaml";

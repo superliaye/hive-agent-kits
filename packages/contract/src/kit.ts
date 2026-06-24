@@ -1,8 +1,9 @@
 // Kit wire contract — the single source of truth for the kit (capability
 // deploy-manager) types the daemon and UI exchange over HTTP. Zod schemas with
 // `z.infer` for every shape crossing the boundary; unprefixed names. Imports
-// only `zod` — no daemon internals, so the UI's Vite bundle can pull this in
-// without dragging Effect/Hono/vendor SDKs into the renderer.
+// only `zod` and the zero-dep `@hive/capability-schema` vocabulary SSOT — no
+// daemon internals, so the UI's Vite bundle can pull this in without dragging
+// Effect/Hono/vendor SDKs into the renderer.
 
 import { CapabilityKind } from "@hive/capability-schema";
 import { z } from "zod";
