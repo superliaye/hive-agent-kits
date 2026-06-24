@@ -1,7 +1,39 @@
 import { describe, expect, test } from "bun:test";
-import { AddSourceBody } from "./source.ts";
+import { AddSourceBody, Source } from "./source.ts";
 
-describe("AddSourceBody — GitHttpsUrl", () => {
+describe("Source — kind discriminator", () => {
+  test("accepts a git Source and a local Source", () => {
+    expect(
+      Source.safeParse({
+        id: "id-git",
+        origin: "https://github.com/a/b",
+        kind: "git",
+        active: true,
+        createdAt: 1,
+      }).success,
+    ).toBe(true);
+    expect(
+      Source.safeParse({
+        id: "starter",
+        origin: "local:starter",
+        kind: "local",
+        active: true,
+        createdAt: 1,
+      }).success,
+    ).toBe(true);
+  });
+
+  test("rejects an unknown kind and a missing kind", () => {
+    expect(
+      Source.safeParse({ id: "x", origin: "y", kind: "remote", active: true, createdAt: 1 }).success,
+    ).toBe(false);
+    expect(Source.safeParse({ id: "x", origin: "y", active: true, createdAt: 1 }).success).toBe(
+      false,
+    );
+  });
+});
+
+describe("AddSourceBody — GitHttpsUrl (the public add stays git-only)", () => {
   test("accepts a plain https git URL", () => {
     expect(AddSourceBody.safeParse({ origin: "https://github.com/a/b" }).success).toBe(true);
     expect(AddSourceBody.safeParse({ origin: "https://github.com/a/b.git" }).success).toBe(true);

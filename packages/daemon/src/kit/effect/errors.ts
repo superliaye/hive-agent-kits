@@ -9,8 +9,15 @@ import { Data } from "effect";
 
 // Sync failures. `offline` and `rate_limited` are distinct so the UI never
 // reports "up to date" on a network failure. `rate_limited` surfaces the GitHub
-// X-RateLimit-Reset epoch when present.
-export type SyncFailureReason = "offline" | "rate_limited" | "parse" | "io";
+// X-RateLimit-Reset epoch when present. `missing_starter_root` is the local-sync
+// equivalent of a bad config — the bundled Starter content root is absent (a bad
+// HIVE_STARTER_ROOT override or a packaging miss); isolated to that Source.
+export type SyncFailureReason =
+  | "offline"
+  | "rate_limited"
+  | "parse"
+  | "io"
+  | "missing_starter_root";
 
 export class SyncError extends Data.TaggedError("SyncError")<{
   readonly reason: SyncFailureReason;

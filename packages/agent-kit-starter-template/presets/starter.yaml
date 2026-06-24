@@ -1,0 +1,14 @@
+name: starter
+description: The bundled Starter selection — offline-safe instruction, skills, and a read-only explorer agent. A deployable default for a fresh install.
+default_agents: [claude]
+
+capabilities:
+  instructions:
+    - starter-conduct
+  skills:
+    - summarize-changes
+    - review-diff
+  agents:
+    - starter-explorer
+  plugins: []
+  bundles: []

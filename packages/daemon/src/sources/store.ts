@@ -17,10 +17,18 @@ export type SourcesWriter = { write(file: SourcesFile): void };
 export type AddResult = { ok: true; source: Source } | { ok: false; reason: "duplicate" };
 export type MutateResult = { ok: true; source: Source } | { ok: false; reason: "not-found" };
 export type DeleteResult = { ok: true } | { ok: false; reason: "not-found" };
+// Seeding a local Source is idempotent: a duplicate fixed id no-ops (the Starter
+// is the sole minter of its well-known id).
+export type SeedLocalResult = { ok: true; source: Source } | { ok: false; reason: "duplicate-id" };
 
 export type SourcesStore = {
   list(): readonly Source[];
+  // The public add path — always a `git` Source (the add route is git-only).
   add(origin: string): AddResult;
+  // Register a bundled `local` Source with a caller-supplied fixed id. A SYSTEM
+  // action (not the audited user `add`). Idempotent on the id, so a re-seed
+  // after the file already carries it is a clean no-op, never a duplicate row.
+  seedLocal(id: string, origin: string): SeedLocalResult;
   activate(id: string): MutateResult;
   deactivate(id: string): MutateResult;
   delete(id: string): DeleteResult;
@@ -73,6 +81,22 @@ export function createSourcesStore(
       const source: Source = {
         id: mintId(),
         origin: normalized,
+        kind: "git",
+        active: true,
+        createdAt: now(),
+      };
+      commit([...sources, source]);
+      return { ok: true, source: { ...source } };
+    },
+
+    seedLocal(id, origin) {
+      // Idempotent on the fixed id — never normalize/dedupe by origin (a local
+      // origin is a non-URL sentinel, not a git URL).
+      if (sources.some((s) => s.id === id)) return { ok: false, reason: "duplicate-id" };
+      const source: Source = {
+        id,
+        origin,
+        kind: "local",
         active: true,
         createdAt: now(),
       };

@@ -47,10 +47,14 @@ export class SourceRegistry extends Context.Service<SourceRegistry, SourceRegist
   "sources/SourceRegistry",
 ) {}
 
-// The default Source pre-added on a truly-first file-mode run (q6-preadd-default):
-// keeps a fresh install non-empty and the interop catalog test meaningful. Minted
-// through the normal `add` path so it gets a real id + createdAt.
-const DEFAULT_SOURCE_ORIGIN = "https://github.com/superliaye/my-agent-kits";
+// The bundled Starter Source seeded on a truly-first file-mode run (ADR-0023):
+// the in-repo content package, local (no network Sync), active by default. It
+// REPLACES the old remote `my-agent-kits` seed — `my-agent-kits` is now just a
+// Source the user may add by URL like any other. Fixed well-known id + a non-URL
+// origin sentinel so the seed is idempotent and the add route's GitHttpsUrl never
+// applies to it.
+const STARTER_SOURCE_ID = "starter";
+const STARTER_SOURCE_ORIGIN = "local:starter";
 
 function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
   if (opts.mode === "memory") {
@@ -66,16 +70,25 @@ function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
   // the default (leaving `{version,sources:[]}` on disk) must not see it
   // re-seeded, so only a truly-absent file seeds.
   const store = createSourcesStore(persist.read(), persist);
-  if (!persist.exists()) {
-    // Seed the default Source. A write fault here must NOT crash daemon boot
-    // (openStore runs inside the Layer build) — degrade to the unseeded store and
-    // trace it, matching how the route verbs ioGuard their persistence faults.
+  // Seed when there is no usable current-version registry: an absent file OR a
+  // stale-version file that read() discarded as EMPTY. A present same-version file
+  // (even an empty one after the user deleted the Starter) is NOT re-seeded —
+  // delete-no-reseed holds. (Plain `!exists()` would skip the re-seed for a
+  // discarded stale file and boot into an empty registry — review finding.)
+  if (!persist.isCurrentVersion()) {
+    // Seed the bundled Starter Source. A SYSTEM action, not a user `add` — it goes
+    // through the store's `seedLocal` (kind:"local"), which is OFF the audited
+    // service `add()` path, so first-run seeding emits NO `source.added` audit
+    // event (AGENTS.md "Audit vs trace": seeding is not a user action). A write
+    // fault here must NOT crash daemon boot (openStore runs inside the Layer
+    // build) — degrade to the unseeded store and trace it, matching how the route
+    // verbs ioGuard their persistence faults.
     try {
-      store.add(DEFAULT_SOURCE_ORIGIN);
+      store.seedLocal(STARTER_SOURCE_ID, STARTER_SOURCE_ORIGIN);
     } catch (err) {
       log().warn(
         { module: "sources", err: String(err) },
-        "first-run default seed write failed; starting with an empty registry",
+        "first-run Starter seed write failed; starting with an empty registry",
       );
     }
   }

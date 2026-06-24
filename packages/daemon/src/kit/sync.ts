@@ -11,7 +11,13 @@ import { gunzipSync } from "node:zlib";
 import { Effect } from "effect";
 import { log } from "../lib/log.ts";
 import { SyncError } from "./effect/errors.ts";
-import { mirrorExists, readProvenance, writeMirror } from "./mirror.ts";
+import {
+  localSyncMirror,
+  MissingStarterRoot,
+  mirrorExists,
+  readProvenance,
+  writeMirror,
+} from "./mirror.ts";
 import type { MirrorProvenance } from "./types.ts";
 
 // Parse a normalized https GitHub origin into owner/repo. The Source registry
@@ -153,6 +159,30 @@ export function syncSource(
       "source mirror synced",
     );
     return { status: "synced", provenance } as const;
+  });
+}
+
+// Sync a local (bundled) Source into its Mirror by copying the Starter content
+// root — no network, no fetch, no provenance. A missing/absent `starterRoot` (bad
+// override or a packaging miss) is a typed `missing_starter_root` SyncError, never
+// a raw throw; any other copy/swap fault maps to `io`. Returns only a status —
+// unlike `syncSource` there is no MirrorProvenance (the sync-status derives
+// "local" from Source.kind, never a synthetic sha). Always `synced` (re-copies
+// every run — a local mirror has no sha to short-circuit on).
+export function localSyncSource(
+  mirrorRoot: string,
+  tmpRoot: string,
+  starterRoot: string,
+): Effect.Effect<{ status: "synced" }, SyncError> {
+  return Effect.try({
+    try: () => {
+      localSyncMirror(mirrorRoot, tmpRoot, starterRoot);
+      return { status: "synced" } as const;
+    },
+    catch: (err) =>
+      err instanceof MissingStarterRoot
+        ? new SyncError({ reason: "missing_starter_root", message: err.message })
+        : new SyncError({ reason: "io", message: `local mirror write failed: ${String(err)}` }),
   });
 }
 

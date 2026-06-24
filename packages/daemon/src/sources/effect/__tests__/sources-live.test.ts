@@ -7,7 +7,8 @@ import { SOURCES_FILE_VERSION } from "../../types.ts";
 import { DuplicateOrigin, SourceNotFound } from "../errors.ts";
 import { SourceRegistry, SourceRegistryLive } from "../sources-live.ts";
 
-const DEFAULT_ORIGIN = "https://github.com/superliaye/my-agent-kits";
+const STARTER_ID = "starter";
+const STARTER_ORIGIN = "local:starter";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -123,7 +124,7 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
   });
 });
 
-describe("SourceRegistryLive — first-run default seeding (#30)", () => {
+describe("SourceRegistryLive — first-run Starter seeding (#32)", () => {
   let root: string;
   let path: string;
 
@@ -141,16 +142,40 @@ describe("SourceRegistryLive — first-run default seeding (#30)", () => {
     return { svc: rt.runSync(SourceRegistry), rt };
   }
 
-  test("missing file (persist.exists()===false) → one active default Source", async () => {
+  test("missing file → seeds exactly the local Starter (id 'starter', kind 'local', active, origin 'local:starter'); NOT my-agent-kits", async () => {
     expect(existsSync(path)).toBe(false);
     const { svc: s, rt } = svc();
     const list = await Effect.runPromise(s.list());
     expect(list).toHaveLength(1);
-    expect(list[0]?.origin).toBe(DEFAULT_ORIGIN);
+    expect(list[0]?.id).toBe(STARTER_ID);
+    expect(list[0]?.origin).toBe(STARTER_ORIGIN);
+    expect(list[0]?.kind).toBe("local");
     expect(list[0]?.active).toBe(true);
+    // No remote my-agent-kits seed anymore.
+    expect(list.some((x) => x.origin.includes("my-agent-kits"))).toBe(false);
     // currentSources() returns the in-memory list synchronously, matching list().
     expect(s.currentSources().map((x) => x.id)).toEqual(list.map((x) => x.id));
     expect(existsSync(path)).toBe(true); // seeded + persisted
+    rt.dispose();
+  });
+
+  test("first-run seed emits NO source.added audit event; a real user add still does", async () => {
+    const seen: Array<{ id: string; origin: string }> = [];
+    const { svc: s, rt } = svc();
+    s.events.on("source.added", (e) => {
+      seen.push(e);
+    });
+    // The Starter was seeded during the Layer build via the store-level seedLocal,
+    // which is OFF the audited service `add()` path — so no event fired then, and
+    // none fires on a subsequent read.
+    const list = await Effect.runPromise(s.list());
+    expect(list[0]?.id).toBe(STARTER_ID);
+    expect(seen).toHaveLength(0);
+    // A genuine user add DOES emit — proving the spy is wired and the zero above is
+    // meaningful, not a dead listener.
+    await Effect.runPromise(s.add("https://github.com/owner/added"));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.origin).toBe("https://github.com/owner/added");
     rt.dispose();
   });
 
@@ -161,7 +186,26 @@ describe("SourceRegistryLive — first-run default seeding (#30)", () => {
     rt.dispose();
   });
 
-  test("deleting the default then re-constructing does NOT re-seed", async () => {
+  test("a STALE-version file (discarded as EMPTY) RE-SEEDS the Starter — no empty-registry boot", async () => {
+    // A prior-schema v1 file present on disk: read() discards it as EMPTY, and the
+    // seed gate (isCurrentVersion, not bare exists) must still re-seed the Starter.
+    writeFileSync(
+      path,
+      JSON.stringify({
+        version: 1,
+        sources: [{ id: "old", origin: "https://github.com/a/b", active: true, createdAt: 1 }],
+      }),
+      "utf8",
+    );
+    const { svc: s, rt } = svc();
+    const list = await Effect.runPromise(s.list());
+    expect(list).toHaveLength(1);
+    expect(list[0]?.id).toBe(STARTER_ID);
+    expect(list[0]?.kind).toBe("local");
+    rt.dispose();
+  });
+
+  test("deleting the Starter then re-constructing does NOT re-seed", async () => {
     // First run seeds.
     const first = svc();
     const list = await Effect.runPromise(first.svc.list());

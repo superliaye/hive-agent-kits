@@ -12,7 +12,14 @@ import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 const CLONE = "D:/GitRepos/my-agent-kits";
 
 function source(id: string, over: Partial<Source> = {}): Source {
-  return { id, origin: `https://github.com/owner/${id}`, active: true, createdAt: 0, ...over };
+  return {
+    id,
+    origin: `https://github.com/owner/${id}`,
+    kind: "git",
+    active: true,
+    createdAt: 0,
+    ...over,
+  };
 }
 
 let tmpRoot: string;

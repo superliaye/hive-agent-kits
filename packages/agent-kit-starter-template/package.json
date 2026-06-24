@@ -1,0 +1,13 @@
+{
+  "name": "@hive/agent-kit-starter-template",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@hive/capability-schema-tools": "workspace:*"
+  }
+}

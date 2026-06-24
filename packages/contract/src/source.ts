@@ -7,10 +7,13 @@ import { z } from "zod";
 
 // A tracked Source. `id` is a stable opaque identity (a uuid), decoupled from
 // `origin` (the git URL can change). `active` toggles whether the Source
-// participates in sync/aggregation.
+// participates in sync/aggregation. `kind` distinguishes a remote `git` Source
+// (synced over the network) from the bundled `local` Starter Source (copied from
+// the in-repo package, no network) — the public add route only ever mints `git`.
 export const Source = z.object({
   id: z.string(),
   origin: z.string(),
+  kind: z.enum(["git", "local"]),
   active: z.boolean(),
   createdAt: z.number().int(),
 });

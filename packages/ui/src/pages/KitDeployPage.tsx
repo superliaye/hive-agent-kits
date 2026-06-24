@@ -70,6 +70,10 @@ function freshnessOf(state: string | undefined): Freshness {
       return { label: "Rate-limited", className: "kit-fresh-error" };
     case "check_failed":
       return { label: "Check failed", className: "kit-fresh-error" };
+    case "local":
+      // The bundled Starter Source: copied from the in-repo package, never fetched
+      // — no SHA, no network state. Surface it as bundled, not "Up to date".
+      return { label: "Bundled", className: "kit-fresh-ok" };
     default:
       return { label: "Up to date", className: "kit-fresh-ok" };
   }

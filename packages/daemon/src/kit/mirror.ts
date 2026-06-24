@@ -5,6 +5,7 @@
 // retaining the prior mirror until the new one is in place.
 
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -139,8 +140,17 @@ export function writeMirror(
   const provenance: MirrorProvenance = { sha, fetchedAt: Date.now() };
   writeFileSync(join(stageDir, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
 
-  // Atomic swap: move the current mirror aside, move the stage in, then drop the
-  // old one. Retains last-good until the new tree is in place.
+  swapMirror(mirrorRoot, stageDir);
+  return provenance;
+}
+
+// Atomic stage→swap of a PRE-POPULATED stage dir into the mirror: move the
+// current mirror aside (`.prev-<ts>`), move the stage in, then drop the old one.
+// Retains last-good until the new tree is in place; restores the prior mirror on
+// a swap failure. Shared by both writeMirror (tar path) and localSyncMirror
+// (copy path) — the only common tail; tar parse/strip/traversal stay in
+// writeMirror, copy concerns stay in localSyncMirror.
+function swapMirror(mirrorRoot: string, stageDir: string): void {
   mkdirSync(dirname(mirrorRoot), { recursive: true });
   const backup = `${mirrorRoot}.prev-${Date.now()}`;
   const hadPrior = existsSync(mirrorRoot);
@@ -161,5 +171,42 @@ export function writeMirror(
       log().warn({ module: "kit/mirror", err: String(err) }, "prior mirror cleanup failed");
     }
   }
-  return provenance;
+}
+
+// Thrown by localSyncMirror when the bundled Starter content root (its
+// `capabilities/`) is absent — a bad HIVE_STARTER_ROOT override or a packaging
+// miss. A dedicated class so the Effect boundary (localSyncSource) discriminates
+// by `instanceof`, NOT by matching the human-readable message text.
+export class MissingStarterRoot extends Error {
+  override readonly name = "MissingStarterRoot";
+}
+
+// Local Sync (#32): copy the bundled Starter's `capabilities/` + `presets/` from
+// `starterRoot` into a staged dir, then atomically swap it into the mirror —
+// producing a NORMAL Mirror the catalog/deploy already read, with no network and
+// no tar. Writes NO provenance file: MirrorProvenance mandates a 40-hex sha, and
+// a local mirror has none (the sync-status derives "local" from Source.kind, not
+// from provenance). Re-copies on every call (no sha to short-circuit on) — that
+// is how a bundled-content update propagates when the app updates. Throws
+// MissingStarterRoot on an absent content root, or a bare Error on a copy/swap
+// fault; the caller maps both to a typed per-source SyncError (never a raw throw
+// out of the sync loop).
+export function localSyncMirror(mirrorRoot: string, tmpRoot: string, starterRoot: string): void {
+  const capsSrc = join(starterRoot, "capabilities");
+  if (!existsSync(capsSrc)) {
+    throw new MissingStarterRoot(`starter capabilities not found at ${capsSrc}`);
+  }
+
+  sweepStaleTmp(tmpRoot);
+  mkdirSync(tmpRoot, { recursive: true });
+  const stageDir = join(tmpRoot, `extract-local-${Date.now()}`);
+  mkdirSync(stageDir, { recursive: true });
+
+  cpSync(capsSrc, join(stageDir, "capabilities"), { recursive: true });
+  const presetsSrc = join(starterRoot, "presets");
+  if (existsSync(presetsSrc)) {
+    cpSync(presetsSrc, join(stageDir, "presets"), { recursive: true });
+  }
+
+  swapMirror(mirrorRoot, stageDir);
 }

@@ -15,7 +15,7 @@
 // installer unless redirection is in place (or an AGENT_KIT_SKIP_* hatch is set).
 
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { DeployTarget } from "@hive/contract";
 
 // `DeployTarget` (claude | codex) is the canonical wire enum in @hive/contract —
@@ -38,6 +38,12 @@ export type DeployTargets = {
   fingerprintPath(): string;
   // Working temp dir for sync extraction (under the Hive home, swept on start).
   kitTmpRoot(): string;
+  // Content root of the bundled Starter Source — the in-repo package dir whose
+  // `capabilities/` + `presets/` the local Sync copies into the Starter's Mirror.
+  // Env-overridable (HIVE_STARTER_ROOT): dev → the workspace package dir, shipped
+  // → the packaged resources dir. A consumer-owned member of this port (not a
+  // sibling), since the sync dispatch already holds `targets`.
+  starterRoot(): string;
   // Redirected child-process env for an external exec. Folds CLAUDE_CONFIG_DIR /
   // HOME / USERPROFILE / npm prefix onto the resolved homes so the shelled-out
   // installer writes under the redirected home, not the real one.
@@ -66,6 +72,15 @@ export function defaultDeployTargets(): DeployTargets {
   const mirrorRoot = (sourceId: string) => join(hiveHome(), "kit", "mirrors", sourceId);
   const fingerprintPath = () => join(hiveHome(), "kit", "fingerprints.json");
   const kitTmpRoot = () => join(hiveHome(), "kit", "tmp");
+  // Dev default: this file lives at packages/daemon/src/kit/targets.ts; the
+  // Starter package is packages/agent-kit-starter-template. Walk up to packages/
+  // (kit → src → daemon → packages) then into the Starter dir. Shipped builds set
+  // HIVE_STARTER_ROOT to the packaged resources dir.
+  const starterRoot = () =>
+    envOr(
+      "HIVE_STARTER_ROOT",
+      join(dirname(dirname(dirname(import.meta.dir))), "agent-kit-starter-template"),
+    );
 
   const redirected =
     Boolean(process.env.HIVE_CLAUDE_HOME) ||
@@ -80,6 +95,7 @@ export function defaultDeployTargets(): DeployTargets {
     mirrorRoot,
     fingerprintPath,
     kitTmpRoot,
+    starterRoot,
     isChildEnvRedirected: () => redirected,
     childEnv: (base) => {
       const env: NodeJS.ProcessEnv = { ...base };

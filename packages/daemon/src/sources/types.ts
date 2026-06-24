@@ -2,7 +2,7 @@
 //
 // On-disk format (`~/.hive/sources.json`):
 //
-//   { "version": 1, "sources": [ { id, origin, active, createdAt }, ... ] }
+//   { "version": 2, "sources": [ { id, origin, kind, active, createdAt }, ... ] }
 //
 // Zod-validated at the disk boundary (AGENTS.md: "Zod at every external
 // boundary"). `version` is for schema migrations. The `Source` shape itself is
@@ -11,7 +11,10 @@
 import { Source } from "@hive/contract";
 import { z } from "zod";
 
-export const SOURCES_FILE_VERSION = 1;
+// Bumped to 2 when `Source` gained `kind` (#32). Greenfield (no users): a file at
+// any other version is discarded and re-seeded (see persistence.read), not
+// migrated.
+export const SOURCES_FILE_VERSION = 2;
 
 export const SourcesFileSchema = z.object({
   version: z.literal(SOURCES_FILE_VERSION),
@@ -19,6 +22,13 @@ export const SourcesFileSchema = z.object({
 });
 
 export type SourcesFile = z.infer<typeof SourcesFileSchema>;
+
+// A minimal probe over just `version` — read FIRST so a stale-version file can be
+// told apart from a same-version corrupt file. `version` in SourcesFileSchema is a
+// `z.literal`, so a stale v1 file and a v2-but-garbage file both fail the SAME
+// full parse and are indistinguishable by catching the throw; this dedicated
+// schema makes the distinction without any cast.
+export const SourcesFileVersionProbe = z.object({ version: z.number() });
 
 // ---- Audit events (source: 'sources') ----
 //

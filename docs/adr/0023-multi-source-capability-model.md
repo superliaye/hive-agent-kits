@@ -15,9 +15,10 @@ containers/remote/harness targets were considered and explicitly ruled out. This
 the "manage everyone's capabilities, compose from many sources, maintain durably via
 git" goal made concrete.
 
-All terms below are **product decisions** parked here, not in `CONTEXT.md` — they
-graduate into the glossary only once they settle. `CONTEXT.md` keeps just the
-settled noun **Source**.
+Most terms below are **product decisions** parked here, not in `CONTEXT.md` —
+they graduate into the glossary only once they settle. The **Starter Source** has
+now **settled** (it ships — see "Starter Source implementation" below), so it is
+promoted into `CONTEXT.md` alongside **Source**; the rest stay parked.
 
 ## The model
 
@@ -31,7 +32,9 @@ fingerprints out of it, `kit/targets.ts`).
 **Starter Source.** A bundled in-repo workspace package is the **default Source**,
 enabled by default, deactivatable to start from scratch. Unlike a user-added
 Source it is **local** — no network Sync. ("Maintained in the repo as a package."
-ADR-0024 names the package.)
+ADR-0024 names the package.) It **replaces** the old remote `my-agent-kits`
+fresh-install seed: `my-agent-kits` is now just a Source the user may add by URL
+like any other. See "Starter Source implementation" below for how it ships.
 
 **Per-Source Sync + per-Source Mirror; never physically merged.** Each active
 Source syncs independently into its own Mirror. Hive does **not** merge Source
@@ -82,6 +85,36 @@ and read the aggregated catalog. The far-edge agent-kit Ledger ACL is untouched.
 `resolveSelection` no longer throws on collision; the resolved plan carries the
 winning `SourceId` per selected CapabilityKey so the Deploy reads artifacts from the
 right Source's Mirror.
+
+## Starter Source implementation (#32)
+
+The Starter Source ships as the workspace package
+`@hive/agent-kit-starter-template` (ADR-0024). Its realization:
+
+- **`kind` discriminator on Source.** `Source` gains `kind: "git" | "local"`. A
+  `git` Source syncs over the network; the `local` Starter is copied from the
+  bundle. The public add route stays git-only (`GitHttpsUrl`); a local Source is
+  only ever **seeded**, never user-added. The on-disk registry version bumps (the
+  Starter is greenfield — an out-of-version registry file is discarded and
+  re-seeded, not migrated).
+- **Local Sync = copy into a Mirror.** A local Source's Sync recursively copies
+  the bundle's `capabilities/` + `presets/` into `<hiveHome>/kit/mirrors/starter/`,
+  reusing the existing **atomic stage→swap** so a partial copy can't corrupt the
+  Mirror. It produces a **normal Mirror** the catalog/deploy read uniformly — no
+  per-reader branching. The only consumer that branches on `kind` is the sync
+  dispatch. It writes **no provenance file** (a local Mirror has no SHA), and
+  re-copies on every run (that is how a bundled-content update propagates on app
+  update).
+- **`"local"` sync-status.** A typed `local` freshness state (no SHA / fetchedAt)
+  derived from `Source.kind` — never a synthetic SHA, never mis-reported as a
+  failed network check. The bundled content is **offline-safe** (instruction +
+  skill + agent + one preset only; no plugin/bundle, which would exec an external
+  installer).
+- **Seed semantics.** Seeded **first-run-only** (the `persist.exists()` gate
+  holds, so deleting the Starter sticks). Seeding is a **system action**, not a
+  user `add` — it goes through a store-level `seedLocal` verb that is off the
+  audited service path, so first-run seeding emits **no** `source.added` audit
+  event.
 
 ## Considered alternatives
 

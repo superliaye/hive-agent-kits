@@ -12,16 +12,29 @@ that section below, which keeps (does not delete) the agent vocabulary.
 ## Language (current — the deploy-manager)
 
 **Source**:
-A tracked git repository of **Capabilities** — a *kit* of capabilities — that
-conforms to Hive's capability format. Hive manages one or more Sources; each is
-**synced** independently into its own **Mirror**. A Source can be activated,
-deactivated, and deleted. Hive tracks each Source's last synced revision; there is
-no app-level version pinning (every Source tracks its own tip). How multiple active
-Sources reconcile (a bundled default Source, ordering, duplicate handling) is a
-product decision recorded in the multi-source ADR, not here.
-_Avoid_: "the repo", "the package" (a Source is the tracked, conformant
-repository). "Kit" stays fine informally — a Source is a kit of Capabilities — but
-"Source" is the precise term once more than one is in play.
+A tracked collection of **Capabilities** — a *kit* of capabilities — that conforms
+to Hive's capability format. A Source is either a remote **git repository** Hive
+**syncs** over the network, or the bundled local **Starter Source** shipped with
+the app. Hive manages one or more Sources; each is synced independently into its
+own **Mirror**. A Source can be activated, deactivated, and deleted. Hive tracks
+each Source's last synced revision where one exists; there is no app-level version
+pinning (every remote Source tracks its own tip). How multiple active Sources
+reconcile (the default Starter Source, ordering, duplicate handling) is a product
+decision recorded in the multi-source ADR, not here.
+_Avoid_: "the repo", "the package" (a remote Source is the tracked, conformant
+repository; the Starter is the bundled local one). "Kit" stays fine informally — a
+Source is a kit of Capabilities — but "Source" is the precise term once more than
+one is in play.
+
+**Starter Source**:
+The bundled **Source** shipped with Hive itself — the default, enabled on a fresh
+install so a new user has deployable Capabilities out of the box, and
+deactivatable to start from scratch. Unlike a remote Source it is **local**: its
+Capabilities are copied from the bundle rather than fetched over the network, so
+it works fully offline. Deleting it sticks (a fresh install seeds it once, never
+re-seeds).
+_Avoid_: implying it is fetched or versioned like a remote Source — it is the
+in-app bundle.
 
 **Capability**:
 A deployable unit in a **Source**. Five kinds, the upstream taxonomy:
@@ -51,12 +64,14 @@ live apart from the rest of its config).
 _Avoid_: "config dir" (CLI home is the specific per-CLI global root a Deploy writes to).
 
 **Sync**:
-Fetching the latest tree of a **Source** into that Source's private **Mirror** — a
-runtime refresh with no rebuild. Each active Source is synced independently. A Sync
-records the exact upstream revision it fetched and keeps the previous Mirror until
-the new one is fully in place. A Sync that fails (offline, rate-limited, or a bad
-download) keeps the last good Mirror and is surfaced as a distinct freshness state —
-never as "up to date".
+Refreshing the latest tree of a **Source** into that Source's private **Mirror** —
+a runtime refresh with no rebuild. For a remote Source this *fetches* the latest
+upstream tree over the network and records the exact revision fetched; for the
+local **Starter Source** it *copies* the bundled tree (no network, no recorded
+revision). Each active Source is synced independently and keeps the previous Mirror
+until the new one is fully in place. A remote Sync that fails (offline,
+rate-limited, or a bad download) keeps the last good Mirror and is surfaced as a
+distinct freshness state — never as "up to date".
 
 **Mirror**:
 A **Source**'s private, read-only copy under the Hive home — what a **Deploy** reads

@@ -65,6 +65,7 @@ const fx = (): DeployFsExec => ({
 const SOURCE: Source = {
   id: SOURCE_ID,
   origin: "https://github.com/owner/repo",
+  kind: "git",
   active: true,
   createdAt: 0,
 };

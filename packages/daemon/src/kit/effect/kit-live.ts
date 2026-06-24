@@ -30,7 +30,7 @@ import { type DeployInput, runDeploy } from "../deploy/engine.ts";
 import { readLedger } from "../ledger.ts";
 import { readProvenance, recoverMirror, sweepStaleTmp } from "../mirror.ts";
 import { computeDiff, resolveSelection } from "../selection.ts";
-import { type HttpFetch, productionFetch, syncSource } from "../sync.ts";
+import { type HttpFetch, localSyncSource, productionFetch, syncSource } from "../sync.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
 import type { DeployAuditEvents } from "../types.ts";
 import { runVerify } from "../verify.ts";
@@ -79,8 +79,27 @@ function buildSourceSyncStatus(
   mirrorRoot: string,
   lastError: LastSyncError | undefined,
 ): SourceSyncStatus {
-  const prov = readProvenance(mirrorRoot);
   const base = { sourceId: source.id, origin: source.origin };
+  // A local (bundled) Source short-circuits BEFORE readProvenance: a local mirror
+  // writes no provenance file, so falling through would mis-report a CLEAN local
+  // sync as `check_failed`. But a local sync can still FAIL (a bad
+  // HIVE_STARTER_ROOT / packaging miss → missing_starter_root): when an error is
+  // recorded for it, surface `check_failed` like any other failed Source — never
+  // mask a failure as the healthy `local` state. A clean local sync → `local`,
+  // null sha/fetchedAt (derived from kind, never a synthetic sha).
+  if (source.kind === "local") {
+    if (lastError) {
+      return {
+        ...base,
+        state: "check_failed",
+        sha: null,
+        fetchedAt: null,
+        errorReason: lastError.reason,
+      };
+    }
+    return { ...base, state: "local", sha: null, fetchedAt: null };
+  }
+  const prov = readProvenance(mirrorRoot);
   if (lastError) {
     return {
       ...base,
@@ -144,14 +163,30 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
           sources,
           (source) =>
             Effect.gen(function* () {
-              const result = yield* Effect.result(
-                syncSource(
-                  targets.mirrorRoot(source.id),
-                  targets.kitTmpRoot(),
-                  source.origin,
-                  fetchImpl,
-                ),
-              );
+              // Branch on the Source kind — the ONE consumer that must differ
+              // between local and git. A local Source copies the bundled Starter
+              // (no fetch); a git Source syncs over the network. A local failure
+              // is a per-source SyncError VALUE in `E` (recorded in that Source's
+              // status), never a thrown defect — a raw throw in this Effect.forEach
+              // loop would sink every Source and could crash boot.
+              // Both branches normalize to a common `{ status }` so the
+              // conditional is one Effect type, not a union (Effect.result can't
+              // infer over a two-arm Effect union). The git path's provenance is
+              // unused here — only the status reaches the run result.
+              const syncEffect: Effect.Effect<{ status: "synced" | "unchanged" }, SyncError> =
+                source.kind === "local"
+                  ? localSyncSource(
+                      targets.mirrorRoot(source.id),
+                      targets.kitTmpRoot(),
+                      targets.starterRoot(),
+                    )
+                  : syncSource(
+                      targets.mirrorRoot(source.id),
+                      targets.kitTmpRoot(),
+                      source.origin,
+                      fetchImpl,
+                    ).pipe(Effect.map((o) => ({ status: o.status })));
+              const result = yield* Effect.result(syncEffect);
               if (result._tag === "Success") {
                 lastSyncError.delete(source.id);
                 return {

@@ -72,6 +72,7 @@ function kitOver(origins: string[], fetchImpl: HttpFetch) {
     initial: origins.map((origin, i) => ({
       id: `src-${i}`,
       origin,
+      kind: "git" as const,
       active: true,
       createdAt: i,
     })),
@@ -195,30 +196,71 @@ describe("Kit.sync — per-Source (#30)", () => {
   });
 });
 
-describe("Kit launch-sync ordering (#30, file mode)", () => {
-  test("a fresh file-mode boot syncs the seeded default Source into a Mirror", async () => {
-    // No sources.json under the Hive home → openStore seeds the default Source
+describe("Kit launch-sync ordering (#32, file mode — local Starter seed)", () => {
+  // Point the Starter content root at the real in-repo package (hermetic, no env
+  // leak between tests).
+  const STARTER_PKG = join(
+    import.meta.dir,
+    "..",
+    "..",
+    "..",
+    "..",
+    "..",
+    "agent-kit-starter-template",
+  );
+
+  test("a fresh file-mode boot seeds the LOCAL Starter and a no-fetch sync copies it into a Mirror", async () => {
+    // No sources.json under the Hive home → openStore seeds the local Starter
     // during the registry acquire (forced first because Kit depends on it), then
-    // the sync reads currentSources() and mirrors it.
+    // the sync branches on kind:'local' and COPIES the bundle (never fetches).
+    process.env.HIVE_STARTER_ROOT = STARTER_PKG;
     const sourcesPath = join(tmpRoot, "runtime", "sources.json");
     expect(existsSync(sourcesPath)).toBe(false);
+    // A fetch that would throw if ever called — proves the local path makes no
+    // network call.
+    const noFetch: HttpFetch = async () => {
+      throw new Error("local Starter must not fetch");
+    };
     const sourcesLayer = SourceRegistryLive({ mode: "file", path: sourcesPath });
     const rt = ManagedRuntime.make(
-      Layer.merge(KitLive({ fetch: okFetch(SHA) }).pipe(Layer.provide(sourcesLayer)), sourcesLayer),
+      Layer.merge(KitLive({ fetch: noFetch }).pipe(Layer.provide(sourcesLayer)), sourcesLayer),
     );
     const registry = rt.runSync(SourceRegistry);
     const kit = rt.runSync(Kit);
 
     const seeded = registry.currentSources();
     expect(seeded).toHaveLength(1);
-    const seededId = seeded[0]?.id;
-    expect(seededId).toBeDefined();
-    if (!seededId) throw new Error("seed failed");
+    expect(seeded[0]?.id).toBe("starter");
+    expect(seeded[0]?.kind).toBe("local");
 
-    await Effect.runPromise(kit.sync());
-    const mirror = defaultDeployTargets().mirrorRoot(seededId);
+    const result = await Effect.runPromise(kit.sync());
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0]?.status).toBe("synced");
+
+    const mirror = defaultDeployTargets().mirrorRoot("starter");
     expect(mirrorExists(mirror)).toBe(true);
-    expect(existsSync(join(mirror, "capabilities", "skills", "foo", "SKILL.md"))).toBe(true);
+    // The bundled Starter skill landed; NO provenance file was written.
+    expect(
+      existsSync(join(mirror, "capabilities", "skills", "summarize-changes", "SKILL.md")),
+    ).toBe(true);
+    expect(existsSync(join(mirror, ".hive-mirror.json"))).toBe(false);
+    expect(existsSync(join(mirror, "presets", "starter.yaml"))).toBe(true);
+
+    // Catalog lists the Starter's capabilities; sync-status is "local".
+    const cat = kit.catalog();
+    expect(cat.entries.some((e) => e.kind === "skill" && e.name === "summarize-changes")).toBe(
+      true,
+    );
+    expect(cat.presets.some((p) => p.name === "starter")).toBe(true);
+    expect(cat.problems).toEqual([]);
+
+    const state = kit.state();
+    expect(state.sync).toHaveLength(1);
+    expect(state.sync[0]?.state).toBe("local");
+    expect(state.sync[0]?.sha).toBeNull();
+    expect(state.sync[0]?.fetchedAt).toBeNull();
+
+    delete process.env.HIVE_STARTER_ROOT;
     rt.dispose();
   });
 });

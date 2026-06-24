@@ -22,6 +22,7 @@ function fakeTargets(redirected: boolean): DeployTargets {
     mirrorRoot: (sourceId: string) => `/tmp/m/${sourceId}`,
     fingerprintPath: () => "/tmp/f",
     kitTmpRoot: () => "/tmp/t",
+    starterRoot: () => "/tmp/starter",
     childEnv: (base) => ({ ...base }),
     isChildEnvRedirected: () => redirected,
   };

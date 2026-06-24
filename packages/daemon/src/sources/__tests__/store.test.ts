@@ -34,6 +34,37 @@ describe("createSourcesStore — duplicate detection over normalization", () => 
   });
 });
 
+describe("createSourcesStore — public add mints a git Source", () => {
+  test("add sets kind:'git'", () => {
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });
+    const res = store.add("https://github.com/a/b");
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.source.kind).toBe("git");
+  });
+});
+
+describe("createSourcesStore — seedLocal (the bundled Starter)", () => {
+  test("seeds a kind:'local' Source with the caller-supplied fixed id + origin", () => {
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });
+    const res = store.seedLocal("starter", "local:starter");
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.source.id).toBe("starter");
+      expect(res.source.origin).toBe("local:starter");
+      expect(res.source.kind).toBe("local");
+      expect(res.source.active).toBe(true);
+    }
+  });
+
+  test("is the sole minter of id 'starter' — a second seed of that id no-ops (no duplicate row)", () => {
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });
+    expect(store.seedLocal("starter", "local:starter").ok).toBe(true);
+    const again = store.seedLocal("starter", "local:starter");
+    expect(again).toEqual({ ok: false, reason: "duplicate-id" });
+    expect(store.list()).toHaveLength(1);
+  });
+});
+
 describe("createSourcesStore — write-fault atomicity", () => {
   // A persist that throws must leave the in-memory state unchanged (memory and
   // disk stay consistent), not mutate memory and diverge from disk.
