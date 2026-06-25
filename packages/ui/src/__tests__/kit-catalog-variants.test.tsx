@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { CapabilityEntry, Catalog, KitState, VerifyReport } from "../api.ts";
+import type { CapabilityEntry, Catalog, KitState, Source, VerifyReport } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 
@@ -63,12 +63,23 @@ async function renderCatalog(
   state: KitState = emptyState,
 ): Promise<HTMLElement> {
   const catalog: Catalog = { entries, presets: [], problems: [] };
+  // The header sources query must resolve so the joined rows render; derive an
+  // active git Source per state.sync entry (these tests assert AC1-3 row content,
+  // not the toggle, so an empty list when state.sync is empty is fine).
+  const sources: Source[] = state.sync.map((s, i) => ({
+    id: s.sourceId,
+    origin: s.origin,
+    kind: "git",
+    active: true,
+    createdAt: i,
+  }));
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     if (path === "/api/kit/catalog") return json(catalog);
     if (path === "/api/kit/state") return json(state);
     if (path === "/api/kit/verify") return json(emptyVerify);
+    if (path === "/api/sources") return json(sources);
     return json({});
   }) as typeof fetch;
 

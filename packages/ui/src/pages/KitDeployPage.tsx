@@ -17,6 +17,8 @@ import {
   type DeployDiff,
   type DeployTarget,
   type Selection,
+  type Source,
+  type SourceSyncStatus,
   type VerifyReport,
   type VerifyStatus,
 } from "../api.ts";
@@ -89,6 +91,13 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   const stateQuery = useQuery({
     queryKey: ["kit", "state"],
     queryFn: () => api.getKitState(apiConfig),
+  });
+  // The authoritative Source list, incl. inactive sources, for the header toggle
+  // rows. state.sync is active-only, so a deactivated Source would otherwise vanish
+  // and could never be re-enabled in place.
+  const sourcesQuery = useQuery({
+    queryKey: ["sources"],
+    queryFn: () => api.listSources(apiConfig),
   });
 
   // The concrete per-kind selected name set is the single source of truth.
@@ -169,6 +178,20 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   const syncMutation = useMutation({
     mutationFn: () => api.syncKit(apiConfig),
     onSettled: () => {
+      void qc.invalidateQueries({ queryKey: ["kit"] });
+    },
+  });
+
+  // Flip a Source on/off. The catalog is server-side active-only, so invalidating
+  // ["kit"] re-fetches the catalog (the deactivated Source's capabilities now gone)
+  // and ["sources"] flips the row's active state — both live, no manual refresh.
+  // Selection is name-based and source-agnostic (ADR-0023): we do NOT prune the
+  // `selected` set here — the daemon drops an absent name from the deploy plan.
+  const toggleSource = useMutation({
+    mutationFn: (s: Source) =>
+      s.active ? api.deactivateSource(apiConfig, s.id) : api.activateSource(apiConfig, s.id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["sources"] });
       void qc.invalidateQueries({ queryKey: ["kit"] });
     },
   });
@@ -263,47 +286,35 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   }, [sourceStatuses]);
   const diff = diffQuery.data;
 
+  // The authoritative row set: the full Source list (incl. inactive) when it has
+  // resolved. While the query is loading/errored — or returns a non-array payload
+  // — fall back to the active-only state.sync rows (read-only, no toggle) so the
+  // header never blanks and never renders a wrong toggle state.
+  const sources = Array.isArray(sourcesQuery.data) ? sourcesQuery.data : undefined;
+  const anyActiveSource = sources?.some((s) => s.active) ?? false;
+  const anyInactiveSource = sources?.some((s) => !s.active) ?? false;
+
+  // Hazard cue: deactivating a Source is non-destructive and does NOT prune the
+  // working selection (ADR-0023) — so a capability that was deployed from a
+  // now-disabled Source stays selected, leaves the active catalog, and shows up
+  // under the Deploy diff's "removed" column. Deploying in that state WOULD un-deploy
+  // those files. With a Source disabled and a non-empty removed diff, warn that
+  // Deploy is destructive here so the safe "hide" gesture isn't confused with it.
+  const removedCount = (diffQuery.data?.entries ?? []).filter((e) => e.change === "removed").length;
+  const deployWouldRemoveDisabled = anyInactiveSource && removedCount > 0;
+
   return (
     <div className="kit-page" data-testid="kit-deploy-page">
       <header className="kit-header">
         <div className="kit-header-version">
           <h1>Capabilities</h1>
           <div className="kit-sources" data-testid="kit-sources">
-            {sourceStatuses.map((s, idx) => {
-              const fresh = freshnessOf(s.state);
-              // Preserve the stable single-Source testids on the FIRST row so
-              // existing selectors still resolve; add per-Source testids too.
-              const first = idx === 0;
-              return (
-                <div
-                  className="kit-source-row"
-                  key={s.sourceId}
-                  data-testid={`kit-source-${s.sourceId}`}
-                >
-                  <span className="kit-source-origin" title={s.origin}>
-                    {shortOrigin(s.origin)}
-                  </span>
-                  <span
-                    className="kit-sha"
-                    data-testid={first ? "kit-sha" : `kit-sha-${s.sourceId}`}
-                    title={s.sha ?? ""}
-                  >
-                    {shortSha(s.sha)}
-                  </span>
-                  <span
-                    className={`kit-fresh ${fresh.className}`}
-                    data-testid={first ? "kit-freshness" : `kit-freshness-${s.sourceId}`}
-                  >
-                    {fresh.label}
-                  </span>
-                  {s.rateLimitReset !== undefined && (
-                    <span className="kit-rate-reset">
-                      resets {new Date(s.rateLimitReset * 1000).toLocaleTimeString()}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
+            <SourceRows
+              sources={sources}
+              syncStatuses={sourceStatuses}
+              onToggle={(s) => toggleSource.mutate(s)}
+              pendingId={toggleSource.isPending ? toggleSource.variables?.id : undefined}
+            />
           </div>
         </div>
         <div className="kit-header-actions">
@@ -373,14 +384,37 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           Deployed. Diff cleared.
         </div>
       )}
+      {toggleSource.isError && (
+        <div className="banner-error" data-testid="kit-source-toggle-error">
+          Could not change the Source — {(toggleSource.error as Error).message}
+        </div>
+      )}
+      {deployWouldRemoveDisabled && (
+        <div className="banner-warn" data-testid="kit-deploy-disabled-warn">
+          Deploying now would remove {removedCount}{" "}
+          {removedCount === 1 ? "capability" : "capabilities"} from a disabled Source. Disabling a
+          Source only hides it — re-enable the Source above to keep its capabilities deployed.
+        </div>
+      )}
 
       <div className="kit-catalog" data-testid="kit-catalog">
         {catalogQuery.isLoading && <CatalogSkeleton />}
-        {catalog && catalog.entries.length === 0 && !catalogQuery.isLoading && (
-          <div className="empty" data-testid="kit-empty">
-            No capabilities yet — Check for updates to sync the latest Kit.
-          </div>
-        )}
+        {catalog &&
+          catalog.entries.length === 0 &&
+          !catalogQuery.isLoading &&
+          // Distinguish "every Source is disabled" (re-enable one above) from the
+          // genuinely-never-synced / no-sources case (Check for updates). The
+          // all-disabled message only applies once the source list has resolved
+          // with at least one entry, none active.
+          (sources !== undefined && sources.length > 0 && !anyActiveSource ? (
+            <div className="empty" data-testid="kit-empty-disabled">
+              All Sources are disabled — enable one above to see its capabilities.
+            </div>
+          ) : (
+            <div className="empty" data-testid="kit-empty">
+              No capabilities yet — Check for updates to sync the latest Kit.
+            </div>
+          ))}
         {KINDS.map((kind) => {
           const entries = (catalog?.entries ?? []).filter((e) => e.kind === kind);
           if (entries.length === 0) return null;
@@ -398,6 +432,145 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// The per-Source header rows. Renders from the authoritative Source list (incl.
+// inactive) when it has resolved, each row carrying an on/off toggle. While the
+// list is loading/errored (`sources` undefined) it falls back to the active-only
+// `state.sync` rows, read-only (no toggle), so the header never blanks against an
+// already-populated catalog and never shows a wrong toggle state.
+function SourceRows({
+  sources,
+  syncStatuses,
+  onToggle,
+  pendingId,
+}: {
+  sources: Source[] | undefined;
+  syncStatuses: SourceSyncStatus[];
+  onToggle: (s: Source) => void;
+  // The id of the Source whose toggle is currently mutating, so only that row's
+  // control disables — an in-flight toggle on one Source must not freeze the rest.
+  pendingId: string | undefined;
+}): JSX.Element {
+  if (sources === undefined) {
+    // Fallback: render the active-only sync rows read-only. The first row keeps the
+    // stable bare testids (every sync row is, by definition, an active synced row).
+    return (
+      <>
+        {syncStatuses.map((s, idx) => (
+          <SourceRow
+            key={s.sourceId}
+            id={s.sourceId}
+            origin={s.origin}
+            sync={s}
+            active
+            anchor={idx === 0}
+          />
+        ))}
+      </>
+    );
+  }
+
+  const syncById = new Map(syncStatuses.map((s) => [s.sourceId, s] as const));
+  // Stable freshness-testid anchor: the bare `kit-sha`/`kit-freshness` go on the
+  // FIRST row that has a state.sync entry (the first *synced* row), never raw idx 0
+  // — the Starter seeds first in registry order and is SHA-less/deactivatable, so
+  // anchoring on position would put the stable testid on a SHA-less row.
+  const firstSyncedId = sources.find((s) => syncById.has(s.id))?.id;
+  return (
+    <>
+      {sources.map((s) => (
+        <SourceRow
+          key={s.id}
+          id={s.id}
+          origin={s.origin}
+          sync={syncById.get(s.id)}
+          active={s.active}
+          anchor={s.id === firstSyncedId}
+          onToggle={() => onToggle(s)}
+          togglePending={pendingId === s.id}
+        />
+      ))}
+    </>
+  );
+}
+
+// A single Source header row. With `onToggle` present it renders an on/off toggle
+// bound to `active`; without it (the loading fallback) it is read-only. SHA +
+// freshness render only for an active, currently-synced Source; an inactive row
+// is muted and shows origin only. The bare `kit-sha`/`kit-freshness` testids land
+// on the `anchor` (first synced) row; every other synced row gets the `-<id>`
+// suffix; un-synced/inactive rows carry no SHA/freshness testid at all.
+function SourceRow({
+  id,
+  origin,
+  sync,
+  active,
+  anchor,
+  onToggle,
+  togglePending,
+}: {
+  id: string;
+  origin: string;
+  sync: SourceSyncStatus | undefined;
+  active: boolean;
+  anchor: boolean;
+  onToggle?: () => void;
+  togglePending?: boolean;
+}): JSX.Element {
+  const fresh = sync ? freshnessOf(sync.state) : null;
+  return (
+    <div
+      className={`kit-source-row ${active ? "" : "kit-source-row-inactive"}`}
+      data-testid={`kit-source-${id}`}
+    >
+      <span className="kit-source-origin" title={origin}>
+        {shortOrigin(origin)}
+      </span>
+      {sync && fresh && (
+        <>
+          <span
+            className="kit-sha"
+            data-testid={anchor ? "kit-sha" : `kit-sha-${id}`}
+            title={sync.sha ?? ""}
+          >
+            {shortSha(sync.sha)}
+          </span>
+          <span
+            className={`kit-fresh ${fresh.className}`}
+            data-testid={anchor ? "kit-freshness" : `kit-freshness-${id}`}
+          >
+            {fresh.label}
+          </span>
+          {sync.rateLimitReset !== undefined && (
+            <span className="kit-rate-reset">
+              resets {new Date(sync.rateLimitReset * 1000).toLocaleTimeString()}
+            </span>
+          )}
+        </>
+      )}
+      {onToggle && (
+        <label
+          className={`kit-source-toggle ${active ? "on" : "off"}`}
+          title={active ? "Deactivate" : "Activate"}
+        >
+          <input
+            type="checkbox"
+            className="kit-source-switch"
+            checked={active}
+            onChange={onToggle}
+            disabled={togglePending}
+            data-testid={`kit-source-toggle-${id}`}
+            aria-label={`${active ? "Deactivate" : "Activate"} ${shortOrigin(origin)}`}
+          />
+          {/* Visible on/off word so the state never relies on color/opacity alone. */}
+          <span className="kit-source-toggle-label" aria-hidden="true">
+            {active ? "On" : "Off"}
+          </span>
+        </label>
+      )}
     </div>
   );
 }

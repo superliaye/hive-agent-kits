@@ -13,6 +13,7 @@ import type {
   DeployResult,
   KitState,
   Selection,
+  Source,
   SyncRunResult,
   VerifyReport,
 } from "@hive/contract";
@@ -35,6 +36,7 @@ export type {
   Ledger,
   PresetSummary,
   Selection,
+  Source,
   SourceSyncStatus,
   StoredSecretMeta,
   SyncRunResult,
@@ -276,4 +278,16 @@ export const api = {
       method: "POST",
       body: JSON.stringify(selection),
     }),
+
+  // ─── Sources ─────────────────────────────────────────────────────────
+  // The authoritative Source list, INCLUDING inactive sources (state.sync is
+  // active-only). Drives the per-Source toggle rows in the Capabilities header.
+  listSources: (cfg: ApiConfig) => call<Source[]>(cfg, "/api/sources"),
+  // Flip a Source on/off. Activate/deactivate only change `active` (no sync) and
+  // emit the source.activated/deactivated audit event server-side; the catalog is
+  // built from active sources only, so the page re-fetches ["kit"] to reflect it.
+  activateSource: (cfg: ApiConfig, id: string) =>
+    call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/activate`, { method: "POST" }),
+  deactivateSource: (cfg: ApiConfig, id: string) =>
+    call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/deactivate`, { method: "POST" }),
 };

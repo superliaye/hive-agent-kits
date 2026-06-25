@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { Catalog, KitState, VerifyReport } from "../api.ts";
+import type { Catalog, KitState, Source, VerifyReport } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 
@@ -47,13 +47,23 @@ afterEach(async () => {
 });
 
 // Render the page with a given KitState (sync array drives the freshness header).
+// The sources list is derived from the sync entries (same order, all active +
+// synced), so the bare kit-sha/kit-freshness testids land on the first synced row.
 async function renderWith(kitState: KitState): Promise<HTMLElement> {
+  const sources: Source[] = kitState.sync.map((s, i) => ({
+    id: s.sourceId,
+    origin: s.origin,
+    kind: "git",
+    active: true,
+    createdAt: i,
+  }));
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     if (path === "/api/kit/catalog") return json(emptyCatalog);
     if (path === "/api/kit/state") return json(kitState);
     if (path === "/api/kit/verify") return json(emptyVerify);
+    if (path === "/api/sources") return json(sources);
     return json({});
   }) as typeof fetch;
 
@@ -89,7 +99,7 @@ describe("KitDeployPage per-Source freshness header", () => {
       ledger: null,
     });
 
-    const rows = host.querySelectorAll('[data-testid^="kit-source-"]');
+    const rows = host.querySelectorAll(".kit-source-row");
     expect(rows.length).toBe(1);
     const sha = host.querySelector('[data-testid="kit-sha"]');
     const fresh = host.querySelector('[data-testid="kit-freshness"]');
@@ -121,7 +131,7 @@ describe("KitDeployPage per-Source freshness header", () => {
     });
 
     // Two rows.
-    expect(host.querySelectorAll('[data-testid^="kit-source-"]').length).toBe(2);
+    expect(host.querySelectorAll(".kit-source-row").length).toBe(2);
 
     // First (healthy) row keeps the stable testids and reads "Up to date".
     const firstFresh = host.querySelector('[data-testid="kit-freshness"]');
@@ -135,6 +145,54 @@ describe("KitDeployPage per-Source freshness header", () => {
     expect(badFresh?.textContent).toBe("Check failed");
     expect(badFresh?.className).toContain("kit-fresh-error");
     expect(badFresh?.textContent).not.toBe("Up to date");
+  });
+
+  test("when GET /api/sources errors, the header falls back to read-only state.sync rows (no toggle, no blank)", async () => {
+    // Sources query fails; the header must still render its rows from state.sync,
+    // read-only (no toggle control) rather than blanking.
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw, "http://localhost").pathname;
+      if (path === "/api/kit/catalog") return json(emptyCatalog);
+      if (path === "/api/kit/state")
+        return json({
+          sync: [
+            {
+              state: "up_to_date",
+              sha: "f799d5fabc",
+              fetchedAt: 1,
+              sourceId: "src-1",
+              origin: "https://github.com/superliaye/my-agent-kits",
+            },
+          ],
+          ledger: null,
+        });
+      if (path === "/api/kit/verify") return json(emptyVerify);
+      if (path === "/api/sources")
+        return new Response("boom", { status: 500, statusText: "Server Error" });
+      return json({});
+    }) as typeof fetch;
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const host = mount();
+    const root = createRoot(host);
+    activeRoot = root;
+    await act(async () => {
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client: qc },
+          createElement(KitDeployPage, { apiConfig }),
+        ),
+      );
+    });
+    await flush();
+
+    // The source row still renders from state.sync...
+    expect(host.querySelector('[data-testid="kit-source-src-1"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="kit-sha"]')?.textContent).toBe("f799d5f");
+    // ...but read-only: no toggle control while the sources list is unavailable.
+    expect(host.querySelector('[data-testid="kit-source-toggle-src-1"]')).toBeNull();
   });
 
   test("a rate-limited Source shows the Rate-limited badge with an error class", async () => {
