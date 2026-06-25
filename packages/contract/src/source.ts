@@ -3,7 +3,9 @@
 // Zod only — daemon-independent, so the UI bundles it without dragging Effect/
 // Hono in. The Source DTO uses no capability-schema types.
 
+import { ConformanceError } from "@hive/capability-schema";
 import { z } from "zod";
+import { SourceSyncStatus } from "./kit.ts";
 
 // A tracked Source. `id` is a stable opaque identity (a uuid), decoupled from
 // `origin` (the git URL can change). `active` toggles whether the Source
@@ -51,3 +53,29 @@ export const AddSourceBody = z.object({
   origin: GitHttpsUrl,
 });
 export type AddSourceBody = z.infer<typeof AddSourceBody>;
+
+// The conformance report produced when a Source is synced + validated on add
+// (#33). `conformant` is the strict-validate verdict; `errors` are the located
+// violations (the hoisted SSOT shape — @hive/capability-schema). `capabilityCount`
+// counts EVERY enumerated capability leaf (resolvable AND non-resolvable), so 0
+// honestly means "no capability-shaped content found" — the soft "empty repo"
+// signal, never a rejection.
+export const SourceValidationReport = z.object({
+  conformant: z.boolean(),
+  errors: z.array(ConformanceError),
+  capabilityCount: z.number().int(),
+});
+export type SourceValidationReport = z.infer<typeof SourceValidationReport>;
+
+// POST /api/sources 201 body (#33): the kept Source plus a point-in-time snapshot
+// of the add-time sync (reusing the per-Source freshness wire shape) and the
+// conformance report. A sync or validation failure is FOLDED HERE — the add is
+// never rejected for it (Q2/Q3). `sync` is the same `SourceSyncStatus` GET
+// /api/kit/state re-derives from disk; a later read may report a different
+// errorReason (e.g. `no_mirror`) for the same failed add — both mean failure.
+export const AddSourceResult = z.object({
+  source: Source,
+  sync: SourceSyncStatus,
+  validation: SourceValidationReport,
+});
+export type AddSourceResult = z.infer<typeof AddSourceResult>;

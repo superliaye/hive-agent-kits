@@ -7,6 +7,7 @@
 // which has no version field. Emitted, not validated against a boundary.
 export const formatVersion = "1";
 
+export * from "./conformance.ts";
 export * from "./identity.ts";
 export * from "./kinds/skill.ts";
 export * from "./layout.ts";

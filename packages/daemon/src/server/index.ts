@@ -33,8 +33,11 @@ import {
   type Config,
 } from "../config/index.ts";
 import { Kit, KitLive, type KitSvc } from "../kit/index.ts";
+import { removeMirror } from "../kit/mirror.ts";
+import { degradedOnboardResult, onboardSource } from "../kit/onboard.ts";
 import { buildKitRoutes, type RunKit } from "../kit/routes.ts";
-import { productionFetch } from "../kit/sync.ts";
+import { type HttpFetch, productionFetch } from "../kit/sync.ts";
+import { defaultDeployTargets } from "../kit/targets.ts";
 import { createLogger, log, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
@@ -44,7 +47,7 @@ import {
   type SourceRegistrySvc,
   SourceRegistry as SourceRegistryTag,
 } from "../sources/effect/sources-live.ts";
-import { buildSourcesRoutes, type RunSources } from "../sources/routes.ts";
+import { buildSourcesRoutes, type RunSources, type SourceLifecycle } from "../sources/routes.ts";
 import { buildRoutes } from "./routes.ts";
 
 export type ServerMode = "file" | "memory";
@@ -59,6 +62,10 @@ export type CreateServerOptions = {
   // `daemon.httpPort` — used by e2e tests for isolation. Bypasses Config so
   // a stale config.yaml value cannot fight the explicit choice.
   port?: number;
+  // Override the HTTP fetch (tests inject offline/403/fixture-tarball). Defaults
+  // to the production global fetch. Shared by the Kit launch-sync AND the add-time
+  // onboard sync, so a test add reaches a stubbed fetch — never the real network.
+  fetch?: HttpFetch;
 };
 
 export type ServerHandles = {
@@ -119,6 +126,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // instance to Kit (Effect memoizes a Layer by reference → one acquire / one
   // store) AND merge it for the routes' own resolution.
   const sourcesLayer = SourceRegistryLive(sourcesOpts);
+  // The one HTTP fetch + deploy-target port shared by Kit (launch sync) and the
+  // Sources lifecycle adapter (add-time onboard sync). `defaultDeployTargets()` is
+  // env-pure — a single source of truth so onboard's Mirror paths match Kit's.
+  const httpFetch: HttpFetch = opts.fetch ?? productionFetch();
+  const deployTargets = defaultDeployTargets();
   const rootLayer = Layer.mergeAll(
     SecretsLive(secretsOpts),
     ConfigLive(configOpts),
@@ -128,10 +140,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // on `BackendProbe` for the re-probe. Provide the probe layer so the
     // dependency is discharged at the module boundary, not leaked to the root.
     BackendUpdaterLive(backendRunnerOpts).pipe(Layer.provide(backendProbeLayer)),
-    // Kit module (capability deploy-manager). Provides its own deploy-target
-    // port + exec adapter; the production HTTP fetch is the only edge injected.
-    // SourceRegistry is provided from the one shared layer (see above).
-    KitLive({ fetch: productionFetch() }).pipe(Layer.provide(sourcesLayer)),
+    // Kit module (capability deploy-manager). Shares the deploy-target port +
+    // HTTP fetch with the Sources lifecycle adapter; its exec adapter stays
+    // module-internal. SourceRegistry is provided from the one shared layer.
+    KitLive({ targets: deployTargets, fetch: httpFetch }).pipe(Layer.provide(sourcesLayer)),
     // Sources registry (ADR-0023). Hive-private JSON store; memory mode in
     // tests/dev writes no real ~/.hive/sources.json. Same shared instance.
     sourcesLayer,
@@ -265,7 +277,31 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
 
   // Sources registry routes (ADR-0023). Reuse the same Effect-discharge runner.
   const runSources: RunSources = runKit;
-  app.route("/", buildSourcesRoutes(sourceRegistry, runSources));
+  // The add → sync → validate orchestration + delete-time Mirror cleanup, built on
+  // the SAME deploy-target port + fetch Kit uses (so an add's Mirror is the one the
+  // catalog reads). The request-blocking add-time sync is bounded by this named
+  // constant — the add can never hang the HTTP request.
+  const SYNC_TIMEOUT_MS = 30_000;
+  const lifecycle: SourceLifecycle = {
+    // onboardSource's typed channel is already `never`; this adapter also makes the
+    // port honor that contract on a DEFECT — an unexpected throw in validate /
+    // enumerate / fs degrades to a well-formed (defect-honest) body + a trace,
+    // rather than escaping as a 500. So the route's `!ok` branch stays genuinely
+    // defensive, never the real defect sink.
+    onboard: (s) =>
+      Effect.catchDefect(
+        onboardSource(deployTargets, httpFetch, s, SYNC_TIMEOUT_MS),
+        (defect: unknown) => {
+          log().error(
+            { module: "sources/onboard", sourceId: s.id, err: String(defect) },
+            "onboard defect — degraded to a defect-honest 201 body",
+          );
+          return Effect.succeed(degradedOnboardResult(s));
+        },
+      ),
+    forgetMirror: (id) => Effect.sync(() => removeMirror(deployTargets.mirrorRoot(id))),
+  };
+  app.route("/", buildSourcesRoutes(sourceRegistry, runSources, lifecycle));
 
   // Auto fetch-on-launch: a NON-BLOCKING per-Source sync-check. A Source failure
   // folds into its typed sync status (check_failed/rate_limited), never fatal and

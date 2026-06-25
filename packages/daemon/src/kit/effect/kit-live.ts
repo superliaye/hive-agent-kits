@@ -10,7 +10,6 @@ import type {
   KitState,
   Selection,
   Source,
-  SourceSyncStatus,
   SyncRunResult,
   VerifyReport,
 } from "@hive/contract";
@@ -28,18 +27,14 @@ import {
 } from "../deploy/adapter.ts";
 import { type DeployInput, runDeploy } from "../deploy/engine.ts";
 import { readLedger } from "../ledger.ts";
-import { readProvenance, recoverMirror, sweepStaleTmp } from "../mirror.ts";
+import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
 import { computeDiff, resolveSelection } from "../selection.ts";
 import { type HttpFetch, localSyncSource, productionFetch, syncSource } from "../sync.ts";
+import { buildSourceSyncStatus, type LastSyncError } from "../sync-status.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
 import type { DeployAuditEvents } from "../types.ts";
 import { runVerify } from "../verify.ts";
-import { DeployError, SyncError, type SyncFailureReason } from "./errors.ts";
-
-// The last sync error for a Source, surfaced in its freshness state. `reason`
-// stays on the typed channel (the wire `errorReason` is free-form, but the
-// in-process branch is a checked discriminant).
-type LastSyncError = { reason: SyncFailureReason; rateLimitReset?: number };
+import { DeployError, SyncError } from "./errors.ts";
 
 export type KitSvc = {
   // Read the catalog from the Mirror (resilient; problems surfaced).
@@ -70,56 +65,6 @@ export type CreateKitOptions = {
   exec?: ExecPort;
   probe?: BinaryProbe;
 };
-
-// Build one Source's freshness status. A failed/rate-limited check is surfaced
-// distinctly and never reports "up to date". `origin` is read live from the
-// current registry entry, not a cached value.
-function buildSourceSyncStatus(
-  source: Source,
-  mirrorRoot: string,
-  lastError: LastSyncError | undefined,
-): SourceSyncStatus {
-  const base = { sourceId: source.id, origin: source.origin };
-  // A local (bundled) Source short-circuits BEFORE readProvenance: a local mirror
-  // writes no provenance file, so falling through would mis-report a CLEAN local
-  // sync as `check_failed`. But a local sync can still FAIL (a bad
-  // HIVE_STARTER_ROOT / packaging miss → missing_starter_root): when an error is
-  // recorded for it, surface `check_failed` like any other failed Source — never
-  // mask a failure as the healthy `local` state. A clean local sync → `local`,
-  // null sha/fetchedAt (derived from kind, never a synthetic sha).
-  if (source.kind === "local") {
-    if (lastError) {
-      return {
-        ...base,
-        state: "check_failed",
-        sha: null,
-        fetchedAt: null,
-        errorReason: lastError.reason,
-      };
-    }
-    return { ...base, state: "local", sha: null, fetchedAt: null };
-  }
-  const prov = readProvenance(mirrorRoot);
-  if (lastError) {
-    return {
-      ...base,
-      state: lastError.reason === "rate_limited" ? "rate_limited" : "check_failed",
-      sha: prov?.sha ?? null,
-      fetchedAt: prov?.fetchedAt ?? null,
-      errorReason: lastError.reason,
-      ...(lastError.rateLimitReset !== undefined
-        ? { rateLimitReset: lastError.rateLimitReset }
-        : {}),
-    };
-  }
-  return {
-    ...base,
-    state: prov ? "up_to_date" : "check_failed",
-    sha: prov?.sha ?? null,
-    fetchedAt: prov?.fetchedAt ?? null,
-    ...(prov ? {} : { errorReason: "no_mirror" }),
-  };
-}
 
 function activeSources(registry: SourceRegistrySvc): readonly Source[] {
   return registry.currentSources().filter((s) => s.active);

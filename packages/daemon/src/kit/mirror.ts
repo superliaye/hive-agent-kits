@@ -93,6 +93,19 @@ export function recoverMirror(mirrorRoot: string): void {
   }
 }
 
+// Remove a Source's whole Mirror dir on delete (#36, Q7), best-effort. An fs
+// fault must NOT fail the delete — the registry row is already gone; a lingering
+// Mirror is harmless (deactivated/deleted Sources never aggregate). Models the
+// sweepStaleTmp best-effort pattern: rmSync recursive+force in try/catch, trace on
+// fault, never throw. The lifecycle adapter wraps this as Effect<void>.
+export function removeMirror(mirrorRoot: string): void {
+  try {
+    rmSync(mirrorRoot, { recursive: true, force: true });
+  } catch (err) {
+    log().warn({ module: "kit/mirror", mirrorRoot, err: String(err) }, "mirror cleanup failed");
+  }
+}
+
 // Reject an archive entry whose extracted destination would escape the stage
 // dir — absolute paths, drive-letter-rooted paths, and `..` traversal alike.
 function destEscapes(stageDir: string, rel: string): boolean {

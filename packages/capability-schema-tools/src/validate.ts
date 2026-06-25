@@ -8,19 +8,17 @@
 // yet). Real-world Source content is not assumed conformant — `validate` reports
 // violations, it does not reject the Source.
 
-import { SkillFrontmatter, assertNameMatchesDir } from "@hive/capability-schema";
+import { ConformanceError, SkillFrontmatter, assertNameMatchesDir } from "@hive/capability-schema";
 import { parse as yamlParse } from "yaml";
 import { z } from "zod";
 import type { LeafHit } from "./walk.ts";
 import type { SourceTree } from "./source-tree.ts";
 import { enumerateLeaves } from "./walk.ts";
 
-export const ConformanceError = z.object({
-  kind: z.string(),
-  name: z.string(),
-  message: z.string(),
-});
-export type ConformanceError = z.infer<typeof ConformanceError>;
+// Re-exported from the pure SSOT (@hive/capability-schema) so existing importers
+// of `ConformanceError` from this tools package keep working — one definition
+// (the imported binding carries both the schema value and its inferred type).
+export { ConformanceError };
 
 export const ValidationResult = z.object({
   conformant: z.boolean(),

@@ -12,12 +12,16 @@ import { Data } from "effect";
 // X-RateLimit-Reset epoch when present. `missing_starter_root` is the local-sync
 // equivalent of a bad config — the bundled Starter content root is absent (a bad
 // HIVE_STARTER_ROOT override or a packaging miss); isolated to that Source.
+// `timeout` is the add-time bounded-sync abort (#33): a sync that outruns the
+// request budget folds into the Source's freshness as `check_failed`, so the add
+// can never hang the HTTP request.
 export type SyncFailureReason =
   | "offline"
   | "rate_limited"
   | "parse"
   | "io"
-  | "missing_starter_root";
+  | "missing_starter_root"
+  | "timeout";
 
 export class SyncError extends Data.TaggedError("SyncError")<{
   readonly reason: SyncFailureReason;
