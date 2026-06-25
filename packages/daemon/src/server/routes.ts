@@ -38,14 +38,37 @@ function toConfiguredProviderWire(p: ConfiguredProvider): ConfiguredProviderWire
   };
 }
 
+// Dev CORS allowlist. The Vite dev origin tracks the daemon port (dev.ps1 shifts
+// both by -Instance N: daemon 3117+N, vite 5173+N), so derive the vite port from
+// HIVE_PORT and allow it on both loopback hostnames. Unset (bare `bun`, tests) →
+// instance-0's 5173. Electron in production loads file:// → Origin "null".
+function corsAllowlist(daemonPort: string | undefined): Set<string> {
+  const vitePort = devVitePort(daemonPort) ?? 5173;
+  return new Set(["null", `http://127.0.0.1:${vitePort}`, `http://localhost:${vitePort}`]);
+}
+
+// Map a daemon port (3117+N) to its sibling Vite port (5173+N) under the dev
+// -Instance scheme; undefined for an unset/unparseable/out-of-range port so the
+// caller falls back to 5173.
+function devVitePort(daemonPort: string | undefined): number | undefined {
+  if (!daemonPort) return undefined;
+  const n = Number(daemonPort);
+  if (!Number.isInteger(n)) return undefined;
+  const instance = n - 3117;
+  if (instance < 0 || instance > 99) return undefined;
+  return 5173 + instance;
+}
+
 export function buildRoutes(deps: RoutesDeps): Hono {
   const app = new Hono();
 
   // Daemon listens on 127.0.0.1; CORS allowlist covers the two legitimate
   // callers: Electron renderer (file:// → Origin header "null") and the Vite
-  // dev server. The bearer token is the real auth gate; this is defense in
-  // depth so an arbitrary localhost origin can't even attempt a request.
-  const allowedOrigins = new Set(["http://localhost:5173", "http://127.0.0.1:5173", "null"]);
+  // dev server. The Vite port tracks the daemon port under the -Instance N scheme
+  // (dev.ps1: daemon 3117+N, vite 5173+N), so derive it from HIVE_PORT rather than
+  // hardcoding 5173 — otherwise a parallel instance's renderer (Vite 5173+N) is
+  // CORS-rejected. The bearer token is the real auth gate; this is defense in depth.
+  const allowedOrigins = corsAllowlist(process.env.HIVE_PORT);
   app.use(
     "/api/*",
     cors({
