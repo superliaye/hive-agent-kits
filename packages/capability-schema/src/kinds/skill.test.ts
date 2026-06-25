@@ -6,7 +6,7 @@ const VALID = {
   description: "Extracts text and tables from PDF files in third person.",
 };
 
-describe("SkillFrontmatter — valid fixtures", () => {
+describe("SkillFrontmatter — valid fixtures (lenient superset)", () => {
   test("minimal required fields pass", () => {
     expect(SkillFrontmatter.safeParse(VALID).success).toBe(true);
   });
@@ -21,6 +21,42 @@ describe("SkillFrontmatter — valid fixtures", () => {
     };
     expect(SkillFrontmatter.safeParse(full).success).toBe(true);
   });
+
+  test("name optional — description-only passes", () => {
+    expect(SkillFrontmatter.safeParse({ description: VALID.description }).success).toBe(true);
+  });
+
+  test("name null (bare `name:` left blank) passes — treated like absent", () => {
+    expect(SkillFrontmatter.safeParse({ description: VALID.description, name: null }).success).toBe(true);
+  });
+
+  test("name-less skill with an extra unknown key passes", () => {
+    const result = SkillFrontmatter.safeParse({ description: VALID.description, added_in: "0.1.0" });
+    expect(result.success).toBe(true);
+  });
+
+  test("unknown frontmatter key passes (passthrough)", () => {
+    expect(SkillFrontmatter.safeParse({ ...VALID, version: "1.0" }).success).toBe(true);
+  });
+
+  test("allowed_tools underscore key passes (passthrough)", () => {
+    expect(SkillFrontmatter.safeParse({ ...VALID, allowed_tools: "Read Write" }).success).toBe(true);
+  });
+
+  test("unknown keys are PRESERVED on the parsed object (passthrough, not stripped)", () => {
+    const result = SkillFrontmatter.safeParse({ ...VALID, added_in: "0.1.0", upstream: "x" });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    // Index into the passthrough record without `any`/casts.
+    const data: Record<string, unknown> = result.data;
+    expect(data.added_in).toBe("0.1.0");
+    expect(data.upstream).toBe("x");
+  });
+
+  test("metadata accepts non-string scalar values (true superset)", () => {
+    expect(SkillFrontmatter.safeParse({ ...VALID, metadata: { reviewed: 1 } }).success).toBe(true);
+    expect(SkillFrontmatter.safeParse({ ...VALID, metadata: { stable: true } }).success).toBe(true);
+  });
 });
 
 describe("SkillFrontmatter — one invalid case per rule", () => {
@@ -28,12 +64,12 @@ describe("SkillFrontmatter — one invalid case per rule", () => {
     return !SkillFrontmatter.safeParse(obj).success;
   }
 
-  test("missing name", () => {
-    expect(rejects({ description: VALID.description })).toBe(true);
-  });
-
   test("missing description", () => {
     expect(rejects({ name: VALID.name })).toBe(true);
+  });
+
+  test("a present but malformed name still rejects (even with description)", () => {
+    expect(rejects({ description: VALID.description, name: "Bad-NAME" })).toBe(true);
   });
 
   test("name too long (>64)", () => {
@@ -82,14 +118,6 @@ describe("SkillFrontmatter — one invalid case per rule", () => {
 
   test("compatibility >500", () => {
     expect(rejects({ ...VALID, compatibility: "x".repeat(501) })).toBe(true);
-  });
-
-  test("unknown frontmatter key (strict reject)", () => {
-    expect(rejects({ ...VALID, version: "1.0" })).toBe(true);
-  });
-
-  test("allowed_tools underscore key (strict reject)", () => {
-    expect(rejects({ ...VALID, allowed_tools: "Read Write" })).toBe(true);
   });
 });
 

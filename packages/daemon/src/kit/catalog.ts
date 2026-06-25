@@ -10,7 +10,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse } from "@hive/capability-schema-tools";
-import { nodeFsSourceTree } from "@hive/capability-schema-tools/node";
+import { capabilitiesRoot } from "@hive/capability-schema-tools/node";
 import type { Catalog, CatalogProblem, PresetSummary, Source } from "@hive/contract";
 import { parse as yamlParse } from "yaml";
 import { log } from "../lib/log.ts";
@@ -125,7 +125,7 @@ export function readCatalog(targets: DeployTargets, sources: readonly Source[]):
     const mirror = targets.mirrorRoot(source.id);
     // The capability bytes live under <mirror>/capabilities; the SourceTree's
     // kind dirs (skills/, agents/, instructions/, …) are relative to that root.
-    const tree = nodeFsSourceTree(join(mirror, "capabilities"));
+    const tree = capabilitiesRoot(mirror);
     const parsed = parse(tree);
 
     // Build an AggInput per parsed Capability: tag the Source, hash its Mirror

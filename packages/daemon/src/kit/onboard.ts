@@ -14,10 +14,9 @@
 // indicate failure. This helper deliberately does NOT write into the Kit service's
 // private lastSyncError map (that would re-couple the edge to Kit's mutable state).
 
-import { join } from "node:path";
 import type { ConformanceError } from "@hive/capability-schema";
 import { enumerateLeaves, validate } from "@hive/capability-schema-tools";
-import { nodeFsSourceTree } from "@hive/capability-schema-tools/node";
+import { capabilitiesRoot } from "@hive/capability-schema-tools/node";
 import type { AddSourceResult, Source, SourceSyncStatus } from "@hive/contract";
 import { Effect } from "effect";
 import { SyncError } from "./effect/errors.ts";
@@ -69,9 +68,9 @@ export function onboardSource(
 
     // Validation (one tree, two reads). A failed sync on a brand-new Source leaves
     // NO Mirror dir (writeMirror is atomic — stage→swap retains last-good), so
-    // nodeFsSourceTree yields an empty tree → conformant:true, capabilityCount:0:
+    // capabilitiesRoot yields an empty tree → conformant:true, capabilityCount:0:
     // the report is always well-formed.
-    const tree = nodeFsSourceTree(join(mirrorRoot, "capabilities"));
+    const tree = capabilitiesRoot(mirrorRoot);
     const { conformant, errors } = validate(tree);
     // After the hoist (Item A) validate()'s errors ARE the contract type — plain
     // pass-through, no .map, no cast.

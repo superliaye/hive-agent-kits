@@ -16,8 +16,10 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+// The CLI roots at <repo-root>/capabilities (capabilitiesRoot), so fixtures live
+// under capabilities/skills/<rel> and the bin is pointed at the repo root.
 function writeSkill(rel: string, fm: string): void {
-  const dir = join(root, "skills", rel);
+  const dir = join(root, "capabilities", "skills", rel);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), `---\n${fm}\n---\nbody\n`);
 }
@@ -50,5 +52,13 @@ describe("capability-validate CLI", () => {
     expect(parsed.conformant).toBe(false);
     expect(Array.isArray(parsed.errors)).toBe(true);
     expect(parsed.errors.length).toBeGreaterThan(0);
+  });
+
+  test("pointed at a repo ROOT with capabilities/skills/Bad, finds the error (no false-conformant)", async () => {
+    // The repo root has the capabilities/ subtree; the CLI must descend into it
+    // rather than report conformant because the root itself has no skills/.
+    writeSkill("Bad", "name: Bad\ndescription: nope");
+    const { code } = await runCli(root);
+    expect(code).toBe(1);
   });
 });

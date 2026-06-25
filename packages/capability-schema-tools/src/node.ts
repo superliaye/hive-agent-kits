@@ -7,7 +7,20 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { SourceTree } from "./source-tree.ts";
 
-export function nodeFsSourceTree(root: string): SourceTree {
+// The convention for rooting a SourceTree at a Source repo: its capability bytes
+// live under `<repoRoot>/capabilities`. This is the ONLY exported way to build a
+// node:fs SourceTree, so the `capabilities/` rooting can't be bypassed — the raw
+// non-appending primitive below is module-private. The argument is ALWAYS a repo
+// root, NEVER an already-`capabilities/`-suffixed path — `capabilities/` is
+// unconditionally appended. Pass a suffixed path and the tree roots at
+// `<x>/capabilities/capabilities` (an empty tree → falsely conformant).
+export function capabilitiesRoot(repoRoot: string): SourceTree {
+  return nodeFsSourceTree(join(repoRoot, "capabilities"));
+}
+
+// Module-private: the low-level fs primitive with NO `capabilities/` rooting. Build
+// a SourceTree only via `capabilitiesRoot` so the rooting convention has one home.
+function nodeFsSourceTree(root: string): SourceTree {
   const abs = (p: string): string => join(root, p);
   return {
     exists(path: string): boolean {

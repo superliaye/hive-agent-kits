@@ -1,13 +1,16 @@
 #!/usr/bin/env bun
 // capability-validate — the fs-coupled validator bin (ADR-0024: the CLI is the
-// one fs-coupled spot). Its only fs touch is importing nodeFsSourceTree. Exit 0
+// one fs-coupled spot). Its only fs touch is importing capabilitiesRoot. Exit 0
 // when conformant, exit 1 when conformance errors are found, so it is CI-usable
 // for a starter's self-validation.
 //
-//   capability-validate <repo-path> [--json]
+// The argument is the Source REPO ROOT (the dir containing `capabilities/`), not the
+// dir containing `skills/` — capabilitiesRoot appends `capabilities/` itself.
+//
+//   capability-validate <repo-root> [--json]
 
 import { validate } from "./index.ts";
-import { nodeFsSourceTree } from "./node.ts";
+import { capabilitiesRoot } from "./node.ts";
 
 function main(argv: string[]): number {
   const args = argv.slice(2);
@@ -15,11 +18,11 @@ function main(argv: string[]): number {
   const repoPath = args.find((a) => !a.startsWith("--"));
 
   if (!repoPath) {
-    process.stderr.write("usage: capability-validate <repo-path> [--json]\n");
+    process.stderr.write("usage: capability-validate <repo-root> [--json]\n");
     return 2;
   }
 
-  const tree = nodeFsSourceTree(repoPath);
+  const tree = capabilitiesRoot(repoPath);
   const result = validate(tree);
 
   if (json) {

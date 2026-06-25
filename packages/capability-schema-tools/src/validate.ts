@@ -69,11 +69,17 @@ function validateSkill(leaf: LeafHit, errors: ConformanceError[]): void {
     return;
   }
 
-  try {
-    // `leaf.dir` is the innermost marker dir, so an @-group skill validates its
-    // name against the leaf dir, not the @-group ancestor.
-    assertNameMatchesDir(result.data.name, leaf.dir);
-  } catch (err) {
-    errors.push({ kind: leaf.kind, name: leaf.name, message: String(err instanceof Error ? err.message : err) });
+  // `name` is optional (lenient superset): when frontmatter omits it — or leaves it
+  // blank (`name:` → null) — the directory is the effective name, so there is nothing
+  // to match. Only assert name==dir when a name is explicitly declared (a string).
+  const parsedName = result.data.name;
+  if (typeof parsedName === "string") {
+    try {
+      // `leaf.dir` is the innermost marker dir, so an @-group skill validates its
+      // name against the leaf dir, not the @-group ancestor.
+      assertNameMatchesDir(parsedName, leaf.dir);
+    } catch (err) {
+      errors.push({ kind: leaf.kind, name: leaf.name, message: String(err instanceof Error ? err.message : err) });
+    }
   }
 }

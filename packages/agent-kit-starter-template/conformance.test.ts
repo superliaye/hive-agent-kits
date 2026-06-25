@@ -8,11 +8,8 @@
 //   (iii) every authored capability is picked up as resolvable (not silently skipped).
 
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
 import { parse, validate } from "@hive/capability-schema-tools";
-import { nodeFsSourceTree } from "@hive/capability-schema-tools/node";
-
-const CAPABILITIES_ROOT = join(import.meta.dir, "capabilities");
+import { capabilitiesRoot } from "@hive/capability-schema-tools/node";
 
 // The capabilities authored under capabilities/, by kind+name. Keep in lockstep
 // with the on-disk content — the test asserts each appears as resolvable.
@@ -24,7 +21,7 @@ const AUTHORED: ReadonlyArray<{ kind: string; name: string }> = [
 ];
 
 describe("agent-kit-starter-template conformance", () => {
-  const tree = nodeFsSourceTree(CAPABILITIES_ROOT);
+  const tree = capabilitiesRoot(import.meta.dir);
 
   test("(i) validate reports no skill conformance errors", () => {
     const result = validate(tree);

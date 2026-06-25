@@ -43,13 +43,44 @@ describe("validate (strict)", () => {
     expect(result.errors.some((e) => /reserved/.test(e.message))).toBe(true);
   });
 
-  test("unknown frontmatter key is rejected (strict object)", () => {
+  test("unknown frontmatter key is conformant (passthrough superset)", () => {
     const tree = memTree({
       "skills/extra-key/SKILL.md": skill("name: extra-key\ndescription: x\nbogus: y"),
     });
     const result = validate(tree);
-    expect(result.conformant).toBe(false);
-    expect(result.errors.some((e) => e.name === "extra-key")).toBe(true);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("a name-less skill is conformant (effective name = directory)", () => {
+    const tree = memTree({
+      "skills/nameless/SKILL.md": skill("description: just a description"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("a name-less skill in a dir a declared name would mismatch is STILL conformant (skip path)", () => {
+    // dir `foo`, no `name` — a declared `name: bar` here would be a name!=dir error,
+    // but with name absent the dir-match gate must not fire.
+    const tree = memTree({
+      "skills/foo/SKILL.md": skill("description: nameless, trusts the directory"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("a blank `name:` (YAML null) is conformant — treated like absent, no dir-match", () => {
+    // dir `bar`, bare `name:` → null. Must defer to the directory, not error on a
+    // null name and not assert name==dir.
+    const tree = memTree({
+      "skills/bar/SKILL.md": skill("name:\ndescription: blank name defers to dir"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
   });
 
   test("name != dir is a located error (assertNameMatchesDir caught, never thrown)", () => {
@@ -72,14 +103,12 @@ describe("validate (strict)", () => {
     const tree = memTree({
       "skills/Up/SKILL.md": skill("name: Up\ndescription: x"),
       "skills/claude-x/SKILL.md": skill("name: claude-x\ndescription: x"),
-      "skills/keyed/SKILL.md": skill("name: keyed\ndescription: x\nbogus: y"),
       "skills/dirA/SKILL.md": skill("name: dirB\ndescription: x"),
     });
     const result = validate(tree);
     expect(result.conformant).toBe(false);
     expect(result.errors.some((e) => e.name === "Up")).toBe(true);
     expect(result.errors.some((e) => e.name === "claude-x")).toBe(true);
-    expect(result.errors.some((e) => e.name === "keyed")).toBe(true);
     expect(result.errors.some((e) => e.name === "dirA")).toBe(true);
   });
 

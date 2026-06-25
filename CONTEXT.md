@@ -56,6 +56,15 @@ the namespace is display-only — a Deploy flattens every Capability to its leaf
 name, which must be unique within its kind.
 _Avoid_: "artifact" alone (a Capability is the named, deployable unit).
 
+**Conformance**:
+The verdict on whether a **Source**'s **Capabilities** match Hive's capability
+format — a `conformant` boolean plus a list of **conformance errors**, each a
+located reason a capability fell short. Hive *reports* conformance; it never refuses
+a non-conformant Source (a non-conformant Capability is surfaced, not rejected). The
+format is a deliberately lenient superset of the upstream standards, so conformance
+means "Hive and the target CLI will both accept this", not "passes the strictest
+possible reading".
+
 **CLI home**:
 A global directory a CLI reads its configuration and capabilities from. Each
 deploy **target** (Claude, Codex) maps to CLI homes; a target's skills, agents,

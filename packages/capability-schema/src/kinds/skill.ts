@@ -1,8 +1,13 @@
 // Skills capability schema — the Agent Skills open standard (`SKILL.md`
 // frontmatter, agentskills.io/specification), referenced rather than reinvented,
-// plus Anthropic's documented refinements. This package is the anti-corruption
-// layer over external Source repos: `.strict()` + Anthropic fidelity reject
-// content the Claude Code CLI would reject, early (ADR-0024).
+// plus Anthropic's documented refinements. A LENIENT SUPERSET of the standard,
+// matching what the Claude Code CLI actually accepts (ADR-0024): `description` is
+// the only required field; `name` is optional or null — omitted or left blank, the
+// effective name is the directory (per the runtime); unknown keys pass through
+// (preserved, not stripped); `metadata` values are unconstrained. The name-quality
+// guards (regex, reserved-word, XML-char) still apply to a PRESENT name — a declared
+// name that the CLI would reject is a robustness gap — but an absent/blank name is
+// NOT re-validated against them; the directory is trusted as the effective name.
 
 import { z } from "zod";
 
@@ -12,20 +17,22 @@ const NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 export const SkillFrontmatter = z
   .object({
-    name: z.string().min(1).max(64).regex(NAME_PATTERN),
+    // `.nullish()`: a bare `name:` (YAML null) is "left blank" — treated like an
+    // omitted name (defer to the directory), matching the runtime, not an error.
+    name: z.string().min(1).max(64).regex(NAME_PATTERN).nullish(),
     description: z.string().min(1).max(1024),
     license: z.string().optional(),
     compatibility: z.string().min(1).max(500).optional(),
-    metadata: z.record(z.string(), z.string()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
     // Hyphenated key, space-separated string. Experimental in the standard.
     "allowed-tools": z.string().optional(),
   })
-  .strict()
-  // Anthropic refinements: a `name` that passes the open standard but the Claude
-  // Code CLI rejects is a robustness gap (a Source that passes Hive but fails the
-  // CLI). Reject XML-tag characters and the reserved words `anthropic`/`claude`
-  // (case-insensitive substring) early.
+  .passthrough()
+  // Anthropic refinements over a PRESENT name: reject XML-tag characters and the
+  // reserved words `anthropic`/`claude` (case-insensitive substring) early. Guarded
+  // on a present name — an omitted name defers to the directory and is not refined.
   .superRefine((value, ctx) => {
+    if (typeof value.name !== "string") return;
     // Belt-and-suspenders: NAME_PATTERN already excludes `<`/`>`, but this guard
     // keeps the Anthropic XML-tag rule explicit and survives a future loosening
     // of NAME_PATTERN.
