@@ -1477,6 +1477,45 @@ pre.config {
   flex-direction: column;
   gap: 18px;
 }
+/* Catalog body states (error / first-run empty): a centered block carrying the
+   page's primary action when the list itself is empty/unreachable, so the
+   actionable control — not the disabled header Deploy — reads as primary. */
+.kit-catalog-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 40px 24px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  background: var(--color-bg-surface);
+}
+.kit-catalog-error {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-bg-surface));
+}
+.kit-catalog-state-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-fg-default);
+}
+.kit-catalog-state-body {
+  margin: 0;
+  max-width: 44ch;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-fg-muted);
+}
+.kit-catalog-state .button.primary {
+  margin-top: 4px;
+}
+.kit-presets-none {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--color-fg-muted);
+}
 .kit-kind-title {
   margin: 0 0 6px;
   font-size: 15px;

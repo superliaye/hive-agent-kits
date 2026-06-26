@@ -8,7 +8,7 @@
 // CLAUDE.md-replacement warning). Deploy is NEVER automatic.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import {
   AddSourceError,
   type AddSourceResult,
@@ -373,6 +373,30 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     deployMutation.mutate();
   }
 
+  // The add-source input ref lives here so the first-run empty-state CTA can focus
+  // it without a DOM query: AddSourceForm receives the ref and the body CTA calls
+  // focusAddSource (no forwardRef ceremony, no document.querySelector).
+  const addSourceInputRef = useRef<HTMLInputElement>(null);
+  function focusAddSource(): void {
+    addSourceInputRef.current?.focus();
+  }
+
+  // `catalogReady` is the single gate for "show the real catalog body": not the
+  // initial-load skeleton, and not the error state. It's also false on a refetch
+  // that errored while stale `catalog` data lingers (react-query keeps the last
+  // success in `.data`), so the error state never co-renders over a stale catalog.
+  const catalogReady = !catalogQuery.isLoading && !catalogQuery.isError;
+  const hasEntries = catalogReady && (catalog?.entries.length ?? 0) > 0;
+  // Distinguish the all-disabled empty (re-enable a Source above) from the
+  // genuinely-first-run / never-synced case. Only meaningful once the catalog has
+  // resolved empty.
+  const allDisabled =
+    catalogReady &&
+    catalog?.entries.length === 0 &&
+    sources !== undefined &&
+    sources.length > 0 &&
+    !anyActiveSource;
+
   return (
     <div className="kit-page" data-testid="kit-deploy-page">
       <header className="kit-header">
@@ -389,7 +413,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               deleteFailedId={deleteSource.isError ? deleteSource.variables?.id : undefined}
             />
           </div>
-          <AddSourceForm apiConfig={apiConfig} />
+          <AddSourceForm apiConfig={apiConfig} inputRef={addSourceInputRef} />
         </div>
         <div className="kit-header-actions">
           <button
@@ -433,38 +457,42 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
         </div>
       )}
 
-      {catalogQuery.isError && <div className="banner-error">Failed to load catalog.</div>}
-
-      <div className="kit-controls">
-        <div className="kit-presets" data-testid="kit-presets">
-          <span className="kit-control-label">Preset</span>
-          {(catalog?.presets ?? []).map((p) => (
-            <button
-              type="button"
-              key={p.name}
-              className={`badge kit-preset ${presetActive(p, selected) ? "active" : ""}`}
-              onClick={() => togglePreset(p.name)}
-              title={p.description}
-            >
-              {p.name}
-            </button>
-          ))}
+      {hasEntries && (
+        <div className="kit-controls">
+          <div className="kit-presets" data-testid="kit-presets">
+            <span className="kit-control-label">Preset</span>
+            {(catalog?.presets ?? []).length === 0 ? (
+              <span className="kit-presets-none">none</span>
+            ) : (
+              (catalog?.presets ?? []).map((p) => (
+                <button
+                  type="button"
+                  key={p.name}
+                  className={`badge kit-preset ${presetActive(p, selected) ? "active" : ""}`}
+                  onClick={() => togglePreset(p.name)}
+                  title={p.description}
+                >
+                  {p.name}
+                </button>
+              ))
+            )}
+          </div>
+          <div className="kit-targets" data-testid="kit-targets">
+            <span className="kit-control-label">Targets</span>
+            {(["claude", "codex"] as DeployTarget[]).map((t) => (
+              <label key={t} className="kit-target-toggle">
+                <input
+                  type="checkbox"
+                  checked={targets.includes(t)}
+                  onChange={() => toggleTarget(t)}
+                  data-testid={`kit-target-${t}`}
+                />
+                {t === "claude" ? "Claude" : "Codex"}
+              </label>
+            ))}
+          </div>
         </div>
-        <div className="kit-targets" data-testid="kit-targets">
-          <span className="kit-control-label">Targets</span>
-          {(["claude", "codex"] as DeployTarget[]).map((t) => (
-            <label key={t} className="kit-target-toggle">
-              <input
-                type="checkbox"
-                checked={targets.includes(t)}
-                onChange={() => toggleTarget(t)}
-                data-testid={`kit-target-${t}`}
-              />
-              {t === "claude" ? "Claude" : "Codex"}
-            </label>
-          ))}
-        </div>
-      </div>
+      )}
 
       {diff && diff.entries.length > 0 && <DeployDiffPanel diff={diff} />}
 
@@ -491,38 +519,66 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
 
       <div className="kit-catalog" data-testid="kit-catalog">
         {catalogQuery.isLoading && <CatalogSkeleton />}
-        {catalog &&
-          catalog.entries.length === 0 &&
-          !catalogQuery.isLoading &&
+        {catalogQuery.isError && (
+          <div className="kit-catalog-state kit-catalog-error" data-testid="kit-catalog-error">
+            <p className="kit-catalog-state-title">Couldn't load the catalog.</p>
+            <p className="kit-catalog-state-body">
+              The deploy daemon didn't return the catalog. Check that the Hive daemon is running,
+              then retry.
+            </p>
+            <button
+              type="button"
+              className="button primary"
+              onClick={() => void catalogQuery.refetch()}
+              disabled={catalogQuery.isFetching}
+              data-testid="kit-catalog-retry"
+            >
+              {catalogQuery.isFetching ? "Retrying…" : "Retry"}
+            </button>
+          </div>
+        )}
+        {catalogReady &&
+          catalog?.entries.length === 0 &&
           // Distinguish "every Source is disabled" (re-enable one above) from the
-          // genuinely-never-synced / no-sources case (Check for updates). The
-          // all-disabled message only applies once the source list has resolved
-          // with at least one entry, none active.
-          (sources !== undefined && sources.length > 0 && !anyActiveSource ? (
+          // genuinely-first-run / no-sources case. The all-disabled message only
+          // applies once the source list has resolved with ≥1 entry, none active.
+          (allDisabled ? (
             <div className="empty" data-testid="kit-empty-disabled">
               All Sources are disabled — enable one above to see its capabilities.
             </div>
           ) : (
-            <div className="empty" data-testid="kit-empty">
-              No capabilities yet — Check for updates to sync the latest Kit.
+            <div className="kit-catalog-state kit-empty-state" data-testid="kit-empty">
+              <p className="kit-catalog-state-title">No capabilities yet.</p>
+              <p className="kit-catalog-state-body">
+                Hive deploys capabilities from one or more Git Sources into your Claude/Codex homes.
+              </p>
+              <button
+                type="button"
+                className="button primary"
+                onClick={focusAddSource}
+                data-testid="kit-empty-add-source"
+              >
+                Add a Source
+              </button>
             </div>
           ))}
-        {KINDS.map((kind) => {
-          const entries = (catalog?.entries ?? []).filter((e) => e.kind === kind);
-          if (entries.length === 0) return null;
-          return (
-            <KindSection
-              key={kind}
-              kind={kind}
-              entries={entries}
-              selected={new Set(selected[KIND_TO_CAP[kind]])}
-              deployed={deployed[kind]}
-              onDisk={onDisk[kind]}
-              sourceLabels={sourceLabels}
-              onToggle={(name) => toggleIndividual(kind, name)}
-            />
-          );
-        })}
+        {catalogReady &&
+          KINDS.map((kind) => {
+            const entries = (catalog?.entries ?? []).filter((e) => e.kind === kind);
+            if (entries.length === 0) return null;
+            return (
+              <KindSection
+                key={kind}
+                kind={kind}
+                entries={entries}
+                selected={new Set(selected[KIND_TO_CAP[kind]])}
+                deployed={deployed[kind]}
+                onDisk={onDisk[kind]}
+                sourceLabels={sourceLabels}
+                onToggle={(name) => toggleIndividual(kind, name)}
+              />
+            );
+          })}
       </div>
 
       <ToastHost toasts={toasts} onDismiss={dismissToast} />
@@ -542,12 +598,19 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
 // or empty, so on success we always invalidate ["sources"] (new row) + ["kit"]
 // (its capabilities, built from active sources); the returned AddSourceResult
 // drives the status copy.
-function AddSourceForm({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
+function AddSourceForm({
+  apiConfig,
+  inputRef,
+}: {
+  apiConfig: ApiConfig;
+  // Owned by the parent so the first-run empty-state CTA can focus this input
+  // without a DOM query (see focusAddSource in KitDeployPage).
+  inputRef: RefObject<HTMLInputElement>;
+}): JSX.Element {
   const qc = useQueryClient();
   // Uncontrolled (matches the api-key-form pattern): read on submit, cleared on a
   // successful add. `empty` tracks only emptiness so submit can disable on a blank
   // field without making the input controlled.
-  const inputRef = useRef<HTMLInputElement>(null);
   const [empty, setEmpty] = useState(true);
 
   const addSource = useMutation<AddSourceResult, AddSourceError, string>({
