@@ -532,6 +532,47 @@ pre.config {
   font-size: 13px;
   line-height: 1.5;
 }
+.banner-success {
+  background: color-mix(in srgb, var(--color-success) 12%, var(--color-bg-surface));
+  border: 1px solid var(--color-success);
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin: 12px 0 16px;
+  color: var(--color-fg-default);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.banner-info {
+  background: color-mix(in srgb, var(--color-fg-muted) 10%, var(--color-bg-surface));
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin: 12px 0 16px;
+  color: var(--color-fg-default);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Add-Source control (#46): git-URL input + button in the Capabilities header,
+   mirroring .api-key-form. The inline status banner sits directly beneath. */
+.add-source-form {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin-top: 8px;
+}
+.add-source-form input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  font: inherit;
+  background: var(--color-bg-surface);
+  color: var(--color-fg-default);
+}
+.add-source-status {
+  margin: 8px 0 0;
+}
 
 /* Secrets settings */
 .secrets-table {

@@ -10,6 +10,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AddSourceError,
+  type AddSourceResult,
   type ApiConfig,
   api,
   type CapabilityEntry,
@@ -316,6 +318,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               pendingId={toggleSource.isPending ? toggleSource.variables?.id : undefined}
             />
           </div>
+          <AddSourceForm apiConfig={apiConfig} />
         </div>
         <div className="kit-header-actions">
           <button
@@ -441,6 +444,152 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
 // list is loading/errored (`sources` undefined) it falls back to the active-only
 // `state.sync` rows, read-only (no toggle), so the header never blanks against an
 // already-populated catalog and never shows a wrong toggle state.
+// Self-contained Add-Source control (mirrors ApiKeyForm): a git-URL input that
+// registers a Source via POST /api/sources, plus the inline status beneath it.
+// Owns its own mutation + query invalidation so the page body stays thin. The
+// daemon onboards (sync + validate) and KEEPS the Source even when non-conformant
+// or empty, so on success we always invalidate ["sources"] (new row) + ["kit"]
+// (its capabilities, built from active sources); the returned AddSourceResult
+// drives the status copy.
+function AddSourceForm({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
+  const qc = useQueryClient();
+  // Uncontrolled (matches the api-key-form pattern): read on submit, cleared on a
+  // successful add. `empty` tracks only emptiness so submit can disable on a blank
+  // field without making the input controlled.
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [empty, setEmpty] = useState(true);
+
+  const addSource = useMutation<AddSourceResult, AddSourceError, string>({
+    mutationFn: (origin: string) => api.addSource(apiConfig, origin),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["sources"] });
+      void qc.invalidateQueries({ queryKey: ["kit"] });
+    },
+    onError: (err) => {
+      // A malformed 201 still committed the Source server-side — refetch so the
+      // new row surfaces even though the body couldn't drive the status banner.
+      if (err.cause.kind === "malformed-success") {
+        void qc.invalidateQueries({ queryKey: ["sources"] });
+        void qc.invalidateQueries({ queryKey: ["kit"] });
+      }
+    },
+  });
+
+  return (
+    <>
+      <form
+        className="add-source-form"
+        data-testid="add-source-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const origin = inputRef.current?.value.trim() ?? "";
+          if (!origin) return;
+          addSource.mutate(origin, {
+            onSuccess: () => {
+              if (inputRef.current) inputRef.current.value = "";
+              setEmpty(true);
+            },
+          });
+        }}
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder="https://github.com/owner/repo"
+          disabled={addSource.isPending}
+          onInput={(e) => setEmpty(e.currentTarget.value.trim().length === 0)}
+          aria-label="Git URL of a Source to add"
+          data-testid="add-source-input"
+        />
+        <button
+          type="submit"
+          className="button"
+          disabled={addSource.isPending || empty}
+          data-testid="add-source-submit"
+        >
+          {addSource.isPending ? "Adding…" : "Add Source"}
+        </button>
+      </form>
+      <AddSourceStatus state={addSource} />
+    </>
+  );
+}
+
+// Inline status beneath the Add-Source form, scoped to this control (not a toast
+// — #50 owns that). Driven by the mutation state + the 201 `validation` body:
+// pending → error (parsed AddSourceError) → success / empty / conformance-warning.
+// The Source is kept on every 201, so the empty + warning cases are informational,
+// not failures.
+function AddSourceStatus({
+  state,
+}: {
+  state: {
+    isPending: boolean;
+    isError: boolean;
+    error: AddSourceError | null;
+    data: AddSourceResult | undefined;
+  };
+}): JSX.Element | null {
+  if (state.isPending) {
+    return (
+      <div className="add-source-status meta" data-testid="add-source-pending">
+        Adding &amp; syncing…
+      </div>
+    );
+  }
+  if (state.isError && state.error) {
+    return (
+      <div className="banner-error add-source-status" data-testid="add-source-error">
+        {addSourceErrorMessage(state.error)}
+      </div>
+    );
+  }
+  const result = state.data;
+  if (!result) return null;
+  const lbl = shortOrigin(result.source.origin);
+  const { validation } = result;
+  if (!validation.conformant) {
+    const n = validation.errors.length;
+    return (
+      <div className="banner-warn add-source-status" data-testid="add-source-warning">
+        Added {lbl} — {n} conformance problem{n === 1 ? "" : "s"}; nothing will deploy until fixed.
+      </div>
+    );
+  }
+  if (validation.capabilityCount === 0) {
+    return (
+      <div className="banner-info add-source-status" data-testid="add-source-empty">
+        Added {lbl} — no capabilities found.
+      </div>
+    );
+  }
+  return (
+    <div className="banner-success add-source-status" data-testid="add-source-success">
+      Added {lbl} — {validation.capabilityCount} capabilit
+      {validation.capabilityCount === 1 ? "y" : "ies"}.
+    </div>
+  );
+}
+
+// Render the parsed AddSourceError cause into user copy: 400 → join issue
+// messages; 409 → the duplicate origin; malformed-success → an advisory note (the
+// Source was added but the response couldn't be read); else → the carried message.
+function addSourceErrorMessage(err: AddSourceError): string {
+  const cause = err.cause;
+  if (cause.kind === "invalid") {
+    return cause.issues.length > 0
+      ? cause.issues.map((i) => i.message).join("; ")
+      : "Invalid source URL.";
+  }
+  if (cause.kind === "duplicate") {
+    return `Already added: ${cause.origin}`;
+  }
+  if (cause.kind === "malformed-success") {
+    return "Source added, but the response could not be read — refresh to see it.";
+  }
+  return cause.message;
+}
+
 function SourceRows({
   sources,
   syncStatuses,

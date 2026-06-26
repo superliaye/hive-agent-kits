@@ -6,6 +6,7 @@
 // kit names use the contract's canonical unprefixed form.
 
 import type {
+  AddSourceResult,
   BackendReadiness,
   BackendStatus,
   Catalog,
@@ -17,9 +18,11 @@ import type {
   SyncRunResult,
   VerifyReport,
 } from "@hive/contract";
+import { AddSourceResult as AddSourceResultSchema } from "@hive/contract";
 import type { Preferences } from "@hive/theming";
 
 export type {
+  AddSourceResult,
   BackendAuthState,
   BackendReadiness,
   BackendStatus,
@@ -38,6 +41,7 @@ export type {
   Selection,
   Source,
   SourceSyncStatus,
+  SourceValidationReport,
   StoredSecretMeta,
   SyncRunResult,
   SyncStatus,
@@ -211,6 +215,52 @@ export async function consumeSSE(
   }
 }
 
+// POST /api/sources error, carrying the server's structured body so the
+// Add-Source control can render it. A transport concern, not a wire contract, so
+// it lives here (not @hive/contract). `cause` is the parsed body discriminated by
+// `kind`: the 400 issue list, the 409 duplicate origin, or a generic message —
+// the three server error shapes differ, so each is narrowed separately. `kind`
+// (not `status`) is the discriminant so the union narrows cleanly even though the
+// generic case's `status` is a plain number.
+export type AddSourceErrorCause =
+  | { kind: "invalid"; status: 400; issues: { path: string; message: string }[] }
+  | { kind: "duplicate"; status: 409; origin: string }
+  // A 201 whose body fails the contract schema: the daemon already COMMITTED the
+  // Source (registry.add runs before the 201 body is built), so the consumer must
+  // still refetch to surface the new row — the banner is advisory, not a hard fail.
+  | { kind: "malformed-success"; status: number; message: string }
+  | { kind: "other"; status: number; message: string };
+
+export class AddSourceError extends Error {
+  readonly cause: AddSourceErrorCause;
+  constructor(cause: AddSourceErrorCause, message: string) {
+    super(message);
+    this.name = "AddSourceError";
+    this.cause = cause;
+  }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+// 400 body: { error, issues: [{ path, message }] }. Keep only well-shaped issues.
+function parse400Issues(body: unknown): { path: string; message: string }[] {
+  if (!isRecord(body) || !Array.isArray(body.issues)) return [];
+  const out: { path: string; message: string }[] = [];
+  for (const raw of body.issues) {
+    if (!isRecord(raw)) continue;
+    const path = asString(raw.path);
+    const message = asString(raw.message);
+    if (message !== undefined) out.push({ path: path ?? "", message });
+  }
+  return out;
+}
+
 export const api = {
   // ─── Secrets ─────────────────────────────────────────────────────────
   // Backend-centric auth lives on the readiness projection (getBackendsReadiness
@@ -283,6 +333,12 @@ export const api = {
   // The authoritative Source list, INCLUDING inactive sources (state.sync is
   // active-only). Drives the per-Source toggle rows in the Capabilities header.
   listSources: (cfg: ApiConfig) => call<Source[]>(cfg, "/api/sources"),
+  // Register a Source by git URL. The daemon onboards it (sync + validate the
+  // mirror) and returns a 201 AddSourceResult even for a non-conformant or empty
+  // repo — the add is never rejected for that. Unlike `call<T>`, this reads the
+  // error body so the control can surface the server's structured 400 issues /
+  // 409 duplicate; on any non-201 it throws a typed `AddSourceError`.
+  addSource: (cfg: ApiConfig, origin: string) => addSource(cfg, origin),
   // Flip a Source on/off. Activate/deactivate only change `active` (no sync) and
   // emit the source.activated/deactivated audit event server-side; the catalog is
   // built from active sources only, so the page re-fetches ["kit"] to reflect it.
@@ -291,3 +347,53 @@ export const api = {
   deactivateSource: (cfg: ApiConfig, id: string) =>
     call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/deactivate`, { method: "POST" }),
 };
+
+async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResult> {
+  const path = "/api/sources";
+  const res = await fetch(`${cfg.baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${cfg.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ origin }),
+  });
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    body = undefined;
+  }
+  if (res.ok) {
+    // Validate the success body against the contract schema (no `as` cast). A
+    // malformed 201 is a server bug — surface it as a transport error.
+    const parsed = AddSourceResultSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new AddSourceError(
+        { kind: "malformed-success", status: res.status, message: "malformed add-source response" },
+        "malformed add-source response",
+      );
+    }
+    return parsed.data;
+  }
+  // Non-ok: discriminate the error body by status (the shapes differ — do not
+  // share a guard). The structured `cause` is the SSOT; the consumer formats the
+  // user-facing copy from it (Error.message stays a terse internal label).
+  if (res.status === 400) {
+    const issues = parse400Issues(body);
+    throw new AddSourceError({ kind: "invalid", status: 400, issues }, "invalid source");
+  }
+  if (res.status === 409) {
+    const carriedOrigin = isRecord(body) ? (asString(body.origin) ?? origin) : origin;
+    throw new AddSourceError(
+      { kind: "duplicate", status: 409, origin: carriedOrigin },
+      "duplicate origin",
+    );
+  }
+  // Any other status (incl. 500 `{ error, message }` and the body-less 500
+  // `{ error, id }`): carry the server message if present, else fall back to
+  // status text. Here the carried message IS the user-facing copy.
+  const message =
+    (isRecord(body) ? asString(body.message) : undefined) ?? `${res.status} ${res.statusText}`;
+  throw new AddSourceError({ kind: "other", status: res.status, message }, message);
+}
