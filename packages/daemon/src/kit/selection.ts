@@ -61,6 +61,50 @@ function emptyCaps(): CapList {
   return { instructions: [], skills: [], agents: [], plugins: [], bundles: [] };
 }
 
+// Per-kind name sets of everything the ACTIVE catalog currently provides (any
+// Variant — deployable, shadowed, or blocked: presence, not deployability). The
+// data-loss guard (#47): an owned-but-deselected name is a real removal ONLY when
+// its name is in this set (its Source is active). Owned-but-absent = an ORPHAN
+// (its Source isn't active) — kept, never auto-deleted (ADR-0023). Source
+// attribution stays out of the Ledger; active-catalog membership is the signal.
+export type CatalogNameSets = {
+  instructions: Set<string>;
+  skills: Set<string>;
+  agents: Set<string>;
+  plugins: Set<string>;
+  bundles: Set<string>;
+};
+
+export function catalogNameSets(catalog: Catalog): CatalogNameSets {
+  const sets: CatalogNameSets = {
+    instructions: new Set(),
+    skills: new Set(),
+    agents: new Set(),
+    plugins: new Set(),
+    bundles: new Set(),
+  };
+  for (const e of catalog.entries) {
+    switch (e.kind) {
+      case "instruction":
+        sets.instructions.add(e.name);
+        break;
+      case "skill":
+        sets.skills.add(e.name);
+        break;
+      case "agent":
+        sets.agents.add(e.name);
+        break;
+      case "plugin":
+        sets.plugins.add(e.name);
+        break;
+      case "bundle":
+        sets.bundles.add(e.name);
+        break;
+    }
+  }
+  return sets;
+}
+
 function uniq(arr: string[]): string[] {
   return Array.from(new Set(arr));
 }
@@ -70,8 +114,8 @@ function uniq(arr: string[]): string[] {
 // DeployError(collision) when a selected name has catalog entries but NONE
 // deployable (a single-Source malformed key). A cross-Source collision no longer
 // throws — the winner resolves (ADR-0023:91). A selected name no Source provides
-// is dropped from the deploy plan + traced (the diff's `removed` pass still prunes
-// a stale ledger-owned phantom).
+// is dropped from the deploy plan + traced; the diff/prune paths then treat such a
+// ledger-owned-but-absent name as an ORPHAN (kept, never auto-deleted — #47).
 export function resolveSelection(catalog: Catalog, selection: Selection): ResolvedSelection {
   const seed = emptyCaps();
   for (const presetName of selection.presets) {
@@ -126,8 +170,9 @@ export function resolveSelection(catalog: Catalog, selection: Selection): Resolv
           name,
         });
       }
-      // No catalog entry at all — drop from the deploy/add plan + trace. The
-      // diff's removed pass still surfaces a stale ledger-owned phantom.
+      // No catalog entry at all — drop from the deploy/add plan + trace. A
+      // ledger-owned name in this state is an orphan: the diff/prune paths keep it
+      // (its Source isn't active), never auto-delete it (#47).
       log().warn(
         { module: "kit/selection", kind, name },
         "selected capability not provided by any active Source; dropped from deploy plan",
@@ -233,10 +278,15 @@ function overwritesUserInstructionFile(
 // selected name reads from ITS winner's Mirror (the resolved item's sourceId), so
 // a "changed" verdict is honest under multi-Source precedence. `activeMirrorRoots`
 // is used ONLY for snippet loading (snippets aren't Capabilities — no winner).
+// `activeNames` is the per-kind active-catalog membership signal: an owned-but-
+// deselected name surfaces as `removed` ONLY if it is currently in the active
+// catalog. Owned-but-absent = an ORPHAN (its Source isn't active) → no diff entry,
+// never auto-deleted (#47) — fixes the first-load destructive-diff data loss.
 export function computeDiff(
   targets: DeployTargets,
   activeMirrorRoots: readonly string[],
   resolved: ResolvedSelection,
+  activeNames: CatalogNameSets,
 ): DeployDiff {
   const ledger = readLedger(targets);
   const ownedSkills = new Set((ledger?.skills ?? []).map((e) => e.name));
@@ -258,6 +308,7 @@ export function computeDiff(
     kind: "skill" | "agent",
     selected: readonly ResolvedItem[],
     owned: Set<string>,
+    active: Set<string>,
   ) => {
     const sel = new Set(selected.map((i) => i.name));
     // added / changed
@@ -281,9 +332,10 @@ export function computeDiff(
         }
       }
     }
-    // removed (owned-but-deselected)
+    // removed: owned-but-deselected AND still provided by an active Source. An
+    // owned name absent from the active catalog is an orphan — kept, no entry (#47).
     for (const name of owned) {
-      if (!sel.has(name)) entries.push({ kind, name, change: "removed" });
+      if (!sel.has(name) && active.has(name)) entries.push({ kind, name, change: "removed" });
     }
   };
 
@@ -292,20 +344,32 @@ export function computeDiff(
     kind: "plugin" | "bundle",
     selected: readonly ResolvedItem[],
     owned: Set<string>,
+    active: Set<string>,
   ) => {
     const sel = new Set(selected.map((i) => i.name));
     for (const item of selected) {
       if (!owned.has(item.name)) entries.push({ kind, name: item.name, change: "added" });
     }
+    // Same orphan guard: an owned name no active Source provides is not a removal.
     for (const name of owned) {
-      if (!sel.has(name)) entries.push({ kind, name, change: "removed" });
+      if (!sel.has(name) && active.has(name)) entries.push({ kind, name, change: "removed" });
     }
   };
 
-  diffNamed("skill", resolved.skills, ownedSkills);
-  diffNamed("agent", resolved.agents, ownedAgents);
-  diffUnhashed("plugin", resolved.plugins, new Set((ledger?.plugins ?? []).map((e) => e.name)));
-  diffUnhashed("bundle", resolved.bundles, new Set((ledger?.bundles ?? []).map((e) => e.name)));
+  diffNamed("skill", resolved.skills, ownedSkills, activeNames.skills);
+  diffNamed("agent", resolved.agents, ownedAgents, activeNames.agents);
+  diffUnhashed(
+    "plugin",
+    resolved.plugins,
+    new Set((ledger?.plugins ?? []).map((e) => e.name)),
+    activeNames.plugins,
+  );
+  diffUnhashed(
+    "bundle",
+    resolved.bundles,
+    new Set((ledger?.bundles ?? []).map((e) => e.name)),
+    activeNames.bundles,
+  );
 
   // Instructions: whole-file overwrite. added/changed/removed by name, plus the
   // user-authored-replacement warning when a selected target's instruction file
@@ -323,7 +387,10 @@ export function computeDiff(
     }
   }
   for (const name of ownedInstr) {
-    if (!selInstr.has(name)) entries.push({ kind: "instruction", name, change: "removed" });
+    // Orphan guard (#47): only a still-active owned instruction is a real removal.
+    if (!selInstr.has(name) && activeNames.instructions.has(name)) {
+      entries.push({ kind: "instruction", name, change: "removed" });
+    }
   }
   // Content-changed instruction set (same names, different concatenated body).
   // Each instruction hashes against its OWN winner Mirror (split-winner safe).

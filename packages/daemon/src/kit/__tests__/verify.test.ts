@@ -77,13 +77,25 @@ function fx(): DeployFsExec {
   return { targets, exec: okExec, probe: () => true };
 }
 
-async function deploy(sel: NameOver): Promise<void> {
+// `active` overrides the per-kind active-catalog names a deploy threads into
+// reconcilePrune (#47). It defaults to the selection (every selected name is
+// active); a prune test must list the still-active-but-deselected name too, or it
+// would be treated as an orphan and KEPT instead of pruned.
+async function deploy(
+  sel: NameOver,
+  active?: { skills?: string[]; agents?: string[] },
+): Promise<void> {
+  const resolvedSel = resolved(sel);
   await Effect.runPromise(
     runDeploy(fx(), {
-      selection: resolved(sel),
+      selection: resolvedSel,
       kitSha: "sha1",
       kitVersion: "1.0.0",
       activeMirrorRoots: [mirror],
+      activeCatalogNames: {
+        skills: active?.skills ?? resolvedSel.skills.map((i) => i.name),
+        agents: active?.agents ?? resolvedSel.agents.map((i) => i.name),
+      },
     }),
   );
 }
@@ -255,8 +267,9 @@ describe("fingerprint sidecar — Hive-private + lockstep prune (Feature 2)", ()
     expect(fp.entries.map((e) => e.name).sort()).toEqual(["a", "b"]);
 
     // Redeploy with only {a}: the engine prunes b from the ledger; the sidecar
-    // must drop b's fingerprint in lockstep.
-    await deploy({ skills: ["a"], targets: ["claude"] });
+    // must drop b's fingerprint in lockstep. b is still active (seeded), so
+    // deselecting it is a real prune, not an orphan-keep.
+    await deploy({ skills: ["a"], targets: ["claude"] }, { skills: ["a", "b"] });
     fp = readFingerprints(targets);
     expect(fp.entries.map((e) => e.name)).toEqual(["a"]);
     expect(readLedger(targets)?.skills.map((e) => e.name)).toEqual(["a"]);

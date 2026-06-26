@@ -355,6 +355,11 @@ export type DeployInput = {
   // (snippets aren't Capabilities, so they have no winner). Each Capability's
   // winner Mirror travels in `selection` (the resolved item's sourceId).
   activeMirrorRoots: readonly string[];
+  // Per-kind names the ACTIVE catalog currently provides (#47 data-loss guard).
+  // reconcilePrune unlinks an owned-but-deselected name ONLY if it is in this set;
+  // an owned name absent from it is an ORPHAN (its Source isn't active) and is KEPT
+  // — never auto-deleted. Built at the deploy seam from the same active catalog.
+  activeCatalogNames: { skills: readonly string[]; agents: readonly string[] };
 };
 
 export function runDeploy(
@@ -419,12 +424,17 @@ export function runDeploy(
     perKind.push(bundleResult);
 
     // Reconcile: re-read the ledger NOW, prune only names that were Hive-owned at
-    // request start AND are now deselected — never a concurrently-CLI-added name.
+    // request start AND are now deselected AND still in the active catalog — never a
+    // concurrently-CLI-added name, never an owned-but-absent orphan (#47).
     const orphan = reconcilePrune(
       fx.targets,
       sel.skills.map((i) => i.name),
       sel.agents.map((i) => i.name),
       priorOwned,
+      {
+        skills: new Set(input.activeCatalogNames.skills),
+        agents: new Set(input.activeCatalogNames.agents),
+      },
     );
     const pruned = pruneOrphans(fx, orphan.skills, orphan.agents, sel.targets);
 

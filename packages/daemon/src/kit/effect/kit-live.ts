@@ -28,7 +28,7 @@ import {
 import { type DeployInput, runDeploy } from "../deploy/engine.ts";
 import { readLedger } from "../ledger.ts";
 import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
-import { computeDiff, resolveSelection } from "../selection.ts";
+import { catalogNameSets, computeDiff, resolveSelection } from "../selection.ts";
 import { type HttpFetch, localSyncSource, productionFetch, syncSource } from "../sync.ts";
 import { buildSourceSyncStatus, type LastSyncError } from "../sync-status.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
@@ -164,7 +164,8 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
           const active = activeSources(registry);
           const catalog = readCatalog(targets, active);
           const resolved = resolveSelection(catalog, selection);
-          return computeDiff(targets, mirrorRootsOf(active), resolved);
+          // #47: only an owned name still in the active catalog can be "removed".
+          return computeDiff(targets, mirrorRootsOf(active), resolved, catalogNameSets(catalog));
         },
         catch: (err) =>
           err instanceof DeployError
@@ -186,11 +187,18 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
         // and the interop Ledger kitVersion are retired unconditionally (both
         // N==1 and N>1). The resolved selection carries each name's winner Source,
         // so the only mirror roots threaded are the active set for snippet loading.
+        // The active-catalog name-set lets reconcilePrune keep owned-but-absent
+        // orphans instead of unlinking them (#47).
+        const activeNames = catalogNameSets(catalog);
         const input: DeployInput = {
           selection: resolved,
           kitSha: null,
           kitVersion: "",
           activeMirrorRoots: mirrorRootsOf(active),
+          activeCatalogNames: {
+            skills: [...activeNames.skills],
+            agents: [...activeNames.agents],
+          },
         };
         const result = yield* runDeploy(fx, input);
         // Exactly one audit event, refs-only allow-list payload.

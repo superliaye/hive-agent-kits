@@ -135,6 +135,16 @@ function fx(exec: ExecPort, probe: (n: string) => boolean = () => true): DeployF
   return { targets, exec, probe: (n) => probe(n) };
 }
 
+// The active-catalog name-sets a deploy threads into reconcilePrune (#47): an
+// owned-but-deselected name is prunable ONLY if it is currently in the active
+// catalog. Defaults to "everything seeded is active" for the single-Source tests.
+function activeCatalogNames(over: { skills?: string[]; agents?: string[] } = {}): {
+  skills: readonly string[];
+  agents: readonly string[];
+} {
+  return { skills: over.skills ?? [], agents: over.agents ?? [] };
+}
+
 describe("runDeploy", () => {
   test("(a) skill lands in both homes; no SOURCE.md / _unshipped", async () => {
     seedSkill("alpha");
@@ -145,6 +155,7 @@ describe("runDeploy", () => {
         kitSha: "sha1",
         kitVersion: "1.0.0",
         activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
 
@@ -167,6 +178,7 @@ describe("runDeploy", () => {
         kitSha: "sha1",
         kitVersion: "1.0.0",
         activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
     const sidecar = join(targets.agentsHome(), "skills", "manual", "agents", "openai.yaml");
@@ -191,6 +203,7 @@ describe("runDeploy", () => {
         kitSha: "sha1",
         kitVersion: "1.0.0",
         activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
 
@@ -212,6 +225,7 @@ describe("runDeploy", () => {
           kitSha: "sha1",
           kitVersion: "1.0.0",
           activeMirrorRoots: [mirror],
+          activeCatalogNames: activeCatalogNames(),
         }),
       );
     await deployOnce(); // backup = original
@@ -233,6 +247,7 @@ describe("runDeploy", () => {
         kitSha: "sha1",
         kitVersion: "1.0.0",
         activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
 
@@ -255,6 +270,7 @@ describe("runDeploy", () => {
           kitSha: "sha1",
           kitVersion: "1.0.0",
           activeMirrorRoots: [mirror],
+          activeCatalogNames: activeCatalogNames(),
         },
       ),
     );
@@ -287,6 +303,7 @@ describe("runDeploy", () => {
         kitSha: "sha1",
         kitVersion: "1.0.0",
         activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
 
@@ -309,6 +326,7 @@ describe("runDeploy", () => {
         kitSha: "sha1",
         kitVersion: "1.0.0",
         activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
     expect(existsSync(join(targets.claudeHome(), "skills", "a", "SKILL.md"))).toBe(true);
@@ -320,6 +338,8 @@ describe("runDeploy", () => {
         kitSha: "sha1",
         kitVersion: "1.0.0",
         activeMirrorRoots: [mirror],
+        // Both names still provided by an active Source, so deselecting b prunes it.
+        activeCatalogNames: activeCatalogNames({ skills: ["a", "b"] }),
       }),
     );
 
@@ -347,6 +367,7 @@ describe("runDeploy", () => {
         kitSha: "sha1",
         kitVersion: "1.0.0",
         activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
 
@@ -378,10 +399,46 @@ describe("runDeploy", () => {
         kitSha: "sha1",
         kitVersion: "1.0.0",
         activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
     expect(result2.perKind.find((k) => k.kind === "bundle")?.applied).toContain("bnd");
     expect(existsSync(join(targets.claudeHome(), "skills", "s1", "SKILL.md"))).toBe(true);
+  });
+
+  test("(i) #47: an owned skill absent from the active catalog is NOT pruned on deploy (file kept on disk)", async () => {
+    seedSkill("active-one");
+    seedSkill("orphan-one");
+    // First deploy with BOTH active → both land on disk + in the ledger.
+    await Effect.runPromise(
+      runDeploy(fx(makeSpy().port), {
+        selection: resolved({ skills: ["active-one", "orphan-one"], targets: ["claude"] }),
+        kitSha: "sha1",
+        kitVersion: "1.0.0",
+        activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames({ skills: ["active-one", "orphan-one"] }),
+      }),
+    );
+    expect(existsSync(join(targets.claudeHome(), "skills", "orphan-one", "SKILL.md"))).toBe(true);
+
+    // Now orphan-one's Source is inactive (absent from the active catalog). A deploy
+    // that deselects BOTH must prune only the active-catalog name; the orphan's file
+    // is KEPT on disk and stays in the ledger (never auto-deleted — ADR-0023).
+    const result = await Effect.runPromise(
+      runDeploy(fx(makeSpy().port), {
+        selection: resolved({ skills: [], targets: ["claude"] }),
+        kitSha: "sha1",
+        kitVersion: "1.0.0",
+        activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames({ skills: ["active-one"] }),
+      }),
+    );
+
+    expect(result.pruned.some((p) => p.name === "active-one")).toBe(true);
+    expect(result.pruned.some((p) => p.name === "orphan-one")).toBe(false);
+    expect(existsSync(join(targets.claudeHome(), "skills", "active-one", "SKILL.md"))).toBe(false);
+    expect(existsSync(join(targets.claudeHome(), "skills", "orphan-one", "SKILL.md"))).toBe(true);
+    expect(readLedger(targets)?.skills.map((e) => e.name)).toContain("orphan-one");
   });
 });
 
@@ -408,6 +465,7 @@ describe("runDeploy — cross-Source (#30)", () => {
         kitSha: null,
         kitVersion: "",
         activeMirrorRoots: [mirrorA, mirrorB],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
 
@@ -442,6 +500,7 @@ describe("runDeploy — cross-Source (#30)", () => {
         kitSha: null,
         kitVersion: "",
         activeMirrorRoots: [mirrorA, mirrorB],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
 
@@ -491,6 +550,7 @@ describe("runDeploy — cross-Source (#30)", () => {
         kitSha: null,
         kitVersion: "",
         activeMirrorRoots: [mirrorA, mirrorB],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
 
@@ -521,6 +581,7 @@ describe("runDeploy — cross-Source (#30)", () => {
         kitSha: null,
         kitVersion: "",
         activeMirrorRoots: [mirrorA, mirrorB],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
 
@@ -542,6 +603,7 @@ describe("runDeploy — cross-Source (#30)", () => {
         kitSha: null,
         kitVersion: "",
         activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
     expect(result1.kitSha).toBeNull();
@@ -573,6 +635,7 @@ describe("runDeploy — cross-Source (#30)", () => {
         kitSha: null,
         kitVersion: "",
         activeMirrorRoots: [mirrorA, mirrorB],
+        activeCatalogNames: activeCatalogNames(),
       }),
     );
     expect(result2.kitSha).toBeNull();

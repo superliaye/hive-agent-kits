@@ -85,6 +85,10 @@ describe("#35 — cross-Source precedence deploy provenance (E.1)", () => {
         kitSha: null,
         kitVersion: "",
         activeMirrorRoots: [mirrorA, mirrorB],
+        activeCatalogNames: {
+          skills: resolved.skills.map((i) => i.name),
+          agents: resolved.agents.map((i) => i.name),
+        },
       }),
     );
 

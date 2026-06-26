@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Selection, Source } from "@hive/contract";
+import type { Catalog, Selection, Source } from "@hive/contract";
 import { Effect } from "effect";
 import { readCatalog } from "../catalog.ts";
 import type { DeployFsExec } from "../deploy/adapter.ts";
 import { runDeploy } from "../deploy/engine.ts";
 import { DeployError } from "../effect/errors.ts";
-import { computeDiff, resolveSelection } from "../selection.ts";
+import { catalogNameSets, computeDiff, resolveSelection } from "../selection.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
@@ -77,6 +77,13 @@ const fx = (): DeployFsExec => ({
   probe: () => true,
 });
 
+// The per-kind active-catalog name arrays a deploy threads into reconcilePrune
+// (#47), derived from a catalog the same way kit-live does.
+function deployActiveNames(cat: Catalog): { skills: readonly string[]; agents: readonly string[] } {
+  const sets = catalogNameSets(cat);
+  return { skills: [...sets.skills], agents: [...sets.agents] };
+}
+
 describe("resolveSelection — winner resolution", () => {
   test("cross-Source collision resolves to the WINNER's sourceId, never the shadow, no throw", () => {
     writeSkillIn(SRC_A.id, "foo", "body A");
@@ -117,11 +124,10 @@ describe("resolveSelection — winner resolution", () => {
   });
 });
 
-describe("computeDiff — phantom prune + split-winner instruction", () => {
-  test("a ledger-owned phantom (no catalog entry) still surfaces as removed (prunable)", async () => {
-    // Deploy `keep` so the ledger owns it, then drop the Mirror source for a
-    // separate owned name by deploying only `keep` — but seed the ledger with a
-    // phantom via a first deploy that owned `gone`.
+describe("computeDiff — orphan keep + split-winner instruction", () => {
+  test("#47: a ledger-owned orphan (no active-catalog entry) is KEPT, not removed", async () => {
+    // Deploy `keep` + `gone` while both are provided by an active Source so the
+    // ledger owns both.
     writeSkillIn(SRC_A.id, "keep", "k");
     writeSkillIn(SRC_A.id, "gone", "g");
     const cat1 = readCatalog(targets, [SRC_A]);
@@ -131,14 +137,25 @@ describe("computeDiff — phantom prune + split-winner instruction", () => {
         kitSha: null,
         kitVersion: "",
         activeMirrorRoots: [targets.mirrorRoot(SRC_A.id)],
+        activeCatalogNames: deployActiveNames(cat1),
       }),
     );
-    // Now `gone` is ledger-owned. Re-resolve a selection that selects only `keep`;
-    // `gone` is deselected → must show as removed.
+    // Now `gone`'s Source is gone from the active catalog (drop its Mirror source).
+    rmSync(join(targets.mirrorRoot(SRC_A.id), "capabilities", "skills", "gone"), {
+      recursive: true,
+      force: true,
+    });
+    // Re-resolve a selection that selects only `keep`; `gone` is owned-but-absent
+    // from the active catalog → an ORPHAN, kept (no removed entry), never deleted.
     const cat2 = readCatalog(targets, [SRC_A]);
     const resolved = resolveSelection(cat2, selection({ skills: ["keep"] }));
-    const diff = computeDiff(targets, [targets.mirrorRoot(SRC_A.id)], resolved);
-    expect(diff.entries.some((e) => e.name === "gone" && e.change === "removed")).toBe(true);
+    const diff = computeDiff(
+      targets,
+      [targets.mirrorRoot(SRC_A.id)],
+      resolved,
+      catalogNameSets(cat2),
+    );
+    expect(diff.entries.some((e) => e.name === "gone")).toBe(false);
   });
 
   test("instruction split-winner: two instructions won by different Sources; changing one diffs changed", async () => {
@@ -156,13 +173,14 @@ describe("computeDiff — phantom prune + split-winner instruction", () => {
         kitSha: null,
         kitVersion: "",
         activeMirrorRoots: activeRoots,
+        activeCatalogNames: deployActiveNames(cat1),
       }),
     );
     // Mutate A's core body.
     writeInstructionIn(SRC_A.id, "core", "core v2 CHANGED");
     const cat2 = readCatalog(targets, [SRC_A, SRC_B]);
     const resolved = resolveSelection(cat2, selection({ instructions: ["core", "extra"] }));
-    const diff = computeDiff(targets, activeRoots, resolved);
+    const diff = computeDiff(targets, activeRoots, resolved, catalogNameSets(cat2));
     expect(diff.entries.some((e) => e.kind === "instruction" && e.change === "changed")).toBe(true);
   });
 });

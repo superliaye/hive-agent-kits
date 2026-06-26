@@ -294,16 +294,37 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   // header never blanks and never renders a wrong toggle state.
   const sources = Array.isArray(sourcesQuery.data) ? sourcesQuery.data : undefined;
   const anyActiveSource = sources?.some((s) => s.active) ?? false;
-  const anyInactiveSource = sources?.some((s) => !s.active) ?? false;
 
-  // Hazard cue: deactivating a Source is non-destructive and does NOT prune the
-  // working selection (ADR-0023) — so a capability that was deployed from a
-  // now-disabled Source stays selected, leaves the active catalog, and shows up
-  // under the Deploy diff's "removed" column. Deploying in that state WOULD un-deploy
-  // those files. With a Source disabled and a non-empty removed diff, warn that
-  // Deploy is destructive here so the safe "hide" gesture isn't confused with it.
+  // A removal-bearing Deploy is destructive: it unlinks those capabilities from the
+  // CLI homes. The server is authoritative — only a genuinely removable capability
+  // (owned, deselected, AND still in the active catalog) reaches the "removed" set
+  // (#47); an owned-but-absent orphan never does. Count drives both the plain-
+  // language warning and the explicit two-step confirm gate below.
   const removedCount = (diffQuery.data?.entries ?? []).filter((e) => e.change === "removed").length;
-  const deployWouldRemoveDisabled = anyInactiveSource && removedCount > 0;
+
+  // Two-step confirm: when removedCount>0 the primary Deploy click ARMS the gate
+  // (does not fire the mutation); the armed "Confirm" click fires it. With zero
+  // removals Deploy fires on the first click (no friction). The armed state is
+  // keyed to the exact diff it was armed against (`armedKey === diffKey`), so any
+  // selection/target change auto-disarms — a stale confirmation can't fire a
+  // different (newly-larger) removal set. No effect needed; it's derived.
+  const diffKey = `${JSON.stringify(selection)}|${removedCount}`;
+  const [armedKey, setArmedKey] = useState<string | null>(null);
+  const deployArmed = armedKey === diffKey;
+
+  // Deploy may only act on a SETTLED diff for the current selection. Mid-refetch
+  // `diffQuery.data` is undefined, so `removedCount` reads 0 and the confirm gate
+  // would be skipped while the server still deletes (#47 bypass). Gate on this.
+  const diffReady = diffQuery.isSuccess && !diffQuery.isFetching;
+
+  function onDeployClick(): void {
+    if (!diffReady) return;
+    if (removedCount > 0 && !deployArmed) {
+      setArmedKey(diffKey);
+      return;
+    }
+    deployMutation.mutate();
+  }
 
   return (
     <div className="kit-page" data-testid="kit-deploy-page">
@@ -333,14 +354,34 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           <button
             type="button"
             className="button primary"
-            onClick={() => deployMutation.mutate()}
-            disabled={!hasSelection || deployMutation.isPending}
+            onClick={onDeployClick}
+            disabled={!hasSelection || deployMutation.isPending || (hasSelection && !diffReady)}
             data-testid="kit-deploy"
           >
             {deployMutation.isPending ? "Deploying…" : "Deploy"}
           </button>
+          {deployArmed && removedCount > 0 && (
+            <button
+              type="button"
+              className="button danger"
+              onClick={() => deployMutation.mutate()}
+              disabled={deployMutation.isPending}
+              data-testid="kit-deploy-confirm"
+            >
+              Confirm: delete {removedCount} &amp; deploy
+            </button>
+          )}
         </div>
       </header>
+
+      {removedCount > 0 && (
+        <div className="banner-warn kit-deploy-remove-warn" data-testid="kit-deploy-remove-warn">
+          Deploy will DELETE {removedCount} installed{" "}
+          {removedCount === 1 ? "capability" : "capabilities"} from your CLI home
+          {targets.length === 1 ? "" : "s"}. This removes the files — confirm below before
+          deploying.
+        </div>
+      )}
 
       {catalogQuery.isError && <div className="banner-error">Failed to load catalog.</div>}
 
@@ -390,13 +431,6 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       {toggleSource.isError && (
         <div className="banner-error" data-testid="kit-source-toggle-error">
           Could not change the Source — {(toggleSource.error as Error).message}
-        </div>
-      )}
-      {deployWouldRemoveDisabled && (
-        <div className="banner-warn" data-testid="kit-deploy-disabled-warn">
-          Deploying now would remove {removedCount}{" "}
-          {removedCount === 1 ? "capability" : "capabilities"} from a disabled Source. Disabling a
-          Source only hides it — re-enable the Source above to keep its capabilities deployed.
         </div>
       )}
 

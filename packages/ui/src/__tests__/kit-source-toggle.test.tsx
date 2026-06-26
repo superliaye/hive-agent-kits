@@ -121,9 +121,10 @@ function installStubs(): void {
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
-    // Selecting a capability triggers the Deploy Diff fetch. Once the git Source is
-    // inactive, a still-selected capability from it resolves as a "removed" entry —
-    // the server-honest consequence the disabled-Source Deploy warning keys on.
+    // Selecting a capability triggers the Deploy Diff fetch. This mock returns a
+    // "removed" entry for the still-selected capability once its Source is inactive,
+    // to exercise the general removal warning + confirm gate (#47/q3a). (The live
+    // server, post-#47, keeps an owned-but-absent orphan OUT of the removed set.)
     if (path === "/api/kit/diff" && method === "POST") {
       const entries = inactive.has(GIT_ID)
         ? [{ kind: "skill", name: "alpha", change: "removed", replacesUserFile: false }]
@@ -284,22 +285,26 @@ describe("KitDeployPage — Source on/off toggle (AC4)", () => {
     expect(host.querySelector(`[data-testid="kit-source-toggle-${GIT_ID}"]`)).not.toBeNull();
   });
 
-  test("with a Source disabled and its selected capability now in the removed diff, a destructive-Deploy warning shows", async () => {
+  test("with a selected capability now in the removed diff, the general removal warning shows (replaces the old disabled-Source banner, #47/q3a)", async () => {
     installStubs();
     const host = await render();
     // Select the git capability, then disable its Source — it survives selection
-    // (not pruned) and resolves as a "removed" diff entry.
+    // (not pruned). NB: post-#47 the server keeps an owned-but-absent orphan out of
+    // the removed set; this mock still returns a removed entry to exercise the
+    // general removal warning + confirm gate the disabled-Source banner became.
     await click(host.querySelector('[data-testid="kit-row-skill-alpha"]'));
     await click(host.querySelector(`[data-testid="kit-source-toggle-${GIT_ID}"]`));
 
-    const warn = host.querySelector('[data-testid="kit-deploy-disabled-warn"]');
+    // The obsolete disabled-Source banner is gone; the general removal warning shows.
+    expect(host.querySelector('[data-testid="kit-deploy-disabled-warn"]')).toBeNull();
+    const warn = host.querySelector('[data-testid="kit-deploy-remove-warn"]');
     expect(warn).not.toBeNull();
-    expect(warn?.textContent).toContain("1 capability");
-    expect(warn?.textContent).toContain("re-enable the Source");
+    expect(warn?.textContent).toContain("DELETE");
+    expect(warn?.textContent).toContain("1");
 
     // Re-enabling the Source clears the warning (no removed diff, source active).
     await click(host.querySelector(`[data-testid="kit-source-toggle-${GIT_ID}"]`));
-    expect(host.querySelector('[data-testid="kit-deploy-disabled-warn"]')).toBeNull();
+    expect(host.querySelector('[data-testid="kit-deploy-remove-warn"]')).toBeNull();
   });
 
   test("a failed toggle surfaces an error banner and leaves the capabilities in place", async () => {

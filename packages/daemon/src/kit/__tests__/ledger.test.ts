@@ -135,7 +135,10 @@ describe("ledger", () => {
     // names that were Hive-owned at request start AND are now deselected. The new
     // deploy still selects {A}, so NOTHING is prunable — crucially X (the CLI's
     // concurrent addition) is NEVER returned, because it was not in priorOwned.
-    const orphan = reconcilePrune(targets, ["A"], [], priorOwned);
+    const orphan = reconcilePrune(targets, ["A"], [], priorOwned, {
+      skills: new Set(["A"]),
+      agents: new Set(),
+    });
     expect(orphan.skills).not.toContain("X");
     expect(orphan.skills).not.toContain("A");
     expect(orphan.skills).toEqual([]);
@@ -176,9 +179,42 @@ describe("ledger", () => {
       [],
     );
     const priorOwned = ownedNamesSnapshot(targets);
-    // The new deploy selects only {A} -> B is the genuine owned-but-deselected orphan.
-    const orphan = reconcilePrune(targets, ["A"], [], priorOwned);
+    // The new deploy selects only {A}; B is owned-but-deselected AND still provided
+    // by an active Source (in the active catalog) -> the genuine prunable orphan.
+    const orphan = reconcilePrune(targets, ["A"], [], priorOwned, {
+      skills: new Set(["A", "B"]),
+      agents: new Set(),
+    });
     expect(orphan.skills).toEqual(["B"]);
+  });
+
+  test("(d3) #47: reconcilePrune does NOT prune an owned-but-deselected name absent from the active catalog", () => {
+    const targets = defaultDeployTargets();
+    // Hive owns {A, B} at request start.
+    mergeLedger(
+      targets,
+      {
+        kitVersion: "1.0.0",
+        targets: ["claude"],
+        skills: ["A", "B"],
+        agents: [],
+        instructions: [],
+        plugins: [],
+        bundles: [],
+      },
+      [],
+      [],
+    );
+    const priorOwned = ownedNamesSnapshot(targets);
+    // The new deploy deselects BOTH. B is still provided by an active Source, but
+    // A's Source is inactive (A absent from the active catalog). A is an ORPHAN —
+    // kept (never auto-deleted); only B is prunable.
+    const orphan = reconcilePrune(targets, [], [], priorOwned, {
+      skills: new Set(["B"]),
+      agents: new Set(),
+    });
+    expect(orphan.skills).toEqual(["B"]);
+    expect(orphan.skills).not.toContain("A");
   });
 
   test("(e) plugins/bundles never auto-removed on deselect (no prune path)", () => {

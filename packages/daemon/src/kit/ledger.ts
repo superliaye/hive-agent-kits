@@ -154,11 +154,18 @@ export function mergeLedger(
 // so it is never pruned (the two-writer lost-update guard, A3). The fresh re-read
 // then narrows to names that still exist on disk now, so we never try to prune a
 // name an external writer already removed.
+//
+// `activeNames` is the per-kind set of names the ACTIVE catalog currently provides
+// (#47 data-loss guard): an owned-but-deselected name is prunable ONLY if it is
+// still in the active catalog. An owned name absent from it is an ORPHAN — its
+// Source isn't active — and is KEPT (never auto-unlinked), honoring ADR-0023's
+// "disabling only hides" without putting Source attribution in the Ledger.
 export function reconcilePrune(
   targets: DeployTargets,
   selectedSkills: string[],
   selectedAgents: string[],
   priorOwned: { skills: string[]; agents: string[] },
+  activeNames: { skills: Set<string>; agents: Set<string> },
 ): { skills: string[]; agents: string[] } {
   const fresh = readLedger(targets) ?? emptyLedger();
   const freshSkills = new Set(fresh.skills.map((e) => e.name));
@@ -166,9 +173,14 @@ export function reconcilePrune(
   const keepSkill = new Set(selectedSkills);
   const keepAgent = new Set(selectedAgents);
   return {
-    // Prunable = was Hive-owned at request start ∩ still on disk ∩ now deselected.
-    skills: priorOwned.skills.filter((n) => freshSkills.has(n) && !keepSkill.has(n)),
-    agents: priorOwned.agents.filter((n) => freshAgents.has(n) && !keepAgent.has(n)),
+    // Prunable = was Hive-owned at request start ∩ still on disk ∩ now deselected ∩
+    // still provided by an active Source (in the active catalog).
+    skills: priorOwned.skills.filter(
+      (n) => freshSkills.has(n) && !keepSkill.has(n) && activeNames.skills.has(n),
+    ),
+    agents: priorOwned.agents.filter(
+      (n) => freshAgents.has(n) && !keepAgent.has(n) && activeNames.agents.has(n),
+    ),
   };
 }
 
