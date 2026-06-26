@@ -156,7 +156,9 @@ describe("readCatalog (single Source)", () => {
     expect(cat.presets.some((p) => p.name === "engineering")).toBe(true);
     // my-commit ships under @my/ but flattens to the leaf name.
     expect(cat.entries.some((e) => e.kind === "skill" && e.name === "my-commit")).toBe(true);
-  });
+    // Copies the full external clone off disk before reading — the default 5s
+    // timeout is too tight on a cold/slow filesystem, so give it generous room.
+  }, 30000);
 });
 
 describe("readCatalog (cross-Source aggregation — merge / collision / shadow)", () => {
