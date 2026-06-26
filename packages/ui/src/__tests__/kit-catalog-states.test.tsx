@@ -52,7 +52,7 @@ const GIT_ID = "git-src";
 const GIT_ORIGIN = "https://github.com/owner/repo";
 
 function sources(active: boolean): Source[] {
-  return [{ id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active, createdAt: 1 }];
+  return [{ id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active, createdAt: 1, rank: 0 }];
 }
 
 function kitState(): KitState {

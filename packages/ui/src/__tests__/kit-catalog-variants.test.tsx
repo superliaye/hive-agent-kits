@@ -72,6 +72,7 @@ async function renderCatalog(
     kind: "git",
     active: true,
     createdAt: i,
+    rank: i,
   }));
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;

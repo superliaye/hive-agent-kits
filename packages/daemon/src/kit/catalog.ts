@@ -183,8 +183,8 @@ export function readCatalog(targets: DeployTargets, sources: readonly Source[]):
   // Aggregate: merge identical-ContentSha Variants, pick the precedence winner per
   // CapabilityKey, Shadow the losers. A cross-Source collision is no longer a
   // problem — it is a resolved winner + shadow, so it pushes NO `problems` entry.
-  // Precedence is derived from registration order (sources arrives in insertion
-  // order; the aggregator keys on index, not createdAt).
+  // Precedence is the stored per-Source `rank` (ADR-0023): a free total order the
+  // user re-ranks at will; the default seed reproduces git > local newest-first.
   const rank = sourcePrecedence(sources);
   const aggEntries = aggregate(aggInputs, rank);
   const entries = aggEntries.map((e) => ({
@@ -197,6 +197,7 @@ export function readCatalog(targets: DeployTargets, sources: readonly Source[]):
     sourceIds: e.sourceIds,
     contentSha: e.contentSha,
     ...(e.blockedReason ? { blockedReason: e.blockedReason } : {}),
+    ...(e.shadowedBy ? { shadowedBy: e.shadowedBy } : {}),
   }));
 
   // Preset-collision problems (preset precedence/merge is out of scope — presets

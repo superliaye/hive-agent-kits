@@ -50,12 +50,15 @@ afterEach(async () => {
 // The sources list is derived from the sync entries (same order, all active +
 // synced), so the bare kit-sha/kit-freshness testids land on the first synced row.
 async function renderWith(kitState: KitState): Promise<HTMLElement> {
+  // Rank so the FIRST sync entry sorts FIRST in precedence order (highest rank),
+  // matching these tests' "first row = first sync entry" assumption.
   const sources: Source[] = kitState.sync.map((s, i) => ({
     id: s.sourceId,
     origin: s.origin,
     kind: "git",
     active: true,
     createdAt: i,
+    rank: kitState.sync.length - 1 - i,
   }));
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;

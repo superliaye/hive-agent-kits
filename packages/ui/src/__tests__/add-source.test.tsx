@@ -61,10 +61,17 @@ let addOutcome: "conformant" | "empty" | "nonconformant" | "bad" | "duplicate";
 
 function sources(): Source[] {
   const list: Source[] = [
-    { id: STARTER_ID, origin: STARTER_ORIGIN, kind: "local", active: true, createdAt: 1 },
+    { id: STARTER_ID, origin: STARTER_ORIGIN, kind: "local", active: true, createdAt: 1, rank: 0 },
   ];
   if (added) {
-    list.push({ id: ADDED_ID, origin: ADDED_ORIGIN, kind: "git", active: true, createdAt: 2 });
+    list.push({
+      id: ADDED_ID,
+      origin: ADDED_ORIGIN,
+      kind: "git",
+      active: true,
+      createdAt: 2,
+      rank: 1,
+    });
   }
   return list;
 }
@@ -132,7 +139,14 @@ function validation(): SourceValidationReport {
 
 function addResult(): unknown {
   return {
-    source: { id: ADDED_ID, origin: ADDED_ORIGIN, kind: "git", active: true, createdAt: 2 },
+    source: {
+      id: ADDED_ID,
+      origin: ADDED_ORIGIN,
+      kind: "git",
+      active: true,
+      createdAt: 2,
+      rank: 1,
+    },
     sync: {
       state: "up_to_date",
       sha: "abc1234def",

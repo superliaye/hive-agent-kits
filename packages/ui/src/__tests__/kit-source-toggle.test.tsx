@@ -56,8 +56,16 @@ function sources(): Source[] {
       kind: "local",
       active: !inactive.has(STARTER_ID),
       createdAt: 1,
+      rank: 0,
     },
-    { id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: !inactive.has(GIT_ID), createdAt: 2 },
+    {
+      id: GIT_ID,
+      origin: GIT_ORIGIN,
+      kind: "git",
+      active: !inactive.has(GIT_ID),
+      createdAt: 2,
+      rank: 1,
+    },
   ];
 }
 
@@ -310,18 +318,20 @@ describe("KitDeployPage — Source on/off toggle (AC4)", () => {
   test("a SHA-less Source (the bundled Starter) renders a labeled 'no SHA', not a bare dash (#54)", async () => {
     installStubs();
     const host = await render();
-    // The Starter seeds first in registry order and is in state.sync, so it is the
-    // anchor row carrying the bare kit-sha testid; its sync.sha is null.
+    // Rows render in precedence order (highest rank first). The git Source (rank 1)
+    // outranks the Starter (rank 0) by the default seed, so the git row is the anchor
+    // carrying the bare kit-sha testid and the Starter carries its per-id testid.
     const sha = host.querySelector('[data-testid="kit-sha"]');
-    expect(sha).not.toBeNull();
-    expect(sha?.textContent).toBe("no SHA");
-    expect(sha?.textContent).not.toBe("—");
-    // The muted-absence treatment is applied via a class hook, not inline style.
-    expect(sha?.className).toContain("kit-sha-empty");
-    // A real SHA still renders short and carries no empty hook.
-    const gitSha = host.querySelector(`[data-testid="kit-sha-${GIT_ID}"]`);
-    expect(gitSha?.textContent).toBe("abc1234");
-    expect(gitSha?.className).not.toContain("kit-sha-empty");
+    expect(sha?.textContent).toBe("abc1234");
+    // The Starter's SHA-less row renders a labeled 'no SHA' (its per-id testid), not
+    // a bare dash, with the muted-absence class hook.
+    const starterSha = host.querySelector(`[data-testid="kit-sha-${STARTER_ID}"]`);
+    expect(starterSha).not.toBeNull();
+    expect(starterSha?.textContent).toBe("no SHA");
+    expect(starterSha?.textContent).not.toBe("—");
+    expect(starterSha?.className).toContain("kit-sha-empty");
+    // A real SHA renders short and carries no empty hook.
+    expect(sha?.className).not.toContain("kit-sha-empty");
   });
 
   test("the deploy-target toggles use the app's custom control class, not a raw native checkbox (#54)", async () => {

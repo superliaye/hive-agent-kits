@@ -43,6 +43,152 @@ describe("createSourcesStore — public add mints a git Source", () => {
   });
 });
 
+describe("createSourcesStore — rank seeding (insertion order = increasing precedence)", () => {
+  test("seedLocal then add: the Starter gets the LOWEST rank, each add the new highest", () => {
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });
+    const starter = store.seedLocal("starter", "local:starter");
+    const a = store.add("https://github.com/a/b");
+    const b = store.add("https://github.com/c/d");
+    expect(starter.ok && a.ok && b.ok).toBe(true);
+    if (!starter.ok || !a.ok || !b.ok) throw new Error("setup failed");
+    expect(a.source.rank).toBeGreaterThan(starter.source.rank);
+    expect(b.source.rank).toBeGreaterThan(a.source.rank);
+  });
+
+  test("add into a non-empty registry assigns max(existing ranks)+1", () => {
+    const store = createSourcesStore({
+      version: SOURCES_FILE_VERSION,
+      sources: [
+        {
+          id: "x",
+          origin: "https://github.com/x/y",
+          kind: "git",
+          active: true,
+          createdAt: 0,
+          rank: 7,
+        },
+      ],
+    });
+    const res = store.add("https://github.com/a/b");
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.source.rank).toBe(8);
+  });
+});
+
+describe("createSourcesStore — reorder (adjacent rank swap)", () => {
+  function seeded(): ReturnType<typeof createSourcesStore> {
+    return createSourcesStore({
+      version: SOURCES_FILE_VERSION,
+      sources: [
+        {
+          id: "low",
+          origin: "https://github.com/a/low",
+          kind: "git",
+          active: true,
+          createdAt: 0,
+          rank: 0,
+        },
+        {
+          id: "mid",
+          origin: "https://github.com/a/mid",
+          kind: "git",
+          active: true,
+          createdAt: 0,
+          rank: 1,
+        },
+        {
+          id: "high",
+          origin: "https://github.com/a/high",
+          kind: "git",
+          active: true,
+          createdAt: 0,
+          rank: 2,
+        },
+      ],
+    });
+  }
+
+  test("reorder up swaps a Source's rank with its higher neighbor", () => {
+    const store = seeded();
+    const res = store.reorder("low", "up");
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.source.id).toBe("low");
+      // A genuine swap is `changed:true` (drives the audit emission).
+      expect(res.changed).toBe(true);
+    }
+    const byId = new Map(store.list().map((s) => [s.id, s.rank]));
+    // low and mid swapped: low now 1, mid now 0; high untouched.
+    expect(byId.get("low")).toBe(1);
+    expect(byId.get("mid")).toBe(0);
+    expect(byId.get("high")).toBe(2);
+  });
+
+  test("reorder down swaps a Source's rank with its lower neighbor", () => {
+    const store = seeded();
+    const res = store.reorder("high", "down");
+    expect(res.ok).toBe(true);
+    const byId = new Map(store.list().map((s) => [s.id, s.rank]));
+    expect(byId.get("high")).toBe(1);
+    expect(byId.get("mid")).toBe(2);
+    expect(byId.get("low")).toBe(0);
+  });
+
+  test("reorder up at the TOP is a no-op (already highest) → changed:false", () => {
+    const store = seeded();
+    const res = store.reorder("high", "up");
+    expect(res.ok).toBe(true);
+    // A no-op reports changed:false so the service emits no audit row.
+    if (res.ok) expect(res.changed).toBe(false);
+    const byId = new Map(store.list().map((s) => [s.id, s.rank]));
+    expect(byId.get("high")).toBe(2);
+    expect(byId.get("mid")).toBe(1);
+    expect(byId.get("low")).toBe(0);
+  });
+
+  test("reorder down at the BOTTOM is a no-op (already lowest) → changed:false", () => {
+    const store = seeded();
+    const res = store.reorder("low", "down");
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.changed).toBe(false);
+    const byId = new Map(store.list().map((s) => [s.id, s.rank]));
+    expect(byId.get("low")).toBe(0);
+  });
+
+  test("reorder of an unknown id → not-found", () => {
+    const store = seeded();
+    expect(store.reorder("nope", "up")).toEqual({ ok: false, reason: "not-found" });
+  });
+
+  test("a free reorder can place the local Starter above a git Source", () => {
+    const store = createSourcesStore({
+      version: SOURCES_FILE_VERSION,
+      sources: [
+        {
+          id: "starter",
+          origin: "local:starter",
+          kind: "local",
+          active: true,
+          createdAt: 0,
+          rank: 0,
+        },
+        {
+          id: "git1",
+          origin: "https://github.com/a/b",
+          kind: "git",
+          active: true,
+          createdAt: 0,
+          rank: 1,
+        },
+      ],
+    });
+    const res = store.reorder("starter", "up");
+    expect(res.ok).toBe(true);
+    const byId = new Map(store.list().map((s) => [s.id, s.rank]));
+    expect((byId.get("starter") ?? -1) > (byId.get("git1") ?? -1)).toBe(true);
+  });
+});
+
 describe("createSourcesStore — seedLocal (the bundled Starter)", () => {
   test("seeds a kind:'local' Source with the caller-supplied fixed id + origin", () => {
     const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });

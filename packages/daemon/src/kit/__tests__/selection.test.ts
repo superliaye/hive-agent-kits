@@ -15,6 +15,9 @@ import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 let tmpRoot: string;
 let targets: DeployTargets;
 
+// Default rank increases per call (later-declared Source = higher precedence),
+// mirroring the seed. Pass `rank` in `over` to pin a specific precedence.
+let rankSeq = 0;
 function src(id: string, over: Partial<Source> = {}): Source {
   return {
     id,
@@ -22,6 +25,7 @@ function src(id: string, over: Partial<Source> = {}): Source {
     kind: "git",
     active: true,
     createdAt: 0,
+    rank: rankSeq++,
     ...over,
   };
 }

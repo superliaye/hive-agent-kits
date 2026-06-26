@@ -142,10 +142,11 @@ const backendUpdateNormalizer: Normalizer<BackendUpdateEvents> = {
   }),
 };
 
-// Sources (registry mutation): add/activate/deactivate/delete are user actions.
-// run_id/agent_id are NULL (a registry mutation has neither). Payload is REFS
-// only — the opaque SourceId, plus the normalized credential-free origin on add
-// (the wire schema already rejects `user:token@` origins).
+// Sources (registry mutation): add/activate/deactivate/delete/reorder are user
+// actions. run_id/agent_id are NULL (a registry mutation has neither). Payload is
+// REFS only — the opaque SourceId, plus the normalized credential-free origin on
+// add (the wire schema already rejects `user:token@` origins), plus the new rank
+// on reorder (an integer precedence ref, never file contents/secrets).
 const sourcesNormalizer: Normalizer<SourcesAuditEvents> = {
   "source.added": (event) => ({
     event_type: "source.added",
@@ -170,5 +171,11 @@ const sourcesNormalizer: Normalizer<SourcesAuditEvents> = {
     run_id: null,
     agent_id: null,
     payload: { id: event.id },
+  }),
+  "source.reordered": (event) => ({
+    event_type: "source.reordered",
+    run_id: null,
+    agent_id: null,
+    payload: { id: event.id, rank: event.rank },
   }),
 };

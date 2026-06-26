@@ -19,7 +19,7 @@ import { Context, Effect, Layer } from "effect";
 import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { SourcesPersistence } from "../persistence.ts";
-import { createSourcesStore, type SourcesStore } from "../store.ts";
+import { createSourcesStore, type ReorderDirection, type SourcesStore } from "../store.ts";
 import { SOURCES_FILE_VERSION, type SourcesAuditEvents } from "../types.ts";
 import { DuplicateOrigin, SourceIoError, SourceNotFound } from "./errors.ts";
 
@@ -39,6 +39,13 @@ export type SourceRegistrySvc = {
   activate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   deactivate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   delete(id: string): Effect.Effect<void, SourceNotFound | SourceIoError>;
+  // Raise/lower a Source one precedence step (a free total-order swap). A swap at
+  // the requested end is a clean no-op (returns the unchanged Source); an unknown
+  // id is SourceNotFound.
+  reorder(
+    id: string,
+    direction: ReorderDirection,
+  ): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   // Audit source emitter (source: 'sources').
   events: TypedEmitter<SourcesAuditEvents>;
 };
@@ -160,6 +167,21 @@ function buildSvc(store: SourcesStore): SourceRegistrySvc {
           res.ok
             ? Effect.promise(() => events.emit("source.removed", { id }))
             : Effect.fail(new SourceNotFound({ id })),
+      ),
+
+    reorder: (id, direction) =>
+      Effect.flatMap(
+        ioGuard(() => store.reorder(id, direction)),
+        (res) => {
+          if (!res.ok) return Effect.fail(new SourceNotFound({ id }));
+          // Emit the audit row only for a genuine swap (ranks moved + persisted) —
+          // a no-op (already at the requested end) wrote nothing, so it records no
+          // user-action row (AGENTS.md: audit reflects a real mutation).
+          if (!res.changed) return Effect.succeed(res.source);
+          return Effect.promise(() =>
+            events.emit("source.reordered", { id, rank: res.source.rank }),
+          ).pipe(Effect.as(res.source));
+        },
       ),
   };
 }

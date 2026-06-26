@@ -75,6 +75,50 @@ describe("sources audit emission", () => {
     }
   });
 
+  test("reorder emits source.reordered with a refs-only payload (id + new rank, no values)", async () => {
+    const audit = makeAudit();
+    const registry = makeRegistry();
+    wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
+
+    // Two adds: a (rank lower), b (rank higher). Raise a above b.
+    const a = await Effect.runPromise(registry.add("https://github.com/a/lower"));
+    await Effect.runPromise(registry.add("https://github.com/b/higher"));
+    const reordered = await Effect.runPromise(registry.reorder(a.id, "up"));
+
+    const rows = await audit.query({ source: "sources" });
+    const row = rows.find((r) => r.event_type === "source.reordered");
+    expect(row).toBeDefined();
+    expect(row?.run_id).toBeNull();
+    expect(row?.agent_id).toBeNull();
+    // Refs only: the id + its NEW rank — never origins or file contents.
+    expect(row?.payload).toEqual({ id: a.id, rank: reordered.rank });
+    const payload = row?.payload as Record<string, unknown> | undefined;
+    expect(payload?.origin).toBeUndefined();
+  });
+
+  test("reorder of an unknown id fails (SourceNotFound) and emits no audit row", async () => {
+    const audit = makeAudit();
+    const registry = makeRegistry();
+    wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
+
+    await Effect.runPromiseExit(registry.reorder("nope", "up"));
+    const rows = await audit.query({ source: "sources" });
+    expect(rows.some((r) => r.event_type === "source.reordered")).toBe(false);
+  });
+
+  test("a NO-OP reorder (already at the end) emits NO audit row", async () => {
+    const audit = makeAudit();
+    const registry = makeRegistry();
+    wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
+
+    // One added Source (the highest rank). Moving it up is a no-op — no row.
+    const a = await Effect.runPromise(registry.add("https://github.com/a/b"));
+    await Effect.runPromise(registry.reorder(a.id, "up"));
+
+    const rows = await audit.query({ source: "sources" });
+    expect(rows.some((r) => r.event_type === "source.reordered")).toBe(false);
+  });
+
   test("a duplicate-origin add emits no audit row", async () => {
     const audit = makeAudit();
     const registry = makeRegistry();

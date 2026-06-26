@@ -36,7 +36,15 @@ afterEach(() => {
 });
 
 function gitSource(id: string, active: boolean, createdAt: number): Source {
-  return { id, origin: `https://github.com/owner/${id}`, kind: "git", active, createdAt };
+  // `createdAt` encodes the intended order; reuse it as the stored precedence rank.
+  return {
+    id,
+    origin: `https://github.com/owner/${id}`,
+    kind: "git",
+    active,
+    createdAt,
+    rank: createdAt,
+  };
 }
 
 function writeSkillIn(mirrorRoot: string, name: string, frontmatter: string, body: string): void {

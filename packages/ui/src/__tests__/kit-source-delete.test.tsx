@@ -55,8 +55,9 @@ function sources(): Source[] {
       kind: "local",
       active: true,
       createdAt: 1,
+      rank: 0,
     },
-    { id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: true, createdAt: 2 },
+    { id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: true, createdAt: 2, rank: 1 },
   ];
   return all.filter((s) => !deleted.has(s.id));
 }

@@ -93,6 +93,7 @@ function installStubs(): void {
           kind: "git",
           active: true,
           createdAt: 1,
+          rank: 0,
         } satisfies Source,
       ]);
     if (path === "/api/kit/diff" && method === "POST") return json({ entries: [] });

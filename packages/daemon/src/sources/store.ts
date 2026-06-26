@@ -17,6 +17,14 @@ export type SourcesWriter = { write(file: SourcesFile): void };
 export type AddResult = { ok: true; source: Source } | { ok: false; reason: "duplicate" };
 export type MutateResult = { ok: true; source: Source } | { ok: false; reason: "not-found" };
 export type DeleteResult = { ok: true } | { ok: false; reason: "not-found" };
+// Reorder is a total-order swap. An unknown id is not-found. `changed` tells a
+// genuine swap (ranks moved + persisted) apart from a no-op (already at the
+// requested end) so the audited service emits an audit row only for a real
+// mutation — never for a no-op that wrote nothing.
+export type ReorderResult =
+  | { ok: true; changed: boolean; source: Source }
+  | { ok: false; reason: "not-found" };
+export type ReorderDirection = "up" | "down";
 // Seeding a local Source is idempotent: a duplicate fixed id no-ops (the Starter
 // is the sole minter of its well-known id).
 export type SeedLocalResult = { ok: true; source: Source } | { ok: false; reason: "duplicate-id" };
@@ -32,6 +40,11 @@ export type SourcesStore = {
   activate(id: string): MutateResult;
   deactivate(id: string): MutateResult;
   delete(id: string): DeleteResult;
+  // Raise ("up") or lower ("down") a Source one precedence step by swapping its
+  // stored rank with its adjacent neighbor in rank order. A free total order — the
+  // swap may cross kinds (the local Starter above a git Source). A swap at the end
+  // in the requested direction is a no-op (returns the unchanged Source).
+  reorder(id: string, direction: ReorderDirection): ReorderResult;
   snapshot(): SourcesFile;
 };
 
@@ -69,6 +82,13 @@ export function createSourcesStore(
     return { ok: true, source: { ...target } };
   }
 
+  // The next rank for a new Source: max(existing ranks)+1, so each add becomes the
+  // new highest precedence (and an empty registry's first seed is rank 0).
+  function nextRank(): number {
+    if (sources.length === 0) return 0;
+    return Math.max(...sources.map((s) => s.rank)) + 1;
+  }
+
   return {
     list() {
       return sources.map((s) => ({ ...s }));
@@ -84,6 +104,7 @@ export function createSourcesStore(
         kind: "git",
         active: true,
         createdAt: now(),
+        rank: nextRank(),
       };
       commit([...sources, source]);
       return { ok: true, source: { ...source } };
@@ -99,6 +120,7 @@ export function createSourcesStore(
         kind: "local",
         active: true,
         createdAt: now(),
+        rank: nextRank(),
       };
       commit([...sources, source]);
       return { ok: true, source: { ...source } };
@@ -106,6 +128,34 @@ export function createSourcesStore(
 
     activate: (id) => setActive(id, true),
     deactivate: (id) => setActive(id, false),
+
+    reorder(id, direction) {
+      if (!sources.some((s) => s.id === id)) return { ok: false, reason: "not-found" };
+      // Order by stored rank ascending, id-tiebroken so adjacency is defined
+      // identically to the UI's rank-desc+id sort (robust to any duplicate-rank
+      // input, which normal max+1 minting never produces). The neighbor to swap
+      // with is the next one up ("up" = toward higher precedence) or down. At the
+      // end in that direction there is no neighbor → a clean no-op.
+      const ordered = [...sources].sort((a, b) =>
+        a.rank !== b.rank ? a.rank - b.rank : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+      );
+      const pos = ordered.findIndex((s) => s.id === id);
+      const neighborPos = direction === "up" ? pos + 1 : pos - 1;
+      const self = ordered[pos];
+      const neighbor = ordered[neighborPos];
+      if (!self) return { ok: false, reason: "not-found" };
+      if (!neighbor) return { ok: true, changed: false, source: { ...self } };
+      const next = sources.map((s) => {
+        if (s.id === self.id) return { ...s, rank: neighbor.rank };
+        if (s.id === neighbor.id) return { ...s, rank: self.rank };
+        return { ...s };
+      });
+      commit(next);
+      const updated = next.find((s) => s.id === id);
+      // `updated` is always present (id was found above); guard for the typechecker.
+      if (!updated) return { ok: false, reason: "not-found" };
+      return { ok: true, changed: true, source: { ...updated } };
+    },
 
     delete(id) {
       const idx = sources.findIndex((s) => s.id === id);

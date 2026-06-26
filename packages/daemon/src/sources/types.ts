@@ -2,7 +2,7 @@
 //
 // On-disk format (`~/.hive/sources.json`):
 //
-//   { "version": 2, "sources": [ { id, origin, kind, active, createdAt }, ... ] }
+//   { "version": 3, "sources": [ { id, origin, kind, active, createdAt, rank }, ... ] }
 //
 // Zod-validated at the disk boundary (AGENTS.md: "Zod at every external
 // boundary"). `version` is for schema migrations. The `Source` shape itself is
@@ -11,10 +11,10 @@
 import { Source } from "@hive/contract";
 import { z } from "zod";
 
-// Bumped to 2 when `Source` gained `kind` (#32). Greenfield (no users): a file at
-// any other version is discarded and re-seeded (see persistence.read), not
-// migrated.
-export const SOURCES_FILE_VERSION = 2;
+// Bumped to 3 when `Source` gained `rank` (#51, the stored precedence signal).
+// Greenfield (no users): a file at any other version is discarded and re-seeded
+// (see persistence.read), not migrated — no rank back-fill code.
+export const SOURCES_FILE_VERSION = 3;
 
 export const SourcesFileSchema = z.object({
   version: z.literal(SOURCES_FILE_VERSION),
@@ -32,15 +32,17 @@ export const SourcesFileVersionProbe = z.object({ version: z.number() });
 
 // ---- Audit events (source: 'sources') ----
 //
-// Source add/activate/deactivate/delete are user actions, so each emits one
-// audit event. Payloads are refs-only — the opaque SourceId, plus the (already
-// normalized, credential-free) origin on add. A registry mutation has neither a
-// Run nor an Agent, so run_id/agent_id are null at the normalizer.
+// Source add/activate/deactivate/delete/reorder are user actions, so each emits
+// one audit event. Payloads are refs-only — the opaque SourceId, plus the (already
+// normalized, credential-free) origin on add, plus the new rank on reorder. A
+// registry mutation has neither a Run nor an Agent, so run_id/agent_id are null at
+// the normalizer.
 export type SourcesAuditEvents = {
   "source.added": { id: string; origin: string };
   "source.activated": { id: string };
   "source.deactivated": { id: string };
   "source.removed": { id: string };
+  "source.reordered": { id: string; rank: number };
 };
 
 // Normalize an origin for storage / duplicate comparison so that clones of the

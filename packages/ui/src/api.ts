@@ -346,6 +346,14 @@ export const api = {
     call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/activate`, { method: "POST" }),
   deactivateSource: (cfg: ApiConfig, id: string) =>
     call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/deactivate`, { method: "POST" }),
+  // Raise ("up") or lower ("down") a Source one precedence step. Returns the
+  // updated Source. The page re-fetches ["sources"] (row order) + ["kit"] (the
+  // catalog recomputes with the new precedence → shadows flip live).
+  reorderSource: (cfg: ApiConfig, id: string, direction: "up" | "down") =>
+    call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/reorder`, {
+      method: "POST",
+      body: JSON.stringify({ direction }),
+    }),
   // Remove a Source: drops the registry row + its Mirror + its catalog entries
   // (DELETE /api/sources/:id, 204 no body). Already-deployed files are NOT touched
   // — a deployed capability whose Source is gone is an orphan (kept, never

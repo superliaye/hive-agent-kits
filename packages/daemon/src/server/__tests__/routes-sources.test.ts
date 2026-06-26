@@ -450,6 +450,73 @@ describe("server routes — sources", () => {
     }
   });
 
+  test("(#51) POST /api/sources/:id/reorder swaps ranks (200) and validates direction", async () => {
+    const server = await serverWith(stubFetch(repoTar([conformingSkill("foo")])));
+    try {
+      const a = AddSourceResult.parse(
+        await (await postOrigin(server, "https://github.com/a/b")).json(),
+      );
+      const b = AddSourceResult.parse(
+        await (await postOrigin(server, "https://github.com/c/d")).json(),
+      );
+      // b was added later → higher rank.
+      expect(b.source.rank).toBeGreaterThan(a.source.rank);
+
+      // Raise a above b.
+      const res = await server.app.fetch(
+        authed(`/api/sources/${a.source.id}/reorder`, {
+          method: "POST",
+          body: JSON.stringify({ direction: "up" }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const updated = (await res.json()) as { id: string; rank: number };
+      expect(updated.id).toBe(a.source.id);
+
+      // The list now ranks a above b.
+      const list = await server.app.fetch(authed("/api/sources"));
+      const sources = (await list.json()) as { id: string; rank: number }[];
+      const aRank = sources.find((s) => s.id === a.source.id)?.rank ?? -1;
+      const bRank = sources.find((s) => s.id === b.source.id)?.rank ?? -1;
+      expect(aRank).toBeGreaterThan(bRank);
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("(#51) reorder with an invalid direction → 400", async () => {
+    const server = await serverWith(stubFetch(repoTar([conformingSkill("foo")])));
+    try {
+      const a = AddSourceResult.parse(
+        await (await postOrigin(server, "https://github.com/a/b")).json(),
+      );
+      const res = await server.app.fetch(
+        authed(`/api/sources/${a.source.id}/reorder`, {
+          method: "POST",
+          body: JSON.stringify({ direction: "sideways" }),
+        }),
+      );
+      expect(res.status).toBe(400);
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("(#51) reorder an unknown id → 404", async () => {
+    const server = await serverWith(stubFetch([]));
+    try {
+      const res = await server.app.fetch(
+        authed("/api/sources/nope/reorder", {
+          method: "POST",
+          body: JSON.stringify({ direction: "up" }),
+        }),
+      );
+      expect(res.status).toBe(404);
+    } finally {
+      await server.dispose();
+    }
+  });
+
   test("(#36) DELETE removes the on-disk Mirror dir + GET omits the Source", async () => {
     const server = await serverWith(stubFetch(repoTar([conformingSkill("foo")])));
     try {

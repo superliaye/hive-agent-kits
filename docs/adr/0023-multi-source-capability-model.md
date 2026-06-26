@@ -59,8 +59,11 @@ Deploy; the losers are **Shadowed**. A Shadowed loser is realized as a **distinc
 non-deployable catalog entry** — its own content Variant (one `CapabilityEntry` per
 ContentSha, sharing `(kind, name)` with the winner) carrying `shadowed:true`, NOT a
 side list and NOT collapsed onto the winner. It is **visible as its own row**,
-clearly badged "not deployed (duplicate)", **non-blocking**. This *replaces* the old
-hard "within-kind collision is un-deployable / refuse the Deploy" rule
+clearly badged "not deployed (duplicate)", **non-blocking**. A shadowed entry also
+carries **`shadowedBy`** — the winning Variant's top-provider `sourceId` — so the UI
+can name the Source that actually deploys ("Hidden — also provided by `<Source>`").
+This *replaces* the old hard "within-kind collision is un-deployable / refuse the
+Deploy" rule
 (`kit/catalog.ts` `withCollisions`, `kit/selection.ts` `resolveSelection` — which no
 longer throws on a cross-Source collision; it resolves the winner). A duplicate
 CapabilityKey **inside a single Source** is still treated as a malformed-source
@@ -71,11 +74,19 @@ called from the kit read path; the `KitSvc.catalog()/sync()` → Sources-service
 context-split is **consciously deferred**, so this upstream/downstream seam is
 half-realized by design (a functional core, not yet a new Effect service Tag).
 
-**Default precedence order (decided).** When the user has not manually ranked,
-**user-added Sources outrank the Starter Source** — the Starter is the overridable
-baseline, so anything the user deliberately adds wins a collision against it. Among
-user-added Sources, ties break by registration order (earliest-added is lower; a
-newly-added Source outranks existing ones). The user may re-rank at any time.
+**Source precedence is a stored `rank` — a free total order.** Each Source carries
+an explicit integer `rank` (higher wins a collision); aggregation reads it as the
+**sole** precedence signal (no runtime kind-band, not registration index, not
+`createdAt`). The user **re-ranks at will** via per-Source move-up/down — the order
+is unconstrained, so the local Starter may be ranked **above** a git Source.
+
+The **default seed** reproduces "user-added git > local Starter, newest-first"
+*without* a band: the Starter seeds first at the lowest rank, and each `add` takes
+`max(rank)+1` (the new highest). So an un-reordered registry behaves exactly as
+the old derived order did, but every step of it is now overridable. `reorder(id,
+"up"|"down")` swaps a Source's rank with its adjacent neighbor in rank order and
+emits a refs-only `source.reordered` audit event. Persistence is versioned; the
+`rank` field was a greenfield discard-and-reseed (no migration).
 
 **Toggle/delete semantics.** Deactivating or deleting a Source deactivates and
 hides its Capabilities. A *merged* Capability survives as long as ≥1 active Source

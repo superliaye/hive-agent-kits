@@ -10,6 +10,7 @@ describe("Source — kind discriminator", () => {
         kind: "git",
         active: true,
         createdAt: 1,
+        rank: 1,
       }).success,
     ).toBe(true);
     expect(
@@ -19,17 +20,31 @@ describe("Source — kind discriminator", () => {
         kind: "local",
         active: true,
         createdAt: 1,
+        rank: 0,
       }).success,
     ).toBe(true);
   });
 
   test("rejects an unknown kind and a missing kind", () => {
     expect(
-      Source.safeParse({ id: "x", origin: "y", kind: "remote", active: true, createdAt: 1 }).success,
+      Source.safeParse({ id: "x", origin: "y", kind: "remote", active: true, createdAt: 1, rank: 0 })
+        .success,
     ).toBe(false);
-    expect(Source.safeParse({ id: "x", origin: "y", active: true, createdAt: 1 }).success).toBe(
-      false,
-    );
+    expect(
+      Source.safeParse({ id: "x", origin: "y", active: true, createdAt: 1, rank: 0 }).success,
+    ).toBe(false);
+  });
+
+  test("requires rank (the stored precedence signal)", () => {
+    expect(
+      Source.safeParse({
+        id: "x",
+        origin: "https://github.com/a/b",
+        kind: "git",
+        active: true,
+        createdAt: 1,
+      }).success,
+    ).toBe(false);
   });
 });
 

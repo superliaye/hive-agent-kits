@@ -123,7 +123,7 @@ function kitOver(
 ) {
   const sourcesLayer = SourceRegistryLive({
     mode: "memory",
-    initial: sources.map((s, i) => ({ ...s, createdAt: i })),
+    initial: sources.map((s, i) => ({ ...s, createdAt: i, rank: i })),
   });
   const rt = ManagedRuntime.make(
     Layer.merge(KitLive({ fetch: fetchImpl }).pipe(Layer.provide(sourcesLayer)), sourcesLayer),
@@ -196,7 +196,14 @@ describe("deploy from the local mirror (#32, offline)", () => {
     const sourcesLayer = SourceRegistryLive({
       mode: "memory",
       initial: [
-        { id: "starter", origin: "local:starter", kind: "local", active: true, createdAt: 0 },
+        {
+          id: "starter",
+          origin: "local:starter",
+          kind: "local",
+          active: true,
+          createdAt: 0,
+          rank: 0,
+        },
       ],
     });
     const rt = ManagedRuntime.make(

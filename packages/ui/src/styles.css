@@ -1389,6 +1389,46 @@ pre.config {
   outline: 2px solid var(--color-danger);
   outline-offset: 2px;
 }
+/* Per-Source precedence re-rank (#51): a stacked up/down pair, muted until hover,
+   so it reads as a secondary control distinct from the toggle/delete. */
+.kit-source-rank {
+  display: inline-flex;
+  flex-direction: column;
+  margin-left: 6px;
+  line-height: 0;
+}
+.kit-source-up,
+.kit-source-down {
+  padding: 0 5px;
+  font-size: 9px;
+  line-height: 1.2;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border-default);
+  cursor: pointer;
+}
+.kit-source-up {
+  border-radius: 4px 4px 0 0;
+  border-bottom: none;
+}
+.kit-source-down {
+  border-radius: 0 0 4px 4px;
+}
+.kit-source-up:hover:not(:disabled),
+.kit-source-down:hover:not(:disabled) {
+  color: var(--color-text-default);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.kit-source-up:disabled,
+.kit-source-down:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.kit-source-up:focus-visible,
+.kit-source-down:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
 .kit-header-actions {
   display: flex;
   gap: 8px;
@@ -1693,6 +1733,14 @@ pre.config {
 .kit-row-blocked {
   font-size: 11px;
   color: var(--color-danger);
+}
+/* Shadow explanation (#51): a muted note on a precedence-loser row naming the
+   Source that actually deploys. Informational, not an error (distinct from
+   .kit-row-blocked's danger color). */
+.kit-row-shadow {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-style: italic;
 }
 .kit-indicator {
   font-size: 10px;

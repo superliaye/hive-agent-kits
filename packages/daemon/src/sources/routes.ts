@@ -3,7 +3,7 @@
 // `kit/routes.ts`.
 
 import type { AddSourceResult, Source } from "@hive/contract";
-import { AddSourceBody } from "@hive/contract";
+import { AddSourceBody, ReorderSourceBody } from "@hive/contract";
 import type { Effect } from "effect";
 import { Hono } from "hono";
 import { ZodError } from "zod";
@@ -88,6 +88,18 @@ export function buildSourcesRoutes(
     const res = await run(registry.deactivate(c.req.param("id")));
     if (res.ok) return c.json(res.value, 200);
     return notFoundOr500(c, res.error, "deactivate failed");
+  });
+
+  app.post("/api/sources/:id/reorder", async (c) => {
+    const body = await readJson(c);
+    if (!body.ok) return c.json({ error: "invalid JSON body" }, 400);
+    const parsed = ReorderSourceBody.safeParse(body.value);
+    if (!parsed.success) {
+      return c.json({ error: "invalid direction", issues: zodIssues(parsed.error) }, 400);
+    }
+    const res = await run(registry.reorder(c.req.param("id"), parsed.data.direction));
+    if (res.ok) return c.json(res.value, 200);
+    return notFoundOr500(c, res.error, "reorder failed");
   });
 
   app.delete("/api/sources/:id", async (c) => {

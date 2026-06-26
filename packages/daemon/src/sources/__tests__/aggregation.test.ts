@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { Source } from "@hive/contract";
 import { type AggInput, aggregate, sourcePrecedence } from "../aggregation.ts";
 
+// Default rank derives from a per-call counter so successive `src()` fixtures get
+// increasing ranks (mirroring the seed: each later-added Source = the new highest
+// rank). Pass `rank` in `over` to pin a specific precedence (e.g. a re-rank).
+let rankSeq = 0;
 function src(id: string, over: Partial<Source> = {}): Source {
   return {
     id,
@@ -9,6 +13,7 @@ function src(id: string, over: Partial<Source> = {}): Source {
     kind: "git",
     active: true,
     createdAt: 0,
+    rank: rankSeq++,
     ...over,
   };
 }
@@ -29,20 +34,36 @@ const SHA_B = "b".repeat(64);
 const SHA_C = "c".repeat(64);
 
 describe("sourcePrecedence", () => {
-  test("git outranks local (Starter)", () => {
-    const rank = sourcePrecedence([src("starter", { kind: "local" }), src("git1")]);
+  test("reads the stored rank directly (higher wins), independent of array order", () => {
+    // The git Source carries a LOWER rank than the local Starter here — a FREE total
+    // order, so the precedence map must honor the stored rank, not a kind-band.
+    const rank = sourcePrecedence([
+      src("git1", { kind: "git", rank: 1 }),
+      src("starter", { kind: "local", rank: 5 }),
+    ]);
+    expect(rank.get("git1")).toBe(1);
+    expect(rank.get("starter")).toBe(5);
+    expect((rank.get("starter") ?? -1) > (rank.get("git1") ?? -1)).toBe(true);
+  });
+
+  test("default seed ranks reproduce git > local Starter (Starter lowest, each add higher)", () => {
+    // Seed order: Starter first (lowest), then two git adds (each the new highest).
+    const rank = sourcePrecedence([
+      src("starter", { kind: "local", rank: 0 }),
+      src("git1", { rank: 1 }),
+      src("git2", { rank: 2 }),
+    ]);
+    expect((rank.get("git2") ?? -1) > (rank.get("git1") ?? -1)).toBe(true);
     expect((rank.get("git1") ?? -1) > (rank.get("starter") ?? -1)).toBe(true);
   });
 
-  test("among git Sources, the later insertion index wins (NOT createdAt)", () => {
-    const rank = sourcePrecedence([src("first"), src("second"), src("third")]);
-    expect((rank.get("third") ?? -1) > (rank.get("second") ?? -1)).toBe(true);
-    expect((rank.get("second") ?? -1) > (rank.get("first") ?? -1)).toBe(true);
-  });
-
-  test("equal createdAt: the later-inserted Source still wins deterministically", () => {
-    const rank = sourcePrecedence([src("a", { createdAt: 100 }), src("b", { createdAt: 100 })]);
-    expect((rank.get("b") ?? -1) > (rank.get("a") ?? -1)).toBe(true);
+  test("NOT derived from array index — the same set in a different order maps identically", () => {
+    const a = sourcePrecedence([src("x", { rank: 7 }), src("y", { rank: 3 })]);
+    const b = sourcePrecedence([src("y", { rank: 3 }), src("x", { rank: 7 })]);
+    expect(a.get("x")).toBe(b.get("x"));
+    expect(a.get("y")).toBe(b.get("y"));
+    expect(a.get("x")).toBe(7);
+    expect(a.get("y")).toBe(3);
   });
 });
 
@@ -175,5 +196,71 @@ describe("aggregate", () => {
         rank([src("s1")]),
       ),
     ).toThrow();
+  });
+
+  test("(h) shadowedBy on the shadowed variant = the winner's top provider; winner has none", () => {
+    const sources = [src("s1", { rank: 1 }), src("s2", { rank: 2 })];
+    const entries = aggregate(
+      [
+        input({ name: "foo", sourceId: "s1", contentSha: SHA_A }),
+        input({ name: "foo", sourceId: "s2", contentSha: SHA_B }),
+      ],
+      rank(sources),
+    );
+    const winner = entries.find((e) => e.deployable);
+    const shadow = entries.find((e) => e.shadowed);
+    expect(winner?.sourceIds[0]).toBe("s2");
+    expect(winner?.shadowedBy).toBeUndefined();
+    // The shadowed variant names the deployable winner's top provider.
+    expect(shadow?.shadowedBy).toBe("s2");
+  });
+
+  test("(i) a reorder that RAISES the shadowed Source above the winner FLIPS deployable/shadowed/shadowedBy", () => {
+    // Before: s2 (rank 2) wins SHA_B; s1 (rank 1) is shadowed → shadowedBy s2.
+    const before = aggregate(
+      [
+        input({ name: "foo", sourceId: "s1", contentSha: SHA_A }),
+        input({ name: "foo", sourceId: "s2", contentSha: SHA_B }),
+      ],
+      sourcePrecedence([src("s1", { rank: 1 }), src("s2", { rank: 2 })]),
+    );
+    expect(before.find((e) => e.deployable)?.sourceIds[0]).toBe("s2");
+    expect(before.find((e) => e.shadowed)?.shadowedBy).toBe("s2");
+
+    // After a reorder that swaps ranks (s1 now highest), s1's variant wins and s2
+    // becomes shadowed → shadowedBy now points at s1.
+    const after = aggregate(
+      [
+        input({ name: "foo", sourceId: "s1", contentSha: SHA_A }),
+        input({ name: "foo", sourceId: "s2", contentSha: SHA_B }),
+      ],
+      sourcePrecedence([src("s1", { rank: 2 }), src("s2", { rank: 1 })]),
+    );
+    const winner = after.find((e) => e.deployable);
+    const shadow = after.find((e) => e.shadowed);
+    expect(winner?.sourceIds[0]).toBe("s1");
+    expect(winner?.shadowedBy).toBeUndefined();
+    expect(shadow?.sourceIds[0]).toBe("s2");
+    expect(shadow?.shadowedBy).toBe("s1");
+  });
+
+  test("(j) a FREE reorder may place the local Starter above a git Source (band-crossing allowed)", () => {
+    // Starter (local) carries a HIGHER rank than the git Source — a deliberate
+    // re-rank across what used to be a hard kind-band. The Starter's variant wins.
+    const entries = aggregate(
+      [
+        input({ name: "foo", sourceId: "starter", contentSha: SHA_A }),
+        input({ name: "foo", sourceId: "git1", contentSha: SHA_B }),
+      ],
+      sourcePrecedence([
+        src("starter", { kind: "local", rank: 9 }),
+        src("git1", { kind: "git", rank: 2 }),
+      ]),
+    );
+    const winner = entries.find((e) => e.deployable);
+    const shadow = entries.find((e) => e.shadowed);
+    expect(winner?.sourceIds[0]).toBe("starter");
+    expect(shadow?.sourceIds[0]).toBe("git1");
+    expect(shadow?.shadowedBy).toBe("starter");
   });
 });

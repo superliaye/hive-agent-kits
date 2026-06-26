@@ -14,6 +14,7 @@ const SAMPLE: SourcesFile = {
       kind: "git",
       active: true,
       createdAt: 1_730_000_000_000,
+      rank: 1,
     },
     {
       id: "starter",
@@ -21,6 +22,7 @@ const SAMPLE: SourcesFile = {
       kind: "local",
       active: false,
       createdAt: 1_730_000_000_001,
+      rank: 0,
     },
   ],
 };

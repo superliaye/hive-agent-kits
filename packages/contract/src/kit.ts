@@ -33,6 +33,9 @@ export type DeployTarget = z.infer<typeof DeployTarget>;
 //   shadowed   — true = this Variant lost precedence to a sibling Variant under the
 //                same CapabilityKey (a non-blocking duplicate, "not deployed
 //                (duplicate)"). Distinct from `blockedReason` (malformed/un-deployable).
+//   shadowedBy — on a shadowed Variant, the winning (deployable) Variant's
+//                top-provider sourceId — so the UI can name "Hidden — also provided
+//                by <Source>". Undefined on the winner and on non-shadowed entries.
 //
 // Exactly one Variant per CapabilityKey is `deployable:true`; shadowed and blocked
 // Variants are `deployable:false`.
@@ -46,6 +49,7 @@ export const CapabilityEntry = z.object({
   sourceIds: z.array(z.string()).min(1),
   contentSha: z.string(),
   blockedReason: z.string().optional(),
+  shadowedBy: z.string().optional(),
 });
 export type CapabilityEntry = z.infer<typeof CapabilityEntry>;
 

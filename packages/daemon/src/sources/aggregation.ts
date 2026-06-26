@@ -41,27 +41,20 @@ export type AggEntry = {
   sourceIds: string[];
   contentSha: string;
   blockedReason?: string;
+  // On a shadowed Variant, the winning Variant's top-provider sourceId — so the UI
+  // can name "Hidden — also provided by <Source>". Absent on winners/blocked.
+  shadowedBy?: string;
 };
 
-// Assign a precedence rank per `source.id` (higher wins) from the DERIVED
-// comparator (grill Q4), matching ADR-0023:67-68 registration-order:
-//   - kind:"git" outranks kind:"local" (the Starter ranks lowest);
-//   - among kind:"git", the LATER insertion index wins ("a newly-added Source
-//     outranks existing ones").
-// `sources` arrives in registration (insertion) order (the store appends). The
-// array index — NOT `createdAt` (a coarse wall-clock ms stamp that can tie or
-// invert under clock skew) — is the ADR's actual signal and a total deterministic
-// order.
+// The precedence map (higher wins) keyed by `source.id`, read STRAIGHT from each
+// Source's stored `rank` (ADR-0023). A FREE total order: the user re-ranks at
+// will, so the Starter may sit above a git Source. The default seed (Starter
+// lowest, each add the new highest) reproduces "user-added git > local Starter,
+// newest-first" WITHOUT a runtime kind-band. `createdAt` is not the signal; array
+// order is not the signal — only the stored rank.
 export function sourcePrecedence(sources: readonly Source[]): Map<string, number> {
-  // Rank by a tuple (kindRank, insertionIndex). git=1 outranks local=0; within a
-  // kind, later index ranks higher. A single dense integer encodes both: local
-  // Sources occupy the low band, git Sources the high band, each ordered by index.
-  const n = sources.length;
   const rank = new Map<string, number>();
-  sources.forEach((s, idx) => {
-    const kindBand = s.kind === "git" ? n : 0;
-    rank.set(s.id, kindBand + idx);
-  });
+  for (const s of sources) rank.set(s.id, s.rank);
   return rank;
 }
 
@@ -160,6 +153,9 @@ export function aggregate(
       return a.contentSha < b.contentSha ? -1 : a.contentSha > b.contentSha ? 1 : 0;
     });
 
+    // The winning Variant is variants[0]; a shadowed Variant names its winner's
+    // top provider so the UI can explain "Hidden — also provided by <Source>".
+    const winnerTopProvider = variants[0]?.providers[0]?.sourceId;
     variants.forEach((variant, idx) => {
       const winner = idx === 0;
       const lead = variant.providers[0];
@@ -173,6 +169,7 @@ export function aggregate(
         shadowed: !winner,
         sourceIds: variant.providers.map((p) => p.sourceId),
         contentSha: variant.contentSha,
+        ...(winner ? {} : winnerTopProvider ? { shadowedBy: winnerTopProvider } : {}),
       });
     });
   }

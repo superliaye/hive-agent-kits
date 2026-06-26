@@ -60,7 +60,7 @@ async function releaseDiff(): Promise<void> {
 }
 
 function sources(): Source[] {
-  return [{ id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: true, createdAt: 1 }];
+  return [{ id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: true, createdAt: 1, rank: 0 }];
 }
 
 function catalog(): Catalog {

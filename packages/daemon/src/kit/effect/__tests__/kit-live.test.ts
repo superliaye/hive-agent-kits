@@ -75,6 +75,7 @@ function kitOver(origins: string[], fetchImpl: HttpFetch) {
       kind: "git" as const,
       active: true,
       createdAt: i,
+      rank: i,
     })),
   });
   // Merge so both Kit (with the shared registry provided) and SourceRegistry are

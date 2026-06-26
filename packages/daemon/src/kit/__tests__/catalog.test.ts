@@ -11,13 +11,19 @@ import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const CLONE = "D:/GitRepos/my-agent-kits";
 
+// Default rank mirrors the seed: a `local` Starter sits at rank 0 (lowest), each
+// git Source gets the next increasing rank (later-declared = higher precedence).
+// Pass `rank` in `over` to pin a specific precedence.
+let gitRankSeq = 1;
 function source(id: string, over: Partial<Source> = {}): Source {
+  const kind = over.kind ?? "git";
   return {
     id,
     origin: `https://github.com/owner/${id}`,
     kind: "git",
     active: true,
     createdAt: 0,
+    rank: kind === "local" ? 0 : gitRankSeq++,
     ...over,
   };
 }

@@ -245,6 +245,20 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     onError: () => pushToast("error", "Could not remove the Source"),
   });
 
+  // Raise/lower a Source one precedence step. Invalidate ["sources"] (row order)
+  // + ["kit"] (the catalog recomputes with the new precedence → shadows flip live).
+  // A success toast (consistent with the toggle/delete acknowledgements, #50).
+  const reorderSource = useMutation({
+    mutationFn: (v: { source: Source; direction: "up" | "down" }) =>
+      api.reorderSource(apiConfig, v.source.id, v.direction),
+    onSuccess: (_data, v) => {
+      pushToast("success", `Moved ${shortOrigin(v.source.origin)} ${v.direction}`);
+      void qc.invalidateQueries({ queryKey: ["sources"] });
+      void qc.invalidateQueries({ queryKey: ["kit"] });
+    },
+    onError: () => pushToast("error", "Could not reorder the Source"),
+  });
+
   const deployMutation = useMutation({
     mutationFn: () => api.kitDeploy(apiConfig, selection),
     onSuccess: () => {
@@ -411,6 +425,10 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               onDelete={(s) => deleteSource.mutate(s)}
               deletePendingId={deleteSource.isPending ? deleteSource.variables?.id : undefined}
               deleteFailedId={deleteSource.isError ? deleteSource.variables?.id : undefined}
+              onReorder={(s, direction) => reorderSource.mutate({ source: s, direction })}
+              reorderPendingId={
+                reorderSource.isPending ? reorderSource.variables?.source.id : undefined
+              }
             />
           </div>
           <AddSourceForm apiConfig={apiConfig} inputRef={addSourceInputRef} />
@@ -755,6 +773,8 @@ function SourceRows({
   onDelete,
   deletePendingId,
   deleteFailedId,
+  onReorder,
+  reorderPendingId,
 }: {
   sources: Source[] | undefined;
   syncStatuses: SourceSyncStatus[];
@@ -770,6 +790,10 @@ function SourceRows({
   // confirm (the error banner above carries the failure; the row returns to its
   // Remove trigger rather than sitting armed).
   deleteFailedId: string | undefined;
+  // Raise ("up") / lower ("down") a Source one precedence step.
+  onReorder: (s: Source, direction: "up" | "down") => void;
+  // The id of the Source whose reorder is currently mutating (same per-row scoping).
+  reorderPendingId: string | undefined;
 }): JSX.Element {
   if (sources === undefined) {
     // Fallback: render the active-only sync rows read-only. The first row keeps the
@@ -791,14 +815,19 @@ function SourceRows({
   }
 
   const syncById = new Map(syncStatuses.map((s) => [s.sourceId, s] as const));
+  // Render in precedence order: highest rank first (the default seed keeps the
+  // Starter — lowest rank — at the bottom). A stable id tiebreak keeps equal ranks
+  // deterministic.
+  const ordered = [...sources].sort((a, b) =>
+    b.rank !== a.rank ? b.rank - a.rank : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  );
   // Stable freshness-testid anchor: the bare `kit-sha`/`kit-freshness` go on the
-  // FIRST row that has a state.sync entry (the first *synced* row), never raw idx 0
-  // — the Starter seeds first in registry order and is SHA-less/deactivatable, so
-  // anchoring on position would put the stable testid on a SHA-less row.
-  const firstSyncedId = sources.find((s) => syncById.has(s.id))?.id;
+  // FIRST row (in precedence order) that has a state.sync entry — never raw idx 0,
+  // since a SHA-less Source could sit at the top.
+  const firstSyncedId = ordered.find((s) => syncById.has(s.id))?.id;
   return (
     <>
-      {sources.map((s) => (
+      {ordered.map((s, idx) => (
         <SourceRow
           key={s.id}
           id={s.id}
@@ -812,6 +841,11 @@ function SourceRows({
           onDelete={() => onDelete(s)}
           deletePending={deletePendingId === s.id}
           deleteFailed={deleteFailedId === s.id}
+          onReorder={(direction) => onReorder(s, direction)}
+          reorderPending={reorderPendingId === s.id}
+          // Disable move-up on the top row and move-down on the bottom row.
+          isFirst={idx === 0}
+          isLast={idx === ordered.length - 1}
         />
       ))}
     </>
@@ -842,6 +876,10 @@ function SourceRow({
   onDelete,
   deletePending,
   deleteFailed,
+  onReorder,
+  reorderPending,
+  isFirst,
+  isLast,
 }: {
   id: string;
   origin: string;
@@ -854,6 +892,14 @@ function SourceRow({
   onDelete?: () => void;
   deletePending?: boolean;
   deleteFailed?: boolean;
+  // Raise ("up") / lower ("down") this Source one precedence step. Absent in the
+  // read-only loading fallback (no reorder controls render there).
+  onReorder?: (direction: "up" | "down") => void;
+  reorderPending?: boolean;
+  // Position in the precedence-ordered list, so the top row disables move-up and
+  // the bottom row disables move-down.
+  isFirst?: boolean;
+  isLast?: boolean;
 }): JSX.Element {
   const fresh = sync ? freshnessOf(sync.state) : null;
   // Two-step inline confirm: the first "Remove" click arms (reveals Confirm +
@@ -915,6 +961,33 @@ function SourceRow({
             {active ? "On" : "Off"}
           </span>
         </label>
+      )}
+      {onReorder && (
+        <span className="kit-source-rank" data-testid={`kit-source-rank-${id}`}>
+          {/* Move up = raise precedence (toward the top). Disabled at the top. */}
+          <button
+            type="button"
+            className="kit-source-up"
+            onClick={() => onReorder("up")}
+            disabled={reorderPending || isFirst}
+            title="Move up (raise precedence)"
+            aria-label={`Raise precedence of ${shortOrigin(origin)}`}
+            data-testid={`kit-source-up-${id}`}
+          >
+            ▲
+          </button>
+          <button
+            type="button"
+            className="kit-source-down"
+            onClick={() => onReorder("down")}
+            disabled={reorderPending || isLast}
+            title="Move down (lower precedence)"
+            aria-label={`Lower precedence of ${shortOrigin(origin)}`}
+            data-testid={`kit-source-down-${id}`}
+          >
+            ▼
+          </button>
+        </span>
       )}
       {deletable &&
         (confirming ? (
@@ -1085,6 +1158,19 @@ function KindSection({
                           {sourceLabels.get(sid) ?? sid}
                         </span>
                       ))}
+                    </span>
+                  )}
+                  {/* A shadowed (precedence-loser) variant explains itself: the
+                      winning Source provides the deployed content. Name that Source
+                      by its human label (the same the header/merge labels use). The
+                      testid carries the short contentSha (a shadowed row is always
+                      multi-variant) so ≥2 shadowed variants of one key stay distinct. */}
+                  {e.shadowed && e.shadowedBy && (
+                    <span
+                      className="kit-row-shadow"
+                      data-testid={`kit-row-shadow-${e.name}-${shortSha}`}
+                    >
+                      Hidden — also provided by {sourceLabels.get(e.shadowedBy) ?? e.shadowedBy}
                     </span>
                   )}
                   {blocked && (

@@ -12,12 +12,18 @@ import { SourceSyncStatus } from "./kit.ts";
 // participates in sync/aggregation. `kind` distinguishes a remote `git` Source
 // (synced over the network) from the bundled `local` Starter Source (copied from
 // the in-repo package, no network) — the public add route only ever mints `git`.
+// `rank` is the stored precedence signal (ADR-0023): higher wins a cross-Source
+// collision. It is a FREE total order — the user may re-rank any Source above any
+// other (the Starter above a git Source is allowed). The default SEED reproduces
+// "user-added git > local Starter, newest-first" (Starter lowest, each add the new
+// highest) without a runtime kind-band. `createdAt` is NOT the precedence signal.
 export const Source = z.object({
   id: z.string(),
   origin: z.string(),
   kind: z.enum(["git", "local"]),
   active: z.boolean(),
   createdAt: z.number().int(),
+  rank: z.number().int(),
 });
 export type Source = z.infer<typeof Source>;
 
@@ -53,6 +59,14 @@ export const AddSourceBody = z.object({
   origin: GitHttpsUrl,
 });
 export type AddSourceBody = z.infer<typeof AddSourceBody>;
+
+// POST /api/sources/:id/reorder body: raise ("up") or lower ("down") a Source one
+// precedence step. The only re-rank control (decision: move-up/down buttons, not
+// drag-and-drop). A free total order — the swap may cross kinds.
+export const ReorderSourceBody = z.object({
+  direction: z.enum(["up", "down"]),
+});
+export type ReorderSourceBody = z.infer<typeof ReorderSourceBody>;
 
 // The conformance report produced when a Source is synced + validated on add
 // (#33). `conformant` is the strict-validate verdict; `errors` are the located

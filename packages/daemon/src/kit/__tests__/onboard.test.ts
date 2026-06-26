@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 function gitSource(id: string, origin = "https://github.com/owner/repo"): Source {
-  return { id, origin, kind: "git", active: true, createdAt: 0 };
+  return { id, origin, kind: "git", active: true, createdAt: 0, rank: 0 };
 }
 
 function conformingTar(name = "foo"): Uint8Array {
