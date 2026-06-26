@@ -1396,20 +1396,31 @@ pre.config {
 }
 .kit-row-check {
   width: 16px;
+  height: 16px;
   flex: 0 0 16px;
   align-self: center;
+  box-sizing: border-box;
+  /* Empty checkbox outline at rest, so the gutter reads as "selectable, off"
+     rather than dead space (#52); fills to a check when selected. */
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--color-accent);
+}
+.kit-row-check.checked {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
 /* CSS-rendered selection mark (no glyph in the source). */
 .kit-row-check.checked::before {
   content: "";
-  display: block;
-  width: 6px;
-  height: 11px;
-  margin: 0 auto;
+  width: 5px;
+  height: 9px;
   border: solid var(--color-accent);
   border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
+  transform: translateY(-1px) rotate(45deg);
 }
 .kit-row-main {
   display: flex;
