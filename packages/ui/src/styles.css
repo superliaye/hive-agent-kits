@@ -1425,19 +1425,53 @@ pre.config {
 .kit-diff {
   border: 1px solid var(--color-border-default);
   border-radius: 8px;
-  padding: 12px 14px;
   background: var(--color-bg-surface);
 }
-.kit-diff-title {
-  margin: 0 0 8px;
-  font-size: 14px;
+.kit-diff-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.kit-diff-caret {
+  color: var(--color-fg-muted);
+  font-size: 11px;
+}
+.kit-diff-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 13px;
+}
+.kit-diff-summary-title {
+  font-weight: 600;
+}
+.kit-diff-count-added {
+  color: var(--color-success);
+}
+.kit-diff-count-changed {
+  color: var(--color-warning);
+}
+.kit-diff-count-removed {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+.kit-diff-body {
+  padding: 0 14px 12px;
 }
 .kit-diff-warn {
-  margin-bottom: 10px;
+  margin: 0 14px 12px;
 }
 .kit-diff-cols {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
 .kit-diff-col-head {
@@ -1462,6 +1496,11 @@ pre.config {
 }
 .kit-diff-changed .kit-diff-col-head {
   color: var(--color-warning);
+}
+.kit-diff-removed li {
+  color: var(--color-danger);
+  border-left: 2px solid var(--color-danger);
+  padding-left: 6px;
 }
 .kit-diff-kind {
   font-size: 10px;

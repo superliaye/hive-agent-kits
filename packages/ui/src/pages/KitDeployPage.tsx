@@ -494,7 +494,9 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
         </div>
       )}
 
-      {diff && diff.entries.length > 0 && <DeployDiffPanel diff={diff} />}
+      {diff && diff.entries.length > 0 && (
+        <DeployDiffPanel key={JSON.stringify(selection)} diff={diff} />
+      )}
 
       {deployMutation.isError && (
         <div className="banner-error" data-testid="kit-deploy-error">
@@ -1106,25 +1108,67 @@ function KindSection({
   );
 }
 
+// One ordered source of truth for the three change buckets: the summary chips and
+// the expanded columns both derive from this, so they never drift in order/label.
+// `glyph` prefixes the count chip (+ ~ −); removed is last so its danger reads as
+// the climax in both the summary and the columns.
+const DIFF_BUCKETS = [
+  { tone: "added", label: "Added", glyph: "+", change: "added" },
+  { tone: "changed", label: "Changed", glyph: "~", change: "changed" },
+  { tone: "removed", label: "Removed", glyph: "−", change: "removed" },
+] as const;
+
 function DeployDiffPanel({ diff }: { diff: DeployDiff }): JSX.Element {
-  const added = diff.entries.filter((e) => e.change === "added");
-  const removed = diff.entries.filter((e) => e.change === "removed");
-  const changed = diff.entries.filter((e) => e.change === "changed");
+  const [open, setOpen] = useState(false);
   const userFileWarning = diff.entries.some((e) => e.replacesUserFile);
+  const buckets = DIFF_BUCKETS.map((b) => ({
+    ...b,
+    entries: diff.entries.filter((e) => e.change === b.change),
+  }));
+  // Only populated buckets render a column — a one-sided diff isn't marooned among
+  // empties. Removed severity outranks added/changed via row-level danger (CSS).
+  const populated = buckets.filter((b) => b.entries.length > 0);
   return (
     <div className="kit-diff" data-testid="kit-diff">
-      <h2 className="kit-diff-title">Deploy diff</h2>
+      <button
+        type="button"
+        className="kit-diff-toggle"
+        data-testid="kit-diff-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="kit-diff-caret" aria-hidden="true">
+          {open ? "▾" : "▸"}
+        </span>
+        <span className="kit-diff-summary" data-testid="kit-diff-summary">
+          <span className="kit-diff-summary-title">Deploy diff</span>
+          {buckets.map((b) =>
+            b.entries.length > 0 ? (
+              <span key={b.tone} className={`kit-diff-count-${b.tone}`}>
+                {b.glyph}
+                {b.entries.length}
+              </span>
+            ) : null,
+          )}
+        </span>
+      </button>
+      {/* Always visible regardless of collapse: a user-authored CLAUDE.md overwrite
+          is a destructive-action notice (no separate page-level banner covers it). */}
       {userFileWarning && (
         <div className="banner-error kit-diff-warn" data-testid="kit-diff-userfile-warn">
           This deploy replaces an existing user-authored CLAUDE.md (backed up to
           CLAUDE.md.hive-bak).
         </div>
       )}
-      <div className="kit-diff-cols">
-        <DiffCol label="Added" tone="added" entries={added} />
-        <DiffCol label="Removed" tone="removed" entries={removed} />
-        <DiffCol label="Changed" tone="changed" entries={changed} />
-      </div>
+      {open && (
+        <div className="kit-diff-body">
+          <div className="kit-diff-cols">
+            {populated.map((b) => (
+              <DiffCol key={b.tone} label={b.label} tone={b.tone} entries={b.entries} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
