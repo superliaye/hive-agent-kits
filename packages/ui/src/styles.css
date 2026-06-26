@@ -1246,6 +1246,72 @@ pre.config {
 .kit-source-toggle.on .kit-source-toggle-label {
   color: var(--color-accent);
 }
+/* The per-Source Remove control: a danger-tinted ghost button, deliberately
+   distinct from the on/off switch. Hidden for the bundled local Starter. The
+   two-step confirm (Remove? / Remove / Cancel) replaces it inline on arm. */
+.kit-source-delete {
+  margin-left: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-danger);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 40%, var(--color-border-default));
+  border-radius: 4px;
+  cursor: pointer;
+}
+.kit-source-delete:hover {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  border-color: var(--color-danger);
+}
+.kit-source-delete:focus-visible {
+  outline: 2px solid var(--color-danger);
+  outline-offset: 2px;
+}
+.kit-source-delete-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+  font-size: 11px;
+}
+.kit-source-delete-prompt {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+.kit-source-delete-go,
+.kit-source-delete-cancel {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.kit-source-delete-go {
+  color: var(--color-fg-on-accent);
+  background: var(--color-danger);
+  border: 1px solid var(--color-danger);
+}
+.kit-source-delete-go:disabled,
+.kit-source-delete-cancel:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.kit-source-delete-cancel {
+  color: var(--color-fg-default);
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+}
+.kit-source-delete-cancel:hover {
+  background: var(--color-bg-hover);
+}
+.kit-source-delete-go:focus-visible,
+.kit-source-delete-cancel:focus-visible {
+  outline: 2px solid var(--color-danger);
+  outline-offset: 2px;
+}
 .kit-header-actions {
   display: flex;
   gap: 8px;

@@ -198,6 +198,18 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     },
   });
 
+  // Remove a Source entirely (DELETE /api/sources/:id). Like the toggle, invalidate
+  // ["sources"] (the row disappears) + ["kit"] (its capabilities, built from active
+  // sources, disappear) so both update live. Already-deployed files are not deleted
+  // — an orphaned capability is kept until the user re-deploys.
+  const deleteSource = useMutation({
+    mutationFn: (id: string) => api.deleteSource(apiConfig, id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["sources"] });
+      void qc.invalidateQueries({ queryKey: ["kit"] });
+    },
+  });
+
   const deployMutation = useMutation({
     mutationFn: () => api.kitDeploy(apiConfig, selection),
     onSuccess: () => {
@@ -337,6 +349,9 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               syncStatuses={sourceStatuses}
               onToggle={(s) => toggleSource.mutate(s)}
               pendingId={toggleSource.isPending ? toggleSource.variables?.id : undefined}
+              onDelete={(s) => deleteSource.mutate(s.id)}
+              deletePendingId={deleteSource.isPending ? deleteSource.variables : undefined}
+              deleteFailedId={deleteSource.isError ? deleteSource.variables : undefined}
             />
           </div>
           <AddSourceForm apiConfig={apiConfig} />
@@ -431,6 +446,11 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       {toggleSource.isError && (
         <div className="banner-error" data-testid="kit-source-toggle-error">
           Could not change the Source — {(toggleSource.error as Error).message}
+        </div>
+      )}
+      {deleteSource.isError && (
+        <div className="banner-error" data-testid="kit-source-delete-error">
+          Could not remove the Source — {(deleteSource.error as Error).message}
         </div>
       )}
 
@@ -629,6 +649,9 @@ function SourceRows({
   syncStatuses,
   onToggle,
   pendingId,
+  onDelete,
+  deletePendingId,
+  deleteFailedId,
 }: {
   sources: Source[] | undefined;
   syncStatuses: SourceSyncStatus[];
@@ -636,6 +659,14 @@ function SourceRows({
   // The id of the Source whose toggle is currently mutating, so only that row's
   // control disables — an in-flight toggle on one Source must not freeze the rest.
   pendingId: string | undefined;
+  onDelete: (s: Source) => void;
+  // The id of the Source whose delete is currently mutating (same per-row scoping
+  // as `pendingId`).
+  deletePendingId: string | undefined;
+  // The id of the Source whose last delete FAILED, so that row auto-disarms its
+  // confirm (the error banner above carries the failure; the row returns to its
+  // Remove trigger rather than sitting armed).
+  deleteFailedId: string | undefined;
 }): JSX.Element {
   if (sources === undefined) {
     // Fallback: render the active-only sync rows read-only. The first row keeps the
@@ -669,11 +700,15 @@ function SourceRows({
           key={s.id}
           id={s.id}
           origin={s.origin}
+          kind={s.kind}
           sync={syncById.get(s.id)}
           active={s.active}
           anchor={s.id === firstSyncedId}
           onToggle={() => onToggle(s)}
           togglePending={pendingId === s.id}
+          onDelete={() => onDelete(s)}
+          deletePending={deletePendingId === s.id}
+          deleteFailed={deleteFailedId === s.id}
         />
       ))}
     </>
@@ -686,24 +721,48 @@ function SourceRows({
 // is muted and shows origin only. The bare `kit-sha`/`kit-freshness` testids land
 // on the `anchor` (first synced) row; every other synced row gets the `-<id>`
 // suffix; un-synced/inactive rows carry no SHA/freshness testid at all.
+//
+// The delete control renders only with `onDelete` AND `kind !== "local"`: the
+// bundled Starter is system-seeded, never user-added (ADR-0023), so a user-facing
+// Remove affordance does not apply to it (it is re-copied from the in-repo package
+// on every app update). Delete is destructive (drops the Source + Mirror + catalog
+// entries) so it is gated by a two-step inline confirm.
 function SourceRow({
   id,
   origin,
+  kind,
   sync,
   active,
   anchor,
   onToggle,
   togglePending,
+  onDelete,
+  deletePending,
+  deleteFailed,
 }: {
   id: string;
   origin: string;
+  kind?: Source["kind"];
   sync: SourceSyncStatus | undefined;
   active: boolean;
   anchor: boolean;
   onToggle?: () => void;
   togglePending?: boolean;
+  onDelete?: () => void;
+  deletePending?: boolean;
+  deleteFailed?: boolean;
 }): JSX.Element {
   const fresh = sync ? freshnessOf(sync.state) : null;
+  // Two-step inline confirm: the first "Remove" click arms (reveals Confirm +
+  // Cancel) without firing; the armed Confirm click calls onDelete. A SUCCESSFUL
+  // delete unmounts this row (its Source leaves the refetched list), discarding
+  // this state; a FAILED delete keeps the row, so disarm on failure (below) so it
+  // returns to the Remove trigger rather than sitting armed.
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (deleteFailed) setConfirming(false);
+  }, [deleteFailed]);
+  const deletable = onDelete && kind !== "local";
   return (
     <div
       className={`kit-source-row ${active ? "" : "kit-source-row-inactive"}`}
@@ -754,6 +813,43 @@ function SourceRow({
           </span>
         </label>
       )}
+      {deletable &&
+        (confirming ? (
+          <span className="kit-source-delete-confirm" data-testid={`kit-source-delete-arm-${id}`}>
+            <span className="kit-source-delete-prompt">Remove?</span>
+            <button
+              type="button"
+              className="kit-source-delete-go"
+              onClick={() => onDelete?.()}
+              disabled={deletePending}
+              title="Removes this Source and its capabilities from the catalog. Already-deployed files stay until you re-deploy."
+              data-testid={`kit-source-delete-confirm-${id}`}
+            >
+              {deletePending ? "Removing…" : "Remove"}
+            </button>
+            {/* Cancel only flips local UI state, so it stays enabled even while
+                the delete is in flight — a hung request must never trap the user. */}
+            <button
+              type="button"
+              className="kit-source-delete-cancel"
+              onClick={() => setConfirming(false)}
+              data-testid={`kit-source-delete-cancel-${id}`}
+            >
+              Cancel
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="kit-source-delete"
+            onClick={() => setConfirming(true)}
+            title="Remove this Source"
+            aria-label={`Remove ${shortOrigin(origin)}`}
+            data-testid={`kit-source-delete-${id}`}
+          >
+            Remove
+          </button>
+        ))}
     </div>
   );
 }

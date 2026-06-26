@@ -346,6 +346,13 @@ export const api = {
     call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/activate`, { method: "POST" }),
   deactivateSource: (cfg: ApiConfig, id: string) =>
     call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/deactivate`, { method: "POST" }),
+  // Remove a Source: drops the registry row + its Mirror + its catalog entries
+  // (DELETE /api/sources/:id, 204 no body). Already-deployed files are NOT touched
+  // — a deployed capability whose Source is gone is an orphan (kept, never
+  // auto-removed). The page re-fetches ["sources"] (row gone) + ["kit"] (its
+  // capabilities gone) on success.
+  deleteSource: (cfg: ApiConfig, id: string) =>
+    callVoid(cfg, `/api/sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
 async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResult> {
