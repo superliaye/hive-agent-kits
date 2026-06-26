@@ -84,6 +84,20 @@ function conformingSkill(name: string): SkillSpec {
   return { dir: name, frontmatter: `name: ${name}\ndescription: a ${name} skill` };
 }
 
+// A Source repo carrying a single `.plugin.md` file-marker capability (the
+// skills-only `repoTar` can't express file-marker kinds). `frontmatter` is the raw
+// YAML block — pass malformed content to exercise the add-time conformance gate.
+function repoTarWithPlugin(name: string, frontmatter: string): TarFixtureEntry[] {
+  const top = `repo-${SHA.slice(0, 7)}`;
+  return [
+    { path: `${top}/` },
+    {
+      path: `${top}/capabilities/plugins/${name}.plugin.md`,
+      content: `---\n${frontmatter}\n---\nplugin body\n`,
+    },
+  ];
+}
+
 async function postOrigin(server: ServerHandles, origin: string): Promise<Response> {
   return server.app.fetch(
     authed("/api/sources", { method: "POST", body: JSON.stringify({ origin }) }),
@@ -203,6 +217,25 @@ describe("server routes — sources", () => {
       expect(body.validation.conformant).toBe(false);
       expect(body.validation.errors.length).toBeGreaterThan(0);
       expect(body.validation.errors[0]?.name).toBeDefined();
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("(#45) reachable + a malformed plugin → 201, conformant:false, located plugin error", async () => {
+    // The failure surfaces at ADD time (validate runs inside onboardSource), not
+    // mid-Deploy: a plugin missing marketplace_source is a located conformance error.
+    const server = await serverWith(
+      stubFetch(repoTarWithPlugin("bad", "description: a plugin\nmarketplace_name: market")),
+    );
+    try {
+      const res = await postOrigin(server, "https://github.com/a/b");
+      expect(res.status).toBe(201);
+      const body = AddSourceResult.parse(await res.json());
+      expect(body.validation.conformant).toBe(false);
+      const pluginError = body.validation.errors.find((e) => e.kind === "plugin");
+      expect(pluginError).toBeDefined();
+      expect(pluginError?.message).toContain("marketplace_source");
     } finally {
       await server.dispose();
     }

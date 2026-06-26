@@ -435,6 +435,10 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
     try {
       const add = await postOrigin(server, PLUGIN_ORIGIN);
       expect(add.status).toBe(201);
+      // (#45) The well-formed plugin + bundle pass the now-stricter validate() gate
+      // end-to-end — a conformance flip would otherwise slip through this e2e, which
+      // previously checked only HTTP 201 + the `applied` lists.
+      expect(AddSourceResult.parse(await add.json()).validation.conformant).toBe(true);
       const sel = JSON.stringify({
         presets: [],
         add: { plugins: ["myplugin"], bundles: ["mybundle"] },

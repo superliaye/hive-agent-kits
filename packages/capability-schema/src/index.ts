@@ -9,5 +9,7 @@ export const formatVersion = "1";
 
 export * from "./conformance.ts";
 export * from "./identity.ts";
+export * from "./kinds/bundle.ts";
+export * from "./kinds/plugin.ts";
 export * from "./kinds/skill.ts";
 export * from "./layout.ts";

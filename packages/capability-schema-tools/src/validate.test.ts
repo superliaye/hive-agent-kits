@@ -112,11 +112,212 @@ describe("validate (strict)", () => {
     expect(result.errors.some((e) => e.name === "dirA")).toBe(true);
   });
 
-  test("non-skill kinds are not strictly gated in this slice", () => {
+  test("still-ungated kinds (agent/instruction) pass through unvalidated", () => {
+    // skill/plugin/bundle are now strictly gated; agent/instruction are not yet,
+    // so loose frontmatter on an instruction is accepted (no strict schema applied).
     const tree = memTree({
-      "plugins/Anything.plugin.md": skill("name: WHATEVER\ndescription: loose"),
+      "instructions/Anything.instructions.md": skill("name: WHATEVER\ndescription: loose"),
     });
     const result = validate(tree);
+    expect(result.conformant).toBe(true);
+  });
+});
+
+describe("validate (strict) — plugin gating", () => {
+  function plugin(fm: string): string {
+    return `---\n${fm}\n---\nbody\n`;
+  }
+
+  test("a conformant plugin is conformant with no errors", () => {
+    const tree = memTree({
+      "plugins/ok.plugin.md": plugin(
+        "description: a plugin\nmarketplace_source: owner/market\nmarketplace_name: market",
+      ),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("a plugin missing marketplace_source is a located error naming the field, kind=plugin", () => {
+    const tree = memTree({
+      "plugins/bad.plugin.md": plugin("description: a plugin\nmarketplace_name: market"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(false);
+    const err = result.errors.find((e) => e.kind === "plugin" && e.name === "bad");
+    expect(err).toBeDefined();
+    expect(err?.message).toContain("marketplace_source");
+  });
+
+  test("a plugin with absent frontmatter degrades to a located error, never throws", () => {
+    const tree = memTree({ "plugins/bare.plugin.md": "no frontmatter here\n" });
+    let threw = false;
+    let result: ReturnType<typeof validate> | undefined;
+    try {
+      result = validate(tree);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result?.conformant).toBe(false);
+    expect(result?.errors.some((e) => e.kind === "plugin" && e.name === "bare")).toBe(true);
+  });
+});
+
+describe("validate (strict) — bundle gating", () => {
+  function bundle(fm: string): string {
+    return `---\n${fm}\n---\nbody\n`;
+  }
+
+  test("a conformant setup-script bundle (absent installer.kind) is conformant", () => {
+    const tree = memTree({
+      "bundles/ok.bundle.md": bundle(
+        "description: a bundle\nsource: https://x.git\npinned_commit: abc\ninstaller:\n  command: ./setup",
+      ),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("a setup-script bundle missing pinned_commit is a located error, kind=bundle", () => {
+    const tree = memTree({
+      "bundles/bad.bundle.md": bundle(
+        "description: a bundle\nsource: https://x.git\ninstaller:\n  command: ./setup",
+      ),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(false);
+    const err = result.errors.find((e) => e.kind === "bundle" && e.name === "bad");
+    expect(err).toBeDefined();
+    expect(err?.message).toContain("pinned_commit");
+  });
+
+  test("a bundle whose installer is absent/non-object degrades to a located error, never throws", () => {
+    // The bundle-level superRefine reads bundle.installer.kind — safe only because
+    // Zod skips refinements when the object parse already failed. This pins that
+    // never-throw contract through the full validate() path (a refactor that
+    // reordered the refinement could otherwise throw on a missing installer).
+    const tree = memTree({
+      "bundles/no-installer.bundle.md": bundle("description: a bundle\nsource: https://x.git\npinned_commit: abc"),
+      "bundles/string-installer.bundle.md": bundle("description: a bundle\ninstaller: just-a-string"),
+    });
+    let threw = false;
+    let result: ReturnType<typeof validate> | undefined;
+    try {
+      result = validate(tree);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result?.conformant).toBe(false);
+    expect(result?.errors.some((e) => e.kind === "bundle" && e.name === "no-installer")).toBe(true);
+    expect(result?.errors.some((e) => e.kind === "bundle" && e.name === "string-installer")).toBe(true);
+  });
+
+  test("a bundle with unparseable frontmatter degrades to a located error, never throws", () => {
+    // A malformed YAML block (bad indentation under a mapping) makes yamlParse throw.
+    const tree = memTree({
+      "bundles/broken.bundle.md": "---\ndescription: x\n  : : bad\n\t- tab\n---\nbody\n",
+    });
+    let threw = false;
+    let result: ReturnType<typeof validate> | undefined;
+    try {
+      result = validate(tree);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result?.conformant).toBe(false);
+    expect(result?.errors.some((e) => e.kind === "bundle" && e.name === "broken")).toBe(true);
+  });
+});
+
+// The load-bearing regression guard (acceptance criterion 1): the stricter gate
+// still accepts the EXACT real reference frontmatters. This — not deploy.test.ts,
+// which never calls validate() — is what proves real content stays conformant.
+describe("validate (strict) — real my-agent-kits reference content stays conformant", () => {
+  test("3 plugins + gstack (setup-script, no installer.kind) + hyperframes (npx-skills) → conformant", () => {
+    const tree = memTree({
+      "plugins/frontend-design.plugin.md": [
+        "---",
+        "description: Distinctive, production-grade frontend interfaces — web components, landing pages, dashboards, React/HTML/CSS layouts.",
+        'applyTo: "**"',
+        "added_in: 0.10.2",
+        "marketplace_source: anthropics/claude-plugins-official",
+        "marketplace_name: claude-plugins-official",
+        "plugin_name: frontend-design",
+        "---",
+        "# Frontend Design",
+      ].join("\n"),
+      "plugins/superpowers.plugin.md": [
+        "---",
+        "description: Agentic skills (TDD, debugging, brainstorming, planning, code review)",
+        'applyTo: "**"',
+        "added_in: 0.2.0",
+        "marketplace_source: anthropics/claude-plugins-official",
+        "marketplace_name: claude-plugins-official",
+        "plugin_name: superpowers",
+        "---",
+        "# Superpowers",
+      ].join("\n"),
+      "plugins/ui-ux-pro-max.plugin.md": [
+        "---",
+        "description: Design intelligence skill — 50+ UI styles, 97 color palettes, 57 font pairings, 99 UX guidelines, 25 chart types across 9 stacks.",
+        'applyTo: "**"',
+        "added_in: 0.10.2",
+        "marketplace_source: nextlevelbuilder/ui-ux-pro-max-skill",
+        "marketplace_name: ui-ux-pro-max-skill",
+        "plugin_name: ui-ux-pro-max",
+        "---",
+        "# UI UX Pro Max",
+      ].join("\n"),
+      "bundles/gstack.bundle.md": [
+        "---",
+        "description: gstack — 30+ slash commands. Installs to ~/.claude/skills/gstack/ with /gstack-* prefix.",
+        "added_in: 0.7.0",
+        "source: https://github.com/garrytan/gstack.git",
+        "pinned_commit: dc6252d1df7f1f650ea6e9b2bba7d08fab5de902",
+        "scope: global",
+        "installer:",
+        "  command: ./setup",
+        '  flags: ["--prefix", "--no-team", "--quiet"]',
+        "  host_flag_map:",
+        '    claude: ["--host", "claude"]',
+        '    codex: ["--host", "codex"]',
+        "requires:",
+        "  - bun",
+        "  - git",
+        "verify_paths:",
+        '  claude: "~/.claude/skills/gstack"',
+        '  codex: "~/.agents/skills/gstack"',
+        "license: MIT",
+        "---",
+        "# gstack bundle",
+      ].join("\n"),
+      "bundles/hyperframes.bundle.md": [
+        "---",
+        "description: hyperframes — HTML-native video rendering for AI agents.",
+        "added_in: 0.8.0",
+        "scope: global",
+        "installer:",
+        "  kind: npx-skills",
+        "  package: heygen-com/hyperframes",
+        "requires:",
+        "  - node",
+        "  - npx",
+        "  - ffmpeg",
+        "verify_paths:",
+        '  claude: "~/.claude/skills/hyperframes"',
+        '  codex: "~/.agents/skills/hyperframes"',
+        "license: Apache-2.0",
+        "---",
+        "# hyperframes bundle",
+      ].join("\n"),
+    });
+    const result = validate(tree);
+    expect(result.errors).toEqual([]);
     expect(result.conformant).toBe(true);
   });
 });

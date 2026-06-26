@@ -3,12 +3,20 @@
 // schemas from capability-schema. Never throws: the assertNameMatchesDir throw is
 // caught into a located ConformanceError.
 //
-// Scope: skills are the only ratified per-kind strict schema (ADR-0024), so only
-// `skill` leaves are strictly gated; other kinds are accepted (no strict schema
-// yet). Real-world Source content is not assumed conformant — `validate` reports
-// violations, it does not reject the Source.
+// Scope: `skill` (ADR-0024), `plugin` (ADR-0025), and `bundle` (ADR-0026) are the
+// ratified per-kind strict schemas, so those leaves are strictly gated;
+// `agent`/`instruction` are still tolerated (no strict schema yet). Real-world
+// Source content is not assumed conformant — `validate` reports violations, it does
+// not reject the Source.
 
-import { ConformanceError, SkillFrontmatter, assertNameMatchesDir } from "@hive/capability-schema";
+import {
+  BundleFrontmatter,
+  ConformanceError,
+  PluginFrontmatter,
+  SkillFrontmatter,
+  assertNameMatchesDir,
+} from "@hive/capability-schema";
+import type { ZodTypeAny } from "zod";
 import { parse as yamlParse } from "yaml";
 import { z } from "zod";
 import type { LeafHit } from "./walk.ts";
@@ -38,6 +46,10 @@ export function validate(tree: SourceTree): ValidationResult {
   for (const leaf of walk.leaves) {
     if (leaf.kind === "skill") {
       validateSkill(leaf, errors);
+    } else if (leaf.kind === "plugin") {
+      validateAgainst(leaf, PluginFrontmatter, errors);
+    } else if (leaf.kind === "bundle") {
+      validateAgainst(leaf, BundleFrontmatter, errors);
     }
   }
 
@@ -51,28 +63,41 @@ function parseFrontmatterRaw(content: string): unknown {
   return yamlParse(content.slice(3, end).trim());
 }
 
-function validateSkill(leaf: LeafHit, errors: ConformanceError[]): void {
+// The single frontmatter gate: parse the marker frontmatter, safeParse against the
+// kind's schema, push one located ConformanceError per issue. Returns the validated
+// data on success (for callers with an extra cross-file rule), or undefined when it
+// reported errors. Robustness contract — absent/unparseable frontmatter yields a
+// located error, never a throw.
+function validateAgainst(leaf: LeafHit, schema: ZodTypeAny, errors: ConformanceError[]): unknown {
   let raw: unknown;
   try {
     raw = parseFrontmatterRaw(leaf.markerContent ?? "");
   } catch (err) {
     errors.push({ kind: leaf.kind, name: leaf.name, message: `unparseable frontmatter: ${String(err)}` });
-    return;
+    return undefined;
   }
 
-  const result = SkillFrontmatter.safeParse(raw);
-  if (!result.success) {
-    for (const issue of result.error.issues) {
-      const at = issue.path.length > 0 ? ` (${issue.path.join(".")})` : "";
-      errors.push({ kind: leaf.kind, name: leaf.name, message: `${issue.message}${at}` });
-    }
-    return;
+  const result = schema.safeParse(raw);
+  if (result.success) return result.data;
+  for (const issue of result.error.issues) {
+    const at = issue.path.length > 0 ? ` (${issue.path.join(".")})` : "";
+    errors.push({ kind: leaf.kind, name: leaf.name, message: `${issue.message}${at}` });
   }
+  return undefined;
+}
+
+// Skill = the generic gate PLUS the cross-file name==dir rule (frontmatter alone
+// can't know its directory). Delegates the parse/safeParse/issue-emission to
+// validateAgainst, then runs only the extra assertion on the validated data.
+function validateSkill(leaf: LeafHit, errors: ConformanceError[]): void {
+  const data = validateAgainst(leaf, SkillFrontmatter, errors);
+  if (data === undefined) return;
 
   // `name` is optional (lenient superset): when frontmatter omits it — or leaves it
   // blank (`name:` → null) — the directory is the effective name, so there is nothing
   // to match. Only assert name==dir when a name is explicitly declared (a string).
-  const parsedName = result.data.name;
+  // Narrow the validated `unknown` to read `name` without a cast.
+  const parsedName = typeof data === "object" && data !== null ? toRecord(data).name : undefined;
   if (typeof parsedName === "string") {
     try {
       // `leaf.dir` is the innermost marker dir, so an @-group skill validates its
@@ -82,4 +107,10 @@ function validateSkill(leaf: LeafHit, errors: ConformanceError[]): void {
       errors.push({ kind: leaf.kind, name: leaf.name, message: String(err instanceof Error ? err.message : err) });
     }
   }
+}
+
+// Read an object's own string-keyed properties as unknowns without a cast (spreads
+// a typeof-narrowed non-null object into a fresh Record).
+function toRecord(value: object): Record<string, unknown> {
+  return { ...value };
 }
