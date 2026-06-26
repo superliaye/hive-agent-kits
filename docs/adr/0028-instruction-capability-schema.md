@@ -58,7 +58,11 @@ its name comes from the filename, not the frontmatter.
 
 ## Out of scope
 
-`mcp` remains the sole ungated kind (deferred — it depends on an external evolving
-spec and has no deploy adapter yet). The deploy-side loose parse (`?? ""` defaults)
-stays as defense-in-depth — this ADR only adds the earlier validate-time gate;
-`parse()` stays lenient, only `validate()` goes strict.
+With `agent` and `instruction` ratified, **all five modeled capability kinds are
+now strictly gated by `validate()`** — no kind remains ungated. `mcp` is a deferred
+*future* kind: it is not a member of `CapabilityKind`, so the walk never emits it,
+and it depends on an external evolving spec and a deploy adapter that do not yet
+exist; the dispatch's exhaustiveness check forces gating it on the day it joins the
+enum. The deploy-side loose parse (`?? ""` defaults) stays as defense-in-depth —
+this ADR only adds the earlier validate-time gate; `parse()` stays lenient, only
+`validate()` goes strict.

@@ -9,13 +9,14 @@
 // folder-kind name contract (`./name.ts`), reused here and by `agent`.
 
 import { z } from "zod";
-import { NAME_PATTERN, refineName } from "./name.ts";
+import { nameField, refineName } from "./name.ts";
 
 export const SkillFrontmatter = z
   .object({
-    // `.nullish()`: a bare `name:` (YAML null) is "left blank" — treated like an
-    // omitted name (defer to the directory), matching the runtime, not an error.
-    name: z.string().min(1).max(64).regex(NAME_PATTERN).nullish(),
+    // Shared folder-kind name field (`nameField`): optional/nullish — a bare
+    // `name:` (YAML null) is "left blank", treated like an omitted name (defer to
+    // the directory), matching the runtime, not an error.
+    name: nameField,
     description: z.string().min(1).max(1024),
     license: z.string().optional(),
     compatibility: z.string().min(1).max(500).optional(),

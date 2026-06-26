@@ -9,11 +9,13 @@
 // (`added_in`, etc.) pass through.
 
 import { z } from "zod";
-import { NAME_PATTERN, refineName } from "./name.ts";
+import { nameField, refineName } from "./name.ts";
 
 export const AgentFrontmatter = z
   .object({
-    name: z.string().min(1).max(64).regex(NAME_PATTERN).nullish(),
+    // Shared folder-kind name field (`nameField`), identical to skill's — the
+    // contract (bounds + regex) lives once in name.ts and can't drift.
+    name: nameField,
     description: z.string().min(1),
   })
   .passthrough()

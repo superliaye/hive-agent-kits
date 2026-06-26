@@ -3,16 +3,19 @@
 // schemas from capability-schema. Never throws: the assertNameMatchesDir throw is
 // caught into a located ConformanceError.
 //
-// Scope: `skill` (ADR-0024), `plugin` (ADR-0025), `bundle` (ADR-0026), `agent`
-// (ADR-0027), and `instruction` (ADR-0028) are the ratified per-kind strict
-// schemas, so those leaves are strictly gated; only `mcp` remains tolerated (no
-// strict schema yet — deferred, external evolving spec). Real-world Source content
-// is not assumed conformant — `validate` reports violations, it does not reject the
-// Source.
+// Scope: all five modeled capability kinds — `skill` (ADR-0024), `plugin`
+// (ADR-0025), `bundle` (ADR-0026), `agent` (ADR-0027), and `instruction`
+// (ADR-0028) — now have ratified per-kind strict schemas, so every enumerated leaf
+// is strictly gated. (`mcp` is a deferred FUTURE kind — not in CapabilityKind, so
+// the walk never emits it — pending an external evolving spec and a deploy
+// adapter; the dispatch's exhaustiveness check would force gating it on the day it
+// joins the enum.) Real-world Source content is not assumed conformant — `validate`
+// reports violations, it does not reject the Source.
 
 import {
   AgentFrontmatter,
   BundleFrontmatter,
+  type CapabilityKind,
   ConformanceError,
   InstructionFrontmatter,
   PluginFrontmatter,
@@ -57,6 +60,12 @@ export function validate(tree: SourceTree): ValidationResult {
       validateAgainst(leaf, BundleFrontmatter, errors);
     } else if (leaf.kind === "instruction") {
       validateAgainst(leaf, InstructionFrontmatter, errors);
+    } else {
+      // Exhaustiveness guard: every CapabilityKind the walk can emit is gated
+      // above. A future kind added to the enum is a compile error here, not a
+      // silent ungated pass.
+      const _exhaustive: never = leaf.kind;
+      void _exhaustive;
     }
   }
 
@@ -100,7 +109,7 @@ function validateAgainst(leaf: LeafHit, schema: ZodTypeAny, errors: ConformanceE
 function validateFolderName(
   leaf: LeafHit,
   schema: ZodTypeAny,
-  kind: string,
+  kind: CapabilityKind,
   errors: ConformanceError[],
 ): void {
   const data = validateAgainst(leaf, schema, errors);

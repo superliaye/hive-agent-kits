@@ -469,6 +469,8 @@ describe("validate (strict) — ALL real my-agent-kits agent + instruction conte
   const CLONE = "D:/GitRepos/my-agent-kits";
   const CAPS = join(CLONE, "capabilities");
 
+  // Recursive walk — agents legitimately nest under @-groups, so AGENT.md markers
+  // live at any depth (enumerateLeaves flattens @-group ancestors to the leaf).
   function walkFiles(dir: string): string[] {
     if (!existsSync(dir)) return [];
     const out: string[] = [];
@@ -480,11 +482,23 @@ describe("validate (strict) — ALL real my-agent-kits agent + instruction conte
     return out;
   }
 
+  // Top-level-only list — instruction is a FILE kind; enumerateLeaves'
+  // collectFileKind enumerates only the top level of `instructions/`, never
+  // recursing. Mirror that here so the guard tests exactly the set validate()
+  // walks (a nested `instructions/sub/x.instructions.md` is not a leaf, so feeding
+  // it to the memTree would silently under-test).
+  function listTopLevel(dir: string): string[] {
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .map((entry) => join(dir, entry))
+      .filter((full) => !statSync(full).isDirectory());
+  }
+
   // Keys are paths relative to `capabilities/` (what memTree/enumerateLeaves walk).
   function cloneTree(): Record<string, string> {
     const files: Record<string, string> = {};
     const agentMd = walkFiles(join(CAPS, "agents")).filter((f) => f.endsWith("AGENT.md"));
-    const instrMd = walkFiles(join(CAPS, "instructions")).filter((f) =>
+    const instrMd = listTopLevel(join(CAPS, "instructions")).filter((f) =>
       f.endsWith(".instructions.md"),
     );
     for (const f of [...agentMd, ...instrMd]) {

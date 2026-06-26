@@ -8,10 +8,18 @@
 // `kind` label applies equally to the regex and the guards — they must not drift).
 
 import { z } from "zod";
+import type { CapabilityKind } from "../identity.ts";
 
 // `name`: 1-64 chars, lowercase alnum + single hyphens, no leading/trailing/
 // consecutive hyphen.
 export const NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+// The shared `name` FIELD for folder kinds — the full contract, bounds included,
+// not just the regex: optional/nullish (omitted or blank `name:` → defer to the
+// directory), 1-64 chars, NAME_PATTERN. Reused verbatim by skill and agent so the
+// bounds can't drift between them. `.superRefine(refineName)` is applied per kind
+// on the assembled object, since refinements attach to the object, not the field.
+export const nameField = z.string().min(1).max(64).regex(NAME_PATTERN).nullish();
 
 // Anthropic refinements over a PRESENT name: reject XML-tag characters and the
 // reserved words `anthropic`/`claude` (case-insensitive substring) early. Guarded
@@ -42,8 +50,9 @@ export function refineName(value: { name?: unknown }, ctx: z.RefinementCtx): voi
 // The "name == parent directory" rule is a separate pure validator: frontmatter
 // alone can't know its directory; the daemon's fs adapter supplies it (#28/#31).
 // Throws on mismatch so callers in the typed-error daemon can map it. `kind` is a
-// required label so the message names the offending kind ("skill"/"agent").
-export function assertNameMatchesDir(name: string, dirName: string, kind: string): void {
+// required CapabilityKind label so the message names the offending kind, and the
+// label can't drift from the real kind set.
+export function assertNameMatchesDir(name: string, dirName: string, kind: CapabilityKind): void {
   if (name !== dirName) {
     throw new Error(`${kind} name "${name}" must match its parent directory "${dirName}"`);
   }
