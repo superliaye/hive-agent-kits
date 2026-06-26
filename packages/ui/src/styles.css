@@ -553,6 +553,64 @@ pre.config {
   line-height: 1.5;
 }
 
+/* Transient toasts (#50): a fixed corner-anchored stack acknowledging silent
+   mutations (sync, Source activate/deactivate/delete). The host never blocks
+   the UI — `pointer-events:none` on the container, `auto` on each toast so its
+   dismiss button is still clickable. Variants reuse the banner color tokens. */
+.toast-host {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: min(360px, calc(100vw - 32px));
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-elevated);
+  color: var(--color-fg-default);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 4px 16px color-mix(in srgb, #000 24%, transparent);
+}
+.toast-success {
+  border-color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, var(--color-bg-elevated));
+}
+.toast-error {
+  border-color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 12%, var(--color-bg-elevated));
+}
+.toast-info {
+  border-color: var(--color-border-strong);
+  background: color-mix(in srgb, var(--color-fg-muted) 10%, var(--color-bg-elevated));
+}
+.toast-message {
+  flex: 1;
+}
+.toast-dismiss {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--color-fg-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+.toast-dismiss:hover {
+  color: var(--color-fg-default);
+}
+
 /* Add-Source control (#46): git-URL input + button in the Capabilities header,
    mirroring .api-key-form. The inline status banner sits directly beneath. */
 .add-source-form {

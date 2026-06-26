@@ -21,10 +21,12 @@ import {
   type Selection,
   type Source,
   type SourceSyncStatus,
+  type SyncRunResult,
   type VerifyReport,
   type VerifyStatus,
 } from "../api.ts";
 import { Skeleton, SkeletonGroup } from "../components/Skeleton.tsx";
+import { ToastHost, useToasts } from "../components/Toasts.tsx";
 import { signalDeployInFlight } from "../platform/deploy-in-flight.ts";
 
 const KINDS: CapabilityKind[] = ["instruction", "skill", "agent", "plugin", "bundle"];
@@ -63,6 +65,22 @@ function shortOrigin(origin: string): string {
   }
 }
 
+// Aggregate one sync run's per-Source outcomes into a single toast. q3a:
+// failure DOMINATES — any failed Source surfaces an ERROR toast (never a
+// success count); else any synced → a success count; else all unchanged →
+// "Up to date". Exported for isolated unit testing of the precedence rule.
+export function syncToast(result: SyncRunResult): { kind: "success" | "error"; message: string } {
+  const failed = result.sources.filter((s) => s.status === "failed").length;
+  if (failed > 0) {
+    return { kind: "error", message: `Sync failed for ${failed} Source${failed === 1 ? "" : "s"}` };
+  }
+  const synced = result.sources.filter((s) => s.status === "synced").length;
+  if (synced > 0) {
+    return { kind: "success", message: `Synced ${synced} Source${synced === 1 ? "" : "s"}` };
+  }
+  return { kind: "success", message: "Up to date" };
+}
+
 type Freshness = {
   label: string;
   className: string;
@@ -85,6 +103,7 @@ function freshnessOf(state: string | undefined): Freshness {
 
 export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
   const qc = useQueryClient();
+  const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
 
   const catalogQuery = useQuery({
     queryKey: ["kit", "catalog"],
@@ -179,6 +198,11 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncKit(apiConfig),
+    onSuccess: (result: SyncRunResult) => {
+      const { kind, message } = syncToast(result);
+      pushToast(kind, message);
+    },
+    onError: () => pushToast("error", "Sync failed"),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ["kit"] });
     },
@@ -192,10 +216,17 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   const toggleSource = useMutation({
     mutationFn: (s: Source) =>
       s.active ? api.deactivateSource(apiConfig, s.id) : api.activateSource(apiConfig, s.id),
-    onSuccess: () => {
+    // The verb is derived from the toggled Source's PRIOR `active` (the mutation
+    // variable): an active Source was just deactivated, and vice versa.
+    onSuccess: (_data, s: Source) => {
+      const label = shortOrigin(s.origin);
+      pushToast("success", s.active ? `Deactivated ${label}` : `Activated ${label}`);
       void qc.invalidateQueries({ queryKey: ["sources"] });
       void qc.invalidateQueries({ queryKey: ["kit"] });
     },
+    // The inline kit-source-toggle-error banner (below) persists the failure;
+    // the toast is a transient nudge on top of it.
+    onError: () => pushToast("error", "Could not change the Source"),
   });
 
   // Remove a Source entirely (DELETE /api/sources/:id). Like the toggle, invalidate
@@ -203,11 +234,15 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   // sources, disappear) so both update live. Already-deployed files are not deleted
   // — an orphaned capability is kept until the user re-deploys.
   const deleteSource = useMutation({
-    mutationFn: (id: string) => api.deleteSource(apiConfig, id),
-    onSuccess: () => {
+    mutationFn: (s: Source) => api.deleteSource(apiConfig, s.id),
+    onSuccess: (_data, s: Source) => {
+      pushToast("success", `Removed ${shortOrigin(s.origin)}`);
       void qc.invalidateQueries({ queryKey: ["sources"] });
       void qc.invalidateQueries({ queryKey: ["kit"] });
     },
+    // The inline kit-source-delete-error banner persists the failure; the toast
+    // is a transient nudge on top of it.
+    onError: () => pushToast("error", "Could not remove the Source"),
   });
 
   const deployMutation = useMutation({
@@ -349,9 +384,9 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               syncStatuses={sourceStatuses}
               onToggle={(s) => toggleSource.mutate(s)}
               pendingId={toggleSource.isPending ? toggleSource.variables?.id : undefined}
-              onDelete={(s) => deleteSource.mutate(s.id)}
-              deletePendingId={deleteSource.isPending ? deleteSource.variables : undefined}
-              deleteFailedId={deleteSource.isError ? deleteSource.variables : undefined}
+              onDelete={(s) => deleteSource.mutate(s)}
+              deletePendingId={deleteSource.isPending ? deleteSource.variables?.id : undefined}
+              deleteFailedId={deleteSource.isError ? deleteSource.variables?.id : undefined}
             />
           </div>
           <AddSourceForm apiConfig={apiConfig} />
@@ -489,6 +524,8 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           );
         })}
       </div>
+
+      <ToastHost toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
