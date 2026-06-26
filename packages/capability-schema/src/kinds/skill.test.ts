@@ -123,10 +123,10 @@ describe("SkillFrontmatter — one invalid case per rule", () => {
 
 describe("assertNameMatchesDir", () => {
   test("passes when name equals parent dir", () => {
-    expect(() => assertNameMatchesDir("pdf-extractor", "pdf-extractor")).not.toThrow();
+    expect(() => assertNameMatchesDir("pdf-extractor", "pdf-extractor", "skill")).not.toThrow();
   });
 
   test("throws when name differs from parent dir", () => {
-    expect(() => assertNameMatchesDir("pdf-extractor", "pdf")).toThrow();
+    expect(() => assertNameMatchesDir("pdf-extractor", "pdf", "skill")).toThrow();
   });
 });

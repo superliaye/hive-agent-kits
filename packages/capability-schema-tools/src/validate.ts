@@ -3,15 +3,18 @@
 // schemas from capability-schema. Never throws: the assertNameMatchesDir throw is
 // caught into a located ConformanceError.
 //
-// Scope: `skill` (ADR-0024), `plugin` (ADR-0025), and `bundle` (ADR-0026) are the
-// ratified per-kind strict schemas, so those leaves are strictly gated;
-// `agent`/`instruction` are still tolerated (no strict schema yet). Real-world
-// Source content is not assumed conformant — `validate` reports violations, it does
-// not reject the Source.
+// Scope: `skill` (ADR-0024), `plugin` (ADR-0025), `bundle` (ADR-0026), `agent`
+// (ADR-0027), and `instruction` (ADR-0028) are the ratified per-kind strict
+// schemas, so those leaves are strictly gated; only `mcp` remains tolerated (no
+// strict schema yet — deferred, external evolving spec). Real-world Source content
+// is not assumed conformant — `validate` reports violations, it does not reject the
+// Source.
 
 import {
+  AgentFrontmatter,
   BundleFrontmatter,
   ConformanceError,
+  InstructionFrontmatter,
   PluginFrontmatter,
   SkillFrontmatter,
   assertNameMatchesDir,
@@ -45,11 +48,15 @@ export function validate(tree: SourceTree): ValidationResult {
 
   for (const leaf of walk.leaves) {
     if (leaf.kind === "skill") {
-      validateSkill(leaf, errors);
+      validateFolderName(leaf, SkillFrontmatter, "skill", errors);
+    } else if (leaf.kind === "agent") {
+      validateFolderName(leaf, AgentFrontmatter, "agent", errors);
     } else if (leaf.kind === "plugin") {
       validateAgainst(leaf, PluginFrontmatter, errors);
     } else if (leaf.kind === "bundle") {
       validateAgainst(leaf, BundleFrontmatter, errors);
+    } else if (leaf.kind === "instruction") {
+      validateAgainst(leaf, InstructionFrontmatter, errors);
     }
   }
 
@@ -86,11 +93,17 @@ function validateAgainst(leaf: LeafHit, schema: ZodTypeAny, errors: ConformanceE
   return undefined;
 }
 
-// Skill = the generic gate PLUS the cross-file name==dir rule (frontmatter alone
-// can't know its directory). Delegates the parse/safeParse/issue-emission to
-// validateAgainst, then runs only the extra assertion on the validated data.
-function validateSkill(leaf: LeafHit, errors: ConformanceError[]): void {
-  const data = validateAgainst(leaf, SkillFrontmatter, errors);
+// A folder kind (skill, agent) = the generic gate PLUS the cross-file name==dir
+// rule (frontmatter alone can't know its directory). Delegates the
+// parse/safeParse/issue-emission to validateAgainst, then runs only the extra
+// assertion on the validated data. `kind` labels the assertion message.
+function validateFolderName(
+  leaf: LeafHit,
+  schema: ZodTypeAny,
+  kind: string,
+  errors: ConformanceError[],
+): void {
+  const data = validateAgainst(leaf, schema, errors);
   if (data === undefined) return;
 
   // `name` is optional (lenient superset): when frontmatter omits it — or leaves it
@@ -100,9 +113,9 @@ function validateSkill(leaf: LeafHit, errors: ConformanceError[]): void {
   const parsedName = typeof data === "object" && data !== null ? toRecord(data).name : undefined;
   if (typeof parsedName === "string") {
     try {
-      // `leaf.dir` is the innermost marker dir, so an @-group skill validates its
-      // name against the leaf dir, not the @-group ancestor.
-      assertNameMatchesDir(parsedName, leaf.dir);
+      // `leaf.dir` is the innermost marker dir, so an @-group folder kind validates
+      // its name against the leaf dir, not the @-group ancestor.
+      assertNameMatchesDir(parsedName, leaf.dir, kind);
     } catch (err) {
       errors.push({ kind: leaf.kind, name: leaf.name, message: String(err instanceof Error ? err.message : err) });
     }

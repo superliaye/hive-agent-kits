@@ -5,15 +5,11 @@
 // the only required field; `name` is optional or null — omitted or left blank, the
 // effective name is the directory (per the runtime); unknown keys pass through
 // (preserved, not stripped); `metadata` values are unconstrained. The name-quality
-// guards (regex, reserved-word, XML-char) still apply to a PRESENT name — a declared
-// name that the CLI would reject is a robustness gap — but an absent/blank name is
-// NOT re-validated against them; the directory is trusted as the effective name.
+// guards (regex, reserved-word, XML-char) and the name==dir rule are the shared
+// folder-kind name contract (`./name.ts`), reused here and by `agent`.
 
 import { z } from "zod";
-
-// `name`: 1-64 chars, lowercase alnum + single hyphens, no leading/trailing/
-// consecutive hyphen.
-const NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+import { NAME_PATTERN, refineName } from "./name.ts";
 
 export const SkillFrontmatter = z
   .object({
@@ -28,37 +24,5 @@ export const SkillFrontmatter = z
     "allowed-tools": z.string().optional(),
   })
   .passthrough()
-  // Anthropic refinements over a PRESENT name: reject XML-tag characters and the
-  // reserved words `anthropic`/`claude` (case-insensitive substring) early. Guarded
-  // on a present name — an omitted name defers to the directory and is not refined.
-  .superRefine((value, ctx) => {
-    if (typeof value.name !== "string") return;
-    // Belt-and-suspenders: NAME_PATTERN already excludes `<`/`>`, but this guard
-    // keeps the Anthropic XML-tag rule explicit and survives a future loosening
-    // of NAME_PATTERN.
-    if (/[<>]/.test(value.name)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["name"],
-        message: "name must not contain XML-tag characters (< or >)",
-      });
-    }
-    const lower = value.name.toLowerCase();
-    if (lower.includes("anthropic") || lower.includes("claude")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["name"],
-        message: 'name must not contain the reserved words "anthropic" or "claude"',
-      });
-    }
-  });
+  .superRefine(refineName);
 export type SkillFrontmatter = z.infer<typeof SkillFrontmatter>;
-
-// The "name == parent directory" rule is a separate pure validator: frontmatter
-// alone can't know its directory; the daemon's fs adapter supplies it (#28/#31).
-// Throws on mismatch so callers in the typed-error daemon can map it.
-export function assertNameMatchesDir(name: string, dirName: string): void {
-  if (name !== dirName) {
-    throw new Error(`skill name "${name}" must match its parent directory "${dirName}"`);
-  }
-}

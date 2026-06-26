@@ -98,6 +98,33 @@ function repoTarWithPlugin(name: string, frontmatter: string): TarFixtureEntry[]
   ];
 }
 
+// A Source repo carrying a single agent folder-marker capability
+// (`agents/<dir>/AGENT.md`) — kept flat (not @-grouped) so `leaf.dir` is the
+// unambiguous name-match target. `frontmatter` is the raw YAML block.
+function repoTarWithAgent(dir: string, frontmatter: string): TarFixtureEntry[] {
+  const top = `repo-${SHA.slice(0, 7)}`;
+  return [
+    { path: `${top}/` },
+    {
+      path: `${top}/capabilities/agents/${dir}/AGENT.md`,
+      content: `---\n${frontmatter}\n---\nagent body\n`,
+    },
+  ];
+}
+
+// A Source repo carrying a single instruction file-marker capability
+// (`instructions/<name>.instructions.md`). `frontmatter` is the raw YAML block.
+function repoTarWithInstruction(name: string, frontmatter: string): TarFixtureEntry[] {
+  const top = `repo-${SHA.slice(0, 7)}`;
+  return [
+    { path: `${top}/` },
+    {
+      path: `${top}/capabilities/instructions/${name}.instructions.md`,
+      content: `---\n${frontmatter}\n---\ninstruction body\n`,
+    },
+  ];
+}
+
 async function postOrigin(server: ServerHandles, origin: string): Promise<Response> {
   return server.app.fetch(
     authed("/api/sources", { method: "POST", body: JSON.stringify({ origin }) }),
@@ -236,6 +263,42 @@ describe("server routes — sources", () => {
       const pluginError = body.validation.errors.find((e) => e.kind === "plugin");
       expect(pluginError).toBeDefined();
       expect(pluginError?.message).toContain("marketplace_source");
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("(#45) reachable + a malformed agent (name != dir) → 201, conformant:false, located agent error", async () => {
+    // The failure surfaces at ADD time, not mid-Deploy: an agent whose declared
+    // name does not match its directory is a located conformance error.
+    const server = await serverWith(
+      stubFetch(repoTarWithAgent("bar", "name: notbar\ndescription: a bar agent")),
+    );
+    try {
+      const res = await postOrigin(server, "https://github.com/a/b");
+      expect(res.status).toBe(201);
+      const body = AddSourceResult.parse(await res.json());
+      expect(body.validation.conformant).toBe(false);
+      const agentError = body.validation.errors.find((e) => e.kind === "agent");
+      expect(agentError).toBeDefined();
+      expect(agentError?.message).toContain("must match its parent directory");
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("(#45) reachable + a malformed instruction (empty description) → 201, conformant:false, located instruction error", async () => {
+    const server = await serverWith(
+      stubFetch(repoTarWithInstruction("core", "description:\napplyTo: '**'")),
+    );
+    try {
+      const res = await postOrigin(server, "https://github.com/a/b");
+      expect(res.status).toBe(201);
+      const body = AddSourceResult.parse(await res.json());
+      expect(body.validation.conformant).toBe(false);
+      const instructionError = body.validation.errors.find((e) => e.kind === "instruction");
+      expect(instructionError).toBeDefined();
+      expect(instructionError?.message).toContain("description");
     } finally {
       await server.dispose();
     }

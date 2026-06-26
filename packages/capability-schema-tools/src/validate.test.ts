@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 import { memTree } from "./mem-tree.ts";
 import { validate } from "./validate.ts";
 
@@ -112,14 +114,150 @@ describe("validate (strict)", () => {
     expect(result.errors.some((e) => e.name === "dirA")).toBe(true);
   });
 
-  test("still-ungated kinds (agent/instruction) pass through unvalidated", () => {
-    // skill/plugin/bundle are now strictly gated; agent/instruction are not yet,
-    // so loose frontmatter on an instruction is accepted (no strict schema applied).
+});
+
+describe("validate (strict) — agent gating", () => {
+  function agent(fm: string): string {
+    return `---\n${fm}\n---\nagent body\n`;
+  }
+
+  test("a conformant agent is conformant with no errors", () => {
     const tree = memTree({
-      "instructions/Anything.instructions.md": skill("name: WHATEVER\ndescription: loose"),
+      "agents/ok-agent/AGENT.md": agent("name: ok-agent\ndescription: a fine agent"),
     });
     const result = validate(tree);
     expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("a name-less agent is conformant (effective name = directory)", () => {
+    const tree = memTree({
+      "agents/nameless/AGENT.md": agent("description: trusts the directory"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("an @-group agent validates name against the innermost dir, not @grp", () => {
+    const tree = memTree({
+      "agents/@grp/ok-agent/AGENT.md": agent("name: ok-agent\ndescription: grouped"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("name != dir is a located agent error (caught, never thrown)", () => {
+    const tree = memTree({
+      "agents/dirname/AGENT.md": agent("name: othername\ndescription: x"),
+    });
+    let threw = false;
+    let result: ReturnType<typeof validate> | undefined;
+    try {
+      result = validate(tree);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result?.conformant).toBe(false);
+    const err = result?.errors.find((e) => e.kind === "agent" && e.name === "dirname");
+    expect(err).toBeDefined();
+    expect(err?.message).toContain('agent name "othername"');
+  });
+
+  test("a bad name is a located agent error", () => {
+    const tree = memTree({
+      "agents/Bad/AGENT.md": agent("name: Bad\ndescription: nope"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(false);
+    expect(result.errors.some((e) => e.kind === "agent" && e.name === "Bad")).toBe(true);
+  });
+
+  test("an empty description is a located agent error", () => {
+    const tree = memTree({
+      "agents/empty-desc/AGENT.md": agent("name: empty-desc\ndescription:"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(false);
+    const err = result.errors.find((e) => e.kind === "agent" && e.name === "empty-desc");
+    expect(err).toBeDefined();
+    expect(err?.message).toContain("description");
+  });
+
+  test("a 600+ char agent description stays conformant (no cap)", () => {
+    const tree = memTree({
+      "agents/long-agent/AGENT.md": agent(`name: long-agent\ndescription: ${"x".repeat(700)}`),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+});
+
+describe("validate (strict) — instruction gating", () => {
+  function instruction(fm: string, body = "body"): string {
+    return `---\n${fm}\n---\n${body}\n`;
+  }
+
+  test("a conformant instruction is conformant with no errors", () => {
+    const tree = memTree({
+      "instructions/core.instructions.md": instruction("description: core rules\napplyTo: '**'"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("an empty description is a located instruction error", () => {
+    const tree = memTree({
+      "instructions/empty.instructions.md": instruction("description:"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(false);
+    const err = result.errors.find((e) => e.kind === "instruction" && e.name === "empty");
+    expect(err).toBeDefined();
+    expect(err?.message).toContain("description");
+  });
+
+  test("a missing description is a located instruction error", () => {
+    const tree = memTree({
+      "instructions/nodesc.instructions.md": instruction("applyTo: '**'"),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(false);
+    expect(result.errors.some((e) => e.kind === "instruction" && e.name === "nodesc")).toBe(true);
+  });
+
+  test("an instruction with NO `---` frontmatter block degrades to a located error, never throws", () => {
+    // The most likely real-world authoring error: a plain markdown body with no
+    // frontmatter. parseFrontmatterRaw → undefined, safeParse(undefined) fails the
+    // required `description`, one located instruction error, no throw.
+    const tree = memTree({
+      "instructions/raw.instructions.md": "Just plain instruction text, no frontmatter.\n",
+    });
+    let threw = false;
+    let result: ReturnType<typeof validate> | undefined;
+    try {
+      result = validate(tree);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result?.conformant).toBe(false);
+    expect(result?.errors.some((e) => e.kind === "instruction" && e.name === "raw")).toBe(true);
+  });
+
+  test("unknown instruction frontmatter keys ride through (passthrough)", () => {
+    const tree = memTree({
+      "instructions/extra.instructions.md": instruction(
+        "description: x\nderived_from: https://example.com/y\nsynced: false\nbogus: z",
+      ),
+    });
+    const result = validate(tree);
+    expect(result.conformant).toBe(true);
+    expect(result.errors).toEqual([]);
   });
 });
 
@@ -317,6 +455,57 @@ describe("validate (strict) — real my-agent-kits reference content stays confo
       ].join("\n"),
     });
     const result = validate(tree);
+    expect(result.errors).toEqual([]);
+    expect(result.conformant).toBe(true);
+  });
+});
+
+// Exhaustive reference-content regression guard (acceptance criterion 4): run the
+// new agent + instruction schemas against EVERY `AGENT.md` and `*.instructions.md`
+// in the my-agent-kits clone (current HEAD; not a hand-picked few). If ANY real
+// frontmatter is rejected, the lenient-superset claim is false — the test fails
+// loudly naming the offender, so the schema (not the content) is revisited.
+describe("validate (strict) — ALL real my-agent-kits agent + instruction content stays conformant", () => {
+  const CLONE = "D:/GitRepos/my-agent-kits";
+  const CAPS = join(CLONE, "capabilities");
+
+  function walkFiles(dir: string): string[] {
+    if (!existsSync(dir)) return [];
+    const out: string[] = [];
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) out.push(...walkFiles(full));
+      else out.push(full);
+    }
+    return out;
+  }
+
+  // Keys are paths relative to `capabilities/` (what memTree/enumerateLeaves walk).
+  function cloneTree(): Record<string, string> {
+    const files: Record<string, string> = {};
+    const agentMd = walkFiles(join(CAPS, "agents")).filter((f) => f.endsWith("AGENT.md"));
+    const instrMd = walkFiles(join(CAPS, "instructions")).filter((f) =>
+      f.endsWith(".instructions.md"),
+    );
+    for (const f of [...agentMd, ...instrMd]) {
+      const rel = relative(CAPS, f).replace(/\\/g, "/");
+      files[rel] = readFileSync(f, "utf8");
+    }
+    return files;
+  }
+
+  test("every clone AGENT.md and *.instructions.md validates conformant:true", () => {
+    const files = cloneTree();
+    // Guard against a silently-empty run (wrong path / absent clone): there are
+    // real agents and instructions under the clone, so the map must be non-empty.
+    const agentCount = Object.keys(files).filter((k) => k.startsWith("agents/")).length;
+    const instrCount = Object.keys(files).filter((k) => k.startsWith("instructions/")).length;
+    expect(agentCount).toBeGreaterThan(0);
+    expect(instrCount).toBeGreaterThan(0);
+
+    const result = validate(memTree(files));
+    // Name the offenders on failure so a too-strict schema is obvious, not a bare
+    // boolean.
     expect(result.errors).toEqual([]);
     expect(result.conformant).toBe(true);
   });
