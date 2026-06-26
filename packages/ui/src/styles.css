@@ -1197,14 +1197,23 @@ pre.config {
 }
 .kit-sha {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  padding: 2px 8px;
+  font-size: 11px;
+  padding: 1px 6px;
   border-radius: 4px;
   background: var(--color-bg-hover);
   color: var(--color-fg-muted);
 }
+/* A SHA-less Source (the bundled local Starter): a labeled, muted "no SHA"
+   rather than a bare dash — non-mono and italic so it reads as an absence, not a
+   value. */
+.kit-sha-empty {
+  font-family: inherit;
+  font-style: italic;
+  background: transparent;
+  padding: 1px 0;
+}
 .kit-fresh {
-  font-size: 12px;
+  font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
   font-weight: 600;
@@ -1233,11 +1242,21 @@ pre.config {
 .kit-source-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
+/* The Source name anchors the row: larger and heavier than the facts ranked
+   after it, so the eye lands on identity first. */
 .kit-source-origin {
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--color-fg-default);
+}
+/* Freshness + SHA, grouped and ranked after the name — one secondary cluster the
+   eye reads as a unit, distinct from the on/off toggle that follows. */
+.kit-source-facts {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .kit-source-row-inactive {
   opacity: 0.55;
@@ -1380,9 +1399,9 @@ pre.config {
 .kit-controls {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--color-border-default);
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--color-border-strong);
   border-radius: 8px;
   background: var(--color-bg-surface);
 }
@@ -1390,15 +1409,18 @@ pre.config {
 .kit-targets {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
+/* PRESET / TARGETS read as a deliberate control group: each label is a fixed,
+   emphasized rail the eye aligns the row's controls against. */
 .kit-control-label {
   font-size: 11px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-fg-muted);
-  min-width: 56px;
+  letter-spacing: 0.06em;
+  color: var(--color-fg-default);
+  min-width: 64px;
 }
 .kit-preset {
   cursor: pointer;
@@ -1421,6 +1443,21 @@ pre.config {
   gap: 6px;
   font-size: 13px;
   cursor: pointer;
+}
+/* The deploy-target checkboxes are a real <input> wearing the app's accent-check
+   vocabulary (the box + fill + drawn mark shared with .kit-row-check below), with
+   the native appearance hidden — never a raw browser checkbox. */
+.kit-target-check {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  background: var(--color-bg-base);
+  margin: 0;
+  cursor: pointer;
+}
+.kit-target-check:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 .kit-diff {
   border: 1px solid var(--color-border-default);
@@ -1596,33 +1633,48 @@ pre.config {
   opacity: 0.6;
   cursor: not-allowed;
 }
-.kit-row-check {
+/* Accent-check box: the app's selection-control vocabulary, shared by the
+   capability-row checkbox (.kit-row-check, a <span>) and the deploy-target
+   checkbox (.kit-target-check, an <input>). Empty outline at rest, so the gutter
+   reads as "selectable, off" rather than dead space (#52); fills to a CSS-drawn
+   check when selected (no glyph in the source). */
+.kit-row-check,
+.kit-target-check {
   width: 16px;
   height: 16px;
   flex: 0 0 16px;
-  align-self: center;
   box-sizing: border-box;
-  /* Empty checkbox outline at rest, so the gutter reads as "selectable, off"
-     rather than dead space (#52); fills to a check when selected. */
   border: 1.5px solid var(--color-border-strong);
   border-radius: 4px;
+}
+.kit-row-check {
+  align-self: center;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--color-accent);
 }
-.kit-row-check.checked {
+.kit-row-check.checked,
+.kit-target-check:checked {
   border-color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 16%, transparent);
 }
-/* CSS-rendered selection mark (no glyph in the source). */
-.kit-row-check.checked::before {
+.kit-row-check.checked::before,
+.kit-target-check:checked::before {
   content: "";
   width: 5px;
   height: 9px;
   border: solid var(--color-accent);
   border-width: 0 2px 2px 0;
   transform: translateY(-1px) rotate(45deg);
+}
+/* The <input> is a replaced element: its ::before is absolutely centered rather
+   than flex-centered as in the .kit-row-check span. */
+.kit-target-check:checked::before {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -60%) rotate(45deg);
 }
 .kit-row-main {
   display: flex;

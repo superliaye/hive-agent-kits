@@ -307,6 +307,40 @@ describe("KitDeployPage — Source on/off toggle (AC4)", () => {
     expect(host.querySelector('[data-testid="kit-deploy-remove-warn"]')).toBeNull();
   });
 
+  test("a SHA-less Source (the bundled Starter) renders a labeled 'no SHA', not a bare dash (#54)", async () => {
+    installStubs();
+    const host = await render();
+    // The Starter seeds first in registry order and is in state.sync, so it is the
+    // anchor row carrying the bare kit-sha testid; its sync.sha is null.
+    const sha = host.querySelector('[data-testid="kit-sha"]');
+    expect(sha).not.toBeNull();
+    expect(sha?.textContent).toBe("no SHA");
+    expect(sha?.textContent).not.toBe("—");
+    // The muted-absence treatment is applied via a class hook, not inline style.
+    expect(sha?.className).toContain("kit-sha-empty");
+    // A real SHA still renders short and carries no empty hook.
+    const gitSha = host.querySelector(`[data-testid="kit-sha-${GIT_ID}"]`);
+    expect(gitSha?.textContent).toBe("abc1234");
+    expect(gitSha?.className).not.toContain("kit-sha-empty");
+  });
+
+  test("the deploy-target toggles use the app's custom control class, not a raw native checkbox (#54)", async () => {
+    installStubs();
+    const host = await render();
+    for (const t of ["claude", "codex"]) {
+      const check = host.querySelector(
+        `[data-testid="kit-target-${t}"]`,
+      ) as HTMLInputElement | null;
+      expect(check).not.toBeNull();
+      // Still a real checkbox for a11y…
+      expect(check?.getAttribute("type")).toBe("checkbox");
+      // …but wrapped in the custom accent-check vocabulary (class hook + the
+      // shared .kit-target-toggle label), not a bare browser checkbox.
+      expect(check?.className).toContain("kit-target-check");
+      expect(check?.closest(".kit-target-toggle")).not.toBeNull();
+    }
+  });
+
   test("a failed toggle surfaces an error banner and leaves the capabilities in place", async () => {
     installStubs();
     failDeactivate = true;

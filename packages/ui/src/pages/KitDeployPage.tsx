@@ -47,7 +47,7 @@ const KIND_TO_CAP: Record<CapabilityKind, keyof Selection["add"]> = {
 };
 
 function shortSha(sha: string | null): string {
-  return sha ? sha.slice(0, 7) : "—";
+  return sha ? sha.slice(0, 7) : "no SHA";
 }
 
 // Short, human-readable origin label (owner/repo for a GitHub URL, else the
@@ -483,6 +483,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               <label key={t} className="kit-target-toggle">
                 <input
                   type="checkbox"
+                  className="kit-target-check"
                   checked={targets.includes(t)}
                   onChange={() => toggleTarget(t)}
                   data-testid={`kit-target-${t}`}
@@ -874,26 +875,26 @@ function SourceRow({
         {shortOrigin(origin)}
       </span>
       {sync && fresh && (
-        <>
-          <span
-            className="kit-sha"
-            data-testid={anchor ? "kit-sha" : `kit-sha-${id}`}
-            title={sync.sha ?? ""}
-          >
-            {shortSha(sync.sha)}
-          </span>
+        <span className="kit-source-facts">
           <span
             className={`kit-fresh ${fresh.className}`}
             data-testid={anchor ? "kit-freshness" : `kit-freshness-${id}`}
           >
             {fresh.label}
           </span>
+          <span
+            className={`kit-sha ${sync.sha ? "" : "kit-sha-empty"}`}
+            data-testid={anchor ? "kit-sha" : `kit-sha-${id}`}
+            title={sync.sha ?? ""}
+          >
+            {shortSha(sync.sha)}
+          </span>
           {sync.rateLimitReset !== undefined && (
             <span className="kit-rate-reset">
               resets {new Date(sync.rateLimitReset * 1000).toLocaleTimeString()}
             </span>
           )}
-        </>
+        </span>
       )}
       {onToggle && (
         <label
