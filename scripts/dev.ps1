@@ -7,6 +7,7 @@
 #   pwsh -NoProfile -File scripts\dev.ps1                 # full GUI stack (instance 0)
 #   pwsh -NoProfile -File scripts\dev.ps1 -DaemonOnly     # daemon API only, no GUI
 #   pwsh -NoProfile -File scripts\dev.ps1 -Instance 1     # a second, isolated stack
+#   pwsh -NoProfile -File scripts\dev.ps1 -Instance 1 -Stop  # tear down instance 1 (windows + ports), no relaunch
 #
 # -Instance N (default 0) shifts every port by N and gives the stack its own
 # runtime root, so multiple agents can each run a full stack in parallel without
@@ -31,7 +32,13 @@ param(
   [switch]$DaemonOnly,
   # Instance number (default 0). Shifts all ports by this amount and isolates
   # the runtime root so parallel stacks never collide. Keep it small (0..99).
-  [int]$Instance = 0
+  [int]$Instance = 0,
+  # Tear down THIS instance's stack (the titled cmd hosts + their bun/electron
+  # children + the ports) and exit, without relaunching. The one-shot teardown a
+  # human or an agent runs after a visual-verification pass, so the minimized
+  # `cmd /k` host windows don't linger. Reuses the same teardown the relaunch
+  # path runs, so there is one cleanup definition.
+  [switch]$Stop
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,6 +53,42 @@ $RuntimeRoot = if ($Instance -eq 0) { Join-Path $env:USERPROFILE '.hive' } else 
 # corrupts a path like HIVE_RUNTIME_ROOT).
 $daemonBatName = "hive-daemon-launch-$Instance.bat"
 $batName = "hive-shell-launch-$Instance.bat"
+
+# Tear down any stack FOR THIS INSTANCE only. Each instance's processes are
+# identified by unique strings in their command lines: the daemon + Electron
+# hosts launch via this instance's per-instance .bat files; Vite is inline and
+# carries `--port <port>`. taskkill /T cascades each titled cmd host to its bun +
+# electron children; the port sweep is the backstop that also reaps an Electron
+# orphaned from an already-closed window (it still holds the CDP port until it
+# exits). Called by BOTH the standalone -Stop path and the relaunch path, so the
+# cleanup lives in one place.
+function Stop-DevStack {
+  Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" |
+    Where-Object {
+      $_.CommandLine -and (
+        $_.CommandLine -match [regex]::Escape($daemonBatName) -or
+        $_.CommandLine -match [regex]::Escape($batName) -or
+        $_.CommandLine -match "--port $VitePort\b"
+      )
+    } |
+    ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }
+  Get-NetTCPConnection -State Listen -LocalPort $DaemonPort, $VitePort, $CdpPort -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+}
+
+# Standalone teardown: stop this instance and exit (no install, no relaunch).
+if ($Stop) {
+  Write-Host "Stopping Hive dev stack (instance $Instance)..."
+  Stop-DevStack
+  Start-Sleep -Milliseconds 600
+  $busy = Get-NetTCPConnection -State Listen -LocalPort $DaemonPort, $VitePort, $CdpPort -ErrorAction SilentlyContinue
+  if ($busy) {
+    Write-Host "STATUS: PARTIAL - ports still listening: $(( $busy | ForEach-Object { $_.LocalPort } | Sort-Object -Unique ) -join ', ')"
+    exit 1
+  }
+  Write-Host "STATUS: STOPPED - daemon :$DaemonPort / vite :$VitePort / cdp :$CdpPort freed; windows closed."
+  exit 0
+}
 
 function Wait-For($timeoutSec, $check) {
   $deadline = (Get-Date).AddSeconds($timeoutSec)
@@ -75,25 +118,9 @@ if (-not $reuse) {
   Pop-Location
   if ($code -ne 0) { Write-Host "bun install failed (exit $code)"; exit 1 }
 
-  # 2. Tear down any prior stack FOR THIS INSTANCE only. Each instance's
-  #    processes are identified by unique strings in their command lines: the
-  #    daemon carries `HIVE_PORT=<port>`, Vite `--port <port>`, and the Electron
-  #    daemon + Electron hosts launch via this instance's per-instance .bat
-  #    files; Vite is inline and carries `--port <port>` in its command line.
-  #    taskkill /T cascades each titled cmd host to its bun + electron children;
-  #    the port sweep is the backstop that also reaps an Electron orphaned from
-  #    an already-closed window (it still holds the CDP port until it exits).
-  Get-CimInstance Win32_Process -Filter "Name='cmd.exe'" |
-    Where-Object {
-      $_.CommandLine -and (
-        $_.CommandLine -match [regex]::Escape($daemonBatName) -or
-        $_.CommandLine -match [regex]::Escape($batName) -or
-        $_.CommandLine -match "--port $VitePort\b"
-      )
-    } |
-    ForEach-Object { taskkill /PID $_.ProcessId /T /F 2>&1 | Out-Null }
-  Get-NetTCPConnection -State Listen -LocalPort $DaemonPort, $VitePort, $CdpPort -ErrorAction SilentlyContinue |
-    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+  # 2. Tear down any prior stack FOR THIS INSTANCE only (same cleanup the
+  #    standalone -Stop path runs).
+  Stop-DevStack
 
   # 3. Launch (minimized, so windows land in the taskbar without stealing focus).
   #    Stagger so the daemon and Vite are serving before Electron probes them.

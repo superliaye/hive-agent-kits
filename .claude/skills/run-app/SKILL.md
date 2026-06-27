@@ -56,7 +56,7 @@ Cross-platform (`scripts/dev.ts` — cmd windows on Windows, Terminal.app on mac
 
 ### Stopping it
 
-Rerun the script (it tears down any prior stack first) or close the cmd windows. The daemon writes to `~/.hive/`.
+Stop **just this instance** with `pwsh -NoProfile -File scripts/dev.ps1 -Instance N -Stop` (omit `-Instance` for instance 0). It kills that instance's three titled `cmd` hosts + their bun/electron children and frees its ports, then prints `STATUS: STOPPED` — scoped to N, so a **parallel instance is never disturbed**. Run this after a visual-verification pass so the minimized `cmd /k` windows don't linger. (Rerunning the launcher also tears the instance down first, but then relaunches it — use `-Stop` when you just want it gone.) The daemon writes to `~/.hive-N/` (`~/.hive/` for instance 0).
 
 ## Visual loop
 
