@@ -859,15 +859,15 @@ function SourceRows({
 // on the `anchor` (first synced) row; every other synced row gets the `-<id>`
 // suffix; un-synced/inactive rows carry no SHA/freshness testid at all.
 //
-// The delete control renders only with `onDelete` AND `kind !== "local"`: the
-// bundled Starter is system-seeded, never user-added (ADR-0023), so a user-facing
-// Remove affordance does not apply to it (it is re-copied from the in-repo package
-// on every app update). Delete is destructive (drops the Source + Mirror + catalog
-// entries) so it is gated by a two-step inline confirm.
+// The delete control renders for any Source with `onDelete` wired — including the
+// bundled Starter, which is deletable on the same path as a git Source (ADR-0023).
+// The Starter is still only system-seeded, never user-added; deleting it sticks
+// because the first-run-only seed does not re-seed an already-initialised registry
+// (gated on isCurrentVersion() at sources-live.ts:85). Delete is destructive (drops
+// the Source + Mirror + catalog entries) so it is gated by a two-step inline confirm.
 function SourceRow({
   id,
   origin,
-  kind,
   sync,
   active,
   anchor,
@@ -911,7 +911,7 @@ function SourceRow({
   useEffect(() => {
     if (deleteFailed) setConfirming(false);
   }, [deleteFailed]);
-  const deletable = onDelete && kind !== "local";
+  const deletable = !!onDelete;
   return (
     <div
       className={`kit-source-row ${active ? "" : "kit-source-row-inactive"}`}

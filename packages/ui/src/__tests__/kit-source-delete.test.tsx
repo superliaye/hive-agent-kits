@@ -1,10 +1,12 @@
-// Per-Source delete control (#49): the Capabilities header renders a Remove
-// affordance per *user-added* Source (kind:"git"), NOT for the bundled Starter
-// (kind:"local" — system-seeded, never user-added, per ADR-0023). Delete is destructive so
-// it is gated by a two-step inline confirm — the first Remove click only arms the
-// confirm; the armed Confirm fires DELETE /api/sources/:id. On success the page
-// re-fetches ["sources"] (the row disappears) + ["kit"] (its capabilities, built
-// from active sources, disappear). Cancel dismisses the confirm with no DELETE.
+// Per-Source delete control (#49, #55): the Capabilities header renders a Remove
+// affordance for EVERY Source — user-added git Sources and the bundled Starter
+// (kind:"local") alike. The Starter is deletable on the same path as a git Source
+// (ADR-0023); deletion sticks because the first-run-only seed does not re-seed an
+// already-initialised registry. Delete is destructive so it is gated by a two-step
+// inline confirm — the first Remove click only arms the confirm; the armed Confirm
+// fires DELETE /api/sources/:id. On success the page re-fetches ["sources"] (the row
+// disappears) + ["kit"] (its capabilities, built from active sources, disappear).
+// Cancel dismisses the confirm with no DELETE.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -37,6 +39,8 @@ const STARTER_ID = "starter-local";
 const GIT_ID = "git-src";
 const STARTER_ORIGIN = "https://github.com/superliaye/my-agent-kits";
 const GIT_ORIGIN = "https://github.com/owner/repo";
+// The toast/label form of an origin (shortOrigin): last two path segments.
+const STARTER_LABEL = "superliaye/my-agent-kits";
 
 type Call = { method: string; path: string };
 let calls: Call[];
@@ -46,6 +50,9 @@ let calls: Call[];
 let deleted: Set<string>;
 // When set, the DELETE endpoint 500s — to exercise the delete error banner.
 let failDelete: boolean;
+// When set, the registry holds ONLY the bundled Starter (no git Source) — so
+// deleting the Starter empties the Sources list and exercises the empty-state.
+let onlyStarter: boolean;
 
 function sources(): Source[] {
   const all: Source[] = [
@@ -57,28 +64,38 @@ function sources(): Source[] {
       createdAt: 1,
       rank: 0,
     },
-    { id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: true, createdAt: 2, rank: 1 },
   ];
+  if (!onlyStarter) {
+    all.push({
+      id: GIT_ID,
+      origin: GIT_ORIGIN,
+      kind: "git",
+      active: true,
+      createdAt: 2,
+      rank: 1,
+    });
+  }
   return all.filter((s) => !deleted.has(s.id));
 }
 
 // One git-provided skill. Omitted from the catalog once its Source is deleted (the
 // server builds the catalog from the surviving active sources only).
 function catalog(): Catalog {
-  const entries: CapabilityEntry[] = deleted.has(GIT_ID)
-    ? []
-    : [
-        {
-          kind: "skill",
-          name: "alpha",
-          description: "a git capability",
-          group: "",
-          deployable: true,
-          shadowed: false,
-          sourceIds: [GIT_ID],
-          contentSha: "a".repeat(64),
-        },
-      ];
+  const entries: CapabilityEntry[] =
+    onlyStarter || deleted.has(GIT_ID)
+      ? []
+      : [
+          {
+            kind: "skill",
+            name: "alpha",
+            description: "a git capability",
+            group: "",
+            deployable: true,
+            shadowed: false,
+            sourceIds: [GIT_ID],
+            contentSha: "a".repeat(64),
+          },
+        ];
   return { entries, presets: [], problems: [] };
 }
 
@@ -93,7 +110,7 @@ function kitState(): KitState {
       origin: STARTER_ORIGIN,
     });
   }
-  if (!deleted.has(GIT_ID)) {
+  if (!onlyStarter && !deleted.has(GIT_ID)) {
     sync.push({
       state: "up_to_date" as const,
       sha: "abc1234def",
@@ -109,6 +126,7 @@ function installStubs(): void {
   calls = [];
   deleted = new Set();
   failDelete = false;
+  onlyStarter = false;
   globalThis.fetch = (async (
     input: string | URL | Request,
     init?: RequestInit,
@@ -176,12 +194,12 @@ async function click(el: Element | null): Promise<void> {
 }
 
 describe("KitDeployPage — Source delete control (#49)", () => {
-  test("a Remove control renders for the git Source and is ABSENT for the bundled local Starter", async () => {
+  test("a Remove control renders for the git Source AND for the bundled local Starter (#55)", async () => {
     installStubs();
     const host = await render();
     expect(host.querySelector(`[data-testid="kit-source-delete-${GIT_ID}"]`)).not.toBeNull();
-    expect(host.querySelector(`[data-testid="kit-source-delete-${STARTER_ID}"]`)).toBeNull();
-    // The Starter row itself still renders (just without a Remove control).
+    // The Starter row exposes the same Remove trigger as a git Source.
+    expect(host.querySelector(`[data-testid="kit-source-delete-${STARTER_ID}"]`)).not.toBeNull();
     expect(host.querySelector(`[data-testid="kit-source-${STARTER_ID}"]`)).not.toBeNull();
   });
 
@@ -206,8 +224,58 @@ describe("KitDeployPage — Source delete control (#49)", () => {
     // After the ["sources"]/["kit"] refetch the row AND its capability are gone.
     expect(host.querySelector(`[data-testid="kit-source-${GIT_ID}"]`)).toBeNull();
     expect(host.querySelector('[data-testid="kit-row-skill-alpha"]')).toBeNull();
-    // The Starter row survives.
+    // The other Source (the Starter) is untouched — deleting one Source leaves the
+    // rest of the list intact (not because the Starter is special: see #55).
     expect(host.querySelector(`[data-testid="kit-source-${STARTER_ID}"]`)).not.toBeNull();
+  });
+
+  test("Starter delete: Remove → confirm fires DELETE /api/sources/<STARTER_ID>, the row disappears, and a success toast fires (#55)", async () => {
+    installStubs();
+    const host = await render();
+    // The Starter row is present initially.
+    expect(host.querySelector(`[data-testid="kit-source-${STARTER_ID}"]`)).not.toBeNull();
+
+    // First click only ARMS — no DELETE yet; the confirm control appears.
+    await click(host.querySelector(`[data-testid="kit-source-delete-${STARTER_ID}"]`));
+    expect(calls.some((c) => c.method === "DELETE")).toBe(false);
+    const confirm = host.querySelector(`[data-testid="kit-source-delete-confirm-${STARTER_ID}"]`);
+    expect(confirm).not.toBeNull();
+
+    // Confirm fires DELETE /api/sources/<STARTER_ID>.
+    await click(confirm);
+    expect(
+      calls.some((c) => c.method === "DELETE" && c.path === `/api/sources/${STARTER_ID}`),
+    ).toBe(true);
+
+    // After the ["sources"]/["kit"] refetch the Starter row is gone.
+    expect(host.querySelector(`[data-testid="kit-source-${STARTER_ID}"]`)).toBeNull();
+
+    // The same success toast as a git Source: `Removed <origin>`.
+    const toast = host.querySelector('[data-testid="toast-success"]');
+    expect(toast).not.toBeNull();
+    expect(toast?.textContent).toContain(`Removed ${STARTER_LABEL}`);
+  });
+
+  test("deleting the only/last Source leaves a clean empty Sources list with no crash (#55)", async () => {
+    installStubs();
+    onlyStarter = true;
+    const host = await render();
+    // The Starter is the sole Source.
+    expect(host.querySelector(`[data-testid="kit-source-${STARTER_ID}"]`)).not.toBeNull();
+
+    await click(host.querySelector(`[data-testid="kit-source-delete-${STARTER_ID}"]`));
+    await click(host.querySelector(`[data-testid="kit-source-delete-confirm-${STARTER_ID}"]`));
+
+    expect(
+      calls.some((c) => c.method === "DELETE" && c.path === `/api/sources/${STARTER_ID}`),
+    ).toBe(true);
+
+    // The row is gone and the now-empty Sources list renders its empty-state
+    // (the genuinely-no-sources case, not all-disabled) with no crash.
+    expect(host.querySelector(`[data-testid="kit-source-${STARTER_ID}"]`)).toBeNull();
+    expect(host.querySelector('[data-testid="kit-empty"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="kit-empty-add-source"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="kit-empty-disabled"]')).toBeNull();
   });
 
   test("Cancel dismisses the confirm and fires no DELETE", async () => {
