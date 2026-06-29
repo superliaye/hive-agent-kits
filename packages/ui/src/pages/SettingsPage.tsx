@@ -2,7 +2,7 @@ import type { ApiConfig } from "../api.ts";
 import { AppearanceSettings } from "../components/AppearanceSettings.tsx";
 import { BackendsSettings } from "../components/BackendsSettings.tsx";
 
-export type SectionId = "appearance" | "backends" | "other";
+export type SectionId = "appearance" | "backends";
 
 type Section = {
   id: SectionId;
@@ -20,12 +20,6 @@ const SECTIONS: readonly Section[] = [
     id: "backends",
     label: "Backends",
     description: "Claude Code and Codex CLIs — health, updates, and sign-in.",
-  },
-  {
-    id: "other",
-    label: "Other",
-    description:
-      "Audit retention, daemon port, and log level. Configurable via ~/.hive/config.yaml in v1; UI editor lands in v1.1 per ADR-0006.",
   },
 ];
 
@@ -68,14 +62,6 @@ export function SettingsPage({
           </header>
           {active === "appearance" && <AppearanceSettings />}
           {active === "backends" && <BackendsSettings apiConfig={apiConfig} />}
-          {active === "other" && (
-            <div className="section">
-              <p className="empty">
-                Configurable via <code>~/.hive/config.yaml</code> in v1; UI editor lands in v1.1 per
-                ADR-0006.
-              </p>
-            </div>
-          )}
         </div>
       </div>
     </div>
