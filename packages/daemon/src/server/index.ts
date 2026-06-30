@@ -290,6 +290,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     backendReadiness,
     backendUpdater,
     config,
+    daemonMode: devMode ? "dev" : "packaged",
     token,
   });
 

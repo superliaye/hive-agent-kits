@@ -14,6 +14,13 @@ import { join, resolve } from "node:path";
 import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
 import { z } from "zod";
 import { hasDaemonToDrain, shouldConfirmClose } from "./close-guard";
+import {
+  canReuseReadyDaemon,
+  incompatibleDaemonMessage,
+  parseReadyProbe,
+  type ReadyProbe,
+  type ShellMode,
+} from "./daemon-ready";
 
 // Renderer→main IPC contracts. AGENTS.md requires Zod at external
 // boundaries — the renderer process is its own untrusted context even
@@ -70,6 +77,7 @@ if (!app.isPackaged) {
 const PACKAGED_DAEMON = app.isPackaged
   ? join(process.resourcesPath, isWin ? "hive-daemon.exe" : "hive-daemon")
   : null;
+const SHELL_MODE: ShellMode = app.isPackaged ? "packaged" : "dev";
 const UI_DIST_INDEX = app.isPackaged
   ? join(app.getAppPath(), "ui-dist", "index.html")
   : join(REPO_ROOT, "ui", "dist", "index.html");
@@ -80,26 +88,37 @@ let spawnedByShell = false;
 // before-quit consults it to confirm before SIGKILLing the daemon mid-write.
 let deployInFlight = false;
 
-async function isDaemonReady(): Promise<boolean> {
+async function probeDaemonReady(): Promise<ReadyProbe> {
   try {
     const res = await fetch(`${DAEMON_URL}/api/ready`);
-    return res.ok;
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    return parseReadyProbe(res.ok, body);
   } catch {
-    return false;
+    return { ready: false };
   }
 }
 
 async function waitForReady(timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await isDaemonReady()) return;
+    const probe = await probeDaemonReady();
+    if (canReuseReadyDaemon(SHELL_MODE, probe)) return;
     await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error("daemon failed to become ready");
 }
 
 async function ensureDaemon(): Promise<void> {
-  if (await isDaemonReady()) return;
+  const probe = await probeDaemonReady();
+  if (canReuseReadyDaemon(SHELL_MODE, probe)) return;
+  if (SHELL_MODE === "packaged" && probe.ready) {
+    throw new Error(incompatibleDaemonMessage(probe));
+  }
   if (PACKAGED_DAEMON) {
     // Packaged: spawn the bundled daemon binary. HIVE_PACKAGED=1 is the single
     // authoritative production signal the daemon reads to deploy to the real CLI

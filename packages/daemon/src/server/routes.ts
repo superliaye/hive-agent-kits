@@ -24,6 +24,7 @@ export type RoutesDeps = {
   backendReadiness: BackendReadinessSvc;
   backendUpdater: BackendUpdaterSvc;
   config: Config<AppConfig>;
+  daemonMode: "dev" | "packaged";
   token: string;
 };
 
@@ -81,7 +82,16 @@ export function buildRoutes(deps: RoutesDeps): Hono {
   );
   app.use("/api/*", bearerAuth(deps.token));
 
-  app.get("/api/ready", (c) => c.json({ status: "ok" }));
+  app.get("/api/ready", (c) =>
+    c.json({
+      status: "ok",
+      daemonMode: deps.daemonMode,
+      deployTargetMode:
+        deps.daemonMode === "packaged" || deps.config.get("developer").allowRealHomeDeploy
+          ? "real"
+          : "sandbox",
+    }),
+  );
 
   // On-demand backend availability probe (ADR-0016). Re-probes the CLI backends
   // and reports installed/missing + version with stable reason codes. Zod
