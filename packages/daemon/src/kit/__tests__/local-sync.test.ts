@@ -13,7 +13,7 @@ import { SyncError } from "../effect/errors.ts";
 import { Kit, KitLive } from "../effect/kit-live.ts";
 import { localSyncMirror, mirrorExists } from "../mirror.ts";
 import { type HttpFetch, localSyncSource } from "../sync.ts";
-import { defaultDeployTargets } from "../targets.ts";
+import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 let tmpRoot: string;
@@ -56,7 +56,7 @@ afterEach(() => {
 
 describe("localSyncMirror / localSyncSource", () => {
   test("copies capabilities + presets into the mirror; writes NO .hive-mirror.json", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("starter");
     localSyncMirror(mirror, targets.kitTmpRoot(), starterFixture);
 
@@ -68,7 +68,7 @@ describe("localSyncMirror / localSyncSource", () => {
   });
 
   test("reuses the atomic stage→swap: an interrupted stage leaves the prior mirror intact", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("starter");
     // Seed a good mirror first.
     localSyncMirror(mirror, targets.kitTmpRoot(), starterFixture);
@@ -83,7 +83,7 @@ describe("localSyncMirror / localSyncSource", () => {
   });
 
   test("a non-existent starterRoot yields a typed missing_starter_root SyncError (no throw out)", async () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const exit = await Effect.runPromiseExit(
       localSyncSource(
         targets.mirrorRoot("starter"),
@@ -100,7 +100,7 @@ describe("localSyncMirror / localSyncSource", () => {
   });
 
   test("re-copy on every run (no sha short-circuit) — content refreshes", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("starter");
     const mirrored = join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md");
     localSyncMirror(mirror, targets.kitTmpRoot(), starterFixture);
@@ -141,7 +141,7 @@ describe("Kit.sync — local kind dispatch (#32)", () => {
     expect(result.sources).toHaveLength(1);
     expect(result.sources[0]?.status).toBe("synced");
 
-    const mirror = defaultDeployTargets().mirrorRoot("starter");
+    const mirror = failSafeDeployTargets().mirrorRoot("starter");
     expect(existsSync(join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md"))).toBe(true);
     expect(existsSync(join(mirror, ".hive-mirror.json"))).toBe(false);
 
@@ -182,7 +182,7 @@ describe("Kit.sync — local kind dispatch (#32)", () => {
     const result = await Effect.runPromise(kit.sync());
     // Inactive → not synced at all.
     expect(result.sources).toHaveLength(0);
-    const mirror = defaultDeployTargets().mirrorRoot("starter");
+    const mirror = failSafeDeployTargets().mirrorRoot("starter");
     expect(existsSync(join(mirror, "capabilities"))).toBe(false);
     // catalog() omits the Starter's capabilities.
     expect(kit.catalog().entries.some((e) => e.name === "demo-skill")).toBe(false);
@@ -231,7 +231,7 @@ describe("deploy from the local mirror (#32, offline)", () => {
       }),
     );
 
-    const claudeHome = defaultDeployTargets().claudeHome();
+    const claudeHome = failSafeDeployTargets().claudeHome();
     expect(existsSync(join(claudeHome, "skills", "demo-skill", "SKILL.md"))).toBe(true);
     // No external installer ran (a skill deploy is pure fs copy).
     expect(execCalls).toHaveLength(0);

@@ -11,7 +11,7 @@ import {
   readLedger,
   reconcilePrune,
 } from "../ledger.ts";
-import { defaultDeployTargets } from "../targets.ts";
+import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 let tmpRoot: string;
@@ -27,14 +27,14 @@ afterEach(() => {
 });
 
 function writeLedgerFile(ledger: Ledger): void {
-  const p = defaultDeployTargets().ledgerPath();
+  const p = failSafeDeployTargets().ledgerPath();
   mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, `${JSON.stringify(ledger, null, 2)}\n`);
 }
 
 describe("ledger", () => {
   test("(a) round-trip: mergeLedger writes a LedgerSchema-valid file with exact keys", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const written = mergeLedger(
       targets,
       {
@@ -66,7 +66,7 @@ describe("ledger", () => {
   });
 
   test("(b) pre-existing manifest surfaced by readLedger", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const seed: Ledger = {
       ...emptyLedger(),
       kitVersion: "0.9.0",
@@ -82,7 +82,7 @@ describe("ledger", () => {
   });
 
   test("(c) prune-correctness: mergeLedger drops only pruned names", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     writeLedgerFile({ ...emptyLedger(), skills: [{ name: "keep" }, { name: "drop" }] });
 
     const merged = mergeLedger(
@@ -103,7 +103,7 @@ describe("ledger", () => {
   });
 
   test("(d) concurrent external write: reconcilePrune re-reads -> X handled per fresh-ledger semantics", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     // Hive deploys skill A.
     mergeLedger(
       targets,
@@ -162,7 +162,7 @@ describe("ledger", () => {
   });
 
   test("(d2) reconcilePrune DOES prune a Hive-owned skill that this deploy deselects", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     // Hive owns {A, B} at request start.
     mergeLedger(
       targets,
@@ -189,7 +189,7 @@ describe("ledger", () => {
   });
 
   test("(d3) #47: reconcilePrune does NOT prune an owned-but-deselected name absent from the active catalog", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     // Hive owns {A, B} at request start.
     mergeLedger(
       targets,
@@ -218,7 +218,7 @@ describe("ledger", () => {
   });
 
   test("(e) plugins/bundles never auto-removed on deselect (no prune path)", () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     writeLedgerFile({
       ...emptyLedger(),
       plugins: [{ name: "oldplugin" }],

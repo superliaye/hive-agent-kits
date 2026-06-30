@@ -30,7 +30,7 @@ import {
   type TarFixtureEntry,
 } from "../../kit/__tests__/helpers.ts";
 import type { HttpFetch } from "../../kit/sync.ts";
-import { defaultDeployTargets } from "../../kit/targets.ts";
+import { failSafeDeployTargets } from "../../kit/targets.ts";
 import { createServer, type ServerHandles } from "../index.ts";
 
 const TOKEN = "test-token";
@@ -232,7 +232,7 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
       expect(bodyA.validation.conformant).toBe(true);
       expect(bodyA.validation.errors).toEqual([]);
       expect(bodyA.validation.capabilityCount).toBeGreaterThan(0);
-      const mirrorA = defaultDeployTargets().mirrorRoot(idA);
+      const mirrorA = failSafeDeployTargets().mirrorRoot(idA);
       expect(existsSync(mirrorA)).toBe(true);
 
       // ---- (b) catalog lists A's caps with A's sourceId ----

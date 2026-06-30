@@ -4,6 +4,7 @@
 // suite WITHOUT blocking a real deploy.
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import {
   type DeployFsExec,
   type ExecRequest,
@@ -12,6 +13,9 @@ import {
 } from "../deploy/adapter.ts";
 import { DeployError } from "../effect/errors.ts";
 import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
+
+// Packaged port: real homes, the production deploy target.
+const packagedOpts = { devMode: false, allowRealHomeDeploy: () => false } as const;
 
 function fakeTargets(redirected: boolean): DeployTargets {
   return {
@@ -99,9 +103,9 @@ describe("childEnv HOME redirection", () => {
     }
   }
 
-  test("PRODUCTION (no overrides) leaves the real HOME/USERPROFILE intact", () => {
+  test("PACKAGED (real homes) leaves the real HOME/USERPROFILE intact", () => {
     withoutHiveEnv(() => {
-      const targets = defaultDeployTargets();
+      const targets = defaultDeployTargets(packagedOpts);
       const base: NodeJS.ProcessEnv = { HOME: "/real/home", USERPROFILE: "C:\\real\\home" };
       const env = targets.childEnv(base);
       expect(env.HOME).toBe("/real/home");
@@ -111,14 +115,20 @@ describe("childEnv HOME redirection", () => {
     });
   });
 
-  test("REDIRECTED (override set) points HOME/USERPROFILE at the Hive home", () => {
+  test("DEV SANDBOX (toggle off) points HOME/USERPROFILE at the sandbox parent", () => {
     const prev = process.env.HIVE_RUNTIME_ROOT;
     process.env.HIVE_RUNTIME_ROOT = "/tmp/redirected-hive";
     try {
-      const targets = defaultDeployTargets();
+      const targets = defaultDeployTargets({ devMode: true, allowRealHomeDeploy: () => false });
       const env = targets.childEnv({ HOME: "/real/home" });
-      expect(env.HOME).toBe("/tmp/redirected-hive");
-      expect(env.USERPROFILE).toBe("/tmp/redirected-hive");
+      // childEnv points $HOME at the parent of the resolved claude home so an
+      // installer's ~/.codex / ~/.agents land on the sandbox tree (B2a). Built
+      // with join() so the OS separators match (Windows backslashes).
+      const sandboxParent = join("/tmp/redirected-hive", "homes");
+      expect(env.HOME).toBe(sandboxParent);
+      expect(env.USERPROFILE).toBe(sandboxParent);
+      // The resolved claude home nests under that parent (B2a invariant).
+      expect(targets.claudeHome()).toBe(join(sandboxParent, ".claude"));
     } finally {
       if (prev === undefined) delete process.env.HIVE_RUNTIME_ROOT;
       else process.env.HIVE_RUNTIME_ROOT = prev;

@@ -25,11 +25,18 @@ export type RedirectedHome = {
 
 // Point every HIVE_* env at subdirs of `root` BEFORE defaultDeployTargets() is
 // called (the port reads env at call time). Returns the resolved paths.
+//
+// Homes are DOTTED siblings under a single `<root>/homes` parent (mirroring the
+// dev-sandbox layout), so the B2a childEnv invariant holds for this redirect too:
+// childEnv sets $HOME = dirname(claudeHome()) = <root>/homes, and an installer
+// resolving ~/.codex / ~/.agents from $HOME lands on exactly codexHome()/
+// agentsHome(). A non-dotted layout (`<root>/codex`) would split the two.
 export function redirectHomeEnv(root: string): RedirectedHome {
-  const claudeHome = `${root}/claude`;
-  const codexHome = `${root}/codex`;
-  const agentsHome = `${root}/agents`;
-  const ledgerPath = `${root}/ledger/manifest.json`;
+  const homes = `${root}/homes`;
+  const claudeHome = `${homes}/.claude`;
+  const codexHome = `${homes}/.codex`;
+  const agentsHome = `${homes}/.agents`;
+  const ledgerPath = `${homes}/.agent-kit/manifest.json`;
   const runtimeRoot = `${root}/runtime`;
   process.env.HIVE_RUNTIME_ROOT = runtimeRoot;
   process.env.HIVE_CLAUDE_HOME = claudeHome;

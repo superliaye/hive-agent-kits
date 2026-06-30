@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { VerifyEntry } from "@hive/contract";
 import { Effect } from "effect";
 import type { DeployFsExec, ExecPort } from "../deploy/adapter.ts";
@@ -16,7 +16,7 @@ import { runDeploy } from "../deploy/engine.ts";
 import { readFingerprints } from "../fingerprint.ts";
 import { emptyLedger, type Ledger, readLedger } from "../ledger.ts";
 import type { ResolvedSelection } from "../selection.ts";
-import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
+import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import { runVerify } from "../verify.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
@@ -29,7 +29,7 @@ let mirror: string;
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "kit-verify-"));
   redirectHomeEnv(tmpRoot);
-  targets = defaultDeployTargets();
+  targets = failSafeDeployTargets();
   mirror = targets.mirrorRoot(SOURCE_ID);
   mkdirSync(mirror, { recursive: true });
 });
@@ -133,7 +133,7 @@ describe("verify — on-disk existence (Feature 1)", () => {
     rmSync(tmpRoot, { recursive: true, force: true });
     tmpRoot = mkdtempSync(join(tmpdir(), "kit-verify-"));
     redirectHomeEnv(tmpRoot);
-    targets = defaultDeployTargets();
+    targets = failSafeDeployTargets();
     mirror = targets.mirrorRoot(SOURCE_ID);
     mkdirSync(mirror, { recursive: true });
     seedSkill("solo");
@@ -151,7 +151,7 @@ describe("verify — on-disk existence (Feature 1)", () => {
       plugins: [{ name: "myplug" }],
       bundles: [{ name: "mybundle", pin: null }],
     };
-    mkdirSync(join(tmpRoot, "ledger"), { recursive: true });
+    mkdirSync(dirname(targets.ledgerPath()), { recursive: true });
     writeFileSync(targets.ledgerPath(), `${JSON.stringify(ledger, null, 2)}\n`);
 
     const report = runVerify(targets);

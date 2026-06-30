@@ -11,7 +11,7 @@ import { AddSourceResult, type Source } from "@hive/contract";
 import { Effect } from "effect";
 import { degradedOnboardResult, onboardSource } from "../onboard.ts";
 import type { HttpFetch } from "../sync.ts";
-import { defaultDeployTargets } from "../targets.ts";
+import { failSafeDeployTargets } from "../targets.ts";
 import { buildGzipTar, clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const SHA = "a".repeat(40);
@@ -51,7 +51,7 @@ describe("onboardSource", () => {
     const neverFetch: HttpFetch = () => new Promise<Response>(() => {});
     const src = gitSource("src-timeout");
     const result = await Effect.runPromise(
-      onboardSource(defaultDeployTargets(), neverFetch, src, 50),
+      onboardSource(failSafeDeployTargets(), neverFetch, src, 50),
     );
     expect(result.sync.state).toBe("check_failed");
     expect(result.sync.errorReason).toBe("timeout");
@@ -68,7 +68,7 @@ describe("onboardSource", () => {
         : new Response(conformingTar("foo"), { status: 200 });
     const src = gitSource("src-ok");
     const result = await Effect.runPromise(
-      onboardSource(defaultDeployTargets(), fetchImpl, src, 30_000),
+      onboardSource(failSafeDeployTargets(), fetchImpl, src, 30_000),
     );
     expect(result.sync.state).toBe("up_to_date");
     expect(result.validation.conformant).toBe(true);
@@ -83,7 +83,7 @@ describe("onboardSource", () => {
     const src = gitSource("src-offline");
     // onboard's error channel is `never` — runPromise resolves, never rejects.
     const result = await Effect.runPromise(
-      onboardSource(defaultDeployTargets(), offline, src, 30_000),
+      onboardSource(failSafeDeployTargets(), offline, src, 30_000),
     );
     expect(result.sync.state).toBe("check_failed");
     expect(result.sync.errorReason).toBe("offline");

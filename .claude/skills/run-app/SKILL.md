@@ -73,6 +73,8 @@ bun run scripts/screenshot.ts --cdp 9334 --out window.png            # instance 
 
 This is what to use when verifying anything desktop-specific (native title bar, system-accent, close-guard, IPC features). It needs the full stack up (the shell, so NOT `-DaemonOnly`). No token handling — the shell already authed the renderer. (Known caveat: under CDP, Playwright's color-scheme emulation renders **light** even though the window chrome is dark, so it isn't yet a faithful dark-theme capture — the DOM/state are the real window's.)
 
+`scripts/screenshot.ts --cdp 9333+N` now yields a **verified non-blank** capture of the real window: the dev shell appends anti-occlusion / anti-backgrounding command-line switches (`--disable-features=CalculateNativeWinOcclusion` et al., dev-only, [packages/shell/src/main.ts](../../../packages/shell/src/main.ts)) so the visible-but-unfocused window keeps compositing instead of writing a black PNG. After writing, the script runs a content-check (decode the PNG, modal-color metric) and **fails loudly with "blank render"** if the frame is uniform — black or all-chrome — so a silent black capture can no longer pass. The anti-occlusion switches alone produce the verified frame on the dev machine; no fallback rung (bringToFront / capturePage / show-restore) was needed.
+
 For **interactive** driving (clicks, typing, multi-step flows), the `electron-visual-loop` skill drives the same port with `agent-browser connect 9333`. `agent-browser` is **not installed by default** — use `npx agent-browser …` or `npm i -g agent-browser`. For a one-shot screenshot, `--cdp` above needs no extra install.
 
 ### Quick browser-mode check (the web rendering)

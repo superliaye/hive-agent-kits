@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { AddSourceResult } from "@hive/contract";
 import { buildGzipTar, clearHomeEnv, redirectHomeEnv } from "../../kit/__tests__/helpers.ts";
 import type { HttpFetch } from "../../kit/sync.ts";
-import { defaultDeployTargets } from "../../kit/targets.ts";
+import { failSafeDeployTargets } from "../../kit/targets.ts";
 import { createServer, type ServerHandles } from "../index.ts";
 
 const TOKEN = "test-token";
@@ -107,7 +107,7 @@ describe("server — toggle/delete never undeploys (#36 Q8)", () => {
 
   test("deactivate after deploy: no new deploy.applied row, no new CLI-home bytes", async () => {
     const id = await addAndDeploy();
-    const claudeHome = defaultDeployTargets().claudeHome();
+    const claudeHome = failSafeDeployTargets().claudeHome();
 
     const deployRowsBefore = (await server.audit.query({ source: "deploy" })).length;
     expect(deployRowsBefore).toBe(1); // the one real deploy
@@ -125,7 +125,7 @@ describe("server — toggle/delete never undeploys (#36 Q8)", () => {
 
   test("delete after deploy: no new deploy.applied row, no new CLI-home bytes", async () => {
     const id = await addAndDeploy();
-    const claudeHome = defaultDeployTargets().claudeHome();
+    const claudeHome = failSafeDeployTargets().claudeHome();
 
     const deployRowsBefore = (await server.audit.query({ source: "deploy" })).length;
     expect(deployRowsBefore).toBe(1);

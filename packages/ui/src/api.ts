@@ -102,6 +102,10 @@ export async function openUrl(url: string): Promise<void> {
 
 export type ApiConfig = { baseUrl: string; token: string };
 
+// Developer config slice — mirrors the daemon's DeveloperConfigSchema. Kept
+// local to the UI client (a tiny boolean slice, no contract entry warranted).
+export type DeveloperConfig = { allowRealHomeDeploy: boolean };
+
 export function resolveApiConfig(): ApiConfig {
   if (typeof window !== "undefined" && window.__hive) {
     return window.__hive;
@@ -300,6 +304,17 @@ export const api = {
     call<Preferences>(cfg, "/api/appearance", {
       method: "PUT",
       body: JSON.stringify(prefs),
+    }),
+
+  // ─── Developer (deploy escape hatches) ───────────────────────────────
+  // `allowRealHomeDeploy` opts a dev daemon into deploying to the real home
+  // instead of the per-instance sandbox. Off by default; surfaced in the
+  // Developer settings tab.
+  getDeveloper: (cfg: ApiConfig) => call<DeveloperConfig>(cfg, "/api/developer"),
+  putDeveloper: (cfg: ApiConfig, value: DeveloperConfig) =>
+    call<DeveloperConfig>(cfg, "/api/developer", {
+      method: "PUT",
+      body: JSON.stringify(value),
     }),
 
   // ─── Kit (capability deploy-manager) ─────────────────────────────────

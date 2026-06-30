@@ -9,7 +9,7 @@ import type { DeployFsExec } from "../deploy/adapter.ts";
 import { runDeploy } from "../deploy/engine.ts";
 import { DeployError } from "../effect/errors.ts";
 import { catalogNameSets, computeDiff, resolveSelection } from "../selection.ts";
-import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
+import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 let tmpRoot: string;
@@ -36,7 +36,7 @@ const SRC_B = src("src-b");
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "kit-sel-"));
   redirectHomeEnv(tmpRoot);
-  targets = defaultDeployTargets();
+  targets = failSafeDeployTargets();
   for (const s of [SRC_A, SRC_B]) {
     mkdirSync(join(targets.mirrorRoot(s.id), "capabilities"), { recursive: true });
   }

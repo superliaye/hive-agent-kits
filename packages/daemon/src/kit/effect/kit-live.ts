@@ -31,7 +31,7 @@ import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
 import { catalogNameSets, computeDiff, resolveSelection } from "../selection.ts";
 import { type HttpFetch, localSyncSource, productionFetch, syncSource } from "../sync.ts";
 import { buildSourceSyncStatus, type LastSyncError } from "../sync-status.ts";
-import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
+import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import type { DeployAuditEvents } from "../types.ts";
 import { runVerify } from "../verify.ts";
 import { DeployError, SyncError } from "./errors.ts";
@@ -71,7 +71,7 @@ function activeSources(registry: SourceRegistrySvc): readonly Source[] {
 }
 
 function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
-  const targets = opts.targets ?? defaultDeployTargets();
+  const targets = opts.targets ?? failSafeDeployTargets();
   const fetchImpl = opts.fetch ?? productionFetch();
   const fx: DeployFsExec = {
     targets,
@@ -229,7 +229,7 @@ export function KitLive(opts: CreateKitOptions = {}): Layer.Layer<Kit, never, So
     Effect.gen(function* () {
       const registry = yield* SourceRegistry;
       const svc = buildSvc(opts, registry);
-      const targets = opts.targets ?? defaultDeployTargets();
+      const targets = opts.targets ?? failSafeDeployTargets();
       // Startup disk maintenance, modeled as an explicit I/O edge: recover a
       // crash-interrupted mirror swap for each active Source's Mirror and sweep
       // the shared stale temp. An fs fault is contained, never a Layer-build

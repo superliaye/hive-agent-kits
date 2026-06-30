@@ -11,7 +11,7 @@ import { SourceRegistry, SourceRegistryLive } from "../../../sources/effect/sour
 import { buildGzipTar, clearHomeEnv, redirectHomeEnv } from "../../__tests__/helpers.ts";
 import { mirrorExists } from "../../mirror.ts";
 import type { HttpFetch } from "../../sync.ts";
-import { defaultDeployTargets } from "../../targets.ts";
+import { failSafeDeployTargets } from "../../targets.ts";
 import type { DeployAuditEvents } from "../../types.ts";
 import { Kit, KitLive } from "../kit-live.ts";
 
@@ -100,7 +100,7 @@ describe("Kit.sync — per-Source (#30)", () => {
     expect(result.sources).toHaveLength(2);
     expect(result.sources.every((s) => s.status === "synced")).toBe(true);
 
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     for (const s of registry.currentSources()) {
       expect(mirrorExists(targets.mirrorRoot(s.id))).toBe(true);
     }
@@ -238,7 +238,7 @@ describe("Kit launch-sync ordering (#32, file mode — local Starter seed)", () 
     expect(result.sources).toHaveLength(1);
     expect(result.sources[0]?.status).toBe("synced");
 
-    const mirror = defaultDeployTargets().mirrorRoot("starter");
+    const mirror = failSafeDeployTargets().mirrorRoot("starter");
     expect(mirrorExists(mirror)).toBe(true);
     // The bundled Starter skill landed; NO provenance file was written.
     expect(

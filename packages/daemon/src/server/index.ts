@@ -126,11 +126,29 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // instance to Kit (Effect memoizes a Layer by reference → one acquire / one
   // store) AND merge it for the routes' own resolution.
   const sourcesLayer = SourceRegistryLive(sourcesOpts);
-  // The one HTTP fetch + deploy-target port shared by Kit (launch sync) and the
-  // Sources lifecycle adapter (add-time onboard sync). `defaultDeployTargets()` is
-  // env-pure — a single source of truth so onboard's Mirror paths match Kit's.
+  // The one HTTP fetch shared by Kit (launch sync) and the Sources lifecycle
+  // adapter (add-time onboard sync).
   const httpFetch: HttpFetch = opts.fetch ?? productionFetch();
-  const deployTargets = defaultDeployTargets();
+  // The deploy-target port needs the live `developer.allowRealHomeDeploy` toggle,
+  // which is only known after Config resolves off the root runtime below. The
+  // port's methods are call-time (deploy happens post-boot), so a closure-held
+  // reader over the resolved Config — wired immediately after `runtime.runSync`
+  // sets it — is the clean seam: no second runtime (which would acquire a duplicate
+  // Config store + watcher), no `R` leak, no mutable config box.
+  const configHolder: { config?: Config<AppConfig> } = {};
+  // Packaging signal (B5): the packaged launch sets HIVE_PACKAGED=1. Absent → dev
+  // (or an unknown / hand-run daemon), which resolves the per-instance SANDBOX —
+  // the fail-safe default. Production is proven by a POSITIVE marker, never inferred.
+  const devMode = process.env.HIVE_PACKAGED !== "1";
+  const deployTargets = defaultDeployTargets({
+    devMode,
+    allowRealHomeDeploy: () => {
+      const cfg = configHolder.config;
+      // Before Config resolves (never at deploy time, only a theoretical early
+      // call) fall back to the fail-safe: do NOT allow a real-home deploy.
+      return cfg ? cfg.get("developer").allowRealHomeDeploy : false;
+    },
+  });
   const rootLayer = Layer.mergeAll(
     SecretsLive(secretsOpts),
     ConfigLive(configOpts),
@@ -154,6 +172,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // service instances off the one runtime — the same live objects (including
   // their `.events` emitters) every consumer below shares.
   const config: Config<AppConfig> = runtime.runSync(ConfigTag);
+  // Point the deploy-target port's toggle reader at the resolved Config (wired
+  // before any deploy can run). See the configHolder note above.
+  configHolder.config = config;
   const secretsSvc = runtime.runSync(SecretsTag);
   // The resolved SecretsSvc is the legacy `Secrets` surface minus `dispose()`
   // (the runtime owns teardown now). Project the legacy shape so the routes +

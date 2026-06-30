@@ -1,4 +1,4 @@
-// Settings left-nav: the sections are Appearance · Backends —
+// Settings left-nav: the sections are Appearance · Backends · Developer —
 // there is NO "Other" item, NO "Secrets" item, and NO "Permissions" item.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 describe("Settings nav", () => {
-  test("shows Appearance/Backends; no Other, no Secrets, no Permissions", async () => {
+  test("shows Appearance/Backends/Developer; no Other, no Secrets, no Permissions", async () => {
     const host = mount();
     const root = createRoot(host);
     activeRoot = root;
@@ -61,6 +61,7 @@ describe("Settings nav", () => {
 
     expect(host.querySelector('[data-testid="settings-nav-appearance"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="settings-nav-backends"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="settings-nav-developer"]')).not.toBeNull();
     // No Other nav item.
     expect(host.querySelector('[data-testid="settings-nav-other"]')).toBeNull();
     // No Secrets nav item.

@@ -54,6 +54,15 @@ const UI_DEV_URL = process.env.HIVE_UI_DEV_URL ?? "http://127.0.0.1:5173";
 // daemon bearer token. Must run before app.whenReady().
 if (!app.isPackaged) {
   app.commandLine.appendSwitch("remote-debugging-port", process.env.HIVE_CDP_PORT ?? "9333");
+  // Anti-occlusion / anti-backgrounding. The dev window is visible-but-unfocused
+  // (show:false → showInactive()), and Windows native occlusion tracking suspends
+  // the window's compositor — so a CDP `page.screenshot()` reads an empty surface
+  // and writes a black PNG. These keep the off-focus window painting so the visual
+  // loop gets a real frame. Dev-only; shipped builds never weaken occlusion.
+  app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+  app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+  app.commandLine.appendSwitch("disable-renderer-backgrounding");
+  app.commandLine.appendSwitch("disable-background-timer-throttling");
 }
 
 // Packaged-mode resource paths. process.resourcesPath is where
@@ -92,8 +101,13 @@ async function waitForReady(timeoutMs = 10_000): Promise<void> {
 async function ensureDaemon(): Promise<void> {
   if (await isDaemonReady()) return;
   if (PACKAGED_DAEMON) {
-    // Packaged: spawn the bundled daemon binary.
+    // Packaged: spawn the bundled daemon binary. HIVE_PACKAGED=1 is the single
+    // authoritative production signal the daemon reads to deploy to the real CLI
+    // homes (the daemon is a separate process, so app.isPackaged is invisible to
+    // it). Dev launchers never set it, so a dev / hand-run daemon defaults to the
+    // per-instance sandbox (the fail-safe default).
     daemon = spawn(PACKAGED_DAEMON, [], {
+      env: { ...process.env, HIVE_PACKAGED: "1" },
       stdio: ["ignore", "inherit", "inherit"],
       windowsHide: true,
     });

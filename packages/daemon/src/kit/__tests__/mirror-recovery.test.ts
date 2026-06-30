@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { mirrorExists, recoverMirror } from "../mirror.ts";
-import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
+import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const SOURCE_ID = "src-1";
@@ -29,7 +29,7 @@ let mirrorRoot: string;
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "kit-test-"));
   redirectHomeEnv(tmpRoot);
-  targets = defaultDeployTargets();
+  targets = failSafeDeployTargets();
   mirrorRoot = targets.mirrorRoot(SOURCE_ID);
 });
 

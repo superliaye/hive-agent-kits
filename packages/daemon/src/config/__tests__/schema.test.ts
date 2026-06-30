@@ -1,10 +1,56 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { configRuntime } from "../effect/config-live.ts";
+import { ConfigPersistence } from "../persistence.ts";
 import { APP_CONFIG_DEFAULTS, AppConfigSchema } from "../schema.ts";
 
 describe("AppConfigSchema", () => {
   test("APP_CONFIG_DEFAULTS validates against the schema", () => {
     const parsed = AppConfigSchema.parse(APP_CONFIG_DEFAULTS);
     expect(parsed).toEqual(APP_CONFIG_DEFAULTS);
+  });
+
+  test("developer.allowRealHomeDeploy defaults to false", () => {
+    expect(APP_CONFIG_DEFAULTS.developer.allowRealHomeDeploy).toBe(false);
+    const parsed = AppConfigSchema.parse(APP_CONFIG_DEFAULTS);
+    expect(parsed.developer.allowRealHomeDeploy).toBe(false);
+  });
+
+  // Forward-compat: an existing on-disk config written before `developer`
+  // existed must backfill from defaults, not be rejected. The file-mode load
+  // path (loadOrSeed → deepMerge(defaults, raw) → schema.parse) is what
+  // guarantees this, so exercise it end to end.
+  describe("forward-compatible load (missing developer key)", () => {
+    let dir: string;
+    let path: string;
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "hive-config-fwd-"));
+      path = join(dir, "config.yaml");
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    test("an on-disk config without `developer` loads with the default backfilled", () => {
+      // Write a config that pre-dates the developer slice — every other key
+      // present, `developer` absent.
+      const { developer: _omitted, ...legacy } = APP_CONFIG_DEFAULTS;
+      new ConfigPersistence(path).write(legacy);
+
+      const { svc, dispose } = configRuntime({
+        mode: "file",
+        path,
+        defaults: APP_CONFIG_DEFAULTS,
+        schema: AppConfigSchema,
+      });
+      try {
+        // Loaded, not rejected; the missing slice is backfilled to the default.
+        expect(svc.get("developer")).toEqual({ allowRealHomeDeploy: false });
+      } finally {
+        dispose();
+      }
+    });
   });
 
   test("rejects invalid retention.days (zero, negative, float)", () => {

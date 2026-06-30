@@ -37,6 +37,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { PNG } from "pngjs";
 
 declare const Bun: unknown;
 const onBun = typeof Bun !== "undefined";
@@ -45,6 +46,84 @@ const DEFAULT_VITE = "http://localhost:5173";
 const DEFAULT_DAEMON = "http://127.0.0.1:3117";
 const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 const MIN_PNG_BYTES = 1024;
+
+// Non-blank content metric. A solid-black (or solid-chrome) PNG can exceed
+// MIN_PNG_BYTES, so the byte guard does not prove a render. We decode the PNG,
+// find the MODAL pixel color (the dominant background), and measure the fraction
+// of pixels whose per-channel value differs from that modal color by >= DELTA.
+// A uniform frame (all black, or all chrome) leaves ~0% differing → blank; a real
+// UI's text/controls push that fraction past MIN_CONTENT_FRACTION → has content.
+// This distinguishes "has UI" from "uniform fill" where a raw stdev check cannot,
+// because the chrome is itself near-black.
+//
+// Assumption: the captured route is content-dense (the app's real surfaces clear
+// 2% comfortably — verified on the Electron window and the Settings page). A
+// deliberately sparse route (a near-empty page, a single heading on a flat
+// background) could fall under 2% and false-FAIL; point this at a content-bearing
+// route, or raise the route's density, rather than loosening the blank guard.
+const CONTENT_DELTA = 16; // per-channel difference (0..255) that counts as "differs"
+const MIN_CONTENT_FRACTION = 0.02; // >= 2% of pixels must differ from the modal color
+
+export type ContentCheck = { ok: boolean; modal: string; differingFraction: number };
+
+// Pure, unit-testable on a synthetic buffer. Decodes a PNG buffer and reports
+// whether enough pixels differ from the modal color to be a real render.
+export function assessNonBlank(pngBuffer: Buffer): ContentCheck {
+  const png = PNG.sync.read(pngBuffer);
+  const { data, width, height } = png;
+  const pixelCount = width * height;
+  if (pixelCount === 0) {
+    return { ok: false, modal: "#000000", differingFraction: 0 };
+  }
+
+  // Tally pixel colors (RGB, alpha ignored) to find the modal color.
+  const counts = new Map<number, number>();
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i] ?? 0;
+    const g = data[i + 1] ?? 0;
+    const b = data[i + 2] ?? 0;
+    const key = (r << 16) | (g << 8) | b;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  let modalKey = 0;
+  let modalCount = -1;
+  for (const [key, count] of counts) {
+    if (count > modalCount) {
+      modalCount = count;
+      modalKey = key;
+    }
+  }
+  const mr = (modalKey >> 16) & 0xff;
+  const mg = (modalKey >> 8) & 0xff;
+  const mb = modalKey & 0xff;
+
+  let differing = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const dr = Math.abs((data[i] ?? 0) - mr);
+    const dg = Math.abs((data[i + 1] ?? 0) - mg);
+    const db = Math.abs((data[i + 2] ?? 0) - mb);
+    if (dr >= CONTENT_DELTA || dg >= CONTENT_DELTA || db >= CONTENT_DELTA) {
+      differing++;
+    }
+  }
+  const differingFraction = differing / pixelCount;
+  const modal = `#${modalKey.toString(16).padStart(6, "0")}`;
+  return { ok: differingFraction >= MIN_CONTENT_FRACTION, modal, differingFraction };
+}
+
+// Throws a loud "blank render" error if the captured PNG is uniform. Run for both
+// browser and --cdp captures, after the cheap MIN_PNG_BYTES pre-check.
+export function assertNonBlank(pngBuffer: Buffer, out: string): void {
+  const { ok, modal, differingFraction } = assessNonBlank(pngBuffer);
+  if (!ok) {
+    throw new Error(
+      `blank render — ${out} is a uniform frame (modal ${modal}, only ` +
+        `${(differingFraction * 100).toFixed(2)}% of pixels differ; need >= ` +
+        `${(MIN_CONTENT_FRACTION * 100).toFixed(0)}%). The window likely captured an ` +
+        `empty compositor surface.`,
+    );
+  }
+}
 
 type Args = {
   route: string;
@@ -295,12 +374,20 @@ async function main(): Promise<void> {
   if (size < MIN_PNG_BYTES) {
     throw new Error(`screenshot ${args.out} is only ${size} bytes — likely a blank/failed render`);
   }
+  // Cheap byte guard passed; now prove the frame actually rendered content (a
+  // solid-black PNG can exceed MIN_PNG_BYTES). Runs for both browser and --cdp modes.
+  assertNonBlank(readFileSync(args.out), args.out);
   console.log(`captured ${target}`);
   console.log(`  → ${args.out} (${size} bytes)`);
 }
 
-main().catch((err: unknown) => {
-  const reason = err instanceof Error ? err.message : String(err);
-  console.error(`screenshot failed: ${reason}`);
-  process.exit(1);
-});
+// Only run when invoked directly (`bun run scripts/screenshot.ts …` or the
+// Node re-exec), not when imported by a unit test of the pure assertions above.
+const invokedDirectly = process.argv[1] === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  main().catch((err: unknown) => {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(`screenshot failed: ${reason}`);
+    process.exit(1);
+  });
+}

@@ -6,7 +6,7 @@ import { Cause, Effect, Exit } from "effect";
 import { SyncError } from "../effect/errors.ts";
 import { mirrorExists, readProvenance } from "../mirror.ts";
 import { type HttpFetch, parseGithubOrigin, syncSource } from "../sync.ts";
-import { defaultDeployTargets } from "../targets.ts";
+import { failSafeDeployTargets } from "../targets.ts";
 import { buildGzipTar, clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const SHA_A = "a".repeat(40);
@@ -51,7 +51,7 @@ function runOne(
   origin: string,
   fetchImpl: HttpFetch,
 ): Effect.Effect<{ status: "synced" | "unchanged" }, SyncError> {
-  const targets = defaultDeployTargets();
+  const targets = failSafeDeployTargets();
   return syncSource(targets.mirrorRoot(sourceId), targets.kitTmpRoot(), origin, fetchImpl);
 }
 
@@ -83,7 +83,7 @@ describe("syncSource", () => {
       return tarballResponse(SHA_A);
     };
 
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("src-a");
     const outcome = await Effect.runPromise(runOne("src-a", ORIGIN, fetchImpl));
 
@@ -104,7 +104,7 @@ describe("syncSource", () => {
   test("(orchestrator) two active Sources land in two distinct mirrors", async () => {
     const fetchImpl: HttpFetch = async (url) =>
       url.includes("api.github.com") ? commitsResponse(SHA_A) : tarballResponse(SHA_A);
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
 
     await Effect.runPromise(runOne("src-a", "https://github.com/owner/a", fetchImpl));
     await Effect.runPromise(runOne("src-b", "https://github.com/owner/b", fetchImpl));
@@ -149,7 +149,7 @@ describe("syncSource", () => {
   });
 
   test("(c) offline — fetch throws -> SyncError.reason offline, prior mirror intact", async () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("src-a");
     const seed: HttpFetch = async (url) =>
       url.includes("api.github.com") ? commitsResponse(SHA_A) : tarballResponse(SHA_A);
@@ -171,7 +171,7 @@ describe("syncSource", () => {
   });
 
   test("(offline-isolation) one Source offline keeps the other's last-good + freshness", async () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const mirrorA = targets.mirrorRoot("src-a");
     const mirrorB = targets.mirrorRoot("src-b");
 
@@ -218,7 +218,7 @@ describe("syncSource", () => {
   });
 
   test("(e) atomic/last-good — extract failure (download 500) keeps the prior mirror", async () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("src-a");
     const seed: HttpFetch = async (url) =>
       url.includes("api.github.com") ? commitsResponse(SHA_A) : tarballResponse(SHA_A);
@@ -240,7 +240,7 @@ describe("syncSource", () => {
   });
 
   test("(e2) corrupt tarball -> parse SyncError, prior mirror intact", async () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("src-a");
     const seed: HttpFetch = async (url) =>
       url.includes("api.github.com") ? commitsResponse(SHA_A) : tarballResponse(SHA_A);
@@ -262,7 +262,7 @@ describe("syncSource", () => {
   });
 
   test("(f) stale temp dir is swept on a successful sync; mirror uncorrupted", async () => {
-    const targets = defaultDeployTargets();
+    const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("src-a");
     const stale = join(targets.kitTmpRoot(), "extract-stale");
     mkdirSync(stale, { recursive: true });

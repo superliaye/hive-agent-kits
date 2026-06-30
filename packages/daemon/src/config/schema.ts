@@ -30,6 +30,14 @@ export const RunsConfigSchema = z.object({
   maxIterations: z.number().int().min(0),
 });
 
+// Developer-only escape hatches. `allowRealHomeDeploy` opts a DEV daemon into
+// deploying to the user's real ~/.claude etc. instead of the per-instance
+// sandbox (the fail-safe default). Off everywhere by default; a packaged build
+// deploys real regardless of this toggle (it never reads it).
+export const DeveloperConfigSchema = z.object({
+  allowRealHomeDeploy: z.boolean(),
+});
+
 // Theme/font preferences — what CONTEXT.md calls "UI theme". The appearance
 // schema + defaults are owned by `@hive/theming/schema` (ADR-0022); the daemon
 // consumes them here and folds them into the deployment-wide config. The strict
@@ -40,6 +48,7 @@ export const AppConfigSchema = z.object({
   appearance: AppearanceConfigSchema,
   daemon: DaemonConfigSchema,
   runs: RunsConfigSchema,
+  developer: DeveloperConfigSchema,
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;
@@ -66,5 +75,10 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
     // 0 = unlimited (Q5 resolution: default-unlimited). A positive integer
     // caps the tool-loop and adds one grace turn on overrun.
     maxIterations: 0,
+  },
+  developer: {
+    // Fail-safe: a dev deploy lands in the per-instance sandbox unless the user
+    // explicitly opts into real-home deploys here.
+    allowRealHomeDeploy: false,
   },
 };

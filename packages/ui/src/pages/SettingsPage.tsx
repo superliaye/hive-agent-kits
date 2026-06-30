@@ -1,8 +1,9 @@
 import type { ApiConfig } from "../api.ts";
 import { AppearanceSettings } from "../components/AppearanceSettings.tsx";
 import { BackendsSettings } from "../components/BackendsSettings.tsx";
+import { DeveloperSettings } from "../components/DeveloperSettings.tsx";
 
-export type SectionId = "appearance" | "backends";
+export type SectionId = "appearance" | "backends" | "developer";
 
 type Section = {
   id: SectionId;
@@ -20,6 +21,11 @@ const SECTIONS: readonly Section[] = [
     id: "backends",
     label: "Backends",
     description: "Claude Code and Codex CLIs — health, updates, and sign-in.",
+  },
+  {
+    id: "developer",
+    label: "Developer",
+    description: "",
   },
 ];
 
@@ -58,10 +64,11 @@ export function SettingsPage({
         <div className="settings-detail-inner">
           <header className="settings-detail-header">
             <h1>{activeSection.label}</h1>
-            <p className="meta">{activeSection.description}</p>
+            {activeSection.description && <p className="meta">{activeSection.description}</p>}
           </header>
           {active === "appearance" && <AppearanceSettings />}
           {active === "backends" && <BackendsSettings apiConfig={apiConfig} />}
+          {active === "developer" && <DeveloperSettings apiConfig={apiConfig} />}
         </div>
       </div>
     </div>

@@ -9,7 +9,7 @@ import { runDeploy } from "../deploy/engine.ts";
 import { DeployError } from "../effect/errors.ts";
 import type { ResolvedSelection } from "../selection.ts";
 import { catalogNameSets, computeDiff } from "../selection.ts";
-import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
+import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 // Active-catalog name-sets for the given per-kind names — the membership signal
@@ -49,7 +49,7 @@ let mirror: string;
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "kit-test-"));
   redirectHomeEnv(tmpRoot);
-  targets = defaultDeployTargets();
+  targets = failSafeDeployTargets();
   mirror = targets.mirrorRoot(SOURCE_ID);
   mkdirSync(mirror, { recursive: true });
 });

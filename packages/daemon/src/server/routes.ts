@@ -10,6 +10,7 @@ import { BackendStatus, ProbeableBackend } from "../backend-probe/index.ts";
 import type { BackendReadinessSvc } from "../backend-readiness/index.ts";
 import { BackendReadiness } from "../backend-readiness/index.ts";
 import type { AppConfig } from "../config/schema.ts";
+import { DeveloperConfigSchema } from "../config/schema.ts";
 import type { Config } from "../config/types.ts";
 import type { Secrets } from "../secrets/index.ts";
 import type { ConfiguredProvider } from "../secrets/types.ts";
@@ -184,6 +185,27 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       return c.json({ error: "invalid appearance", issues: zodIssues(parsed.error) }, 400);
     }
     await deps.config.set("appearance", parsed.data);
+    return c.json(parsed.data);
+  });
+
+  // ─── Developer (deploy escape hatches) ───────────────────────────────
+
+  app.get("/api/developer", (c) => {
+    return c.json(deps.config.get("developer"));
+  });
+
+  app.put("/api/developer", async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const parsed = DeveloperConfigSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid developer config", issues: zodIssues(parsed.error) }, 400);
+    }
+    await deps.config.set("developer", parsed.data);
     return c.json(parsed.data);
   });
 

@@ -6,7 +6,7 @@ import type { Selection, Source } from "@hive/contract";
 import { readCatalog } from "../catalog.ts";
 import { DeployError } from "../effect/errors.ts";
 import { resolveSelection } from "../selection.ts";
-import { defaultDeployTargets } from "../targets.ts";
+import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const CLONE = "D:/GitRepos/my-agent-kits";
@@ -36,7 +36,7 @@ const SOURCE = source("src-1");
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "kit-test-"));
   redirectHomeEnv(tmpRoot);
-  mirror = defaultDeployTargets().mirrorRoot(SOURCE.id);
+  mirror = failSafeDeployTargets().mirrorRoot(SOURCE.id);
   mkdirSync(join(mirror, "capabilities", "skills"), { recursive: true });
 });
 
@@ -86,7 +86,7 @@ function emptySelection(over: Partial<Selection["add"]>): Selection {
 describe("readCatalog (single Source)", () => {
   test("(a) @-group flatten: leaf name + group path are content-derived", () => {
     writeSkill("@grp/@sub/foo", "description: nested foo");
-    const cat = readCatalog(defaultDeployTargets(), [SOURCE]);
+    const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
     const foo = cat.entries.find((e) => e.kind === "skill" && e.name === "foo");
     expect(foo).toBeDefined();
     expect(foo?.name).toBe("foo");
@@ -97,7 +97,7 @@ describe("readCatalog (single Source)", () => {
   test("(b) within-kind collision blocks both, and resolveSelection throws", () => {
     writeSkill("@a/foo", "description: a-foo");
     writeSkill("@b/foo", "description: b-foo");
-    const cat = readCatalog(defaultDeployTargets(), [SOURCE]);
+    const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
 
     const foos = cat.entries.filter((e) => e.kind === "skill" && e.name === "foo");
     expect(foos.length).toBe(2);
@@ -124,7 +124,7 @@ describe("readCatalog (single Source)", () => {
     writePresetIn(mirror, "a", "name: a\nextends: b\ncapabilities: {}\n");
     writePresetIn(mirror, "b", "name: b\nextends: a\ncapabilities: {}\n");
 
-    const cat = readCatalog(defaultDeployTargets(), [SOURCE]);
+    const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
 
     expect(cat.entries.some((e) => e.name === "good")).toBe(true);
     expect(cat.presets.some((p) => p.name === "a" || p.name === "b")).toBe(false);
@@ -147,7 +147,7 @@ describe("readCatalog (single Source)", () => {
       "name: child\nextends: parent\ndefault_agents: [claude]\ncapabilities:\n  skills: [beta, gamma]\n",
     );
 
-    const cat = readCatalog(defaultDeployTargets(), [SOURCE]);
+    const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
     const child = cat.presets.find((p) => p.name === "child");
     expect(child).toBeDefined();
     expect(new Set(child?.capabilities.skills)).toEqual(new Set(["alpha", "beta", "gamma"]));
@@ -157,7 +157,7 @@ describe("readCatalog (single Source)", () => {
   test("loads the real clone catalog without throwing (realistic content)", () => {
     cpSync(join(CLONE, "capabilities"), join(mirror, "capabilities"), { recursive: true });
     cpSync(join(CLONE, "presets"), join(mirror, "presets"), { recursive: true });
-    const cat = readCatalog(defaultDeployTargets(), [SOURCE]);
+    const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
     expect(cat.entries.length).toBeGreaterThan(0);
     expect(cat.presets.some((p) => p.name === "engineering")).toBe(true);
     // my-commit ships under @my/ but flattens to the leaf name.
@@ -174,8 +174,8 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
   let mirrorB: string;
 
   beforeEach(() => {
-    mirrorA = defaultDeployTargets().mirrorRoot(SRC_A.id);
-    mirrorB = defaultDeployTargets().mirrorRoot(SRC_B.id);
+    mirrorA = failSafeDeployTargets().mirrorRoot(SRC_A.id);
+    mirrorB = failSafeDeployTargets().mirrorRoot(SRC_B.id);
     mkdirSync(join(mirrorA, "capabilities"), { recursive: true });
     mkdirSync(join(mirrorB, "capabilities"), { recursive: true });
   });
@@ -183,7 +183,7 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
   test("(a) disjoint capability names across two Sources -> all deployable, single-variant", () => {
     writeSkillIn(mirrorA, "alpha", "description: a");
     writeSkillIn(mirrorB, "beta", "description: b");
-    const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
+    const cat = readCatalog(failSafeDeployTargets(), [SRC_A, SRC_B]);
     const alpha = cat.entries.find((e) => e.name === "alpha");
     const beta = cat.entries.find((e) => e.name === "beta");
     expect(alpha?.deployable).toBe(true);
@@ -196,7 +196,7 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
     // Identical frontmatter + body → identical Mirror bytes → same ContentSha.
     writeSkillIn(mirrorA, "foo", "description: same", "identical body");
     writeSkillIn(mirrorB, "foo", "description: same", "identical body");
-    const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
+    const cat = readCatalog(failSafeDeployTargets(), [SRC_A, SRC_B]);
     const foos = cat.entries.filter((e) => e.kind === "skill" && e.name === "foo");
     expect(foos.length).toBe(1);
     const foo = foos[0];
@@ -210,7 +210,7 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
   test("(c) COLLISION: different-content skill in two Sources -> winner + shadow, no problem", () => {
     writeSkillIn(mirrorA, "foo", "description: a-foo", "body A");
     writeSkillIn(mirrorB, "foo", "description: b-foo", "body B");
-    const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
+    const cat = readCatalog(failSafeDeployTargets(), [SRC_A, SRC_B]);
     const foos = cat.entries.filter((e) => e.kind === "skill" && e.name === "foo");
     expect(foos.length).toBe(2);
     const deployable = foos.filter((f) => f.deployable);
@@ -228,7 +228,7 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
   test("(c2) COLLISION on a file-marker kind (instruction) -> winner + shadow (ContentSha covers all kinds)", () => {
     writeInstructionIn(mirrorA, "core", "a-core");
     writeInstructionIn(mirrorB, "core", "b-core");
-    const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
+    const cat = readCatalog(failSafeDeployTargets(), [SRC_A, SRC_B]);
     const instrs = cat.entries.filter((e) => e.kind === "instruction" && e.name === "core");
     expect(instrs.length).toBe(2);
     expect(instrs.filter((i) => i.deployable).length).toBe(1);
@@ -238,13 +238,13 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
 
   test("(d) entry-count conservation: {A,A,B} -> 2 entries (1 merged deployable, 1 shadowed B)", () => {
     const SRC_C = source("src-c");
-    const mirrorC = defaultDeployTargets().mirrorRoot(SRC_C.id);
+    const mirrorC = failSafeDeployTargets().mirrorRoot(SRC_C.id);
     mkdirSync(join(mirrorC, "capabilities"), { recursive: true });
     // A and A' identical; B different.
     writeSkillIn(mirrorA, "foo", "description: x", "content A");
     writeSkillIn(mirrorB, "foo", "description: x", "content A");
     writeSkillIn(mirrorC, "foo", "description: x", "content B");
-    const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B, SRC_C]);
+    const cat = readCatalog(failSafeDeployTargets(), [SRC_A, SRC_B, SRC_C]);
     const foos = cat.entries.filter((e) => e.kind === "skill" && e.name === "foo");
     expect(foos.length).toBe(2);
     const merged = foos.find((f) => f.sourceIds.length === 2);
@@ -256,7 +256,7 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
     // Two skills named foo INSIDE one Source -> parse marks both not-resolvable.
     writeSkillIn(mirrorA, "@x/foo", "description: a");
     writeSkillIn(mirrorA, "@y/foo", "description: b");
-    const cat = readCatalog(defaultDeployTargets(), [SRC_A]);
+    const cat = readCatalog(failSafeDeployTargets(), [SRC_A]);
     const foos = cat.entries.filter((e) => e.kind === "skill" && e.name === "foo");
     expect(foos.length).toBe(2);
     for (const f of foos) {
@@ -268,12 +268,12 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
 
   test("(f) PRECEDENCE: a git Source outranks the local Starter on a collision", () => {
     const STARTER = source("starter", { kind: "local" });
-    const mirrorStarter = defaultDeployTargets().mirrorRoot(STARTER.id);
+    const mirrorStarter = failSafeDeployTargets().mirrorRoot(STARTER.id);
     mkdirSync(join(mirrorStarter, "capabilities"), { recursive: true });
     writeSkillIn(mirrorStarter, "foo", "description: starter", "starter body");
     writeSkillIn(mirrorA, "foo", "description: git", "git body");
     // Registration order: starter first (local), then the git Source.
-    const cat = readCatalog(defaultDeployTargets(), [STARTER, SRC_A]);
+    const cat = readCatalog(failSafeDeployTargets(), [STARTER, SRC_A]);
     const winner = cat.entries.find((e) => e.kind === "skill" && e.name === "foo" && e.deployable);
     expect(winner?.sourceIds[0]).toBe("src-a");
   });
@@ -291,7 +291,7 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
       "shared",
       "name: shared\ndefault_agents: [claude]\ncapabilities:\n  skills: [beta]\n",
     );
-    const cat = readCatalog(defaultDeployTargets(), [SRC_A, SRC_B]);
+    const cat = readCatalog(failSafeDeployTargets(), [SRC_A, SRC_B]);
     expect(cat.presets.some((p) => p.name === "shared")).toBe(false);
     expect(cat.problems.some((p) => p.kind === "preset" && p.name === "shared")).toBe(true);
   });

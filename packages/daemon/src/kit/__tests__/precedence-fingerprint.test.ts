@@ -24,7 +24,7 @@ import { runDeploy } from "../deploy/engine.ts";
 import { FingerprintEntrySchema, FingerprintFileSchema, readFingerprints } from "../fingerprint.ts";
 import { readLedger } from "../ledger.ts";
 import { resolveSelection } from "../selection.ts";
-import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
+import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 let tmpRoot: string;
@@ -33,7 +33,7 @@ let targets: DeployTargets;
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "kit-prec-"));
   redirectHomeEnv(tmpRoot);
-  targets = defaultDeployTargets();
+  targets = failSafeDeployTargets();
 });
 
 afterEach(() => {

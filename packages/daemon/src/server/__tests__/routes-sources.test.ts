@@ -24,7 +24,7 @@ import {
   type TarFixtureEntry,
 } from "../../kit/__tests__/helpers.ts";
 import type { HttpFetch } from "../../kit/sync.ts";
-import { defaultDeployTargets } from "../../kit/targets.ts";
+import { failSafeDeployTargets } from "../../kit/targets.ts";
 import { createServer, type ServerHandles } from "../index.ts";
 
 const TOKEN = "test-token";
@@ -522,7 +522,7 @@ describe("server routes — sources", () => {
     try {
       const add = await postOrigin(server, "https://github.com/a/b");
       const { source } = AddSourceResult.parse(await add.json());
-      const mirrorRoot = defaultDeployTargets().mirrorRoot(source.id);
+      const mirrorRoot = failSafeDeployTargets().mirrorRoot(source.id);
       // The add built the Mirror (reachable + conforming).
       expect(existsSync(mirrorRoot)).toBe(true);
 

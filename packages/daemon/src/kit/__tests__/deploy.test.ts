@@ -8,7 +8,7 @@ import { runDeploy } from "../deploy/engine.ts";
 import { DeployError } from "../effect/errors.ts";
 import { readLedger } from "../ledger.ts";
 import type { ResolvedSelection } from "../selection.ts";
-import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
+import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const SOURCE_ID = "src-1";
@@ -20,7 +20,7 @@ let mirror: string;
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "kit-test-"));
   redirectHomeEnv(tmpRoot);
-  targets = defaultDeployTargets();
+  targets = failSafeDeployTargets();
   mirror = targets.mirrorRoot(SOURCE_ID);
   mkdirSync(mirror, { recursive: true });
 });
@@ -614,7 +614,7 @@ describe("runDeploy — cross-Source (#30)", () => {
     rmSync(tmpRoot, { recursive: true, force: true });
     tmpRoot = mkdtempSync(join(tmpdir(), "kit-test-"));
     redirectHomeEnv(tmpRoot);
-    targets = defaultDeployTargets();
+    targets = failSafeDeployTargets();
     const mirrorA = targets.mirrorRoot("src-a");
     const mirrorB = targets.mirrorRoot("src-b");
     seedSkillIn(mirrorA, "a-skill");

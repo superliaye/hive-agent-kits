@@ -14,7 +14,7 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import { SourceRegistry, SourceRegistryLive } from "../../sources/effect/sources-live.ts";
 import { Kit, KitLive } from "../effect/kit-live.ts";
 import { type HttpFetch } from "../sync.ts";
-import { defaultDeployTargets } from "../targets.ts";
+import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 // Any fetch means a code path wrongly went to the network — these tests read
@@ -74,8 +74,8 @@ describe("Kit.catalog — toggle hide-effect (#36)", () => {
     // provides a unique skill `y`. B inserted later → B wins `x`, A is shadowed.
     const A = gitSource("src-a", true, 0);
     const B = gitSource("src-b", true, 1);
-    const mirrorA = defaultDeployTargets().mirrorRoot(A.id);
-    const mirrorB = defaultDeployTargets().mirrorRoot(B.id);
+    const mirrorA = failSafeDeployTargets().mirrorRoot(A.id);
+    const mirrorB = failSafeDeployTargets().mirrorRoot(B.id);
     writeSkillIn(mirrorA, "x", "name: x\ndescription: x from A", "A body");
     writeSkillIn(mirrorA, "y", "name: y\ndescription: y only in A", "y body");
     writeSkillIn(mirrorB, "x", "name: x\ndescription: x from B", "B body");
@@ -121,8 +121,18 @@ describe("Kit.catalog — toggle hide-effect (#36)", () => {
     // A to the deployable winner (the formerly-shadowed loser).
     const A = gitSource("src-a", true, 0);
     const B = gitSource("src-b", true, 1);
-    writeSkillIn(defaultDeployTargets().mirrorRoot(A.id), "x", "name: x\ndescription: A", "A body");
-    writeSkillIn(defaultDeployTargets().mirrorRoot(B.id), "x", "name: x\ndescription: B", "B body");
+    writeSkillIn(
+      failSafeDeployTargets().mirrorRoot(A.id),
+      "x",
+      "name: x\ndescription: A",
+      "A body",
+    );
+    writeSkillIn(
+      failSafeDeployTargets().mirrorRoot(B.id),
+      "x",
+      "name: x\ndescription: B",
+      "B body",
+    );
 
     const { kit, registry, rt } = kitOver([A, B]);
     try {

@@ -27,6 +27,7 @@ import {
 } from "../api.ts";
 import { Skeleton, SkeletonGroup } from "../components/Skeleton.tsx";
 import { ToastHost, useToasts } from "../components/Toasts.tsx";
+import { useDeveloperConfig } from "../components/useDeveloperConfig.ts";
 import { signalDeployInFlight } from "../platform/deploy-in-flight.ts";
 
 const KINDS: CapabilityKind[] = ["instruction", "skill", "agent", "plugin", "bundle"];
@@ -120,6 +121,20 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     queryKey: ["sources"],
     queryFn: () => api.listSources(apiConfig),
   });
+  // Developer-only deploy escape hatch. When `allowRealHomeDeploy` is on, a Deploy
+  // from this dev instance writes/overwrites the REAL CLI homes — surfaced here as a
+  // persistent armed banner so a user at the Deploy surface (not just inside the
+  // Developer Settings tab) sees the consequence before deploying. Shares the data
+  // seam (useDeveloperConfig) with DeveloperSettings, so a toggle there arms this
+  // banner live (the optimistic write updates the shared query cache).
+  //
+  // Fail closed deliberately: while the developer read is loading or errored `armed`
+  // is false (banner hidden). A false-negative here is a banner that briefly doesn't
+  // show; the daemon is local, and the page's required catalog/state queries share
+  // its fate — if /api/developer is down the surface is already non-functional. We
+  // do not raise a degraded "could not confirm" banner: it would fire on every
+  // transient blip and dull the real warning.
+  const { armed: realHomeArmed } = useDeveloperConfig(apiConfig);
 
   // The concrete per-kind selected name set is the single source of truth.
   // Presets are a convenience tool over it (seed / clear / active-overview), not
@@ -465,6 +480,18 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           )}
         </div>
       </header>
+
+      {realHomeArmed && (
+        // role="alert" (assertive): unlike the sibling banner in Developer Settings —
+        // which appears in response to the user's own toggle click (polite is fine) —
+        // this one is present on first render of the Deploy surface, so a polite live
+        // region may never announce. The banner mirrors that sibling's wording, plus a
+        // recovery pointer to where the user disarms it.
+        <div className="banner-warn" data-testid="deploy-real-home-armed" role="alert">
+          Deploys now write your real <code>~/.claude</code>, <code>~/.codex</code>, and{" "}
+          <code>~/.agents</code> — no sandbox. Turn this off in Settings → Developer.
+        </div>
+      )}
 
       {removedCount > 0 && (
         <div className="banner-warn kit-deploy-remove-warn" data-testid="kit-deploy-remove-warn">
