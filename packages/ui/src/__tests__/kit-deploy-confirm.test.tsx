@@ -1,17 +1,23 @@
-// #47 data-loss guard (UI): a removal-bearing Deploy is gated behind an explicit
-// two-step confirm, with a plain-language danger banner above the Deploy button.
-// And the first-load regression: a Ledger holding capabilities whose Sources are
-// not active (absent from the server-side active catalog) yields a diff with zero
-// "removed" — so the page opens with NO removal warning and Deploy is NOT gated.
+// #47 data-loss guard (UI): removal-bearing Deploys are gated behind an explicit
+// two-step confirm, while no-op Deploy Diffs disable the primary action.
 //
 // The server is authoritative for the diff (#47 fixes computeDiff/reconcilePrune);
-// these tests stub the diff endpoint to drive the two UI states.
+// these tests stub the diff endpoint to drive readiness and removal states.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { SelectionSchema } from "@hive/contract";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { CapabilityEntry, Catalog, KitState, Source, VerifyReport } from "../api.ts";
+import type {
+  CapabilityEntry,
+  Catalog,
+  DeployTarget,
+  KitState,
+  Selection,
+  Source,
+  VerifyReport,
+} from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 
@@ -37,20 +43,15 @@ const emptyVerify: VerifyReport = { entries: [] };
 const GIT_ID = "git-src";
 const GIT_ORIGIN = "https://github.com/owner/repo";
 
-type Call = { method: string; path: string };
+type Call = { method: string; path: string; body?: string };
 let calls: Call[];
-// When set, the diff endpoint returns a "removed" entry for the named skill so the
-// Deploy is removal-bearing; otherwise the diff is empty (no removals).
 let removedSkill: string | null;
-// Ledger names to seed the page's selection on first load.
 let ledgerSkills: string[];
-// Names the active catalog provides (drives both the catalog rows and the diff's
-// removed set: a selected name NOT in this set is an orphan → never "removed").
+let ledgerTargets: DeployTarget[];
 let activeSkill: string | null;
-// When true, the diff endpoint hangs until `releaseDiff()` is called — lets a test
-// hold the diff in-flight and assert Deploy is gated during that refetch window.
 let deferDiff: boolean;
 let diffGate: (() => void) | null;
+
 async function releaseDiff(): Promise<void> {
   await act(async () => {
     diffGate?.();
@@ -95,7 +96,7 @@ function kitState(): KitState {
     ],
     ledger: {
       kitVersion: "1.0.0",
-      agents: ["claude"],
+      agents: ledgerTargets,
       skills: ledgerSkills.map((name) => ({ name })),
       agentDefs: [],
       instructions: [],
@@ -109,6 +110,7 @@ function installStubs(): void {
   calls = [];
   removedSkill = null;
   ledgerSkills = [];
+  ledgerTargets = ["claude"];
   activeSkill = null;
   deferDiff = false;
   diffGate = null;
@@ -119,15 +121,18 @@ function installStubs(): void {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     const method = (init?.method ?? "GET").toUpperCase();
-    calls.push({ method, path });
+    const body = typeof init?.body === "string" ? init.body : undefined;
+    calls.push({ method, path, body });
 
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
     if (path === "/api/sources" && method === "GET") return json(sources());
+    if (path === "/api/kit/sync" && method === "POST") return json({ sources: [] });
     if (path === "/api/kit/diff" && method === "POST") {
+      const selection = parseSelection(body);
       const entries =
-        removedSkill !== null
+        removedSkill !== null && !selection.add.skills.includes(removedSkill)
           ? [{ kind: "skill", name: removedSkill, change: "removed", replacesUserFile: false }]
           : [];
       if (deferDiff) {
@@ -187,23 +192,30 @@ function deployPosts(): number {
   return calls.filter((c) => c.method === "POST" && c.path === "/api/kit/deploy").length;
 }
 
-describe("KitDeployPage — #47 removal confirm gate", () => {
-  test("a removal-bearing Deploy does NOT POST on the first click; a confirm appears; confirm POSTs", async () => {
+function diffCalls(): Call[] {
+  return calls.filter((c) => c.method === "POST" && c.path === "/api/kit/diff");
+}
+
+function parseSelection(body: string | undefined): Selection {
+  if (body === undefined) throw new Error("missing selection request body");
+  return SelectionSchema.parse(JSON.parse(body));
+}
+
+describe("KitDeployPage - Deploy readiness and removal confirm gate", () => {
+  test("empty Selection can still be removal-bearing: first click arms confirm, confirm POSTs", async () => {
     installStubs();
+    ledgerSkills = ["alpha"];
     activeSkill = "alpha";
     removedSkill = "alpha";
     const host = await render();
 
-    // Select the active capability so a diff is fetched (removal-bearing).
     await click(host.querySelector('[data-testid="kit-row-skill-alpha"]'));
 
-    // The plain-language danger banner is shown above Deploy.
     const warn = host.querySelector('[data-testid="kit-deploy-remove-warn"]');
     expect(warn).not.toBeNull();
     expect(warn?.textContent ?? "").toContain("DELETE");
     expect(warn?.textContent ?? "").toContain("1");
 
-    // First Deploy click does NOT fire the mutation — it arms the confirm.
     await click(host.querySelector('[data-testid="kit-deploy"]'));
     expect(deployPosts()).toBe(0);
 
@@ -211,71 +223,103 @@ describe("KitDeployPage — #47 removal confirm gate", () => {
     expect(confirm).not.toBeNull();
     expect(confirm?.textContent ?? "").toContain("Confirm");
 
-    // Clicking confirm fires the deploy.
-    await click(host.querySelector('[data-testid="kit-deploy-confirm"]'));
+    await click(confirm);
     expect(deployPosts()).toBe(1);
   });
 
-  test("a zero-removals Deploy POSTs on the first click (no extra friction)", async () => {
+  test("a settled empty diff disables Deploy, labels it Up to date, and does not POST", async () => {
     installStubs();
     activeSkill = "alpha";
-    removedSkill = null; // an added/changed-only diff, no removals
+    removedSkill = null;
     const host = await render();
 
     await click(host.querySelector('[data-testid="kit-row-skill-alpha"]'));
-    // No removal warning, no confirm gate.
+
+    const deploy = host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement | null;
+    expect(deploy).not.toBeNull();
+    expect(deploy?.disabled).toBe(true);
+    expect(deploy?.textContent).toBe("Up to date");
     expect(host.querySelector('[data-testid="kit-deploy-remove-warn"]')).toBeNull();
 
-    await click(host.querySelector('[data-testid="kit-deploy"]'));
-    expect(deployPosts()).toBe(1);
+    await click(deploy);
+    expect(deployPosts()).toBe(0);
     expect(host.querySelector('[data-testid="kit-deploy-confirm"]')).toBeNull();
   });
 
-  test("first load: a Ledger holding names absent from the active catalog shows 0 removed and no warning", async () => {
+  test("first load: Ledger-owned orphans with an empty active catalog are no-op", async () => {
     installStubs();
-    // The active catalog provides nothing the ledger owns (those Sources are
-    // inactive/absent). The page seeds its selection from the ledger; the server's
-    // #47 fix yields an empty removed set, so no warning, no gate.
     ledgerSkills = ["ghost-1", "ghost-2"];
     activeSkill = null;
     removedSkill = null;
     const host = await render();
 
     expect(host.querySelector('[data-testid="kit-deploy-remove-warn"]')).toBeNull();
-    // Deploy fires directly (no confirm gate) since there are zero removals.
-    await click(host.querySelector('[data-testid="kit-deploy"]'));
+    const deploy = host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement | null;
+    expect(deploy).not.toBeNull();
+    expect(deploy?.disabled).toBe(true);
+    expect(deploy?.textContent).toBe("Up to date");
+    await click(deploy);
     expect(host.querySelector('[data-testid="kit-deploy-confirm"]')).toBeNull();
-    expect(deployPosts()).toBe(1);
+    expect(deployPosts()).toBe(0);
   });
 
-  test("Deploy is gated while the diff is still loading (no confirm-bypass mid-refetch)", async () => {
+  test("first diff after Ledger seed uses seeded selected names and targets", async () => {
     installStubs();
+    ledgerSkills = ["alpha", "beta"];
+    ledgerTargets = ["codex"];
     activeSkill = "alpha";
-    removedSkill = "alpha"; // the loaded diff WILL be removal-bearing
-    deferDiff = true; // ...but hold it in-flight
     const host = await render();
 
-    // Select the capability: the diff fetch starts but the stub is gated, so
-    // diffQuery.data is undefined and removedCount reads 0 — the exact window
-    // where the old code let a Deploy click fire with no confirm.
-    await click(host.querySelector('[data-testid="kit-row-skill-alpha"]'));
+    expect(host.querySelector('[data-testid="kit-deploy"]')?.textContent).toBe("Up to date");
+    const firstDiff = diffCalls()[0];
+    expect(firstDiff).toBeDefined();
+    const selection = parseSelection(firstDiff?.body);
+    expect(selection.add.skills).toEqual(["alpha", "beta"]);
+    expect(selection.targets).toEqual(["codex"]);
+  });
+
+  test("Deploy is disabled while the diff is still loading and does not POST", async () => {
+    installStubs();
+    activeSkill = "alpha";
+    deferDiff = true;
+    const host = await render();
 
     const deploy = host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement | null;
     expect(deploy).not.toBeNull();
     expect(deploy?.disabled).toBe(true);
+    expect(diffCalls()).toHaveLength(1);
 
-    // Clicking Deploy in this window must NOT deploy (and must NOT have skipped a
-    // confirm). No POST /api/kit/deploy.
     await click(deploy);
     expect(deployPosts()).toBe(0);
     expect(host.querySelector('[data-testid="kit-deploy-confirm"]')).toBeNull();
 
-    // Once the diff settles (removal-bearing), Deploy enables and arms the gate.
     await releaseDiff();
-    expect(deploy?.disabled).toBe(false);
-    expect(host.querySelector('[data-testid="kit-deploy-remove-warn"]')).not.toBeNull();
-    await click(deploy);
-    expect(deployPosts()).toBe(0); // first click arms, does not deploy
-    expect(host.querySelector('[data-testid="kit-deploy-confirm"]')).not.toBeNull();
+    expect(deploy?.textContent).toBe("Up to date");
+  });
+
+  test("an already-armed removal confirm cannot POST while the diff is refetching", async () => {
+    installStubs();
+    ledgerSkills = ["alpha"];
+    activeSkill = "alpha";
+    removedSkill = "alpha";
+    const host = await render();
+
+    await click(host.querySelector('[data-testid="kit-row-skill-alpha"]'));
+    await click(host.querySelector('[data-testid="kit-deploy"]'));
+    const confirm = host.querySelector(
+      '[data-testid="kit-deploy-confirm"]',
+    ) as HTMLButtonElement | null;
+    expect(confirm).not.toBeNull();
+    expect(confirm?.disabled).toBe(false);
+
+    deferDiff = true;
+    await click(host.querySelector('[data-testid="kit-check-updates"]'));
+    expect(confirm?.disabled).toBe(true);
+
+    await click(confirm);
+    expect(deployPosts()).toBe(0);
+
+    await releaseDiff();
+    expect(confirm?.disabled).toBe(false);
   });
 });

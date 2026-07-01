@@ -185,30 +185,31 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   // than blank. User edits then layer on top; the guard keeps a post-deploy
   // refetch from clobbering those edits.
   const seededRef = useRef(false);
+  const [ledgerSeeded, setLedgerSeeded] = useState(false);
   useEffect(() => {
     if (seededRef.current || !stateQuery.isSuccess) return;
     seededRef.current = true;
     const ledger = stateQuery.data?.ledger;
-    if (!ledger) return;
-    setSelected({
-      instructions: ledger.instructions.map((e) => e.name),
-      skills: ledger.skills.map((e) => e.name),
-      agents: ledger.agentDefs.map((e) => e.name),
-      plugins: ledger.plugins.map((e) => e.name),
-      bundles: ledger.bundles.map((e) => e.name),
-    });
-    const seededTargets = ledger.agents.filter(
-      (a): a is DeployTarget => a === "claude" || a === "codex",
-    );
-    if (seededTargets.length > 0) setTargets(seededTargets);
+    if (ledger) {
+      setSelected({
+        instructions: ledger.instructions.map((e) => e.name),
+        skills: ledger.skills.map((e) => e.name),
+        agents: ledger.agentDefs.map((e) => e.name),
+        plugins: ledger.plugins.map((e) => e.name),
+        bundles: ledger.bundles.map((e) => e.name),
+      });
+      const seededTargets = ledger.agents.filter(
+        (a): a is DeployTarget => a === "claude" || a === "codex",
+      );
+      if (seededTargets.length > 0) setTargets(seededTargets);
+    }
+    setLedgerSeeded(true);
   }, [stateQuery.isSuccess, stateQuery.data]);
-
-  const hasSelection = KINDS.some((k) => selected[KIND_TO_CAP[k]].length > 0);
 
   const diffQuery = useQuery({
     queryKey: ["kit", "diff", JSON.stringify(selection)],
     queryFn: () => api.kitDiff(apiConfig, selection),
-    enabled: Boolean(catalog) && hasSelection,
+    enabled: Boolean(catalog) && ledgerSeeded,
   });
 
   const syncMutation = useMutation({
@@ -379,12 +380,10 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   const removedCount = (diffQuery.data?.entries ?? []).filter((e) => e.change === "removed").length;
 
   // Two-step confirm: when removedCount>0 the primary Deploy click ARMS the gate
-  // (does not fire the mutation); the armed "Confirm" click fires it. With zero
-  // removals Deploy fires on the first click (no friction). The armed state is
-  // keyed to the exact diff it was armed against (`armedKey === diffKey`), so any
-  // selection/target change auto-disarms — a stale confirmation can't fire a
-  // different (newly-larger) removal set. No effect needed; it's derived.
-  const diffKey = `${JSON.stringify(selection)}|${removedCount}`;
+  // (does not fire the mutation); the armed "Confirm" click fires it. The armed
+  // state is keyed to the exact diff it was armed against, so any settled diff
+  // change auto-disarms.
+  const diffKey = `${JSON.stringify(selection)}|${JSON.stringify(diff?.entries ?? [])}`;
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const deployArmed = armedKey === diffKey;
 
@@ -392,9 +391,16 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   // `diffQuery.data` is undefined, so `removedCount` reads 0 and the confirm gate
   // would be skipped while the server still deletes (#47 bypass). Gate on this.
   const diffReady = diffQuery.isSuccess && !diffQuery.isFetching;
+  const diffHasEntries = diffReady && (diff?.entries.length ?? 0) > 0;
+  const deployActionable = diffHasEntries && !deployMutation.isPending;
+  const deployLabel = deployMutation.isPending
+    ? "Deploying…"
+    : diffReady && !diffHasEntries
+      ? "Up to date"
+      : "Deploy";
 
   function onDeployClick(): void {
-    if (!diffReady) return;
+    if (!deployActionable) return;
     if (removedCount > 0 && !deployArmed) {
       setArmedKey(diffKey);
       return;
@@ -462,17 +468,17 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
             type="button"
             className="button primary"
             onClick={onDeployClick}
-            disabled={!hasSelection || deployMutation.isPending || (hasSelection && !diffReady)}
+            disabled={!deployActionable}
             data-testid="kit-deploy"
           >
-            {deployMutation.isPending ? "Deploying…" : "Deploy"}
+            {deployLabel}
           </button>
           {deployArmed && removedCount > 0 && (
             <button
               type="button"
               className="button danger"
-              onClick={() => deployMutation.mutate()}
-              disabled={deployMutation.isPending}
+              onClick={onDeployClick}
+              disabled={!deployActionable}
               data-testid="kit-deploy-confirm"
             >
               Confirm: delete {removedCount} &amp; deploy
