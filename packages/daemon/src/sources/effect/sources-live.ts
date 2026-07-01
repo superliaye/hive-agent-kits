@@ -25,7 +25,7 @@ import { DuplicateOrigin, SourceIoError, SourceNotFound } from "./errors.ts";
 
 export type CreateSourceRegistryOptions =
   | { mode: "memory"; initial?: Source[] }
-  | { mode: "file"; path: string };
+  | { mode: "file"; path: string; seedFixtureSources?: boolean };
 
 export type SourceRegistrySvc = {
   list(): Effect.Effect<readonly Source[], SourceIoError>;
@@ -63,6 +63,12 @@ export class SourceRegistry extends Context.Service<SourceRegistry, SourceRegist
 const STARTER_SOURCE_ID = "starter";
 const STARTER_SOURCE_ORIGIN = "local:starter";
 
+export const DEV_FIXTURE_SOURCES = [
+  { id: "fixture-alpha", origin: "local:fixture-alpha" },
+  { id: "fixture-beta", origin: "local:fixture-beta" },
+  { id: "fixture-gamma", origin: "local:fixture-gamma" },
+] as const;
+
 function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
   if (opts.mode === "memory") {
     // Memory mode never seeds and writes no file.
@@ -90,13 +96,19 @@ function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
     // fault here must NOT crash daemon boot (openStore runs inside the Layer
     // build) — degrade to the unseeded store and trace it, matching how the route
     // verbs ioGuard their persistence faults.
-    try {
-      store.seedLocal(STARTER_SOURCE_ID, STARTER_SOURCE_ORIGIN);
-    } catch (err) {
-      log().warn(
-        { module: "sources", err: String(err) },
-        "first-run Starter seed write failed; starting with an empty registry",
-      );
+    const seeds = [
+      { id: STARTER_SOURCE_ID, origin: STARTER_SOURCE_ORIGIN },
+      ...(opts.seedFixtureSources ? DEV_FIXTURE_SOURCES : []),
+    ];
+    for (const seed of seeds) {
+      try {
+        store.seedLocal(seed.id, seed.origin);
+      } catch (err) {
+        log().warn(
+          { module: "sources", sourceId: seed.id, err: String(err) },
+          "first-run local Source seed write failed; continuing with available registry",
+        );
+      }
     }
   }
   return store;

@@ -1,0 +1,17 @@
+name: beta-quick
+description: Safe beta fixture subset for quick deploy testing.
+default_agents:
+  - claude
+capabilities:
+  instructions:
+    - beta-code
+    - beta-release
+  skills:
+    - beta-review
+    - beta-summarize
+    - merged-duplicate
+  agents:
+    - beta-runner
+    - beta-inspector
+  plugins: []
+  bundles: []

@@ -15,6 +15,13 @@
         "typescript": "^5",
       },
     },
+    "packages/agent-kit-fixture-sources": {
+      "name": "@hive/agent-kit-fixture-sources",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@hive/capability-schema-tools": "workspace:*",
+      },
+    },
     "packages/agent-kit-starter-template": {
       "name": "@hive/agent-kit-starter-template",
       "version": "0.0.0",
@@ -274,6 +281,8 @@
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
 
     "@happy-dom/global-registrator": ["@happy-dom/global-registrator@20.10.5", "", { "dependencies": { "@types/node": ">=20.0.0", "happy-dom": "^20.10.5" } }, "sha512-U64VYxPsoO4RxNHzzp7N+sMHmXaY+GDzcc272mTfZFt0LKuuf7hoNCxna4+T472p+GRKUOtYlLLnVlxCWAcobw=="],
+
+    "@hive/agent-kit-fixture-sources": ["@hive/agent-kit-fixture-sources@workspace:packages/agent-kit-fixture-sources"],
 
     "@hive/agent-kit-starter-template": ["@hive/agent-kit-starter-template@workspace:packages/agent-kit-starter-template"],
 

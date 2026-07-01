@@ -174,6 +174,24 @@ describe("Kit.sync — local kind dispatch (#32)", () => {
     rt.dispose();
   });
 
+  test("an unknown local Source origin fails that Source instead of copying Starter bytes", async () => {
+    const { kit, rt } = kitOver(
+      [{ id: "mystery", origin: "local:mystery", kind: "local", active: true }],
+      NEVER_FETCH,
+    );
+    const result = await Effect.runPromise(kit.sync());
+    expect(result.sources).toEqual([
+      {
+        sourceId: "mystery",
+        origin: "local:mystery",
+        status: "failed",
+        errorReason: "missing_starter_root",
+      },
+    ]);
+    expect(kit.catalog().entries.some((e) => e.sourceIds.includes("mystery"))).toBe(false);
+    rt.dispose();
+  });
+
   test("a deactivated Starter is excluded from catalog() and skipped by sync", async () => {
     const { kit, rt } = kitOver(
       [{ id: "starter", origin: "local:starter", kind: "local", active: false }],

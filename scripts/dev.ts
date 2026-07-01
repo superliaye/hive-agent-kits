@@ -6,6 +6,7 @@
 //   bun run dev:full                   full GUI stack (instance 0)
 //   bun run dev:full -- --daemon-only  daemon API only, no Vite/Electron
 //   bun run dev:full -- --instance 1   a second, isolated stack
+//   bun run dev:full -- --fixture-sources  full GUI stack with offline fixture Sources
 //
 // --instance N (default 0) shifts every port by N (daemon 3117+N, vite 5173+N,
 // electron CDP 9333+N) and isolates the runtime root (~/.hive, else ~/.hive-N),
@@ -17,9 +18,10 @@
 // Linux:   x-terminal-emulator / gnome-terminal / xterm (first one found)
 
 import { type SpawnOptions, spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { Catalog, KitStateSchema, Source } from "@hive/contract";
 
 type Job = {
   title: string;
@@ -41,18 +43,34 @@ function parseInstance(argv: string[]): number {
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const daemonOnly = process.argv.includes("--daemon-only");
+const fixtureSources = process.argv.includes("--fixture-sources");
 const instance = parseInstance(process.argv);
 const DAEMON_PORT = 3117 + instance;
 const VITE_PORT = 5173 + instance;
 const CDP_PORT = 9333 + instance;
 const RUNTIME_ROOT =
-  instance === 0 ? join(homedir(), ".hive") : join(homedir(), `.hive-${instance}`);
+  instance === 0
+    ? join(homedir(), fixtureSources ? ".hive-fixtures" : ".hive")
+    : join(homedir(), fixtureSources ? `.hive-fixtures-${instance}` : `.hive-${instance}`);
+const fixtureRegistryExisted = fixtureSources && existsSync(join(RUNTIME_ROOT, "sources.json"));
+
+function fixtureEnv(): Record<string, string> {
+  if (!fixtureSources) return {};
+  const homesRoot = join(RUNTIME_ROOT, "homes");
+  return {
+    HIVE_DEV_FIXTURE_SOURCES: "1",
+    HIVE_CLAUDE_HOME: join(homesRoot, ".claude"),
+    HIVE_CODEX_HOME: join(homesRoot, ".codex"),
+    HIVE_AGENTS_HOME: join(homesRoot, ".agents"),
+    HIVE_LEDGER_PATH: join(homesRoot, ".agent-kit", "manifest.json"),
+  };
+}
 
 const jobs: Job[] = [
   {
     title: "Hive Daemon",
     cmd: "bun --watch packages/daemon/src/server/start.ts",
-    env: { HIVE_PORT: String(DAEMON_PORT), HIVE_RUNTIME_ROOT: RUNTIME_ROOT },
+    env: { HIVE_PORT: String(DAEMON_PORT), HIVE_RUNTIME_ROOT: RUNTIME_ROOT, ...fixtureEnv() },
   },
   {
     title: "Hive UI (Vite)",
@@ -74,6 +92,7 @@ const jobs: Job[] = [
       ELECTRON_RUN_AS_NODE: "",
       HIVE_PORT: String(DAEMON_PORT),
       HIVE_RUNTIME_ROOT: RUNTIME_ROOT,
+      ...fixtureEnv(),
       HIVE_UI_DEV_URL: `http://127.0.0.1:${VITE_PORT}`,
       HIVE_CDP_PORT: String(CDP_PORT),
     },
@@ -221,6 +240,7 @@ type Health = {
   vite: boolean;
   kitOk: boolean;
   cdp: boolean;
+  fixtureSources: boolean;
 };
 
 async function verify(): Promise<Health> {
@@ -245,25 +265,59 @@ async function verify(): Promise<Health> {
 
   // Health-check the deploy-manager's kit surface (the agent stack is gone — ADR-0021).
   let kitOk = false;
+  let fixtureSourcesOk = !fixtureSources;
   if (daemon) {
     try {
       const token = readFileSync(join(RUNTIME_ROOT, ".token"), "utf8").trim();
       const res = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/kit/catalog`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      kitOk = res.ok;
+      const catalog = res.ok ? Catalog.parse(await res.json()) : null;
+      kitOk = catalog !== null;
+      if (fixtureSources) {
+        const sources = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/sources`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const parsedSources = Source.array().parse(await sources.json());
+        const state = await fetch(`http://127.0.0.1:${DAEMON_PORT}/api/kit/state`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const parsedState = KitStateSchema.parse(await state.json());
+        const fixtureIds = parsedSources
+          .filter((source) => source.id.startsWith("fixture-"))
+          .map((source) => source.id);
+        const freshSeedPresent =
+          fixtureRegistryExisted ||
+          ["fixture-alpha", "fixture-beta", "fixture-gamma"].every((id) => fixtureIds.includes(id));
+        const activeFixtureIds = parsedSources
+          .filter((source) => source.active && source.id.startsWith("fixture-"))
+          .map((source) => source.id);
+        const activeFixturesHealthy =
+          activeFixtureIds.length === 0
+            ? fixtureRegistryExisted
+            : activeFixtureIds.every((id) => {
+                const sync = parsedState.sync.find((entry) => entry.sourceId === id);
+                const hasCatalogEntry = catalog?.entries.some((entry) =>
+                  entry.sourceIds.includes(id),
+                );
+                return sync?.state === "local" && hasCatalogEntry;
+              });
+        fixtureSourcesOk = freshSeedPresent && activeFixturesHealthy;
+      }
     } catch {
       // leave kitOk false — reported as a failure below
     }
   }
 
-  return { daemon, vite, kitOk, cdp };
+  return { daemon, vite, kitOk, cdp, fixtureSources: fixtureSourcesOk };
 }
 
 function printStatus(h: Health): void {
   // The CDP port is informational here (this is the human launcher — you can see
   // the window). The agent launcher, dev.ps1, gates PASS on it instead.
-  const pass = daemonOnly ? h.daemon && h.kitOk : h.daemon && h.vite && h.kitOk;
+  const pass = daemonOnly
+    ? h.daemon && h.kitOk && h.fixtureSources
+    : h.daemon && h.vite && h.kitOk && h.fixtureSources;
   console.log(`\n=== Hive ${daemonOnly ? "daemon" : "dev stack"} (instance ${instance}) ===`);
   console.log(`  daemon    :${DAEMON_PORT} /api/ready → ${h.daemon ? "ok" : "unreachable"}`);
   console.log(`  kit       /api/kit/catalog → ${h.kitOk ? "ok" : "unreachable"}`);
@@ -273,6 +327,9 @@ function printStatus(h: Health): void {
       `  electron  CDP :${CDP_PORT} → ${h.cdp ? "ok (visual loop ready)" : "unreachable"}`,
     );
   }
+  if (fixtureSources) {
+    console.log(`  fixtures  ${h.fixtureSources ? "present" : "missing"}`);
+  }
   console.log(`  runtime   ${RUNTIME_ROOT}`);
   console.log(`  STATUS: ${pass ? "PASS" : "FAIL"}`);
   if (!pass) process.exitCode = 1;
@@ -280,16 +337,20 @@ function printStatus(h: Health): void {
 
 // Daemon-only: reuse a healthy daemon if one is already up, so testing the API
 // doesn't restart (and disturb) a running GUI stack.
-const reuse = daemonOnly && (await daemonHealthy());
+const reuse = daemonOnly && !fixtureSources && (await daemonHealthy());
 if (reuse) {
   console.log(`Daemon already healthy on :${DAEMON_PORT} — reusing (no restart).`);
 } else {
-  console.log(`Preparing Hive ${daemonOnly ? "daemon" : "dev stack"}...\n`);
+  console.log(
+    `Preparing Hive ${daemonOnly ? "daemon" : "dev stack"}${fixtureSources ? " with fixture Sources" : ""}...\n`,
+  );
   installAll();
   stopPriorStack();
 
   const activeJobs = daemonOnly ? jobs.slice(0, 1) : jobs;
-  console.log(`\nStarting Hive ${daemonOnly ? "daemon" : "dev stack"}...\n`);
+  console.log(
+    `\nStarting Hive ${daemonOnly ? "daemon" : "dev stack"}${fixtureSources ? " with fixture Sources" : ""}...\n`,
+  );
   for (const [i, job] of activeJobs.entries()) {
     const where = job.cwd ? ` (in ${job.cwd}/)` : "";
     console.log(`  ${i + 1}. ${job.title}: ${job.cmd}${where}`);
@@ -300,7 +361,7 @@ if (reuse) {
     }
   }
 
-  console.log("\nClose a window to stop that piece. Daemon writes to ~/.hive/.");
+  console.log(`\nClose a window to stop that piece. Daemon writes to ${RUNTIME_ROOT}.`);
   console.log(`(Launcher scripts staged at ${stageDir})`);
 }
 

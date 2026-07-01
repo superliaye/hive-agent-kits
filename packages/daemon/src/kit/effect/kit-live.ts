@@ -27,6 +27,7 @@ import {
 } from "../deploy/adapter.ts";
 import { type DeployInput, runDeploy } from "../deploy/engine.ts";
 import { readLedger } from "../ledger.ts";
+import { localSourceRootFor } from "../local-source-roots.ts";
 import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
 import { catalogNameSets, computeDiff, resolveSelection } from "../selection.ts";
 import { type HttpFetch, localSyncSource, productionFetch, syncSource } from "../sync.ts";
@@ -121,11 +122,21 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
               // unused here — only the status reaches the run result.
               const syncEffect: Effect.Effect<{ status: "synced" | "unchanged" }, SyncError> =
                 source.kind === "local"
-                  ? localSyncSource(
-                      targets.mirrorRoot(source.id),
-                      targets.kitTmpRoot(),
-                      targets.starterRoot(),
-                    )
+                  ? (() => {
+                      const localRoot = localSourceRootFor(source, targets);
+                      return localRoot
+                        ? localSyncSource(
+                            targets.mirrorRoot(source.id),
+                            targets.kitTmpRoot(),
+                            localRoot,
+                          )
+                        : Effect.fail(
+                            new SyncError({
+                              reason: "missing_starter_root",
+                              message: `unknown local Source origin: ${source.origin}`,
+                            }),
+                          );
+                    })()
                   : syncSource(
                       targets.mirrorRoot(source.id),
                       targets.kitTmpRoot(),

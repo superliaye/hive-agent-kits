@@ -1,0 +1,18 @@
+name: alpha-quick
+description: Safe alpha fixture subset for quick deploy testing.
+default_agents:
+  - claude
+  - codex
+capabilities:
+  instructions:
+    - alpha-code
+    - alpha-release
+  skills:
+    - alpha-focus
+    - alpha-triage
+    - merged-duplicate
+  agents:
+    - alpha-planner
+    - alpha-auditor
+  plugins: []
+  bundles: []

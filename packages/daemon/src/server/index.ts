@@ -66,6 +66,9 @@ export type CreateServerOptions = {
   // to the production global fetch. Shared by the Kit launch-sync AND the add-time
   // onboard sync, so a test add reaches a stubbed fetch — never the real network.
   fetch?: HttpFetch;
+  // Dev/test-only: seed the checked-in fixture local Sources on first file-mode
+  // boot. The environment flag is read only at this composition boundary.
+  fixtureSources?: boolean;
 };
 
 export type ServerHandles = {
@@ -88,6 +91,13 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // Install the trace logger before any other module emits a log line.
   setLogger(createLogger({ mode: opts.mode === "memory" ? "silent" : "file" }));
 
+  // Packaging signal (B5): the packaged launch sets HIVE_PACKAGED=1. Absent → dev
+  // (or an unknown / hand-run daemon), which resolves the per-instance SANDBOX —
+  // the fail-safe default. Production is proven by a POSITIVE marker, never inferred.
+  const devMode = process.env.HIVE_PACKAGED !== "1";
+  const fixtureSources =
+    devMode && (opts.fixtureSources ?? process.env.HIVE_DEV_FIXTURE_SOURCES === "1");
+
   // The surviving modules compose into ONE root Layer owned by a single
   // ManagedRuntime (ADR-0011). The `mode`-driven adapter choice stays here at
   // the composition root, feeding each Live constructor — root configuration,
@@ -108,7 +118,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const sourcesOpts =
     opts.mode === "memory"
       ? ({ mode: "memory" } as const)
-      : ({ mode: "file", path: files.sources() } as const);
+      : ({ mode: "file", path: files.sources(), seedFixtureSources: fixtureSources } as const);
   // Audit keeps its OWN sqlite file (~/.hive/audit.db).
   const auditOpts =
     opts.mode === "memory"
@@ -136,13 +146,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // sets it — is the clean seam: no second runtime (which would acquire a duplicate
   // Config store + watcher), no `R` leak, no mutable config box.
   const configHolder: { config?: Config<AppConfig> } = {};
-  // Packaging signal (B5): the packaged launch sets HIVE_PACKAGED=1. Absent → dev
-  // (or an unknown / hand-run daemon), which resolves the per-instance SANDBOX —
-  // the fail-safe default. Production is proven by a POSITIVE marker, never inferred.
-  const devMode = process.env.HIVE_PACKAGED !== "1";
   const deployTargets = defaultDeployTargets({
     devMode,
     allowRealHomeDeploy: () => {
+      if (fixtureSources) return false;
       const cfg = configHolder.config;
       // Before Config resolves (never at deploy time, only a theoretical early
       // call) fall back to the fail-safe: do NOT allow a real-home deploy.
