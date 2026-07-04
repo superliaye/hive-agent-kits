@@ -239,6 +239,8 @@ describe("KitDeployPage — precedence re-rank + shadow explanation (#51)", () =
   test("the header renders Sources in precedence order (highest rank first)", async () => {
     installStubs();
     const host = await render();
+    expect(host.querySelector(".kit-source-panel-title")?.textContent).toBe("Sources");
+    expect(host.querySelector(".kit-source-panel-meta")?.textContent).toContain("Precedence order");
     const rowIds = [...host.querySelectorAll(".kit-source-row")].map((r) =>
       r.getAttribute("data-testid"),
     );
@@ -255,6 +257,8 @@ describe("KitDeployPage — precedence re-rank + shadow explanation (#51)", () =
     const shadowNote = host.querySelector('[data-testid^="kit-row-shadow-foo-"]');
     expect(shadowNote).not.toBeNull();
     expect(shadowNote?.textContent).toContain("Hidden");
+    expect(shadowNote?.textContent).toContain("Source precedence");
+    expect(shadowNote?.textContent).toContain("higher Source precedence");
     expect(shadowNote?.textContent).toContain("owner/repo-b");
   });
 

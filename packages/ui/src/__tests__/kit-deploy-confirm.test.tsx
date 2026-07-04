@@ -227,6 +227,44 @@ describe("KitDeployPage - Deploy readiness and removal confirm gate", () => {
     expect(deployPosts()).toBe(1);
   });
 
+  test("sticky deploy summary mirrors diff gates and the removal confirm action", async () => {
+    installStubs();
+    ledgerSkills = ["alpha"];
+    activeSkill = "alpha";
+    removedSkill = "alpha";
+    const host = await render();
+
+    await click(host.querySelector('[data-testid="kit-row-skill-alpha"]'));
+
+    expect(host.querySelector('[data-testid="kit-sticky-selected"]')?.textContent).toContain(
+      "0 selected",
+    );
+    expect(host.querySelector('[data-testid="kit-sticky-targets"]')?.textContent).toContain(
+      "Claude",
+    );
+    expect(host.querySelector('[data-testid="kit-sticky-diff"]')?.textContent).toContain(
+      "Removed 1",
+    );
+
+    const stickyDeploy = host.querySelector(
+      '[data-testid="kit-sticky-deploy-action"]',
+    ) as HTMLButtonElement | null;
+    expect(stickyDeploy).not.toBeNull();
+    expect(stickyDeploy?.disabled).toBe(false);
+
+    await click(stickyDeploy);
+    expect(deployPosts()).toBe(0);
+    await click(stickyDeploy);
+    expect(deployPosts()).toBe(0);
+    const stickyConfirm = host.querySelector(
+      '[data-testid="kit-sticky-deploy-confirm"]',
+    ) as HTMLButtonElement | null;
+    expect(stickyConfirm).not.toBeNull();
+
+    await click(stickyConfirm);
+    expect(deployPosts()).toBe(1);
+  });
+
   test("a settled empty diff disables Deploy, labels it Up to date, and does not POST", async () => {
     installStubs();
     activeSkill = "alpha";

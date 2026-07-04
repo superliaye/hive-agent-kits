@@ -43,16 +43,32 @@ const emptyVerify: VerifyReport = { entries: [] };
 
 const GIT_ID = "git-src";
 const GIT_ORIGIN = "https://github.com/owner/repo";
+const OTHER_ID = "other-src";
+const OTHER_ORIGIN = "https://github.com/owner/repo-b";
 
 // The diff entries the stubbed /api/kit/diff endpoint returns for this render.
 let diffEntries: DiffEntry[];
+let ledgerInstructions: string[];
 
 function sources(): Source[] {
-  return [{ id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: true, createdAt: 1, rank: 0 }];
+  return [
+    { id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: true, createdAt: 1, rank: 0 },
+    { id: OTHER_ID, origin: OTHER_ORIGIN, kind: "git", active: true, createdAt: 2, rank: 1 },
+  ];
 }
 
 function catalog(): Catalog {
   const entries: CapabilityEntry[] = [
+    {
+      kind: "instruction",
+      name: "global-rule",
+      description: "an active instruction capability",
+      group: "",
+      deployable: true,
+      shadowed: false,
+      sourceIds: [GIT_ID],
+      contentSha: "d".repeat(64),
+    },
     {
       kind: "skill",
       name: "alpha",
@@ -62,6 +78,27 @@ function catalog(): Catalog {
       shadowed: false,
       sourceIds: [GIT_ID],
       contentSha: "a".repeat(64),
+    },
+    {
+      kind: "skill",
+      name: "priority-tool",
+      description: "winning duplicate capability",
+      group: "",
+      deployable: true,
+      shadowed: false,
+      sourceIds: [OTHER_ID],
+      contentSha: "b".repeat(64),
+    },
+    {
+      kind: "skill",
+      name: "priority-tool",
+      description: "hidden duplicate capability",
+      group: "",
+      deployable: false,
+      shadowed: true,
+      sourceIds: [GIT_ID],
+      contentSha: "c".repeat(64),
+      shadowedBy: OTHER_ID,
     },
   ];
   return { entries, presets: [], problems: [] };
@@ -77,13 +114,20 @@ function kitState(): KitState {
         sourceId: GIT_ID,
         origin: GIT_ORIGIN,
       },
+      {
+        state: "up_to_date",
+        sha: "def5678abc",
+        fetchedAt: 1,
+        sourceId: OTHER_ID,
+        origin: OTHER_ORIGIN,
+      },
     ],
     ledger: {
       kitVersion: "1.0.0",
       agents: ["claude"],
       skills: [],
       agentDefs: [],
-      instructions: [],
+      instructions: ledgerInstructions.map((name) => ({ name })),
       plugins: [],
       bundles: [],
     },
@@ -92,6 +136,7 @@ function kitState(): KitState {
 
 function installStubs(): void {
   diffEntries = [];
+  ledgerInstructions = [];
   globalThis.fetch = (async (
     input: string | URL | Request,
     init?: RequestInit,
@@ -241,5 +286,38 @@ describe("KitDeployPage — #53 Deploy Diff visual treatment", () => {
     const warn = host.querySelector('[data-testid="kit-diff-userfile-warn"]');
     expect(warn).not.toBeNull();
     expect(warn?.textContent ?? "").toContain("CLAUDE.md");
+  });
+
+  test("expanded review shows targets, Source labels, and hidden duplicate context", async () => {
+    const host = await renderWithDiff([
+      { kind: "skill", name: "priority-tool", change: "changed", replacesUserFile: false },
+    ]);
+
+    await click(host.querySelector('[data-testid="kit-diff-toggle"]'));
+
+    const review = host.querySelector('[data-testid="kit-diff-review"]');
+    expect(review?.textContent ?? "").toContain("Targets: Claude");
+    expect(review?.textContent ?? "").toContain("Changed 1");
+
+    const source = host.querySelector('[data-testid="kit-diff-sources-priority-tool"]');
+    expect(source?.textContent ?? "").toContain("owner/repo-b");
+
+    const hidden = host.querySelector('[data-testid="kit-diff-hidden-priority-tool"]');
+    expect(hidden?.textContent ?? "").toContain("Hidden duplicate from owner/repo");
+    expect(hidden?.textContent ?? "").toContain("owner/repo-b wins by Source precedence");
+  });
+
+  test("expanded review names Sources for the synthetic instruction changed row", async () => {
+    installStubs();
+    ledgerInstructions = ["global-rule"];
+    diffEntries = [
+      { kind: "instruction", name: "(CLAUDE.md)", change: "changed", replacesUserFile: true },
+    ];
+    const host = await render();
+
+    await click(host.querySelector('[data-testid="kit-diff-toggle"]'));
+
+    const source = host.querySelector('[data-testid="kit-diff-sources-(CLAUDE.md)"]');
+    expect(source?.textContent ?? "").toContain("owner/repo");
   });
 });

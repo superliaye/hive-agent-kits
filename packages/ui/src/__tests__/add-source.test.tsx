@@ -391,4 +391,25 @@ describe("KitDeployPage — Add-Source UI (#46)", () => {
     expect(host.querySelector('[data-testid="add-source-error"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="add-source-success"]')).toBeNull();
   });
+
+  test("(h) settled Add Source status clears as soon as the user edits or clears the input", async () => {
+    installStubs();
+    const host = await render();
+    addOutcome = "bad";
+
+    const input = host.querySelector('[data-testid="add-source-input"]') as HTMLInputElement;
+    await typeUrl(input, "not-a-url");
+    await submitForm(host.querySelector('[data-testid="add-source-form"]') as HTMLFormElement);
+    expect(host.querySelector('[data-testid="add-source-error"]')).not.toBeNull();
+
+    await typeUrl(input, "https://github.com/owner/retry");
+    expect(host.querySelector('[data-testid="add-source-error"]')).toBeNull();
+
+    addOutcome = "empty";
+    await submitForm(host.querySelector('[data-testid="add-source-form"]') as HTMLFormElement);
+    expect(host.querySelector('[data-testid="add-source-empty"]')).not.toBeNull();
+
+    await typeUrl(input, "");
+    expect(host.querySelector('[data-testid="add-source-empty"]')).toBeNull();
+  });
 });

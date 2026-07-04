@@ -621,6 +621,7 @@ pre.config {
 }
 .add-source-form input {
   flex: 1;
+  min-width: 260px;
   padding: 8px 10px;
   border: 1px solid var(--color-border-strong);
   border-radius: 4px;
@@ -1282,7 +1283,7 @@ pre.config {
 .kit-page {
   flex: 1;
   overflow: auto;
-  padding: 20px 24px 40px;
+  padding: 20px 24px 96px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1297,12 +1298,57 @@ pre.config {
 .kit-header-version {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 14px;
   flex-wrap: wrap;
+}
+.kit-title-block {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 150px;
 }
 .kit-header-version h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 24px;
+  line-height: 1.1;
+}
+.kit-title-meta {
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+.kit-source-panel {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(360px, max-content) minmax(340px, 1fr);
+  align-items: start;
+  column-gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg-surface) 86%, transparent);
+}
+.kit-source-panel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kit-source-panel-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-fg-default);
+}
+.kit-source-panel-meta {
+  max-width: 18ch;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--color-fg-muted);
+}
+.kit-add-source-panel {
+  min-width: 340px;
+}
+.kit-add-source-panel .add-source-form {
+  margin-top: 0;
 }
 .kit-sha {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1346,12 +1392,13 @@ pre.config {
 .kit-sources {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 .kit-source-row {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-height: 24px;
 }
 /* The Source name anchors the row: larger and heavier than the facts ranked
    after it, so the eye lands on identity first. */
@@ -1437,20 +1484,21 @@ pre.config {
    two-step confirm (Remove? / Remove / Cancel) replaces it inline on arm. */
 .kit-source-delete {
   margin-left: 4px;
-  padding: 2px 8px;
+  padding: 1px 7px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--color-danger);
+  color: var(--color-fg-muted);
   background: transparent;
-  border: 1px solid color-mix(in srgb, var(--color-danger) 40%, var(--color-border-default));
+  border: 1px solid var(--color-border-default);
   border-radius: 4px;
   cursor: pointer;
 }
 .kit-source-delete:hover {
   background: color-mix(in srgb, var(--color-danger) 12%, transparent);
   border-color: var(--color-danger);
+  color: var(--color-danger);
 }
 .kit-source-delete:focus-visible {
   outline: 2px solid var(--color-danger);
@@ -1586,6 +1634,10 @@ pre.config {
   color: var(--color-fg-on-accent);
   border-color: var(--color-accent);
 }
+.kit-preset-note {
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
 .kit-target-toggle {
   display: inline-flex;
   align-items: center;
@@ -1652,6 +1704,18 @@ pre.config {
 .kit-diff-body {
   padding: 0 14px 12px;
 }
+.kit-diff-review {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  background: var(--color-bg-base);
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
 .kit-diff-warn {
   margin: 0 14px 12px;
 }
@@ -1672,7 +1736,10 @@ pre.config {
   font-size: 12px;
 }
 .kit-diff-col li {
-  padding: 1px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px 0;
 }
 .kit-diff-added .kit-diff-col-head {
   color: var(--color-success);
@@ -1692,6 +1759,18 @@ pre.config {
   font-size: 10px;
   text-transform: uppercase;
   color: var(--color-fg-muted);
+}
+.kit-diff-line {
+  color: var(--color-fg-default);
+}
+.kit-diff-meta,
+.kit-diff-shadow {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--color-fg-muted);
+}
+.kit-diff-shadow {
+  font-style: italic;
 }
 .kit-deploy-ok {
   color: var(--color-success);
@@ -1742,13 +1821,26 @@ pre.config {
   color: var(--color-fg-muted);
 }
 .kit-kind-title {
-  margin: 0 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
   font-size: 15px;
-  border-bottom: 1px solid var(--color-border-default);
-  padding-bottom: 4px;
+  border-bottom: 1px solid var(--color-border-strong);
+  padding: 0 0 6px;
+}
+.kit-kind-count {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--color-bg-hover);
+  color: var(--color-fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
 }
 .kit-group {
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 .kit-group-name {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1765,8 +1857,8 @@ pre.config {
   background: var(--color-bg-base);
   border: 1px solid var(--color-border-default);
   border-radius: 6px;
-  padding: 8px 10px;
-  margin-bottom: 4px;
+  padding: 9px 11px;
+  margin-bottom: 5px;
   cursor: pointer;
   font: inherit;
   color: var(--color-fg-default);
@@ -1850,6 +1942,58 @@ pre.config {
   font-size: 11px;
   color: var(--color-text-muted);
   font-style: italic;
+}
+.kit-sticky-deploy {
+  position: static;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: min(520px, calc(100vw - 48px));
+  margin: 12px 12px 0 auto;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  background: var(--color-bg-elevated);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--color-bg-base) 20%, transparent);
+}
+.kit-sticky-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-width: 0;
+  font-size: 12px;
+}
+.kit-sticky-count {
+  font-weight: 700;
+  color: var(--color-fg-default);
+}
+.kit-sticky-targets,
+.kit-sticky-diff {
+  color: var(--color-fg-muted);
+}
+.kit-sticky-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 980px) {
+  .kit-source-panel {
+    grid-template-columns: 1fr;
+    row-gap: 10px;
+  }
+  .kit-add-source-panel,
+  .add-source-form input {
+    min-width: 0;
+  }
+  .kit-sticky-deploy {
+    width: auto;
+    margin-right: 0;
+    margin-left: 0;
+  }
 }
 .kit-indicator {
   font-size: 10px;

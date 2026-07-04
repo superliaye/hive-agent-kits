@@ -18,6 +18,7 @@ import {
   type CapabilityKind,
   type DeployDiff,
   type DeployTarget,
+  type DiffEntry,
   type Selection,
   type Source,
   type SourceSyncStatus,
@@ -45,6 +46,44 @@ const KIND_TO_CAP: Record<CapabilityKind, keyof Selection["add"]> = {
   agent: "agents",
   plugin: "plugins",
   bundle: "bundles",
+};
+
+const TARGET_LABEL: Record<DeployTarget, string> = {
+  claude: "Claude",
+  codex: "Codex",
+};
+
+// One ordered source of truth for the three change buckets: the summary chips and
+// the expanded columns both derive from this, so they never drift in order/label.
+// `glyph` prefixes the count chip (+ ~ -); removed is last so its danger reads as
+// the climax in both the summary and the columns.
+const DIFF_BUCKETS = [
+  { tone: "added", label: "Added", glyph: "+", change: "added" },
+  { tone: "changed", label: "Changed", glyph: "~", change: "changed" },
+  { tone: "removed", label: "Removed", glyph: "−", change: "removed" },
+] as const;
+
+type DiffChange = (typeof DIFF_BUCKETS)[number]["change"];
+
+type DiffReviewItem = {
+  kind: CapabilityKind;
+  name: string;
+  change: DiffChange;
+  replacesUserFile: boolean;
+  sourceLabels: string[];
+  hiddenVariants: {
+    sourceLabels: string[];
+    winnerLabel: string | null;
+  }[];
+};
+
+type DeployReview = {
+  selectedCount: number;
+  targetLabels: string[];
+  changeCounts: Record<DiffChange, number>;
+  items: DiffReviewItem[];
+  hasUserFileWarning: boolean;
+  manualSelectionCount: number;
 };
 
 function shortSha(sha: string | null): string {
@@ -80,6 +119,101 @@ export function syncToast(result: SyncRunResult): { kind: "success" | "error"; m
     return { kind: "success", message: `Synced ${synced} Source${synced === 1 ? "" : "s"}` };
   }
   return { kind: "success", message: "Up to date" };
+}
+
+function countDeployableSelected(entries: CapabilityEntry[], caps: Selection["add"]): number {
+  let count = 0;
+  for (const entry of entries) {
+    if (!entry.deployable) continue;
+    if (caps[KIND_TO_CAP[entry.kind]].includes(entry.name)) count += 1;
+  }
+  return count;
+}
+
+function uniqueLabels(sourceIds: string[], sourceLabels: Map<string, string>): string[] {
+  return [...new Set(sourceIds.map((sid) => sourceLabels.get(sid) ?? sid))];
+}
+
+function matchingCatalogEntries(
+  entries: CapabilityEntry[],
+  diffEntry: DiffEntry,
+  selected: Selection["add"],
+): CapabilityEntry[] {
+  if (diffEntry.kind === "instruction" && diffEntry.name === "(CLAUDE.md)") {
+    return entries.filter(
+      (entry) =>
+        entry.kind === "instruction" &&
+        entry.deployable &&
+        selected.instructions.includes(entry.name),
+    );
+  }
+  return entries.filter((entry) => entry.kind === diffEntry.kind && entry.name === diffEntry.name);
+}
+
+function buildDeployReview(args: {
+  catalogEntries: CapabilityEntry[];
+  presets: Array<{ name: string; capabilities: Selection["add"] }>;
+  selected: Selection["add"];
+  targets: DeployTarget[];
+  diff: DeployDiff | undefined;
+  sourceLabels: Map<string, string>;
+}): DeployReview {
+  const { catalogEntries, presets, selected, targets, diff, sourceLabels } = args;
+  const activePresetNames = presets
+    .filter((preset) => presetActive(preset, selected))
+    .map((preset) => preset.name);
+  const activePresetCovered = emptyCapSets();
+  for (const preset of presets) {
+    if (!activePresetNames.includes(preset.name)) continue;
+    for (const kind of KINDS) {
+      const cap = KIND_TO_CAP[kind];
+      for (const name of preset.capabilities[cap]) activePresetCovered[cap].add(name);
+    }
+  }
+  let manualSelectionCount = 0;
+  for (const entry of catalogEntries) {
+    if (!entry.deployable) continue;
+    const cap = KIND_TO_CAP[entry.kind];
+    if (selected[cap].includes(entry.name) && !activePresetCovered[cap].has(entry.name)) {
+      manualSelectionCount += 1;
+    }
+  }
+
+  const changeCounts: Record<DiffChange, number> = { added: 0, changed: 0, removed: 0 };
+  const items: DiffReviewItem[] = [];
+  for (const entry of diff?.entries ?? []) {
+    changeCounts[entry.change] += 1;
+    const matching = matchingCatalogEntries(catalogEntries, entry, selected);
+    const deployable = matching.filter((catalogEntry) => !catalogEntry.shadowed);
+    const hiddenVariants = matching
+      .filter((catalogEntry) => catalogEntry.shadowed)
+      .map((catalogEntry) => ({
+        sourceLabels: uniqueLabels(catalogEntry.sourceIds, sourceLabels),
+        winnerLabel: catalogEntry.shadowedBy
+          ? (sourceLabels.get(catalogEntry.shadowedBy) ?? catalogEntry.shadowedBy)
+          : null,
+      }));
+    items.push({
+      kind: entry.kind,
+      name: entry.name,
+      change: entry.change,
+      replacesUserFile: entry.replacesUserFile ?? false,
+      sourceLabels: uniqueLabels(
+        deployable.flatMap((catalogEntry) => catalogEntry.sourceIds),
+        sourceLabels,
+      ),
+      hiddenVariants,
+    });
+  }
+
+  return {
+    selectedCount: countDeployableSelected(catalogEntries, selected),
+    targetLabels: targets.map((target) => TARGET_LABEL[target]),
+    changeCounts,
+    items,
+    hasUserFileWarning: items.some((item) => item.replacesUserFile),
+    manualSelectionCount,
+  };
 }
 
 type Freshness = {
@@ -391,7 +525,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   // `diffQuery.data` is undefined, so `removedCount` reads 0 and the confirm gate
   // would be skipped while the server still deletes (#47 bypass). Gate on this.
   const diffReady = diffQuery.isSuccess && !diffQuery.isFetching;
-  const diffHasEntries = diffReady && (diff?.entries.length ?? 0) > 0;
+  const diffHasEntries = diffReady && (diff?.entries?.length ?? 0) > 0;
   const deployActionable = diffHasEntries && !deployMutation.isPending;
   const deployLabel = deployMutation.isPending
     ? "Deploying…"
@@ -401,10 +535,15 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
 
   function onDeployClick(): void {
     if (!deployActionable) return;
-    if (removedCount > 0 && !deployArmed) {
+    if (removedCount > 0) {
       setArmedKey(diffKey);
       return;
     }
+    deployMutation.mutate();
+  }
+
+  function onDeployConfirmClick(): void {
+    if (!deployActionable) return;
     deployMutation.mutate();
   }
 
@@ -431,28 +570,53 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     sources !== undefined &&
     sources.length > 0 &&
     !anyActiveSource;
+  const deployReview = useMemo(
+    () =>
+      buildDeployReview({
+        catalogEntries: catalog?.entries ?? [],
+        presets: catalog?.presets ?? [],
+        selected,
+        targets,
+        diff,
+        sourceLabels,
+      }),
+    [catalog?.entries, catalog?.presets, selected, targets, diff, sourceLabels],
+  );
 
   return (
     <div className="kit-page" data-testid="kit-deploy-page">
       <header className="kit-header">
         <div className="kit-header-version">
-          <h1>Capabilities</h1>
-          <div className="kit-sources" data-testid="kit-sources">
-            <SourceRows
-              sources={sources}
-              syncStatuses={sourceStatuses}
-              onToggle={(s) => toggleSource.mutate(s)}
-              pendingId={toggleSource.isPending ? toggleSource.variables?.id : undefined}
-              onDelete={(s) => deleteSource.mutate(s)}
-              deletePendingId={deleteSource.isPending ? deleteSource.variables?.id : undefined}
-              deleteFailedId={deleteSource.isError ? deleteSource.variables?.id : undefined}
-              onReorder={(s, direction) => reorderSource.mutate({ source: s, direction })}
-              reorderPendingId={
-                reorderSource.isPending ? reorderSource.variables?.source.id : undefined
-              }
-            />
+          <div className="kit-title-block">
+            <h1>Capabilities</h1>
+            <span className="kit-title-meta">
+              {deployReview.selectedCount} selected for {deployReview.targetLabels.join(", ")}
+            </span>
           </div>
-          <AddSourceForm apiConfig={apiConfig} inputRef={addSourceInputRef} />
+          <div className="kit-source-panel">
+            <div className="kit-source-panel-head">
+              <span className="kit-source-panel-title">Sources</span>
+              <span className="kit-source-panel-meta">Precedence order, highest first</span>
+            </div>
+            <div className="kit-sources" data-testid="kit-sources">
+              <SourceRows
+                sources={sources}
+                syncStatuses={sourceStatuses}
+                onToggle={(s) => toggleSource.mutate(s)}
+                pendingId={toggleSource.isPending ? toggleSource.variables?.id : undefined}
+                onDelete={(s) => deleteSource.mutate(s)}
+                deletePendingId={deleteSource.isPending ? deleteSource.variables?.id : undefined}
+                deleteFailedId={deleteSource.isError ? deleteSource.variables?.id : undefined}
+                onReorder={(s, direction) => reorderSource.mutate({ source: s, direction })}
+                reorderPendingId={
+                  reorderSource.isPending ? reorderSource.variables?.source.id : undefined
+                }
+              />
+            </div>
+            <div className="kit-add-source-panel">
+              <AddSourceForm apiConfig={apiConfig} inputRef={addSourceInputRef} />
+            </div>
+          </div>
         </div>
         <div className="kit-header-actions">
           <button
@@ -466,7 +630,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           </button>
           <button
             type="button"
-            className="button primary"
+            className="button ghost kit-header-deploy"
             onClick={onDeployClick}
             disabled={!deployActionable}
             data-testid="kit-deploy"
@@ -477,7 +641,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
             <button
               type="button"
               className="button danger"
-              onClick={onDeployClick}
+              onClick={onDeployConfirmClick}
               disabled={!deployActionable}
               data-testid="kit-deploy-confirm"
             >
@@ -527,6 +691,12 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
                 </button>
               ))
             )}
+            {(catalog?.presets ?? []).length > 0 && (
+              <span className="kit-preset-note" data-testid="kit-preset-note">
+                Presets add to the current Selection; {deployReview.manualSelectionCount} selected
+                outside active Presets.
+              </span>
+            )}
           </div>
           <div className="kit-targets" data-testid="kit-targets">
             <span className="kit-control-label">Targets</span>
@@ -539,15 +709,15 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
                   onChange={() => toggleTarget(t)}
                   data-testid={`kit-target-${t}`}
                 />
-                {t === "claude" ? "Claude" : "Codex"}
+                {TARGET_LABEL[t]}
               </label>
             ))}
           </div>
         </div>
       )}
 
-      {diff && diff.entries.length > 0 && (
-        <DeployDiffPanel key={JSON.stringify(selection)} diff={diff} />
+      {diff && (diff.entries?.length ?? 0) > 0 && (
+        <DeployDiffPanel key={JSON.stringify(selection)} review={deployReview} />
       )}
 
       {deployMutation.isError && (
@@ -555,7 +725,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           Deploy failed: {(deployMutation.error as Error).message}
         </div>
       )}
-      {deployMutation.isSuccess && (!diff || diff.entries.length === 0) && (
+      {deployMutation.isSuccess && (!diff || (diff.entries?.length ?? 0) === 0) && (
         <div className="kit-deploy-ok" data-testid="kit-deploy-ok">
           Deployed. Diff cleared.
         </div>
@@ -635,6 +805,19 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           })}
       </div>
 
+      {hasEntries && (
+        <DeploySummaryBar
+          review={deployReview}
+          diffReady={diffReady}
+          deployActionable={deployActionable}
+          deployLabel={deployLabel}
+          deployArmed={deployArmed}
+          removedCount={removedCount}
+          onDeployClick={onDeployClick}
+          onDeployConfirmClick={onDeployConfirmClick}
+        />
+      )}
+
       <ToastHost toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
@@ -705,7 +888,12 @@ function AddSourceForm({
           type="text"
           placeholder="https://github.com/owner/repo"
           disabled={addSource.isPending}
-          onInput={(e) => setEmpty(e.currentTarget.value.trim().length === 0)}
+          onInput={(e) => {
+            setEmpty(e.currentTarget.value.trim().length === 0);
+            if (!addSource.isPending && (addSource.isError || addSource.data !== undefined)) {
+              addSource.reset();
+            }
+          }}
           aria-label="Git URL of a Source to add"
           data-testid="add-source-input"
         />
@@ -997,13 +1185,12 @@ function SourceRow({
       )}
       {onReorder && (
         <span className="kit-source-rank" data-testid={`kit-source-rank-${id}`}>
-          {/* Move up = raise precedence (toward the top). Disabled at the top. */}
           <button
             type="button"
             className="kit-source-up"
             onClick={() => onReorder("up")}
             disabled={reorderPending || isFirst}
-            title="Move up (raise precedence)"
+            title="Raise precedence. Source precedence decides the deployable Variant."
             aria-label={`Raise precedence of ${shortOrigin(origin)}`}
             data-testid={`kit-source-up-${id}`}
           >
@@ -1014,7 +1201,7 @@ function SourceRow({
             className="kit-source-down"
             onClick={() => onReorder("down")}
             disabled={reorderPending || isLast}
-            title="Move down (lower precedence)"
+            title="Lower precedence. Source precedence decides the deployable Variant."
             aria-label={`Lower precedence of ${shortOrigin(origin)}`}
             data-testid={`kit-source-down-${id}`}
           >
@@ -1136,7 +1323,10 @@ function KindSection({
 
   return (
     <section className="kit-kind" data-testid={`kit-kind-${kind}`}>
-      <h2 className="kit-kind-title">{KIND_LABEL[kind]}</h2>
+      <h2 className="kit-kind-title">
+        <span>{KIND_LABEL[kind]}</span>
+        <span className="kit-kind-count">{entries.length}</span>
+      </h2>
       {groups.map(([group, rows]) => (
         <div className="kit-group" key={group || "(root)"}>
           {group && <div className="kit-group-name">{group}</div>}
@@ -1203,7 +1393,8 @@ function KindSection({
                       className="kit-row-shadow"
                       data-testid={`kit-row-shadow-${e.name}-${shortSha}`}
                     >
-                      Hidden — also provided by {sourceLabels.get(e.shadowedBy) ?? e.shadowedBy}
+                      Hidden by Source precedence: {sourceLabels.get(e.shadowedBy) ?? e.shadowedBy}{" "}
+                      has higher Source precedence.
                     </span>
                   )}
                   {blocked && (
@@ -1228,22 +1419,74 @@ function KindSection({
   );
 }
 
-// One ordered source of truth for the three change buckets: the summary chips and
-// the expanded columns both derive from this, so they never drift in order/label.
-// `glyph` prefixes the count chip (+ ~ −); removed is last so its danger reads as
-// the climax in both the summary and the columns.
-const DIFF_BUCKETS = [
-  { tone: "added", label: "Added", glyph: "+", change: "added" },
-  { tone: "changed", label: "Changed", glyph: "~", change: "changed" },
-  { tone: "removed", label: "Removed", glyph: "−", change: "removed" },
-] as const;
+function DeploySummaryBar({
+  review,
+  diffReady,
+  deployActionable,
+  deployLabel,
+  deployArmed,
+  removedCount,
+  onDeployClick,
+  onDeployConfirmClick,
+}: {
+  review: DeployReview;
+  diffReady: boolean;
+  deployActionable: boolean;
+  deployLabel: string;
+  deployArmed: boolean;
+  removedCount: number;
+  onDeployClick: () => void;
+  onDeployConfirmClick: () => void;
+}): JSX.Element {
+  const diffText = diffReady
+    ? DIFF_BUCKETS.map((bucket) => `${bucket.label} ${review.changeCounts[bucket.change]}`).join(
+        " / ",
+      )
+    : "Deploy Diff loading";
+  return (
+    <div className="kit-sticky-deploy" data-testid="kit-sticky-deploy">
+      <div className="kit-sticky-main">
+        <span className="kit-sticky-count" data-testid="kit-sticky-selected">
+          {review.selectedCount} selected
+        </span>
+        <span className="kit-sticky-targets" data-testid="kit-sticky-targets">
+          {review.targetLabels.join(", ")}
+        </span>
+        <span className="kit-sticky-diff" data-testid="kit-sticky-diff">
+          {diffText}
+        </span>
+      </div>
+      <div className="kit-sticky-actions">
+        <button
+          type="button"
+          className="button primary"
+          onClick={onDeployClick}
+          disabled={!deployActionable}
+          data-testid="kit-sticky-deploy-action"
+        >
+          {deployLabel}
+        </button>
+        {deployArmed && removedCount > 0 && (
+          <button
+            type="button"
+            className="button danger"
+            onClick={onDeployConfirmClick}
+            disabled={!deployActionable}
+            data-testid="kit-sticky-deploy-confirm"
+          >
+            Confirm: delete {removedCount} &amp; deploy
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
 
-function DeployDiffPanel({ diff }: { diff: DeployDiff }): JSX.Element {
+function DeployDiffPanel({ review }: { review: DeployReview }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const userFileWarning = diff.entries.some((e) => e.replacesUserFile);
   const buckets = DIFF_BUCKETS.map((b) => ({
     ...b,
-    entries: diff.entries.filter((e) => e.change === b.change),
+    entries: review.items.filter((item) => item.change === b.change),
   }));
   // Only populated buckets render a column — a one-sided diff isn't marooned among
   // empties. Removed severity outranks added/changed via row-level danger (CSS).
@@ -1274,7 +1517,7 @@ function DeployDiffPanel({ diff }: { diff: DeployDiff }): JSX.Element {
       </button>
       {/* Always visible regardless of collapse: a user-authored CLAUDE.md overwrite
           is a destructive-action notice (no separate page-level banner covers it). */}
-      {userFileWarning && (
+      {review.hasUserFileWarning && (
         <div className="banner-error kit-diff-warn" data-testid="kit-diff-userfile-warn">
           This deploy replaces an existing user-authored CLAUDE.md (backed up to
           CLAUDE.md.hive-bak).
@@ -1282,6 +1525,14 @@ function DeployDiffPanel({ diff }: { diff: DeployDiff }): JSX.Element {
       )}
       {open && (
         <div className="kit-diff-body">
+          <div className="kit-diff-review" data-testid="kit-diff-review">
+            <span>Targets: {review.targetLabels.join(", ")}</span>
+            <span>
+              {DIFF_BUCKETS.map(
+                (bucket) => `${bucket.label} ${review.changeCounts[bucket.change]}`,
+              ).join(" / ")}
+            </span>
+          </div>
           <div className="kit-diff-cols">
             {populated.map((b) => (
               <DiffCol key={b.tone} label={b.label} tone={b.tone} entries={b.entries} />
@@ -1300,7 +1551,7 @@ function DiffCol({
 }: {
   label: string;
   tone: string;
-  entries: DeployDiff["entries"];
+  entries: DiffReviewItem[];
 }): JSX.Element {
   return (
     <div className={`kit-diff-col kit-diff-${tone}`} data-testid={`kit-diff-${tone}`}>
@@ -1308,9 +1559,26 @@ function DiffCol({
         {label} ({entries.length})
       </div>
       <ul>
-        {entries.map((e) => (
-          <li key={`${e.kind}/${e.name}`}>
-            <span className="kit-diff-kind">{e.kind}</span> {e.name}
+        {entries.map((item) => (
+          <li key={`${item.kind}/${item.name}`}>
+            <span className="kit-diff-line">
+              <span className="kit-diff-kind">{item.kind}</span> {item.name}
+            </span>
+            {item.sourceLabels.length > 0 && (
+              <span className="kit-diff-meta" data-testid={`kit-diff-sources-${item.name}`}>
+                Source: {item.sourceLabels.join(", ")}
+              </span>
+            )}
+            {item.hiddenVariants.map((variant) => (
+              <span
+                key={`${item.kind}/${item.name}/${variant.sourceLabels.join("|")}`}
+                className="kit-diff-shadow"
+                data-testid={`kit-diff-hidden-${item.name}`}
+              >
+                Hidden duplicate from {variant.sourceLabels.join(", ")}
+                {variant.winnerLabel ? `; ${variant.winnerLabel} wins by Source precedence` : ""}
+              </span>
+            ))}
           </li>
         ))}
       </ul>
