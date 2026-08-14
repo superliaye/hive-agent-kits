@@ -5,11 +5,11 @@
 // so the top-folder strip is CONTENT-DERIVED — read the first path component of
 // the first entry, never hard-code `my-agent-kits-<sha>/`.
 
-export type TarEntry = {
-  path: string;
-  type: "file" | "dir";
-  data: Uint8Array;
-};
+export type TarEntry =
+  | { path: string; type: "file"; data: Uint8Array; mode: number }
+  | { path: string; type: "dir"; data: Uint8Array; mode: number }
+  | { path: string; type: "symlink"; data: Uint8Array; mode: number; linkTarget: string }
+  | { path: string; type: "special"; data: Uint8Array; mode: number };
 
 const BLOCK = 512;
 
@@ -57,8 +57,10 @@ export function parseTar(buf: Uint8Array): TarEntry[] {
     if (allZero) break;
 
     const name = readString(buf, offset, 100);
+    const mode = readOctal(buf, offset + 100, 8);
     const size = readOctal(buf, offset + 124, 12);
     const typeflag = String.fromCharCode(buf[offset + 156] || 0);
+    const linkTarget = readString(buf, offset + 157, 100);
     const prefix = readString(buf, offset + 345, 155);
 
     offset += BLOCK;
@@ -72,18 +74,44 @@ export function parseTar(buf: Uint8Array): TarEntry[] {
       continue;
     }
 
-    let fullPath = longName ?? (prefix ? `${prefix}/${name}` : name);
+    const fullPath = longName ?? (prefix ? `${prefix}/${name}` : name);
     longName = null;
-    fullPath = fullPath.replace(/\\/g, "/");
 
     if (typeflag === "5" || fullPath.endsWith("/")) {
-      entries.push({ path: fullPath.replace(/\/+$/, ""), type: "dir", data: new Uint8Array(0) });
+      entries.push({
+        path: fullPath.replace(/\/+$/, ""),
+        type: "dir",
+        data: new Uint8Array(0),
+        mode,
+      });
       continue;
     }
-    // Only regular files ('0' or '\0'); skip symlinks/hardlinks/devices.
-    if (typeflag !== "0" && typeflag !== "\0") continue;
+    if (typeflag === "2") {
+      entries.push({
+        path: fullPath,
+        type: "symlink",
+        data: new Uint8Array(0),
+        mode,
+        linkTarget,
+      });
+      continue;
+    }
+    if (typeflag !== "0" && typeflag !== "\0") {
+      entries.push({
+        path: fullPath,
+        type: "special",
+        data: new Uint8Array(0),
+        mode,
+      });
+      continue;
+    }
 
-    entries.push({ path: fullPath, type: "file", data: buf.subarray(dataStart, dataStart + size) });
+    entries.push({
+      path: fullPath,
+      type: "file",
+      data: buf.subarray(dataStart, dataStart + size),
+      mode,
+    });
   }
 
   return entries;
