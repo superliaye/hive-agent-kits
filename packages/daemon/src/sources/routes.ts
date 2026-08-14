@@ -51,7 +51,7 @@ export function buildSourcesRoutes(
     if (!parsed.success) {
       return c.json({ error: "invalid source", issues: zodIssues(parsed.error) }, 400);
     }
-    const res = await run(registry.add(parsed.data.origin));
+    const res = await run(registry.add(parsed.data));
     if (!res.ok) {
       const err = res.error;
       if (err instanceof DuplicateOrigin) {

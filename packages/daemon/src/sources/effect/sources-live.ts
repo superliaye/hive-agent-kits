@@ -14,7 +14,7 @@
 // directly. Mirrors the deploy emitter (`kit/effect/kit-live.ts`) — the awaited
 // `emit` preserves block-on-failure (an audit persist fault fails the op).
 
-import type { Source } from "@hive/contract";
+import type { AddSourceInput, Source } from "@hive/contract";
 import { Context, Effect, Layer } from "effect";
 import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
@@ -35,7 +35,7 @@ export type SourceRegistrySvc = {
   // SourceIoError to channel. NOT named `snapshot` — the store already has a
   // `snapshot(): SourcesFile` of a different type.
   currentSources(): readonly Source[];
-  add(origin: string): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
+  add(input: string | AddSourceInput): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
   activate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   deactivate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   delete(id: string): Effect.Effect<void, SourceNotFound | SourceIoError>;
@@ -74,6 +74,7 @@ function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
     // Memory mode never seeds and writes no file.
     return createSourcesStore({
       version: SOURCES_FILE_VERSION,
+      revision: 0,
       sources: opts.initial ?? [],
     });
   }
@@ -139,15 +140,24 @@ function buildSvc(store: SourcesStore): SourceRegistrySvc {
 
     currentSources: () => store.list(),
 
-    add: (origin) =>
+    add: (input) =>
       Effect.flatMap(
-        ioGuard(() => store.add(origin)),
+        ioGuard(() => store.add(input)),
         (res) =>
           res.ok
             ? Effect.promise(() =>
                 events.emit("source.added", { id: res.source.id, origin: res.source.origin }),
               ).pipe(Effect.as(res.source))
-            : Effect.fail(new DuplicateOrigin({ origin })),
+            : Effect.fail(
+                new DuplicateOrigin({
+                  origin:
+                    typeof input === "string"
+                      ? input
+                      : input.locator.kind === "git"
+                        ? input.locator.repoUrl
+                        : input.locator.repoRoot,
+                }),
+              ),
       ),
 
     activate: (id) =>

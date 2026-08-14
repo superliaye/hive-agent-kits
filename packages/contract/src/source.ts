@@ -7,6 +7,67 @@ import { ConformanceError } from "@hive/capability-schema";
 import { z } from "zod";
 import { SourceSyncStatus } from "./kit.ts";
 
+const SafeRelativeSubpath = z.string().refine(
+  (value) => {
+    if (value === ".") return true;
+    if (value.length === 0 || value.startsWith("/") || value.includes("\\")) return false;
+    const segments = value.split("/");
+    return segments.every(
+      (segment) =>
+        segment.length > 0 && segment !== "." && segment !== ".." && !segment.startsWith("-"),
+    );
+  },
+  { message: "subpath must be '.' or a traversal-free relative POSIX path" },
+);
+
+const GitHttpsUrl = z
+  .string()
+  .url()
+  .refine(
+    (s) => {
+      let parsed: URL;
+      try {
+        parsed = new URL(s);
+      } catch {
+        return false;
+      }
+      return (
+        parsed.protocol === "https:" &&
+        parsed.hostname.length > 0 &&
+        parsed.username === "" &&
+        parsed.password === ""
+      );
+    },
+    { message: "repository URL must be https with a host and no embedded credentials" },
+  );
+
+const TrackedGitRef = z
+  .string()
+  .regex(/^refs\/(heads|tags)\/[A-Za-z0-9._\/-]+$/, "tracked ref must be a safe fully-qualified branch or tag ref");
+
+export const SourceLocator = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("starter") }).strict(),
+  z
+    .object({
+      kind: z.literal("git"),
+      repoUrl: GitHttpsUrl,
+      revision: z.discriminatedUnion("mode", [
+        z.object({ mode: z.literal("track"), ref: TrackedGitRef }).strict(),
+        z.object({ mode: z.literal("pin"), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
+      ]),
+      subpath: SafeRelativeSubpath,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("working-tree"),
+      repoRoot: z.string().min(1),
+      subpath: SafeRelativeSubpath,
+    })
+    .strict(),
+]);
+export type SourceLocator = z.infer<typeof SourceLocator>;
+
 // A tracked Source. `id` is a stable opaque identity (a uuid), decoupled from
 // `origin` (the git URL can change). `active` toggles whether the Source
 // participates in sync/aggregation. `kind` distinguishes a remote `git` Source
@@ -19,6 +80,10 @@ import { SourceSyncStatus } from "./kit.ts";
 // highest) without a runtime kind-band. `createdAt` is NOT the precedence signal.
 export const Source = z.object({
   id: z.string(),
+  label: z.string().min(1).max(160),
+  locator: SourceLocator,
+  // Compatibility display fields while the existing catalog page moves to the
+  // locator-native Overview. Acquisition and duplicate identity never use them.
   origin: z.string(),
   kind: z.enum(["git", "local"]),
   active: z.boolean(),
@@ -27,38 +92,16 @@ export const Source = z.object({
 });
 export type Source = z.infer<typeof Source>;
 
-// Restrict an add to https git URLs. `git@`/ssh origins are out of scope for
-// this slice (a later sync issue may add them); reject mailto:/ftp:/non-clonable
-// schemes. The registry normalizes before storing/comparing (strip trailing `/`
-// and `.git`), so this only fixes the accepted shape.
-const GitHttpsUrl = z
-  .string()
-  .url()
-  .refine(
-    (s) => {
-      let parsed: URL;
-      try {
-        parsed = new URL(s);
-      } catch {
-        return false;
-      }
-      // https only, with a host, and no embedded credentials — the origin is
-      // persisted and echoed back over the wire, so a `user:token@` URL would
-      // leak a secret into ~/.hive/sources.json and the Source DTO.
-      return (
-        parsed.protocol === "https:" &&
-        parsed.hostname.length > 0 &&
-        parsed.username === "" &&
-        parsed.password === ""
-      );
-    },
-    { message: "origin must be an https URL with a host and no embedded credentials" },
-  );
-
-export const AddSourceBody = z.object({
-  origin: GitHttpsUrl,
-});
+export const AddSourceBody = z
+  .object({
+    label: z.string().min(1).max(160),
+    locator: SourceLocator.refine((locator) => locator.kind !== "starter", {
+      message: "the built-in Starter cannot be added",
+    }),
+  })
+  .strict();
 export type AddSourceBody = z.infer<typeof AddSourceBody>;
+export type AddSourceInput = { label: string; locator: Exclude<SourceLocator, { kind: "starter" }> };
 
 // POST /api/sources/:id/reorder body: raise ("up") or lower ("down") a Source one
 // precedence step. The only re-rank control (decision: move-up/down buttons, not

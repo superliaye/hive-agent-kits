@@ -6,8 +6,14 @@
 // error channel and owns the audit emitter; the store itself stays plain (an
 // I/O edge), mirroring the secrets store's plain core.
 
-import type { Source } from "@hive/contract";
-import { normalizeOrigin, SOURCES_FILE_VERSION, type SourcesFile } from "./types.ts";
+import type { AddSourceInput, Source, SourceLocator } from "@hive/contract";
+import {
+  locatorIdentity,
+  normalizeLocator,
+  normalizeOrigin,
+  SOURCES_FILE_VERSION,
+  type SourcesFile,
+} from "./types.ts";
 
 // The narrow persistence port the store needs: just commit a file snapshot.
 // `SourcesPersistence` satisfies this structurally; tests can supply a plain
@@ -32,7 +38,7 @@ export type SeedLocalResult = { ok: true; source: Source } | { ok: false; reason
 export type SourcesStore = {
   list(): readonly Source[];
   // The public add path — always a `git` Source (the add route is git-only).
-  add(origin: string): AddResult;
+  add(input: string | AddSourceInput): AddResult;
   // Register a bundled `local` Source with a caller-supplied fixed id. A SYSTEM
   // action (not the audited user `add`). Idempotent on the id, so a re-seed
   // after the file already carries it is a clean no-op, never a duplicate row.
@@ -57,9 +63,10 @@ export function createSourcesStore(
   now: () => number = Date.now,
 ): SourcesStore {
   const sources: Source[] = [...initial.sources];
+  let revision = initial.revision;
 
   function snapshot(): SourcesFile {
-    return { version: SOURCES_FILE_VERSION, sources: [...sources] };
+    return { version: SOURCES_FILE_VERSION, revision, sources: [...sources] };
   }
 
   // Persist the candidate state BEFORE committing it to the in-memory array, so
@@ -67,8 +74,11 @@ export function createSourcesStore(
   // (both unchanged) rather than mutating memory and diverging from disk until
   // the next restart silently reloads the old file.
   function commit(next: Source[]): void {
-    if (persist) persist.write({ version: SOURCES_FILE_VERSION, sources: next });
+    const nextRevision = revision + 1;
+    if (persist)
+      persist.write({ version: SOURCES_FILE_VERSION, revision: nextRevision, sources: next });
     sources.splice(0, sources.length, ...next);
+    revision = nextRevision;
   }
 
   function setActive(id: string, active: boolean): MutateResult {
@@ -94,14 +104,32 @@ export function createSourcesStore(
       return sources.map((s) => ({ ...s }));
     },
 
-    add(origin) {
-      const normalized = normalizeOrigin(origin);
-      const exists = sources.some((s) => normalizeOrigin(s.origin) === normalized);
+    add(input) {
+      const canonical: AddSourceInput =
+        typeof input === "string"
+          ? {
+              label: normalizeOrigin(input),
+              locator: {
+                kind: "git",
+                repoUrl: normalizeOrigin(input),
+                revision: { mode: "track", ref: "refs/heads/main" },
+                subpath: ".",
+              },
+            }
+          : input;
+      const locator = normalizeLocator(canonical.locator) as Exclude<
+        SourceLocator,
+        { kind: "starter" }
+      >;
+      const exists = sources.some((s) => locatorIdentity(s.locator) === locatorIdentity(locator));
       if (exists) return { ok: false, reason: "duplicate" };
+      const origin = locator.kind === "git" ? locator.repoUrl : locator.repoRoot;
       const source: Source = {
         id: mintId(),
-        origin: normalized,
-        kind: "git",
+        label: canonical.label,
+        locator,
+        origin,
+        kind: locator.kind === "git" ? "git" : "local",
         active: true,
         createdAt: now(),
         rank: nextRank(),
@@ -116,6 +144,8 @@ export function createSourcesStore(
       if (sources.some((s) => s.id === id)) return { ok: false, reason: "duplicate-id" };
       const source: Source = {
         id,
+        label: origin,
+        locator: { kind: "starter" },
         origin,
         kind: "local",
         active: true,

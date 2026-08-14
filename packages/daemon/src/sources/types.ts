@@ -8,16 +8,17 @@
 // boundary"). `version` is for schema migrations. The `Source` shape itself is
 // the wire DTO from `@hive/contract` — the disk store reuses it verbatim.
 
-import { Source } from "@hive/contract";
+import { Source, type SourceLocator } from "@hive/contract";
 import { z } from "zod";
 
 // Bumped to 3 when `Source` gained `rank` (#51, the stored precedence signal).
 // Greenfield (no users): a file at any other version is discarded and re-seeded
 // (see persistence.read), not migrated — no rank back-fill code.
-export const SOURCES_FILE_VERSION = 3;
+export const SOURCES_FILE_VERSION = 4;
 
 export const SourcesFileSchema = z.object({
   version: z.literal(SOURCES_FILE_VERSION),
+  revision: z.number().int().nonnegative(),
   sources: z.array(Source),
 });
 
@@ -68,4 +69,40 @@ export function normalizeOrigin(origin: string): string {
   if (s.endsWith(".git")) s = s.slice(0, -4);
   while (s.endsWith("/")) s = s.slice(0, -1);
   return s;
+}
+
+function normalizeSubpath(subpath: string): string {
+  if (subpath === ".") return subpath;
+  return subpath.replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+export function normalizeLocator(locator: SourceLocator): SourceLocator {
+  switch (locator.kind) {
+    case "starter":
+      return locator;
+    case "git":
+      return {
+        ...locator,
+        repoUrl: normalizeOrigin(locator.repoUrl),
+        subpath: normalizeSubpath(locator.subpath),
+      };
+    case "working-tree":
+      return {
+        ...locator,
+        repoRoot: locator.repoRoot.replace(/\/+$/, "") || "/",
+        subpath: normalizeSubpath(locator.subpath),
+      };
+  }
+}
+
+export function locatorIdentity(locator: SourceLocator): string {
+  const normalized = normalizeLocator(locator);
+  switch (normalized.kind) {
+    case "starter":
+      return "starter";
+    case "git":
+      return `git\u0000${normalized.repoUrl}\u0000${JSON.stringify(normalized.revision)}\u0000${normalized.subpath}`;
+    case "working-tree":
+      return `working-tree\u0000${normalized.repoRoot}\u0000${normalized.subpath}`;
+  }
 }

@@ -127,7 +127,18 @@ function repoTarWithInstruction(name: string, frontmatter: string): TarFixtureEn
 
 async function postOrigin(server: ServerHandles, origin: string): Promise<Response> {
   return server.app.fetch(
-    authed("/api/sources", { method: "POST", body: JSON.stringify({ origin }) }),
+    authed("/api/sources", {
+      method: "POST",
+      body: JSON.stringify({
+        label: origin,
+        locator: {
+          kind: "git",
+          repoUrl: origin,
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+      }),
+    }),
   );
 }
 
@@ -179,6 +190,30 @@ describe("server routes — sources", () => {
     try {
       const res = await postOrigin(server, "ftp://example.com/repo");
       expect(res.status).toBe(400);
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("POST /api/sources accepts a labeled git locator", async () => {
+    const server = await serverWith(stubFetch(repoTar([conformingSkill("foo")])));
+    try {
+      const locator = {
+        kind: "git",
+        repoUrl: "https://github.com/a/b",
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      } as const;
+      const res = await server.app.fetch(
+        authed("/api/sources", {
+          method: "POST",
+          body: JSON.stringify({ label: "Personal kit", locator }),
+        }),
+      );
+
+      expect(res.status).toBe(201);
+      const body = AddSourceResult.parse(await res.json());
+      expect(body.source).toMatchObject({ label: "Personal kit", locator });
     } finally {
       await server.dispose();
     }

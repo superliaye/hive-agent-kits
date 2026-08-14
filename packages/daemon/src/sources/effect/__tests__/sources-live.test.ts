@@ -22,7 +22,11 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
     // These tests exercise the lifecycle verbs in isolation, not first-run
     // seeding: write an empty file so the `!persist.exists()` seed gate is skipped
     // (seeding has its own describe block below).
-    writeFileSync(path, JSON.stringify({ version: SOURCES_FILE_VERSION, sources: [] }), "utf8");
+    writeFileSync(
+      path,
+      JSON.stringify({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] }),
+      "utf8",
+    );
   });
 
   afterEach(() => {
@@ -180,7 +184,11 @@ describe("SourceRegistryLive — first-run Starter seeding (#32)", () => {
   });
 
   test("exists-but-empty file (`{version,sources:[]}`) → NO re-seed", async () => {
-    writeFileSync(path, JSON.stringify({ version: SOURCES_FILE_VERSION, sources: [] }), "utf8");
+    writeFileSync(
+      path,
+      JSON.stringify({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] }),
+      "utf8",
+    );
     const { svc: s, rt } = svc();
     expect(await Effect.runPromise(s.list())).toHaveLength(0);
     rt.dispose();
