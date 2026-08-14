@@ -202,6 +202,41 @@ describe("git Source acquisition", () => {
     expect(readFileSync(marker, "utf8").trim()).toBe("killed");
   });
 
+  test("keeps the archive deadline after Git closes stdout", async () => {
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const bin = join(work, "bin");
+    const started = join(work, "started");
+    const release = join(work, "release");
+    const marker = join(work, "killed");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "git"),
+      `#!/bin/sh\necho started > "${started}"\nexec 1>&-\ntrap 'echo killed > "${marker}"; exit 0' TERM\nwhile [ ! -f "${release}" ]; do :; done\n`,
+    );
+    chmodSync(join(bin, "git"), 0o755);
+    const archive = productionGitProcess().runArchive(["archive"], {
+      env: { PATH: bin },
+      maxBytes: 1,
+      timeoutMs: 20,
+    });
+
+    try {
+      const outcome = await Promise.race([
+        archive.then(
+          () => "resolved",
+          () => "rejected",
+        ),
+        Bun.sleep(100).then(() => "pending"),
+      ]);
+      expect(outcome).toBe("rejected");
+      expect(readFileSync(marker, "utf8").trim()).toBe("killed");
+    } finally {
+      writeFileSync(release, "release");
+      await archive.catch(() => undefined);
+    }
+  });
+
   test("maps cache and temporary-root filesystem failures to io", async () => {
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
