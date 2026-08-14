@@ -16,6 +16,10 @@ describe("server routes - ready", () => {
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({
         status: "ok",
+        protocolVersion: 1,
+        buildVersion: server.buildVersion,
+        daemonInstanceId: server.daemonInstanceId,
+        runtimeRootId: server.runtimeRootId,
         daemonMode: "dev",
         deployTargetMode: "sandbox",
       });
@@ -33,6 +37,10 @@ describe("server routes - ready", () => {
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({
         status: "ok",
+        protocolVersion: 1,
+        buildVersion: server.buildVersion,
+        daemonInstanceId: server.daemonInstanceId,
+        runtimeRootId: server.runtimeRootId,
         daemonMode: "packaged",
         deployTargetMode: "real",
       });
@@ -51,6 +59,10 @@ describe("server routes - ready", () => {
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({
         status: "ok",
+        protocolVersion: 1,
+        buildVersion: server.buildVersion,
+        daemonInstanceId: server.daemonInstanceId,
+        runtimeRootId: server.runtimeRootId,
         daemonMode: "dev",
         deployTargetMode: "real",
       });

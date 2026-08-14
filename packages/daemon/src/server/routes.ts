@@ -3,7 +3,7 @@
 import { AppearanceConfigSchema } from "@hive/theming/schema";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 import type { Audit } from "../audit/index.ts";
 import type { BackendProbeSvc, BackendUpdaterSvc } from "../backend-probe/index.ts";
 import { BackendStatus, ProbeableBackend } from "../backend-probe/index.ts";
@@ -15,6 +15,7 @@ import type { Config } from "../config/types.ts";
 import type { Secrets } from "../secrets/index.ts";
 import type { ConfiguredProvider } from "../secrets/types.ts";
 import { bearerAuth } from "./auth.ts";
+import type { SessionRegistry } from "./sessions.ts";
 import { AuditQueryParams, type ConfiguredProviderWire, SetApiKeyBody } from "./types.ts";
 
 export type RoutesDeps = {
@@ -25,7 +26,12 @@ export type RoutesDeps = {
   backendUpdater: BackendUpdaterSvc;
   config: Config<AppConfig>;
   daemonMode: "dev" | "packaged";
+  protocolVersion: 1;
+  buildVersion: string;
+  daemonInstanceId: string;
+  runtimeRootId: string;
   token: string;
+  sessions: SessionRegistry;
 };
 
 function toConfiguredProviderWire(p: ConfiguredProvider): ConfiguredProviderWire | undefined {
@@ -80,11 +86,15 @@ export function buildRoutes(deps: RoutesDeps): Hono {
       credentials: true,
     }),
   );
-  app.use("/api/*", bearerAuth(deps.token));
+  app.use("/api/*", bearerAuth(deps.token, deps.sessions));
 
   app.get("/api/ready", (c) =>
     c.json({
       status: "ok",
+      protocolVersion: deps.protocolVersion,
+      buildVersion: deps.buildVersion,
+      daemonInstanceId: deps.daemonInstanceId,
+      runtimeRootId: deps.runtimeRootId,
       daemonMode: deps.daemonMode,
       deployTargetMode:
         deps.daemonMode === "packaged" || deps.config.get("developer").allowRealHomeDeploy
@@ -92,6 +102,23 @@ export function buildRoutes(deps: RoutesDeps): Hono {
           : "sandbox",
     }),
   );
+
+  app.post("/api/external-sessions", (c) => {
+    if (c.get("authKind") !== "durable") {
+      return c.json({ error: "durable credential required" }, 403);
+    }
+    return c.json(deps.sessions.mint(), 201);
+  });
+
+  app.delete("/api/external-sessions/:sessionId", (c) => {
+    if (c.get("authKind") !== "durable") {
+      return c.json({ error: "durable credential required" }, 403);
+    }
+    const parsed = z.string().uuid().safeParse(c.req.param("sessionId"));
+    if (!parsed.success) return c.json({ error: "invalid session id" }, 400);
+    deps.sessions.revoke(parsed.data);
+    return c.body(null, 204);
+  });
 
   // On-demand backend availability probe (ADR-0016). Re-probes the CLI backends
   // and reports installed/missing + version with stable reason codes. Zod

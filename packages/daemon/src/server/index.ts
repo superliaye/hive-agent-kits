@@ -49,6 +49,8 @@ import {
 } from "../sources/effect/sources-live.ts";
 import { buildSourcesRoutes, type RunSources, type SourceLifecycle } from "../sources/routes.ts";
 import { buildRoutes } from "./routes.ts";
+import { DAEMON_PROTOCOL_VERSION, HIVE_BUILD_VERSION, runtimeRootId } from "./identity.ts";
+import { createSessionRegistry } from "./sessions.ts";
 
 export type ServerMode = "file" | "memory";
 
@@ -80,6 +82,9 @@ export type ServerHandles = {
   kit: KitSvc;
   token: string;
   port: number;
+  buildVersion: string;
+  daemonInstanceId: string;
+  runtimeRootId: string;
   dispose(): Promise<void>;
 };
 
@@ -289,6 +294,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   const token = opts.token ?? (opts.mode === "memory" ? "test-token" : ensureToken());
+  const sessions = createSessionRegistry();
+  const daemonInstanceId = crypto.randomUUID();
+  const daemonRuntimeRootId = runtimeRootId(opts.mode);
 
   const app = buildRoutes({
     audit,
@@ -298,7 +306,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     backendUpdater,
     config,
     daemonMode: devMode ? "dev" : "packaged",
+    protocolVersion: DAEMON_PROTOCOL_VERSION,
+    buildVersion: HIVE_BUILD_VERSION,
+    daemonInstanceId,
+    runtimeRootId: daemonRuntimeRootId,
     token,
+    sessions,
   });
 
   // Kit deploy-manager routes, mounted additively behind the surviving server.
@@ -362,6 +375,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     kit,
     token,
     port,
+    buildVersion: HIVE_BUILD_VERSION,
+    daemonInstanceId,
+    runtimeRootId: daemonRuntimeRootId,
     async dispose() {
       dispose();
       // ONE teardown: releases Config (watcher + ref scope), Secrets (no-op),
