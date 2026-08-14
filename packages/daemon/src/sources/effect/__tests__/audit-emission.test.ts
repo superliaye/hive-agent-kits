@@ -15,6 +15,18 @@ import {
 
 const runtimes: Array<{ dispose(): Promise<void> }> = [];
 
+function gitInput(repoUrl: string) {
+  return {
+    label: repoUrl,
+    locator: {
+      kind: "git" as const,
+      repoUrl,
+      revision: { mode: "track" as const, ref: "refs/heads/main" },
+      subpath: ".",
+    },
+  };
+}
+
 function makeAudit(): AuditSvc {
   const runtime = ManagedRuntime.make(AuditLive({ mode: "memory" }));
   runtimes.push(runtime);
@@ -38,7 +50,7 @@ describe("sources audit emission", () => {
     wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
 
     const source = await Effect.runPromise(
-      registry.add("https://github.com/superliaye/my-agent-kits.git"),
+      registry.add(gitInput("https://github.com/superliaye/my-agent-kits.git")),
     );
 
     const rows = await audit.query({ source: "sources" });
@@ -57,7 +69,7 @@ describe("sources audit emission", () => {
     const registry = makeRegistry();
     wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
 
-    const source = await Effect.runPromise(registry.add("https://example.com/a/b"));
+    const source = await Effect.runPromise(registry.add(gitInput("https://example.com/a/b")));
     await Effect.runPromise(registry.deactivate(source.id));
     await Effect.runPromise(registry.activate(source.id));
     await Effect.runPromise(registry.delete(source.id));
@@ -81,8 +93,8 @@ describe("sources audit emission", () => {
     wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
 
     // Two adds: a (rank lower), b (rank higher). Raise a above b.
-    const a = await Effect.runPromise(registry.add("https://github.com/a/lower"));
-    await Effect.runPromise(registry.add("https://github.com/b/higher"));
+    const a = await Effect.runPromise(registry.add(gitInput("https://github.com/a/lower")));
+    await Effect.runPromise(registry.add(gitInput("https://github.com/b/higher")));
     const reordered = await Effect.runPromise(registry.reorder(a.id, "up"));
 
     const rows = await audit.query({ source: "sources" });
@@ -112,7 +124,7 @@ describe("sources audit emission", () => {
     wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
 
     // One added Source (the highest rank). Moving it up is a no-op — no row.
-    const a = await Effect.runPromise(registry.add("https://github.com/a/b"));
+    const a = await Effect.runPromise(registry.add(gitInput("https://github.com/a/b")));
     await Effect.runPromise(registry.reorder(a.id, "up"));
 
     const rows = await audit.query({ source: "sources" });
@@ -124,9 +136,9 @@ describe("sources audit emission", () => {
     const registry = makeRegistry();
     wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
 
-    await Effect.runPromise(registry.add("https://example.com/a/b"));
+    await Effect.runPromise(registry.add(gitInput("https://example.com/a/b")));
     // The .git/trailing-slash variant normalizes to the same origin → DuplicateOrigin.
-    await Effect.runPromiseExit(registry.add("https://example.com/a/b.git"));
+    await Effect.runPromiseExit(registry.add(gitInput("https://example.com/a/b.git")));
 
     const rows = await audit.query({ source: "sources" });
     expect(rows.length).toBe(1);

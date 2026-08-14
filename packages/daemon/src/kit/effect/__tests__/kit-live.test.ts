@@ -280,7 +280,17 @@ describe("Kit ↔ SourceRegistry shared store (#30 wiring invariant)", () => {
     const kit = rt.runSync(Kit);
 
     expect(kit.state().sync).toHaveLength(0);
-    await Effect.runPromise(registry.add("https://github.com/owner/added-at-runtime"));
+    await Effect.runPromise(
+      registry.add({
+        label: "added-at-runtime",
+        locator: {
+          kind: "git",
+          repoUrl: "https://github.com/owner/added-at-runtime",
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+      }),
+    );
     // Visible to Kit without any re-wiring — proves the single shared store.
     expect(kit.state().sync).toHaveLength(1);
     expect(kit.state().sync[0]?.origin).toBe("https://github.com/owner/added-at-runtime");

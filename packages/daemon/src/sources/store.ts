@@ -10,7 +10,6 @@ import type { AddSourceInput, Source, SourceLocator } from "@hive/contract";
 import {
   locatorIdentity,
   normalizeLocator,
-  normalizeOrigin,
   SOURCES_FILE_VERSION,
   type SourcesFile,
 } from "./types.ts";
@@ -37,8 +36,7 @@ export type SeedLocalResult = { ok: true; source: Source } | { ok: false; reason
 
 export type SourcesStore = {
   list(): readonly Source[];
-  // The public add path — always a `git` Source (the add route is git-only).
-  add(input: string | AddSourceInput): AddResult;
+  add(input: AddSourceInput): AddResult;
   // Register a bundled `local` Source with a caller-supplied fixed id. A SYSTEM
   // action (not the audited user `add`). Idempotent on the id, so a re-seed
   // after the file already carries it is a clean no-op, never a duplicate row.
@@ -56,17 +54,36 @@ export type SourcesStore = {
 
 export type MintId = () => string;
 
+function cloneLocator(locator: SourceLocator): SourceLocator {
+  switch (locator.kind) {
+    case "starter":
+      return { kind: "starter" };
+    case "git":
+      return { ...locator, revision: { ...locator.revision } };
+    case "working-tree":
+      return { ...locator };
+  }
+}
+
+function cloneSource(source: Source): Source {
+  return { ...source, locator: cloneLocator(source.locator) };
+}
+
+function cloneSources(sources: readonly Source[]): Source[] {
+  return sources.map(cloneSource);
+}
+
 export function createSourcesStore(
   initial: SourcesFile,
   persist?: SourcesWriter,
   mintId: MintId = () => crypto.randomUUID(),
   now: () => number = Date.now,
 ): SourcesStore {
-  const sources: Source[] = [...initial.sources];
+  const sources: Source[] = cloneSources(initial.sources);
   let revision = initial.revision;
 
   function snapshot(): SourcesFile {
-    return { version: SOURCES_FILE_VERSION, revision, sources: [...sources] };
+    return { version: SOURCES_FILE_VERSION, revision, sources: cloneSources(sources) };
   }
 
   // Persist the candidate state BEFORE committing it to the in-memory array, so
@@ -76,20 +93,24 @@ export function createSourcesStore(
   function commit(next: Source[]): void {
     const nextRevision = revision + 1;
     if (persist)
-      persist.write({ version: SOURCES_FILE_VERSION, revision: nextRevision, sources: next });
-    sources.splice(0, sources.length, ...next);
+      persist.write({
+        version: SOURCES_FILE_VERSION,
+        revision: nextRevision,
+        sources: cloneSources(next),
+      });
+    sources.splice(0, sources.length, ...cloneSources(next));
     revision = nextRevision;
   }
 
   function setActive(id: string, active: boolean): MutateResult {
     const idx = sources.findIndex((s) => s.id === id);
     if (idx === -1) return { ok: false, reason: "not-found" };
-    const next = sources.map((s) => ({ ...s }));
+    const next = cloneSources(sources);
     const target = next[idx];
     if (!target) return { ok: false, reason: "not-found" };
     target.active = active;
     commit(next);
-    return { ok: true, source: { ...target } };
+    return { ok: true, source: cloneSource(target) };
   }
 
   // The next rank for a new Source: max(existing ranks)+1, so each add becomes the
@@ -101,23 +122,11 @@ export function createSourcesStore(
 
   return {
     list() {
-      return sources.map((s) => ({ ...s }));
+      return cloneSources(sources);
     },
 
     add(input) {
-      const canonical: AddSourceInput =
-        typeof input === "string"
-          ? {
-              label: normalizeOrigin(input),
-              locator: {
-                kind: "git",
-                repoUrl: normalizeOrigin(input),
-                revision: { mode: "track", ref: "refs/heads/main" },
-                subpath: ".",
-              },
-            }
-          : input;
-      const locator = normalizeLocator(canonical.locator) as Exclude<
+      const locator = cloneLocator(normalizeLocator(input.locator)) as Exclude<
         SourceLocator,
         { kind: "starter" }
       >;
@@ -126,7 +135,7 @@ export function createSourcesStore(
       const origin = locator.kind === "git" ? locator.repoUrl : locator.repoRoot;
       const source: Source = {
         id: mintId(),
-        label: canonical.label,
+        label: input.label,
         locator,
         origin,
         kind: locator.kind === "git" ? "git" : "local",
@@ -135,7 +144,7 @@ export function createSourcesStore(
         rank: nextRank(),
       };
       commit([...sources, source]);
-      return { ok: true, source: { ...source } };
+      return { ok: true, source: cloneSource(source) };
     },
 
     seedLocal(id, origin) {
@@ -153,7 +162,7 @@ export function createSourcesStore(
         rank: nextRank(),
       };
       commit([...sources, source]);
-      return { ok: true, source: { ...source } };
+      return { ok: true, source: cloneSource(source) };
     },
 
     activate: (id) => setActive(id, true),
@@ -174,8 +183,8 @@ export function createSourcesStore(
       const self = ordered[pos];
       const neighbor = ordered[neighborPos];
       if (!self) return { ok: false, reason: "not-found" };
-      if (!neighbor) return { ok: true, changed: false, source: { ...self } };
-      const next = sources.map((s) => {
+      if (!neighbor) return { ok: true, changed: false, source: cloneSource(self) };
+      const next = cloneSources(sources).map((s) => {
         if (s.id === self.id) return { ...s, rank: neighbor.rank };
         if (s.id === neighbor.id) return { ...s, rank: self.rank };
         return { ...s };
@@ -184,7 +193,7 @@ export function createSourcesStore(
       const updated = next.find((s) => s.id === id);
       // `updated` is always present (id was found above); guard for the typechecker.
       if (!updated) return { ok: false, reason: "not-found" };
-      return { ok: true, changed: true, source: { ...updated } };
+      return { ok: true, changed: true, source: cloneSource(updated) };
     },
 
     delete(id) {

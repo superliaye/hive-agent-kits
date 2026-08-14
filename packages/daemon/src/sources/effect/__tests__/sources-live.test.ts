@@ -12,6 +12,18 @@ const STARTER_ORIGIN = "local:starter";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function gitInput(repoUrl: string) {
+  return {
+    label: repoUrl,
+    locator: {
+      kind: "git" as const,
+      repoUrl,
+      revision: { mode: "track" as const, ref: "refs/heads/main" },
+      subpath: ".",
+    },
+  };
+}
+
 describe("SourceRegistryLive — file mode lifecycle", () => {
   let root: string;
   let path: string;
@@ -41,7 +53,7 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
   test("add → list shows it (active, uuid id ≠ origin, has createdAt)", async () => {
     const { svc: s, rt } = svc();
     const origin = "https://github.com/a/b";
-    const created = await Effect.runPromise(s.add(origin));
+    const created = await Effect.runPromise(s.add(gitInput(origin)));
     expect(created.active).toBe(true);
     expect(created.origin).toBe(origin);
     expect(UUID_RE.test(created.id)).toBe(true);
@@ -56,15 +68,21 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
 
   test("add duplicate origin (and .git / trailing-slash variant) yields DuplicateOrigin", async () => {
     const { svc: s, rt } = svc();
-    await Effect.runPromise(s.add("https://github.com/a/b"));
+    await Effect.runPromise(s.add(gitInput("https://github.com/a/b")));
 
-    const dupPlain = await Effect.runPromise(Effect.flip(s.add("https://github.com/a/b")));
+    const dupPlain = await Effect.runPromise(
+      Effect.flip(s.add(gitInput("https://github.com/a/b"))),
+    );
     expect(dupPlain).toBeInstanceOf(DuplicateOrigin);
 
-    const dupGit = await Effect.runPromise(Effect.flip(s.add("https://github.com/a/b.git")));
+    const dupGit = await Effect.runPromise(
+      Effect.flip(s.add(gitInput("https://github.com/a/b.git"))),
+    );
     expect(dupGit).toBeInstanceOf(DuplicateOrigin);
 
-    const dupSlash = await Effect.runPromise(Effect.flip(s.add("https://github.com/a/b/")));
+    const dupSlash = await Effect.runPromise(
+      Effect.flip(s.add(gitInput("https://github.com/a/b/"))),
+    );
     expect(dupSlash).toBeInstanceOf(DuplicateOrigin);
 
     expect(await Effect.runPromise(s.list())).toHaveLength(1);
@@ -73,7 +91,7 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
 
   test("deactivate → active:false; activate → active:true", async () => {
     const { svc: s, rt } = svc();
-    const created = await Effect.runPromise(s.add("https://github.com/a/b"));
+    const created = await Effect.runPromise(s.add(gitInput("https://github.com/a/b")));
 
     const off = await Effect.runPromise(s.deactivate(created.id));
     expect(off.active).toBe(false);
@@ -85,7 +103,7 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
 
   test("delete → gone", async () => {
     const { svc: s, rt } = svc();
-    const created = await Effect.runPromise(s.add("https://github.com/a/b"));
+    const created = await Effect.runPromise(s.add(gitInput("https://github.com/a/b")));
     await Effect.runPromise(s.delete(created.id));
     expect(await Effect.runPromise(s.list())).toHaveLength(0);
     rt.dispose();
@@ -104,7 +122,7 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
   test("registry file lands under the Hive home; the agent-kit Ledger is untouched", async () => {
     const ledger = join(root, "agent-kit", "manifest.json");
     const { svc: s, rt } = svc();
-    await Effect.runPromise(s.add("https://github.com/a/b"));
+    await Effect.runPromise(s.add(gitInput("https://github.com/a/b")));
     expect(existsSync(path)).toBe(true);
     // The registry write touches only sources.json, never the interop Ledger.
     expect(existsSync(ledger)).toBe(false);
@@ -113,7 +131,7 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
 
   test("persistence round-trips across a fresh registry instance", async () => {
     const first = svc();
-    const created = await Effect.runPromise(first.svc.add("https://github.com/a/b"));
+    const created = await Effect.runPromise(first.svc.add(gitInput("https://github.com/a/b")));
     await Effect.runPromise(first.svc.deactivate(created.id));
     first.rt.dispose();
 
@@ -177,7 +195,7 @@ describe("SourceRegistryLive — first-run Starter seeding (#32)", () => {
     expect(seen).toHaveLength(0);
     // A genuine user add DOES emit — proving the spy is wired and the zero above is
     // meaningful, not a dead listener.
-    await Effect.runPromise(s.add("https://github.com/owner/added"));
+    await Effect.runPromise(s.add(gitInput("https://github.com/owner/added")));
     expect(seen).toHaveLength(1);
     expect(seen[0]?.origin).toBe("https://github.com/owner/added");
     rt.dispose();
@@ -261,10 +279,10 @@ describe("SourceRegistryLive — memory mode writes no file", () => {
     // Memory mode never seeds the default Source.
     expect(await Effect.runPromise(s.list())).toHaveLength(0);
 
-    const created = await Effect.runPromise(s.add("https://github.com/a/b"));
+    const created = await Effect.runPromise(s.add(gitInput("https://github.com/a/b")));
     await Effect.runPromise(s.deactivate(created.id));
     await Effect.runPromise(s.activate(created.id));
-    const dup = await Effect.runPromise(Effect.flip(s.add("https://github.com/a/b")));
+    const dup = await Effect.runPromise(Effect.flip(s.add(gitInput("https://github.com/a/b"))));
     expect(dup).toBeInstanceOf(DuplicateOrigin);
     await Effect.runPromise(s.delete(created.id));
     expect(await Effect.runPromise(s.list())).toHaveLength(0);

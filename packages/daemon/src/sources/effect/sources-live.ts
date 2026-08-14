@@ -35,7 +35,7 @@ export type SourceRegistrySvc = {
   // SourceIoError to channel. NOT named `snapshot` — the store already has a
   // `snapshot(): SourcesFile` of a different type.
   currentSources(): readonly Source[];
-  add(input: string | AddSourceInput): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
+  add(input: AddSourceInput): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
   activate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   deactivate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   delete(id: string): Effect.Effect<void, SourceNotFound | SourceIoError>;
@@ -151,11 +151,7 @@ function buildSvc(store: SourcesStore): SourceRegistrySvc {
             : Effect.fail(
                 new DuplicateOrigin({
                   origin:
-                    typeof input === "string"
-                      ? input
-                      : input.locator.kind === "git"
-                        ? input.locator.repoUrl
-                        : input.locator.repoRoot,
+                    input.locator.kind === "git" ? input.locator.repoUrl : input.locator.repoRoot,
                 }),
               ),
       ),
