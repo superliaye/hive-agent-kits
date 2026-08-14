@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Source } from "@hive/contract";
 import { Cause, Effect, Exit } from "effect";
-import { createServer } from "../../server/index.ts";
+import { createServer, legacyGithubFixtureFetchForMode } from "../../server/index.ts";
 import { type GitProcess, GitProcessFailure } from "../acquisition/git-process.ts";
 import { SyncError } from "../effect/errors.ts";
 import { readProvenance } from "../mirror.ts";
@@ -177,6 +177,32 @@ describe("locator-native Source sync", () => {
         "utf8",
       ),
     ).toContain("fixture");
+  });
+
+  test("legacy HTTP fixtures are memory-only and never handle a non-GitHub locator", async () => {
+    let legacyCalls = 0;
+    const legacyFetch = async () => {
+      legacyCalls++;
+      throw new Error("legacy fixture must not be called");
+    };
+    expect(legacyGithubFixtureFetchForMode("file", legacyFetch)).toBeUndefined();
+    expect(legacyGithubFixtureFetchForMode("memory", legacyFetch)).toBe(legacyFetch);
+
+    const nonGithub = source("gitlab", {
+      kind: "git",
+      repoUrl: "https://gitlab.example.invalid/acme/kit",
+      revision: { mode: "track", ref: "refs/heads/main" },
+      subpath: ".",
+    });
+    const outcome = await Effect.runPromise(
+      syncLocatorSource(nonGithub, failSafeDeployTargets(), {
+        legacyGithubFixtureFetch: legacyFetch,
+        gitProcess: gitFixture(),
+      }),
+    );
+    expect(outcome.status).toBe("synced");
+    expect(legacyCalls).toBe(0);
+    expect(readProvenance(failSafeDeployTargets().mirrorRoot(nonGithub.id))?.transport).toBe("git");
   });
 
   test("server config reaches working-tree onboarding and an existing non-kit subpath remains an explicit empty Source", async () => {

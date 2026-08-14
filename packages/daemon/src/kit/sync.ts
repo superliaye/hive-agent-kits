@@ -259,6 +259,7 @@ export function syncLocatorSource(
     case "git":
       if (
         options.legacyGithubFixtureFetch &&
+        parseGithubOrigin(locator.repoUrl) !== null &&
         locator.revision.mode === "track" &&
         locator.revision.ref === "refs/heads/main" &&
         locator.subpath === "."

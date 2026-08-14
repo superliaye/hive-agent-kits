@@ -54,7 +54,7 @@ import { createSessionRegistry } from "./sessions.ts";
 
 export type ServerMode = "file" | "memory";
 
-export type CreateServerOptions = {
+type CreateServerBaseOptions = {
   // "memory" — no persistence, used by tests and dev fast-iter.
   // "file"   — production: audit.db on disk, config.yaml hot-reload.
   mode: ServerMode;
@@ -64,14 +64,25 @@ export type CreateServerOptions = {
   // `daemon.httpPort` — used by e2e tests for isolation. Bypasses Config so
   // a stale config.yaml value cannot fight the explicit choice.
   port?: number;
-  // Override the HTTP fetch (tests inject offline/403/fixture-tarball). Defaults
-  // to the production global fetch. Shared by the Kit launch-sync AND the add-time
-  // onboard sync, so a test add reaches a stubbed fetch — never the real network.
-  fetch?: HttpFetch;
   // Dev/test-only: seed the checked-in fixture local Sources on first file-mode
   // boot. The environment flag is read only at this composition boundary.
   fixtureSources?: boolean;
 };
+
+export type CreateServerOptions =
+  | (CreateServerBaseOptions & { mode: "memory"; fetch?: HttpFetch })
+  | (CreateServerBaseOptions & { mode: "file"; fetch?: never });
+
+// The pre-locator GitHub HTTP transport is a memory-test fixture only. Keeping
+// the mode decision adjacent to server composition makes it impossible for a
+// normal file-mode caller to opt into that path, while the runtime branch also
+// protects JavaScript callers that bypass the TypeScript boundary.
+export function legacyGithubFixtureFetchForMode(
+  mode: ServerMode,
+  fetch: HttpFetch | undefined,
+): HttpFetch | undefined {
+  return mode === "memory" ? fetch : undefined;
+}
 
 export type ServerHandles = {
   app: Hono;
@@ -102,6 +113,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const devMode = process.env.HIVE_PACKAGED !== "1";
   const fixtureSources =
     devMode && (opts.fixtureSources ?? process.env.HIVE_DEV_FIXTURE_SOURCES === "1");
+  const legacyGithubFixtureFetch = legacyGithubFixtureFetchForMode(opts.mode, opts.fetch);
 
   // The surviving modules compose into ONE root Layer owned by a single
   // ManagedRuntime (ADR-0011). The `mode`-driven adapter choice stays here at
@@ -172,7 +184,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // module-internal. SourceRegistry is provided from the one shared layer.
     KitLive({
       targets: deployTargets,
-      ...(opts.fetch ? { fetch: opts.fetch } : {}),
+      ...(legacyGithubFixtureFetch ? { fetch: legacyGithubFixtureFetch } : {}),
       workingTreeRoots: () => configHolder.config?.get("sources").workingTreeRoots ?? [],
     }).pipe(Layer.provide(sourcesLayer)),
     // Sources registry (ADR-0023). Hive-private JSON store; memory mode in
@@ -334,7 +346,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     onboard: (s) =>
       Effect.catchDefect(
         onboardSource(deployTargets, s, SYNC_TIMEOUT_MS, {
-          ...(opts.fetch ? { legacyGithubFixtureFetch: opts.fetch } : {}),
+          ...(legacyGithubFixtureFetch ? { legacyGithubFixtureFetch } : {}),
           workingTreeRoots: config.get("sources").workingTreeRoots,
         }),
         (defect: unknown) => {

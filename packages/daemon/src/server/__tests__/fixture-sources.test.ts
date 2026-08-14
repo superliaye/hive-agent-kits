@@ -101,10 +101,6 @@ describe("dev fixture Sources mode", () => {
       mode: "file",
       token: TOKEN,
       fixtureSources: true,
-      fetch: async () => {
-        fetchCalls += 1;
-        throw new Error("fixture Sources must not fetch");
-      },
     });
   }
 
@@ -198,10 +194,6 @@ describe("dev fixture Sources mode", () => {
     server = await createServer({
       mode: "file",
       token: TOKEN,
-      fetch: async () => {
-        fetchCalls += 1;
-        throw new Error("normal local Starter must not fetch");
-      },
     });
     try {
       const sources = await getSources(server);
