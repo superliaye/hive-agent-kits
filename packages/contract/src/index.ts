@@ -7,5 +7,6 @@
 // bundle. Schemas must not import daemon internals.
 
 export * from "./backend.ts";
+export * from "./connection.ts";
 export * from "./kit.ts";
 export * from "./source.ts";
