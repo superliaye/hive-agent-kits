@@ -188,6 +188,91 @@ function validateSourcePath(
   return { source, selectedRelative };
 }
 
+type SourceEntry =
+  | {
+      selectedRelative: string;
+      kind: "file";
+      mode: number;
+      data: Buffer;
+      fingerprint: string;
+    }
+  | {
+      selectedRelative: string;
+      kind: "link";
+      mode: number;
+      target: string;
+      fingerprint: string;
+    };
+
+function fingerprintEntry(
+  selectedRelative: string,
+  mode: number,
+  kind: SourceEntry["kind"],
+  content: string | Buffer,
+): string {
+  return createHash("sha256")
+    .update(selectedRelative)
+    .update("\0")
+    .update(String(mode))
+    .update("\0")
+    .update(kind)
+    .update("\0")
+    .update(content)
+    .digest("hex");
+}
+
+function readSourceEntry(
+  repoRoot: string,
+  selectedRoot: string,
+  repoRelative: string,
+): SourceEntry {
+  const { source, selectedRelative } = validateSourcePath(repoRoot, selectedRoot, repoRelative);
+  const sourceStat = lstatSync(source);
+  const mode = sourceStat.mode & 0o777;
+  if (sourceStat.isSymbolicLink()) {
+    const target = readlinkSync(source);
+    if (!safelyResolvesWithin(source, target, selectedRoot)) {
+      throw new WorkingTreeAcquireError("unsafe_tree", "working tree link escapes selected tree");
+    }
+    return {
+      selectedRelative,
+      kind: "link",
+      mode,
+      target,
+      fingerprint: fingerprintEntry(selectedRelative, mode, "link", target),
+    };
+  }
+  if (!sourceStat.isFile()) {
+    throw new WorkingTreeAcquireError("unsafe_tree", "working tree contains a special file");
+  }
+  if (
+    !containedBy(
+      canonicalPath(source, "unsafe_tree", "working tree file is unavailable"),
+      selectedRoot,
+    )
+  ) {
+    throw new WorkingTreeAcquireError("unsafe_tree", "working tree file escapes selected tree");
+  }
+  const data = readFileSync(source);
+  return {
+    selectedRelative,
+    kind: "file",
+    mode,
+    data,
+    fingerprint: fingerprintEntry(selectedRelative, mode, "file", data),
+  };
+}
+
+function fingerprintsMatch(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>,
+): boolean {
+  return (
+    before.size === after.size &&
+    [...before].every(([path, fingerprint]) => after.get(path) === fingerprint)
+  );
+}
+
 export async function acquireWorkingTree(
   locator: WorkingTreeLocator,
   destination: string,
@@ -274,70 +359,67 @@ export async function acquireWorkingTree(
       stage = mkdtempSync(join(options.tmpRoot, "extract-working-tree-"));
       const identity = createHash("sha256");
       const seen = new Set<string>();
+      const capturedFingerprints = new Map<string, string>();
       let files = 0;
       let bytes = 0;
       for (const repoRelative of paths) {
         checkDeadline(deadlineMs);
-        const { source, selectedRelative } = validateSourcePath(
-          topLevel,
-          selectedRoot,
-          repoRelative,
-        );
-        if (seen.has(selectedRelative)) {
+        const entry = readSourceEntry(topLevel, selectedRoot, repoRelative);
+        if (seen.has(entry.selectedRelative)) {
           throw new WorkingTreeAcquireError(
             "unsafe_tree",
             "Git listed duplicate working tree paths",
           );
         }
-        seen.add(selectedRelative);
-        const output = safeDestination(stage, selectedRelative);
-        const sourceStat = lstatSync(source);
+        seen.add(entry.selectedRelative);
+        capturedFingerprints.set(entry.selectedRelative, entry.fingerprint);
+        const output = safeDestination(stage, entry.selectedRelative);
         files++;
         if (files > limits.maxFiles) {
           throw new WorkingTreeAcquireError("budget_exceeded", "selected tree exceeds file limit");
         }
         mkdirSync(dirname(output), { recursive: true });
-        identity
-          .update(selectedRelative)
-          .update("\0")
-          .update(String(sourceStat.mode & 0o777));
-        if (sourceStat.isSymbolicLink()) {
-          const target = readlinkSync(source);
-          if (!safelyResolvesWithin(source, target, selectedRoot)) {
-            throw new WorkingTreeAcquireError(
-              "unsafe_tree",
-              "working tree link escapes selected tree",
-            );
-          }
-          identity.update("link\0").update(target).update("\0");
-          symlinkSync(target, output);
+        identity.update(entry.selectedRelative).update("\0").update(String(entry.mode));
+        if (entry.kind === "link") {
+          identity.update("link\0").update(entry.target).update("\0");
+          symlinkSync(entry.target, output);
           continue;
         }
-        if (!sourceStat.isFile()) {
-          throw new WorkingTreeAcquireError("unsafe_tree", "working tree contains a special file");
-        }
-        if (
-          !containedBy(
-            canonicalPath(source, "unsafe_tree", "working tree file is unavailable"),
-            selectedRoot,
-          )
-        ) {
-          throw new WorkingTreeAcquireError(
-            "unsafe_tree",
-            "working tree file escapes selected tree",
-          );
-        }
-        const data = readFileSync(source);
-        bytes += data.byteLength;
+        bytes += entry.data.byteLength;
         if (bytes > limits.maxBytes) {
           throw new WorkingTreeAcquireError("budget_exceeded", "selected tree exceeds byte limit");
         }
-        identity.update("file\0").update(data).update("\0");
-        writeFileSync(output, data);
-        chmodSync(output, sourceStat.mode & 0o777);
+        identity.update("file\0").update(entry.data).update("\0");
+        writeFileSync(output, entry.data);
+        chmodSync(output, entry.mode);
       }
       const after = await snapshotMarker(git, topLevel, locator.subpath, deadlineMs);
-      if (before.head !== after.head || before.status !== after.status) {
+      const afterFingerprints = new Map<string, string>();
+      let afterFiles = 0;
+      let afterBytes = 0;
+      for (const repoRelative of paths) {
+        checkDeadline(deadlineMs);
+        const entry = readSourceEntry(topLevel, selectedRoot, repoRelative);
+        afterFiles++;
+        if (afterFiles > limits.maxFiles) {
+          throw new WorkingTreeAcquireError("budget_exceeded", "selected tree exceeds file limit");
+        }
+        if (entry.kind === "file") {
+          afterBytes += entry.data.byteLength;
+          if (afterBytes > limits.maxBytes) {
+            throw new WorkingTreeAcquireError(
+              "budget_exceeded",
+              "selected tree exceeds byte limit",
+            );
+          }
+        }
+        afterFingerprints.set(entry.selectedRelative, entry.fingerprint);
+      }
+      if (
+        before.head !== after.head ||
+        before.status !== after.status ||
+        !fingerprintsMatch(capturedFingerprints, afterFingerprints)
+      ) {
         if (attempt === 0) {
           rmSync(stage, { recursive: true, force: true });
           stage = undefined;

@@ -292,6 +292,40 @@ describe("working-tree Source acquisition", () => {
     );
   });
 
+  test("retries when an existing untracked or already-dirty tracked file changes during capture", async () => {
+    const fixtures: Array<{ path: [string, string]; before?: string }> = [
+      { path: ["untracked", "SKILL.md"], before: undefined },
+      { path: ["tracked", "SKILL.md"], before: "dirty before capture\n" },
+    ];
+    for (const fixture of fixtures) {
+      const repo = repository();
+      const work = workRoot();
+      const skills = join(repo, "nested", "kit", "capabilities", "skills");
+      const source = join(skills, ...fixture.path);
+      if (fixture.before) writeFileSync(source, fixture.before);
+      let statusCalls = 0;
+      const process = localGitProcess((args) => {
+        if (!args.includes("status")) return;
+        statusCalls++;
+        if (statusCalls === 2) writeFileSync(source, "changed during capture\n");
+      });
+
+      await acquireWorkingTree(
+        { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
+        join(work, fixture.path[0]),
+        { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
+      );
+
+      expect(
+        readFileSync(
+          join(work, fixture.path[0], "capabilities", "skills", ...fixture.path),
+          "utf8",
+        ),
+      ).toBe("changed during capture\n");
+      expect(statusCalls).toBe(4);
+    }
+  });
+
   test("retries once when the source changes, then fails if it changes again", async () => {
     const repo = repository();
     const work = workRoot();
