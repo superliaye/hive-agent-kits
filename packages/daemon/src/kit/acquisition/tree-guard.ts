@@ -17,20 +17,23 @@ export const DEFAULT_TREE_LIMITS: TreeLimits = {
 export class TreeGuardError extends Error {
   override readonly name = "TreeGuardError";
   constructor(
-    readonly code: "budget_exceeded" | "unsafe_tree" | "io",
+    readonly code: "budget_exceeded" | "timeout" | "unsafe_tree" | "io",
     message: string,
   ) {
     super(message);
   }
 }
 
-function escapes(root: string, relativePath: string): boolean {
+function escapes(root: string, relativePath: string, allowRoot = false): boolean {
   if (isAbsolute(relativePath) || /^[A-Za-z]:/.test(relativePath) || relativePath.includes("\\")) {
     return true;
   }
   const destination = resolve(root, relativePath);
   const resolvedRoot = resolve(root);
-  return destination === resolvedRoot || !destination.startsWith(resolvedRoot + sep);
+  return (
+    (!allowRoot && destination === resolvedRoot) ||
+    (destination !== resolvedRoot && !destination.startsWith(resolvedRoot + sep))
+  );
 }
 
 function relativeEntryPath(stage: string, path: string): string {
@@ -49,11 +52,13 @@ function validateEntries(
   entries: readonly TarEntry[],
   stage: string,
   limits: Pick<TreeLimits, "maxFiles" | "maxBytes">,
+  checkDeadline: () => void,
 ): void {
   let files = 0;
   let bytes = 0;
   const paths = new Set<string>();
   for (const entry of entries) {
+    checkDeadline();
     const relativePath = relativeEntryPath(stage, entry.path);
     if (paths.has(relativePath)) {
       throw new TreeGuardError("unsafe_tree", "archive contains duplicate paths");
@@ -74,7 +79,7 @@ function validateEntries(
       (isAbsolute(entry.linkTarget) ||
         /^[A-Za-z]:/.test(entry.linkTarget) ||
         entry.linkTarget.includes("\\") ||
-        escapes(stage, join(dirname(relativePath), entry.linkTarget)))
+        escapes(stage, join(dirname(relativePath), entry.linkTarget), true))
     ) {
       throw new TreeGuardError("unsafe_tree", "archive contains a link outside the selected tree");
     }
@@ -86,15 +91,23 @@ export function extractBoundedTree(
   tar: Uint8Array,
   stage: string,
   limits: Pick<TreeLimits, "maxFiles" | "maxBytes">,
+  deadlineMs?: number,
 ): void {
-  const entries = parseTar(tar);
-  validateEntries(entries, stage, limits);
+  const checkDeadline = () => {
+    if (deadlineMs !== undefined && Date.now() > deadlineMs) {
+      throw new TreeGuardError("timeout", "git acquisition timed out");
+    }
+  };
+  const entries = parseTar(tar, checkDeadline);
+  validateEntries(entries, stage, limits, checkDeadline);
 
   for (const entry of entries) {
+    checkDeadline();
     if (entry.type !== "dir") continue;
     mkdirSync(join(stage, relativeEntryPath(stage, entry.path)), { recursive: true });
   }
   for (const entry of entries) {
+    checkDeadline();
     if (entry.type !== "file") continue;
     const destination = join(stage, relativeEntryPath(stage, entry.path));
     mkdirSync(dirname(destination), { recursive: true });
@@ -102,6 +115,7 @@ export function extractBoundedTree(
     chmodSync(destination, entry.mode & 0o777);
   }
   for (const entry of entries) {
+    checkDeadline();
     if (entry.type !== "symlink") continue;
     const destination = join(stage, relativeEntryPath(stage, entry.path));
     mkdirSync(dirname(destination), { recursive: true });

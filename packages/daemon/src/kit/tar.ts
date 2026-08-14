@@ -38,14 +38,43 @@ function readOctal(buf: Uint8Array, offset: number, length: number): number {
   return parseInt(s, 8) || 0;
 }
 
-// Parse a decompressed tar buffer into entries. Handles GNU long-name ('L')
-// extension headers. Ignores PAX/global headers and other non-file typeflags.
-export function parseTar(buf: Uint8Array): TarEntry[] {
+function parsePax(data: Uint8Array): Map<string, string> {
+  const attributes = new Map<string, string>();
+  const decoder = new TextDecoder();
+  let offset = 0;
+  while (offset < data.length) {
+    let space = offset;
+    while (space < data.length && data[space] !== 0x20) space++;
+    if (space === data.length) break;
+    const length = Number.parseInt(decoder.decode(data.subarray(offset, space)), 10);
+    if (
+      !Number.isSafeInteger(length) ||
+      length <= space - offset ||
+      offset + length > data.length
+    ) {
+      throw new Error("invalid PAX header");
+    }
+    const record = decoder.decode(data.subarray(space + 1, offset + length - 1));
+    const equals = record.indexOf("=");
+    if (equals > 0) attributes.set(record.slice(0, equals), record.slice(equals + 1));
+    offset += length;
+  }
+  return attributes;
+}
+
+// Parse a decompressed tar buffer into entries. PAX/global and GNU long-name/
+// long-link metadata is consumed without materializing it; filesystem special
+// entries remain visible to the guarded extractor.
+export function parseTar(buf: Uint8Array, checkDeadline?: () => void): TarEntry[] {
   const entries: TarEntry[] = [];
   let offset = 0;
   let longName: string | null = null;
+  let longLink: string | null = null;
+  let globalPax = new Map<string, string>();
+  let nextPax = new Map<string, string>();
 
   while (offset + BLOCK <= buf.length) {
+    checkDeadline?.();
     // Two consecutive zero blocks mark end-of-archive.
     let allZero = true;
     for (let i = 0; i < BLOCK; i++) {
@@ -67,15 +96,33 @@ export function parseTar(buf: Uint8Array): TarEntry[] {
     const dataStart = offset;
     const padded = Math.ceil(size / BLOCK) * BLOCK;
     offset += padded;
+    if (offset > buf.length) throw new Error("truncated tar archive");
+
+    if (typeflag === "g") {
+      globalPax = new Map([...globalPax, ...parsePax(buf.subarray(dataStart, dataStart + size))]);
+      continue;
+    }
+    if (typeflag === "x") {
+      nextPax = parsePax(buf.subarray(dataStart, dataStart + size));
+      continue;
+    }
 
     if (typeflag === "L") {
       // GNU long name: the next header's real name is this block's data.
       longName = readString(buf, dataStart, size).replace(/\0+$/, "");
       continue;
     }
+    if (typeflag === "K") {
+      longLink = readString(buf, dataStart, size).replace(/\0+$/, "");
+      continue;
+    }
 
-    const fullPath = longName ?? (prefix ? `${prefix}/${name}` : name);
+    const pax = new Map([...globalPax, ...nextPax]);
+    const fullPath = longName ?? pax.get("path") ?? (prefix ? `${prefix}/${name}` : name);
+    const fullLink = longLink ?? pax.get("linkpath") ?? linkTarget;
     longName = null;
+    longLink = null;
+    nextPax = new Map();
 
     if (typeflag === "5" || fullPath.endsWith("/")) {
       entries.push({
@@ -92,7 +139,7 @@ export function parseTar(buf: Uint8Array): TarEntry[] {
         type: "symlink",
         data: new Uint8Array(0),
         mode,
-        linkTarget,
+        linkTarget: fullLink,
       });
       continue;
     }
