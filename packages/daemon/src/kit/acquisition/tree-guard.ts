@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
-import { parseTar, type TarEntry } from "../tar.ts";
+import { parseTar, type TarEntry, TarEntryLimitError } from "../tar.ts";
 
 export type TreeLimits = {
   maxFiles: number;
@@ -98,7 +98,15 @@ export function extractBoundedTree(
       throw new TreeGuardError("timeout", "git acquisition timed out");
     }
   };
-  const entries = parseTar(tar, checkDeadline);
+  let entries: TarEntry[];
+  try {
+    entries = parseTar(tar, checkDeadline, limits.maxFiles);
+  } catch (error) {
+    if (error instanceof TarEntryLimitError) {
+      throw new TreeGuardError("budget_exceeded", "selected tree exceeds entry limit");
+    }
+    throw error;
+  }
   validateEntries(entries, stage, limits, checkDeadline);
 
   for (const entry of entries) {

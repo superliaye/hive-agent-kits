@@ -86,7 +86,15 @@ describe("server — toggle/delete never undeploys (#36 Q8)", () => {
     const add = await server.app.fetch(
       authed("/api/sources", {
         method: "POST",
-        body: JSON.stringify({ origin: "https://github.com/a/b" }),
+        body: JSON.stringify({
+          label: "https://github.com/a/b",
+          locator: {
+            kind: "git",
+            repoUrl: "https://github.com/a/b",
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          },
+        }),
       }),
     );
     const { source } = AddSourceResult.parse(await add.json());

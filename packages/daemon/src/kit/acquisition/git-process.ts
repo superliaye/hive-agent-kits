@@ -4,7 +4,12 @@ export type GitProcessResult = {
   stderr: string;
 };
 
-export type GitProcessOptions = { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number };
+export type GitProcessOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  maxStdoutBytes?: number;
+};
 
 export type GitArchiveOptions = GitProcessOptions & { maxBytes: number };
 
@@ -26,6 +31,10 @@ export class GitProcessFailure extends Error {
 }
 
 export function productionGitProcess(): GitProcess {
+  const STDERR_LIMIT = 64 * 1024;
+  const DEFAULT_STDOUT_LIMIT = 64 * 1024 * 1024;
+  const KILL_GRACE_MS = 100;
+  const ownsProcessGroup = process.platform !== "win32";
   const spawnGit = (args: readonly string[], options: GitProcessOptions) =>
     Bun.spawn(["git", ...args], {
       ...(options.cwd ? { cwd: options.cwd } : {}),
@@ -35,77 +44,116 @@ export function productionGitProcess(): GitProcess {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
+      ...(ownsProcessGroup ? { detached: true } : {}),
     });
+
+  const signal = (child: ReturnType<typeof spawnGit>, processSignal: "SIGTERM" | "SIGKILL") => {
+    if (ownsProcessGroup && child.pid > 0) {
+      try {
+        process.kill(-child.pid, processSignal);
+        return;
+      } catch {
+        // Fall back to the direct child if process groups are unavailable.
+      }
+    }
+    try {
+      child.kill(processSignal);
+    } catch {
+      // The child may already have exited between observation and signalling.
+    }
+  };
+
+  const readStream = async (
+    stream: ReadableStream<Uint8Array>,
+    limit: number,
+    onOverflow?: () => void,
+  ): Promise<{ bytes: Uint8Array; overflow: boolean }> => {
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let retained = 0;
+    let overflow = false;
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      const remaining = Math.max(0, limit - retained);
+      if (remaining > 0) {
+        const chunk = next.value.subarray(0, remaining);
+        chunks.push(chunk);
+        retained += chunk.byteLength;
+      }
+      if (next.value.byteLength > remaining && !overflow) {
+        overflow = true;
+        onOverflow?.();
+      }
+    }
+    const bytes = new Uint8Array(retained);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { bytes, overflow };
+  };
+
+  const collect = async (
+    args: readonly string[],
+    options: GitProcessOptions,
+    stdoutLimit: number,
+  ): Promise<GitProcessResult> => {
+    const child = spawnGit(args, options);
+    let timedOut = false;
+    let budgetExceeded = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const terminate = (reason: "timeout" | "budget") => {
+      if (reason === "timeout") timedOut = true;
+      else budgetExceeded = true;
+      signal(child, "SIGTERM");
+      if (!killTimer) {
+        killTimer = setTimeout(() => signal(child, "SIGKILL"), KILL_GRACE_MS);
+        killTimer.unref();
+      }
+    };
+    const timer = setTimeout(() => terminate("timeout"), options.timeoutMs ?? 120_000);
+    timer.unref();
+    try {
+      let collected: [
+        number,
+        { bytes: Uint8Array; overflow: boolean },
+        { bytes: Uint8Array; overflow: boolean },
+      ];
+      try {
+        collected = await Promise.all([
+          child.exited,
+          readStream(child.stdout, stdoutLimit, () => terminate("budget")),
+          readStream(child.stderr, STDERR_LIMIT),
+        ]);
+      } catch (error) {
+        signal(child, "SIGKILL");
+        await child.exited.catch(() => undefined);
+        throw error;
+      }
+      const [exitCode, stdout, stderr] = collected;
+      const result = {
+        exitCode,
+        stdout: stdout.bytes,
+        stderr: new TextDecoder().decode(stderr.bytes),
+      };
+      if (exitCode !== 0 || timedOut || budgetExceeded) {
+        throw new GitProcessFailure(args, result, timedOut, budgetExceeded);
+      }
+      return result;
+    } finally {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    }
+  };
 
   return {
     async run(args, options = {}) {
-      const child = spawnGit(args, options);
-      let timedOut = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill();
-      }, options.timeoutMs ?? 120_000);
-      timer.unref();
-      const [exitCode, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).arrayBuffer(),
-        new Response(child.stderr).text(),
-      ]);
-      clearTimeout(timer);
-      const result = { exitCode, stdout: new Uint8Array(stdout), stderr };
-      if (exitCode !== 0 || timedOut) throw new GitProcessFailure(args, result, timedOut);
-      return result;
+      return collect(args, options, options.maxStdoutBytes ?? DEFAULT_STDOUT_LIMIT);
     },
     async runArchive(args, options) {
-      const child = spawnGit(args, options);
-      let timedOut = false;
-      let budgetExceeded = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        child.kill();
-      }, options.timeoutMs ?? 120_000);
-      timer.unref();
-      try {
-        const reader = child.stdout.getReader();
-        const stderr = new Response(child.stderr).text();
-        const chunks: Uint8Array[] = [];
-        let byteLength = 0;
-        let readError: unknown;
-        while (true) {
-          try {
-            const next = await reader.read();
-            if (next.done) break;
-            const nextByteLength = byteLength + next.value.byteLength;
-            if (nextByteLength > options.maxBytes) {
-              budgetExceeded = true;
-              child.kill();
-              await reader.cancel();
-              break;
-            }
-            byteLength = nextByteLength;
-            chunks.push(next.value);
-          } catch (error) {
-            readError = error;
-            child.kill();
-            break;
-          }
-        }
-        const [exitCode, stderrText] = await Promise.all([child.exited, stderr]);
-        if (readError) throw readError;
-        const stdout = new Uint8Array(byteLength);
-        let offset = 0;
-        for (const chunk of chunks) {
-          stdout.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        const result = { exitCode, stdout, stderr: stderrText };
-        if (exitCode !== 0 || timedOut || budgetExceeded) {
-          throw new GitProcessFailure(args, result, timedOut, budgetExceeded);
-        }
-        return result;
-      } finally {
-        clearTimeout(timer);
-      }
+      return collect(args, options, options.maxBytes);
     },
   };
 }

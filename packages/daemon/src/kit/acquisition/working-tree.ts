@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readlinkSync,
   realpathSync,
@@ -160,6 +165,7 @@ function validateSourcePath(
 ): {
   source: string;
   selectedRelative: string;
+  parentIdentity: string;
 } {
   if (!safeRelativePath(repoRelative) || repoRelative === ".") {
     throw new WorkingTreeAcquireError("unsafe_tree", "Git listed an unsafe working tree path");
@@ -177,15 +183,45 @@ function validateSourcePath(
   }
   // Git should not enumerate through a symlinked parent, but make the staging
   // boundary independent of that implementation detail.
-  if (
-    !containedBy(
-      canonicalPath(dirname(source), "unsafe_tree", "working tree path is unavailable"),
-      selectedRoot,
-    )
-  ) {
+  let parentIdentity: string;
+  try {
+    parentIdentity = realpathSync(dirname(source));
+  } catch {
+    throw new WorkingTreeRaceError("working tree parent changed before capture");
+  }
+  if (!containedBy(parentIdentity, selectedRoot)) {
     throw new WorkingTreeAcquireError("unsafe_tree", "working tree path escapes the selected tree");
   }
-  return { source, selectedRelative };
+  return { source, selectedRelative, parentIdentity };
+}
+
+class WorkingTreeRaceError extends Error {
+  override readonly name = "WorkingTreeRaceError";
+}
+
+function sameInode(a: { dev: number; ino: number }, b: { dev: number; ino: number }): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+function descriptorResolvesWithin(fd: number, selectedRoot: string): boolean {
+  for (const root of ["/proc/self/fd", "/dev/fd"]) {
+    if (!existsSync(root)) continue;
+    try {
+      return containedBy(realpathSync(join(root, String(fd))), selectedRoot);
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function unchangedParent(parent: string, identity: string, selectedRoot: string): boolean {
+  try {
+    const after = realpathSync(parent);
+    return after === identity && containedBy(after, selectedRoot);
+  } catch {
+    return false;
+  }
 }
 
 type SourceEntry =
@@ -226,11 +262,34 @@ function readSourceEntry(
   selectedRoot: string,
   repoRelative: string,
 ): SourceEntry {
-  const { source, selectedRelative } = validateSourcePath(repoRoot, selectedRoot, repoRelative);
-  const sourceStat = lstatSync(source);
+  const { source, selectedRelative, parentIdentity } = validateSourcePath(
+    repoRoot,
+    selectedRoot,
+    repoRelative,
+  );
+  let sourceStat: ReturnType<typeof lstatSync>;
+  try {
+    sourceStat = lstatSync(source);
+  } catch {
+    throw new WorkingTreeRaceError("working tree entry changed before it could be read");
+  }
   const mode = sourceStat.mode & 0o777;
   if (sourceStat.isSymbolicLink()) {
-    const target = readlinkSync(source);
+    let target: string;
+    let after: ReturnType<typeof lstatSync>;
+    try {
+      target = readlinkSync(source);
+      after = lstatSync(source);
+    } catch {
+      throw new WorkingTreeRaceError("working tree link changed while it was read");
+    }
+    if (
+      !sameInode(sourceStat, after) ||
+      !after.isSymbolicLink() ||
+      !unchangedParent(dirname(source), parentIdentity, selectedRoot)
+    ) {
+      throw new WorkingTreeRaceError("working tree link changed while it was read");
+    }
     if (!safelyResolvesWithin(source, target, selectedRoot)) {
       throw new WorkingTreeAcquireError("unsafe_tree", "working tree link escapes selected tree");
     }
@@ -245,15 +304,39 @@ function readSourceEntry(
   if (!sourceStat.isFile()) {
     throw new WorkingTreeAcquireError("unsafe_tree", "working tree contains a special file");
   }
-  if (
-    !containedBy(
-      canonicalPath(source, "unsafe_tree", "working tree file is unavailable"),
-      selectedRoot,
-    )
-  ) {
-    throw new WorkingTreeAcquireError("unsafe_tree", "working tree file escapes selected tree");
+  const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
+  let fd: number;
+  try {
+    fd = openSync(source, constants.O_RDONLY | noFollow);
+  } catch {
+    throw new WorkingTreeRaceError("working tree file changed before it could be opened");
   }
-  const data = readFileSync(source);
+  let data: Buffer;
+  try {
+    const opened = fstatSync(fd);
+    if (
+      !opened.isFile() ||
+      !sameInode(sourceStat, opened) ||
+      !descriptorResolvesWithin(fd, selectedRoot)
+    ) {
+      throw new WorkingTreeRaceError("working tree file changed while it was opened");
+    }
+    data = readFileSync(fd);
+    const after = lstatSync(source);
+    if (
+      !sameInode(opened, after) ||
+      !after.isFile() ||
+      !descriptorResolvesWithin(fd, selectedRoot) ||
+      !unchangedParent(dirname(source), parentIdentity, selectedRoot)
+    ) {
+      throw new WorkingTreeRaceError("working tree file changed while it was read");
+    }
+  } catch (error) {
+    if (error instanceof WorkingTreeRaceError) throw error;
+    throw new WorkingTreeRaceError("working tree file changed while it was read");
+  } finally {
+    closeSync(fd);
+  }
   return {
     selectedRelative,
     kind: "file",
@@ -273,11 +356,17 @@ function fingerprintsMatch(
   );
 }
 
-export async function acquireWorkingTree(
+type VerifiedWorkingTree = {
+  locator: WorkingTreeLocator;
+  topLevel: string;
+  selectedRoot: string;
+};
+
+async function verifyWorkingTree(
   locator: WorkingTreeLocator,
-  destination: string,
-  options: WorkingTreeAcquireOptions,
-): Promise<WorkingTreeProvenance> {
+  options: Pick<WorkingTreeAcquireOptions, "allowedRoots" | "process" | "limits">,
+  requireCanonicalTopLevel: boolean,
+): Promise<VerifiedWorkingTree> {
   const git = options.process ?? productionGitProcess();
   const limits = options.limits ?? DEFAULT_TREE_LIMITS;
   const deadlineMs = Date.now() + limits.timeoutMs;
@@ -291,14 +380,29 @@ export async function acquireWorkingTree(
     "working_tree_not_allowed",
     "working tree Git top-level is unavailable",
   );
-  if (topLevel !== locatorRoot) {
+  if (requireCanonicalTopLevel && topLevel !== locatorRoot) {
     throw new WorkingTreeAcquireError(
       "working_tree_not_allowed",
       "repoRoot must be the Git top-level",
     );
   }
+  let topLevelStat: ReturnType<typeof statSync>;
+  try {
+    topLevelStat = statSync(topLevel);
+  } catch {
+    throw new WorkingTreeAcquireError(
+      "working_tree_not_allowed",
+      "working tree Git top-level is unavailable",
+    );
+  }
+  if (!topLevelStat.isDirectory()) {
+    throw new WorkingTreeAcquireError(
+      "working_tree_not_allowed",
+      "working tree Git top-level is unavailable",
+    );
+  }
   const uid = process.getuid?.();
-  if (uid !== undefined && statSync(topLevel).uid !== uid) {
+  if (uid !== undefined && topLevelStat.uid !== uid) {
     throw new WorkingTreeAcquireError(
       "working_tree_not_allowed",
       "working tree is not owned by the Daemon user",
@@ -333,6 +437,30 @@ export async function acquireWorkingTree(
   } catch {
     throw new WorkingTreeAcquireError("invalid_subpath", "working tree subpath is unavailable");
   }
+  return {
+    locator: { ...locator, repoRoot: topLevel },
+    topLevel,
+    selectedRoot,
+  };
+}
+
+export async function canonicalizeWorkingTreeLocator(
+  locator: WorkingTreeLocator,
+  options: Pick<WorkingTreeAcquireOptions, "allowedRoots" | "process" | "limits">,
+): Promise<WorkingTreeLocator> {
+  return (await verifyWorkingTree(locator, options, false)).locator;
+}
+
+export async function acquireWorkingTree(
+  locator: WorkingTreeLocator,
+  destination: string,
+  options: WorkingTreeAcquireOptions,
+): Promise<WorkingTreeProvenance> {
+  const git = options.process ?? productionGitProcess();
+  const limits = options.limits ?? DEFAULT_TREE_LIMITS;
+  const deadlineMs = Date.now() + limits.timeoutMs;
+  const verified = await verifyWorkingTree(locator, options, true);
+  const { topLevel, selectedRoot } = verified;
 
   for (let attempt = 0; attempt < 2; attempt++) {
     let stage: string | undefined;
@@ -399,7 +527,12 @@ export async function acquireWorkingTree(
       let afterBytes = 0;
       for (const repoRelative of paths) {
         checkDeadline(deadlineMs);
-        const entry = readSourceEntry(topLevel, selectedRoot, repoRelative);
+        let entry: SourceEntry;
+        try {
+          entry = readSourceEntry(topLevel, selectedRoot, repoRelative);
+        } catch {
+          throw new WorkingTreeRaceError("working tree entry changed during verification");
+        }
         afterFiles++;
         if (afterFiles > limits.maxFiles) {
           throw new WorkingTreeAcquireError("budget_exceeded", "selected tree exceeds file limit");
@@ -444,11 +577,25 @@ export async function acquireWorkingTree(
         treeIdentity: identity.digest("hex"),
         dirty: after.status.length > 0,
       };
-      commitStagedMirror(destination, stage, provenance);
+      const cleanup = commitStagedMirror(destination, stage, provenance);
       stage = undefined;
+      cleanup();
       return provenance;
     } catch (error) {
-      if (stage) rmSync(stage, { recursive: true, force: true });
+      if (stage) {
+        try {
+          rmSync(stage, { recursive: true, force: true });
+        } catch {
+          // Keep the original stable acquisition error at the caller boundary.
+        }
+      }
+      if (error instanceof WorkingTreeRaceError) {
+        if (attempt === 0) continue;
+        throw new WorkingTreeAcquireError(
+          "working_tree_changed",
+          "working tree changed during capture",
+        );
+      }
       if (error instanceof WorkingTreeAcquireError) throw error;
       throw new WorkingTreeAcquireError("io", "working tree could not be captured");
     }

@@ -35,9 +35,9 @@ export function mirrorExists(mirrorRoot: string): boolean {
   return existsSync(join(mirrorRoot, "capabilities"));
 }
 
-// Sweep stale partial temp extract dirs from a prior aborted sync. Called on
-// startup and before each new extraction. The tmp root is shared across Sources
-// (each extraction stages into a uniquely-named extract-<sha>-<ts> dir).
+// Sweep stale partial temp extract dirs from a prior aborted sync. This is a
+// startup-only operation: per-sync sweeps could delete another Source's live,
+// uniquely-named staging directory.
 export function sweepStaleTmp(tmpRoot: string): void {
   const root = tmpRoot;
   if (!existsSync(root)) return;
@@ -123,7 +123,6 @@ export function writeMirror(
   tarBuf: Uint8Array,
   sha: string,
 ): MirrorProvenance {
-  sweepStaleTmp(tmpRoot);
   mkdirSync(tmpRoot, { recursive: true });
   const stageDir = join(tmpRoot, `extract-${sha.slice(0, 12)}-${Date.now()}`);
   mkdirSync(stageDir, { recursive: true });
@@ -153,7 +152,7 @@ export function writeMirror(
   const provenance: MirrorProvenance = { sha, fetchedAt: Date.now() };
   writeFileSync(join(stageDir, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
 
-  swapMirror(mirrorRoot, stageDir);
+  swapMirror(mirrorRoot, stageDir)();
   return provenance;
 }
 
@@ -163,7 +162,9 @@ export function writeMirror(
 // a swap failure. Shared by both writeMirror (tar path) and localSyncMirror
 // (copy path) — the only common tail; tar parse/strip/traversal stay in
 // writeMirror, copy concerns stay in localSyncMirror.
-function swapMirror(mirrorRoot: string, stageDir: string): void {
+type MirrorCleanup = () => void;
+
+function swapMirror(mirrorRoot: string, stageDir: string): MirrorCleanup {
   mkdirSync(dirname(mirrorRoot), { recursive: true });
   const backup = `${mirrorRoot}.prev-${Date.now()}`;
   const hadPrior = existsSync(mirrorRoot);
@@ -177,22 +178,23 @@ function swapMirror(mirrorRoot: string, stageDir: string): void {
     }
     throw err;
   }
-  if (hadPrior) {
+  return () => {
+    if (!hadPrior) return;
     try {
       rmSync(backup, { recursive: true, force: true });
     } catch (err) {
       log().warn({ module: "kit/mirror", err: String(err) }, "prior mirror cleanup failed");
     }
-  }
+  };
 }
 
 export function commitStagedMirror(
   mirrorRoot: string,
   stageDir: string,
   provenance: MirrorProvenance,
-): void {
+): MirrorCleanup {
   writeFileSync(join(stageDir, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
-  swapMirror(mirrorRoot, stageDir);
+  return swapMirror(mirrorRoot, stageDir);
 }
 
 // Thrown by localSyncMirror when the bundled Starter content root (its
@@ -207,8 +209,8 @@ export class MissingStarterRoot extends Error {
 // `starterRoot` into a staged dir, then atomically swap it into the mirror —
 // producing a NORMAL Mirror the catalog/deploy already read, with no network and
 // no tar. Writes NO provenance file: MirrorProvenance mandates a 40-hex sha, and
-// a local mirror has none (the sync-status derives "local" from Source.kind, not
-// from provenance). Re-copies on every call (no sha to short-circuit on) — that
+// a local mirror has none (the sync-status derives "local" from
+// Source.locator.kind, not from provenance). Re-copies on every call (no sha to short-circuit on) — that
 // is how a bundled-content update propagates when the app updates. Throws
 // MissingStarterRoot on an absent content root, or a bare Error on a copy/swap
 // fault; the caller maps both to a typed per-source SyncError (never a raw throw
@@ -219,7 +221,6 @@ export function localSyncMirror(mirrorRoot: string, tmpRoot: string, starterRoot
     throw new MissingStarterRoot(`starter capabilities not found at ${capsSrc}`);
   }
 
-  sweepStaleTmp(tmpRoot);
   mkdirSync(tmpRoot, { recursive: true });
   const stageDir = join(tmpRoot, `extract-local-${Date.now()}`);
   mkdirSync(stageDir, { recursive: true });
@@ -230,5 +231,5 @@ export function localSyncMirror(mirrorRoot: string, tmpRoot: string, starterRoot
     cpSync(presetsSrc, join(stageDir, "presets"), { recursive: true });
   }
 
-  swapMirror(mirrorRoot, stageDir);
+  swapMirror(mirrorRoot, stageDir)();
 }

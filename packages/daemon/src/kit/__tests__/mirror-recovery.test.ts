@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { mirrorExists, recoverMirror } from "../mirror.ts";
+import { commitStagedMirror, localSyncMirror, mirrorExists, recoverMirror } from "../mirror.ts";
 import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
@@ -72,5 +72,41 @@ describe("recoverMirror", () => {
     const leftover = readdirSync(parent).filter((e) => e.startsWith(`${base}.prev-`));
     expect(leftover).toEqual([]);
     expect(mirrorExists(mirrorRoot)).toBe(true);
+  });
+
+  test("a Source sync never sweeps another acquisition's active temp directory", () => {
+    const active = join(targets.kitTmpRoot(), "extract-working-tree-active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(join(active, "owned"), "still active");
+    const starter = join(tmpRoot, "starter");
+    mkdirSync(join(starter, "capabilities"), { recursive: true });
+
+    localSyncMirror(mirrorRoot, targets.kitTmpRoot(), starter);
+
+    expect(existsSync(join(active, "owned"))).toBe(true);
+  });
+
+  test("commits the staged rename before running prior-Mirror cleanup", () => {
+    mkdirSync(join(mirrorRoot, "capabilities"), { recursive: true });
+    writeFileSync(join(mirrorRoot, "capabilities", "old"), "old");
+    const stage = join(targets.kitTmpRoot(), "extract-working-tree-commit");
+    mkdirSync(join(stage, "capabilities"), { recursive: true });
+    writeFileSync(join(stage, "capabilities", "new"), "new");
+
+    const cleanup = commitStagedMirror(mirrorRoot, stage, {
+      sha: "a".repeat(40),
+      fetchedAt: 0,
+      transport: "working-tree",
+      repoRoot: "/verified/repository",
+      resolvedCommit: "a".repeat(40),
+      subpath: ".",
+      treeIdentity: "tree",
+      dirty: false,
+    });
+
+    expect(existsSync(join(mirrorRoot, "capabilities", "new"))).toBe(true);
+    expect(readdirSync(dirname(mirrorRoot)).some((entry) => entry.includes(".prev-"))).toBe(true);
+    cleanup();
+    expect(readdirSync(dirname(mirrorRoot)).some((entry) => entry.includes(".prev-"))).toBe(false);
   });
 });

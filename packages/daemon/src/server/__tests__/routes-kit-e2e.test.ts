@@ -157,7 +157,18 @@ function twoSourceFetch(): HttpFetch {
 
 async function postOrigin(server: ServerHandles, origin: string): Promise<Response> {
   return server.app.fetch(
-    authed("/api/sources", { method: "POST", body: JSON.stringify({ origin }) }),
+    authed("/api/sources", {
+      method: "POST",
+      body: JSON.stringify({
+        label: origin,
+        locator: {
+          kind: "git",
+          repoUrl: origin,
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+      }),
+    }),
   );
 }
 

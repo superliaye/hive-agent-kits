@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Source } from "@hive/contract";
@@ -46,6 +54,7 @@ function result(stdout = "") {
 }
 
 function gitFixture(shouldFail = false): GitProcess {
+  const blob = "c".repeat(40);
   return {
     async run(args) {
       if (shouldFail && args.includes("fetch")) {
@@ -59,6 +68,14 @@ function gitFixture(shouldFail = false): GitProcess {
           },
           false,
         );
+      }
+      if (args.includes("--is-bare-repository")) return result("true\n");
+      if (args.includes("cat-file") && args.includes("-t")) return result("tree\n");
+      if (args.includes("cat-file") && args.includes("blob")) {
+        return result("---\nname: fixture\ndescription: fixture\n---\nbody\n");
+      }
+      if (args.includes("ls-tree")) {
+        return result(`100644 blob ${blob}\tcapabilities/skills/fixture/SKILL.md\0`);
       }
       if (args.includes("rev-parse") && args.some((arg) => arg.includes("FETCH_HEAD"))) {
         return result(SHA);
@@ -240,6 +257,43 @@ describe("locator-native Source sync", () => {
       expect(rerun.sources).toEqual([
         { sourceId: added.source.id, origin: repo, status: "synced" },
       ]);
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("canonicalizes working-tree aliases before duplicate identity is persisted", async () => {
+    const repo = workingTree();
+    const alias = join(root, "working-tree-alias");
+    symlinkSync(repo, alias);
+    const server = await createServer({ mode: "memory", token: "locator-sync" });
+    const post = (repoRoot: string) =>
+      server.app.fetch(
+        new Request("http://localhost/api/sources", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer locator-sync",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            label: "plain subtree",
+            locator: { kind: "working-tree", repoRoot, subpath: "plain" },
+          }),
+        }),
+      );
+    try {
+      await server.config.set("sources", { workingTreeRoots: [repo] });
+      const first = await post(`${alias}/.`);
+      expect(first.status).toBe(201);
+      const added = (await first.json()) as { source: Source };
+      expect(added.source.locator).toMatchObject({ kind: "working-tree", repoRoot: repo });
+      expect((await post(repo)).status).toBe(409);
+      const listed = await server.app.fetch(
+        new Request("http://localhost/api/sources", {
+          headers: { authorization: "Bearer locator-sync" },
+        }),
+      );
+      expect(await listed.json()).toHaveLength(1);
     } finally {
       await server.dispose();
     }

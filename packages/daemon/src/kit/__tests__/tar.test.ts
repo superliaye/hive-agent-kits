@@ -36,6 +36,27 @@ describe("parseTar", () => {
     expect(f).toBeDefined();
     expect(new TextDecoder().decode(f?.data)).toBe("gzipped");
   });
+
+  test("bounds every archive header, including directories, before returning entries", () => {
+    const tar = buildTar([{ path: "one/" }, { path: "two/" }, { path: "three/" }]);
+    expect(() => parseTar(tar, undefined, 2)).toThrow("tar archive exceeds entry limit");
+  });
+
+  test("counts metadata headers against the archive entry limit", () => {
+    const header = (type: string) => {
+      const block = new Uint8Array(512);
+      block.set(new TextEncoder().encode("metadata"), 0);
+      block.set(new TextEncoder().encode("0000000\0"), 100);
+      block.set(new TextEncoder().encode("00000000000\0"), 124);
+      block[156] = type.charCodeAt(0);
+      return block;
+    };
+    const tar = new Uint8Array(512 * 5);
+    tar.set(header("g"), 0);
+    tar.set(header("x"), 512);
+    tar.set(header("L"), 1024);
+    expect(() => parseTar(tar, undefined, 2)).toThrow("tar archive exceeds entry limit");
+  });
 });
 
 describe("topFolder (content-derived strip)", () => {

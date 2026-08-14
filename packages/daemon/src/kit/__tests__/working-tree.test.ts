@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -189,6 +190,26 @@ describe("working-tree Source acquisition", () => {
     );
   });
 
+  test("maps a non-directory Git top-level to the stable allowlist taxonomy", async () => {
+    const work = workRoot();
+    const topLevel = join(work, "not-a-directory");
+    writeFileSync(topLevel, "plain file");
+    const process: GitProcess = {
+      run: async (args) =>
+        args.includes("--show-toplevel") ? gitResult(`${topLevel}\n`) : gitResult(),
+      runArchive: async () => gitResult(),
+    };
+    await expectCode(
+      () =>
+        acquireWorkingTree(
+          { kind: "working-tree", repoRoot: topLevel, subpath: "." },
+          join(work, "mirror"),
+          { allowedRoots: [work], tmpRoot: join(work, "tmp"), process },
+        ),
+      "working_tree_not_allowed",
+    );
+  });
+
   test("preserves file bytes, executable modes, safe links, and byte identity", async () => {
     const repo = repository();
     const work = workRoot();
@@ -361,5 +382,67 @@ describe("working-tree Source acquisition", () => {
         ),
       "working_tree_changed",
     );
+  });
+
+  test("retries a file-to-symlink swap instead of reading through the replacement", async () => {
+    const repo = repository();
+    const work = workRoot();
+    const source = join(repo, "nested", "kit", "capabilities", "skills", "tracked", "SKILL.md");
+    const held = `${source}.held`;
+    let statusCalls = 0;
+    const process = localGitProcess((args) => {
+      if (!args.includes("status")) return;
+      statusCalls++;
+      if (statusCalls === 2) {
+        renameSync(source, held);
+        symlinkSync("/etc/passwd", source);
+      } else if (statusCalls === 3) {
+        rmSync(source);
+        renameSync(held, source);
+      }
+    });
+
+    await acquireWorkingTree(
+      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
+      join(work, "mirror"),
+      { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
+    );
+    expect(
+      readFileSync(join(work, "mirror", "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
+    ).toContain("name: tracked");
+    expect(statusCalls).toBe(4);
+  });
+
+  test("retries a parent-directory swap instead of reopening outside the selected root", async () => {
+    const repo = repository();
+    const work = workRoot();
+    const parent = join(repo, "nested", "kit", "capabilities", "skills", "tracked");
+    const held = `${parent}.held`;
+    const outside = join(work, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "SKILL.md"), "outside bytes\n");
+    writeFileSync(join(outside, "bytes.bin"), "outside bytes\n");
+    let statusCalls = 0;
+    const process = localGitProcess((args) => {
+      if (!args.includes("status")) return;
+      statusCalls++;
+      if (statusCalls === 2) {
+        renameSync(parent, held);
+        symlinkSync(outside, parent);
+      } else if (statusCalls === 3) {
+        rmSync(parent);
+        renameSync(held, parent);
+      }
+    });
+
+    await acquireWorkingTree(
+      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
+      join(work, "mirror"),
+      { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
+    );
+    expect(
+      readFileSync(join(work, "mirror", "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
+    ).toContain("name: tracked");
+    expect(statusCalls).toBe(4);
   });
 });

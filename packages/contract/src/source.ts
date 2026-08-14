@@ -35,10 +35,15 @@ const GitHttpsUrl = z
         parsed.protocol === "https:" &&
         parsed.hostname.length > 0 &&
         parsed.username === "" &&
-        parsed.password === ""
+        parsed.password === "" &&
+        parsed.search === "" &&
+        parsed.hash === ""
       );
     },
-    { message: "repository URL must be https with a host and no embedded credentials" },
+  {
+    message:
+      "repository URL must be https with a host and no embedded credentials, query, or fragment",
+  },
   );
 
 const TrackedGitRef = z
@@ -70,9 +75,8 @@ export type SourceLocator = z.infer<typeof SourceLocator>;
 
 // A tracked Source. `id` is a stable opaque identity (a uuid), decoupled from
 // `origin` (the git URL can change). `active` toggles whether the Source
-// participates in sync/aggregation. `kind` distinguishes a remote `git` Source
-// (synced over the network) from the bundled `local` Starter Source (copied from
-// the in-repo package, no network) — the public add route only ever mints `git`.
+// participates in sync/aggregation. `locator.kind` selects the authoritative
+// transport; the legacy `kind` field remains a display compatibility seam.
 // `rank` is the stored precedence signal (ADR-0023): higher wins a cross-Source
 // collision. It is a FREE total order — the user may re-rank any Source above any
 // other (the Starter above a git Source is allowed). The default SEED reproduces

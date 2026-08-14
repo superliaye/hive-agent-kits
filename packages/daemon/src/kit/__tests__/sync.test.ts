@@ -261,7 +261,7 @@ describe("syncSource", () => {
     expect(readProvenance(mirror)?.sha).toBe(SHA_A);
   });
 
-  test("(f) stale temp dir is swept on a successful sync; mirror uncorrupted", async () => {
+  test("(f) a successful sync leaves another acquisition's temp dir untouched", async () => {
     const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("src-a");
     const stale = join(targets.kitTmpRoot(), "extract-stale");
@@ -273,7 +273,7 @@ describe("syncSource", () => {
     const outcome = await Effect.runPromise(runOne("src-a", ORIGIN, fetchImpl));
 
     expect(outcome.status).toBe("synced");
-    expect(existsSync(stale)).toBe(false); // swept
+    expect(existsSync(stale)).toBe(true);
     expect(mirrorExists(mirror)).toBe(true);
     expect(existsSync(join(mirror, "capabilities", "skills", "foo", "SKILL.md"))).toBe(true);
   });

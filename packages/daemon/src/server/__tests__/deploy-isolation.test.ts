@@ -111,7 +111,18 @@ describe("deploy isolation — dev daemon (toggle off) never touches real homes"
     });
     try {
       const add = await server.app.fetch(
-        authed("/api/sources", { method: "POST", body: JSON.stringify({ origin: ORIGIN }) }),
+        authed("/api/sources", {
+          method: "POST",
+          body: JSON.stringify({
+            label: ORIGIN,
+            locator: {
+              kind: "git",
+              repoUrl: ORIGIN,
+              revision: { mode: "track", ref: "refs/heads/main" },
+              subpath: ".",
+            },
+          }),
+        }),
       );
       expect(add.status).toBe(201);
       AddSourceResult.parse(await add.json());

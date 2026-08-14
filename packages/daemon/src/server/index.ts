@@ -32,6 +32,7 @@ import {
   AppConfigSchema,
   type Config,
 } from "../config/index.ts";
+import { canonicalizeWorkingTreeLocator } from "../kit/acquisition/working-tree.ts";
 import { Kit, KitLive, type KitSvc } from "../kit/index.ts";
 import { removeMirror } from "../kit/mirror.ts";
 import { degradedOnboardResult, onboardSource } from "../kit/onboard.ts";
@@ -338,6 +339,16 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // constant — the add can never hang the HTTP request.
   const SYNC_TIMEOUT_MS = 30_000;
   const lifecycle: SourceLifecycle = {
+    prepareLocator: (locator) =>
+      locator.kind === "working-tree"
+        ? Effect.tryPromise({
+            try: () =>
+              canonicalizeWorkingTreeLocator(locator, {
+                allowedRoots: config.get("sources").workingTreeRoots,
+              }),
+            catch: () => new Error("working tree locator is unavailable"),
+          })
+        : Effect.succeed(locator),
     // onboardSource's typed channel is already `never`; this adapter also makes the
     // port honor that contract on a DEFECT — an unexpected throw in validate /
     // enumerate / fs degrades to a well-formed (defect-honest) body + a trace,

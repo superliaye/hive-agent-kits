@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -25,6 +26,7 @@ import {
 } from "../acquisition/git-source.ts";
 import { extractBoundedTree, TreeGuardError } from "../acquisition/tree-guard.ts";
 import { readProvenance } from "../mirror.ts";
+import { buildTar } from "./helpers.ts";
 
 const roots: string[] = [];
 const TEST_COMMIT = "a".repeat(40);
@@ -34,16 +36,46 @@ function gitResult(stdout = ""): { exitCode: number; stdout: Uint8Array; stderr:
   return { exitCode: 0, stdout: new TextEncoder().encode(stdout), stderr: "" };
 }
 
+function emptyTreeResult(args: readonly string[]) {
+  if (args.includes("--is-bare-repository")) return gitResult("true\n");
+  if (args.includes("cat-file") && args.includes("-t")) return gitResult("tree\n");
+  if (args.includes("ls-tree")) return gitResult();
+  if (args.includes("rev-parse") && args.some((arg) => arg.includes("FETCH_HEAD"))) {
+    return gitResult(`${TEST_COMMIT}\n`);
+  }
+  if (args.includes("rev-parse")) return gitResult(`${"b".repeat(40)}\n`);
+  return gitResult();
+}
+
 function localGitProcess(remote: string): GitProcess {
   return testGitProcess(async (args, options) => {
-    const result = Bun.spawnSync(
-      ["git", ...args.map((arg) => (arg === FIXTURE_REPOSITORY_URL ? remote : arg))],
-      { cwd: options?.cwd, env: options?.env, stderr: "pipe", stdout: "pipe" },
-    );
+    const localArgs: string[] = [];
+    for (let index = 0; index < args.length; index++) {
+      if (
+        args[index] === "-c" &&
+        (args[index + 1] === "protocol.allow=never" ||
+          args[index + 1] === "protocol.https.allow=always")
+      ) {
+        index++;
+        continue;
+      }
+      const arg = args[index];
+      if (arg !== undefined) localArgs.push(arg === FIXTURE_REPOSITORY_URL ? remote : arg);
+    }
+    const env = { ...options?.env };
+    delete env.GIT_ALLOW_PROTOCOL;
+    const result = Bun.spawnSync(["git", ...localArgs], {
+      cwd: options?.cwd,
+      env,
+      stderr: "pipe",
+      stdout: "pipe",
+    });
     const output = {
       exitCode: result.exitCode,
       stdout: result.stdout,
-      stderr: result.stderr.toString(),
+      stderr: result.stderr
+        .toString()
+        .replace(/warning: filtering not recognized by server, ignoring\s*/gi, ""),
     };
     if (result.exitCode !== 0) throw new GitProcessFailure(args, output, false);
     return output;
@@ -124,7 +156,7 @@ afterEach(() => {
 });
 
 describe("git Source acquisition", () => {
-  test("materializes a real root archive containing Git PAX metadata", async () => {
+  test("materializes a root tree without adding a synthetic wrapper", async () => {
     const repo = fixtureRepository();
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
@@ -202,6 +234,70 @@ describe("git Source acquisition", () => {
     expect(readFileSync(marker, "utf8").trim()).toBe("killed");
   });
 
+  test("kills a TERM-resistant Git process group and its descendant after a bounded grace", async () => {
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const bin = join(work, "bin");
+    const leaderFile = join(work, "leader");
+    const descendantFile = join(work, "descendant");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "git"),
+      `#!/bin/sh\necho $$ > "${leaderFile}"\ntrap '' TERM\n(sh -c 'trap "" TERM; while :; do sleep 1; done') &\necho $! > "${descendantFile}"\nwhile :; do sleep 1; done\n`,
+    );
+    chmodSync(join(bin, "git"), 0o755);
+    const running = productionGitProcess().run(["status"], {
+      env: { PATH: bin },
+      timeoutMs: 20,
+    });
+
+    try {
+      await expect(
+        Promise.race([
+          running,
+          Bun.sleep(1_000).then(() => {
+            throw new Error("Git timeout did not settle");
+          }),
+        ]),
+      ).rejects.toMatchObject({ timedOut: true });
+      for (const pidFile of [leaderFile, descendantFile]) {
+        const pid = Number(readFileSync(pidFile, "utf8"));
+        expect(() => process.kill(pid, 0)).toThrow();
+      }
+    } finally {
+      for (const pidFile of [leaderFile, descendantFile]) {
+        if (!existsSync(pidFile)) continue;
+        try {
+          process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+        } catch {
+          // The hardened runner already reaped it.
+        }
+      }
+      await running.catch(() => undefined);
+    }
+  });
+
+  test("caps retained Git diagnostics while draining the child stream", async () => {
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const bin = join(work, "bin");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "git"),
+      "#!/bin/sh\n/usr/bin/head -c 1048576 /dev/zero | /usr/bin/tr '\\0' x >&2\nexit 1\n",
+    );
+    chmodSync(join(bin, "git"), 0o755);
+
+    let failure: unknown;
+    try {
+      await productionGitProcess().run(["status"], { env: { PATH: bin }, timeoutMs: 5_000 });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(GitProcessFailure);
+    expect((failure as GitProcessFailure).result.stderr.length).toBe(64 * 1024);
+  });
+
   test("keeps the archive deadline after Git closes stdout", async () => {
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
@@ -247,9 +343,7 @@ describe("git Source acquisition", () => {
       subpath: ".",
     };
     const git = testGitProcess(async (args) => {
-      if (args.includes("archive")) return gitResult("\0".repeat(1024));
-      if (args.includes("rev-parse")) return gitResult(`${TEST_COMMIT}\n`);
-      return gitResult();
+      return emptyTreeResult(args);
     });
     const cacheFile = join(work, "cache-file");
     const tmpFile = join(work, "tmp-file");
@@ -277,9 +371,7 @@ describe("git Source acquisition", () => {
     roots.push(work);
     const git = testGitProcess(async (args) => {
       await Bun.sleep(10);
-      if (args.includes("archive")) return gitResult("\0".repeat(1024));
-      if (args.includes("rev-parse")) return gitResult(`${TEST_COMMIT}\n`);
-      return gitResult();
+      return emptyTreeResult(args);
     });
 
     await expect(
@@ -299,6 +391,37 @@ describe("git Source acquisition", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "timeout" });
+  });
+
+  test("treats the Mirror rename as the success commit point", async () => {
+    const repo = fixtureRepository();
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const destination = join(work, "mirror");
+    const realNow = Date.now;
+    Date.now = () =>
+      existsSync(join(destination, "capabilities", "skills", "arca-smoke", "SKILL.md")) ? 101 : 0;
+    try {
+      await expect(
+        acquireGitSource(
+          {
+            kind: "git",
+            repoUrl: FIXTURE_REPOSITORY_URL,
+            revision: { mode: "pin", commit: repo.goodCommit },
+            subpath: "nested/personal-kit",
+          },
+          destination,
+          {
+            cacheRoot: join(work, "cache"),
+            tmpRoot: join(work, "tmp"),
+            limits: { maxFiles: 20_000, maxBytes: 256 * 1024 * 1024, timeoutMs: 100 },
+            process: localGitProcess(repo.root),
+          },
+        ),
+      ).resolves.toMatchObject({ resolvedCommit: repo.goodCommit });
+    } finally {
+      Date.now = realNow;
+    }
   });
 
   test("rejects a locator that is not credential-free HTTPS before running Git", async () => {
@@ -323,6 +446,64 @@ describe("git Source acquisition", () => {
       ),
     ).rejects.toMatchObject({ code: "invalid_locator" });
     expect(calls).toBe(0);
+  });
+
+  test("rejects query and fragment credentials at the acquisition boundary", async () => {
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    let calls = 0;
+    const git = testGitProcess(async () => {
+      calls++;
+      return gitResult();
+    });
+    const base = {
+      kind: "git" as const,
+      revision: { mode: "track" as const, ref: "refs/heads/main" },
+      subpath: ".",
+    };
+    for (const repoUrl of [
+      "https://example.invalid/acme/kits?token=secret",
+      "https://example.invalid/acme/kits#secret",
+    ]) {
+      await expect(
+        acquireGitSource({ ...base, repoUrl }, join(work, crypto.randomUUID()), {
+          cacheRoot: join(work, "cache"),
+          tmpRoot: join(work, "tmp"),
+          process: git,
+        }),
+      ).rejects.toMatchObject({ code: "invalid_locator" });
+    }
+    expect(calls).toBe(0);
+  });
+
+  test("rejects a server that ignores partial-fetch filtering and discards its cache", async () => {
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const cacheRoot = join(work, "cache");
+    const key = createHash("sha256").update("https://example.invalid/acme/kits").digest("hex");
+    const cache = join(cacheRoot, key);
+    mkdirSync(cache, { recursive: true });
+    const git = testGitProcess(async (args) =>
+      args.includes("fetch")
+        ? { ...gitResult(), stderr: "warning: filtering not recognized by server, ignoring" }
+        : args.includes("--is-bare-repository")
+          ? gitResult("true\n")
+          : gitResult(),
+    );
+
+    await expect(
+      acquireGitSource(
+        {
+          kind: "git",
+          repoUrl: "https://example.invalid/acme/kits.git",
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+        join(work, "mirror"),
+        { cacheRoot, tmpRoot: join(work, "tmp"), process: git },
+      ),
+    ).rejects.toMatchObject({ code: "auth_or_repository_unavailable" });
+    expect(existsSync(cache)).toBe(false);
   });
 
   test("maps Git failures to bounded acquisition errors", async () => {
@@ -386,6 +567,42 @@ describe("git Source acquisition", () => {
     ).toThrow(TreeGuardError);
   });
 
+  test("rejects unsupported entries from the raw Git tree", async () => {
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const git = testGitProcess(async (args) => {
+      if (args.includes("ls-tree")) {
+        return gitResult(`160000 commit ${"c".repeat(40)}\tsubmodule\0`);
+      }
+      return emptyTreeResult(args);
+    });
+
+    await expect(
+      acquireGitSource(
+        {
+          kind: "git",
+          repoUrl: "https://example.invalid/acme/kits.git",
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+        join(work, "mirror"),
+        { cacheRoot: join(work, "cache"), tmpRoot: join(work, "tmp"), process: git },
+      ),
+    ).rejects.toMatchObject({ code: "unsafe_tree" });
+    expect(existsSync(join(work, "mirror"))).toBe(false);
+  });
+
+  test("counts archive directories against the entry budget", () => {
+    const stage = mkdtempSync(join(tmpdir(), "hive-tree-guard-"));
+    roots.push(stage);
+    expect(() =>
+      extractBoundedTree(buildTar([{ path: "one/" }, { path: "two/" }]), stage, {
+        maxFiles: 1,
+        maxBytes: 1024,
+      }),
+    ).toThrow(TreeGuardError);
+  });
+
   test("rejects backslash archive paths instead of normalizing them", () => {
     const stage = mkdtempSync(join(tmpdir(), "hive-tree-guard-"));
     roots.push(stage);
@@ -416,11 +633,14 @@ describe("git Source acquisition", () => {
     const previousHome = process.env.HOME;
     process.env.HOME = join(work, "daemon-home");
     const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+    const blob = "c".repeat(40);
     const git = testGitProcess(async (args, options) => {
       calls.push({ args, env: options?.env });
-      if (args.includes("archive")) return gitResult("\0".repeat(1024));
-      if (args.includes("rev-parse")) return gitResult(`${TEST_COMMIT}\n`);
-      return gitResult();
+      if (args.includes("ls-tree")) {
+        return gitResult(`100644 blob ${blob}\tREADME.md\0`);
+      }
+      if (args.includes("cat-file") && args.includes("blob")) return gitResult("raw bytes\n");
+      return emptyTreeResult(args);
     });
 
     try {
@@ -452,6 +672,59 @@ describe("git Source acquisition", () => {
       ),
     ).toBe(true);
     expect(calls.every((call) => call.env?.HOME === join(work, "daemon-home"))).toBe(true);
+    const fetch = calls.find((call) => call.args.includes("fetch"));
+    expect(fetch?.args).toContain("protocol.allow=never");
+    expect(fetch?.args).toContain("protocol.https.allow=always");
+    expect(fetch?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+    expect(
+      calls.some(
+        (call) =>
+          call.args.includes("config") &&
+          call.args.slice(-2).join("\0") ===
+            "remote.origin.url\0https://example.invalid/acme/kits.git",
+      ),
+    ).toBe(true);
+    const blobRead = calls.find(
+      (call) => call.args.includes("cat-file") && call.args.includes("blob"),
+    );
+    expect(blobRead?.args).toContain("protocol.allow=never");
+    expect(blobRead?.args).toContain("protocol.https.allow=always");
+    expect(blobRead?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+  });
+
+  test("blocks ambient insteadOf rewrites from HTTPS to a local protocol", async () => {
+    const repo = fixtureRepository();
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const daemonHome = join(work, "daemon-home");
+    mkdirSync(daemonHome);
+    writeFileSync(
+      join(daemonHome, ".gitconfig"),
+      `[url "file://${repo.root}"]\n\tinsteadOf = https://rewrite.invalid/repo\n`,
+    );
+    const oldHome = process.env.HOME;
+    process.env.HOME = daemonHome;
+    try {
+      await expect(
+        acquireGitSource(
+          {
+            kind: "git",
+            repoUrl: "https://rewrite.invalid/repo",
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          },
+          join(work, "mirror"),
+          {
+            cacheRoot: join(work, "cache"),
+            tmpRoot: join(work, "tmp"),
+            process: productionGitProcess(),
+          },
+        ),
+      ).rejects.toMatchObject({ code: "auth_or_repository_unavailable" });
+      expect(existsSync(join(work, "mirror"))).toBe(false);
+    } finally {
+      process.env.HOME = oldHome;
+    }
   });
 
   test("releases a completed repository lock", async () => {
@@ -517,6 +790,42 @@ describe("git Source acquisition", () => {
     });
   });
 
+  test("materializes committed bytes without export-ignore or export-subst transformations", async () => {
+    const repo = fixtureRepository();
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const kit = join(repo.root, "nested", "personal-kit");
+    writeFileSync(join(kit, "hidden.txt"), "committed but export-ignored\n");
+    writeFileSync(join(kit, "literal.txt"), "$Format:%H$\n");
+    writeFileSync(
+      join(kit, ".gitattributes"),
+      "hidden.txt export-ignore\nliteral.txt export-subst\n",
+    );
+    runGit(repo.root, "add", ".");
+    runGit(repo.root, "commit", "-m", "export attributes");
+    const commit = runGit(repo.root, "rev-parse", "HEAD");
+
+    await acquireGitSource(
+      {
+        kind: "git",
+        repoUrl: FIXTURE_REPOSITORY_URL,
+        revision: { mode: "pin", commit },
+        subpath: "nested/personal-kit",
+      },
+      join(work, "mirror"),
+      {
+        cacheRoot: join(work, "cache"),
+        tmpRoot: join(work, "tmp"),
+        process: localGitProcess(repo.root),
+      },
+    );
+
+    expect(readFileSync(join(work, "mirror", "hidden.txt"), "utf8")).toBe(
+      "committed but export-ignored\n",
+    );
+    expect(readFileSync(join(work, "mirror", "literal.txt"), "utf8")).toBe("$Format:%H$\n");
+  });
+
   test("rejects an unavailable subpath and an over-budget selected tree", async () => {
     const repo = fixtureRepository();
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
@@ -541,6 +850,35 @@ describe("git Source acquisition", () => {
         limits: { maxFiles: 20_000, maxBytes: 1, timeoutMs: 120_000 },
       }),
     ).rejects.toMatchObject({ code: "budget_exceeded" });
+    await expect(
+      acquireGitSource({ ...base, subpath: ".gitignore" }, join(work, "file-subpath"), options),
+    ).rejects.toMatchObject({ code: "invalid_subpath" });
+  });
+
+  test("atomically recreates an incomplete cache directory", async () => {
+    const repo = fixtureRepository();
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const normalized = "https://fixture.invalid/acme/kits";
+    const cache = join(work, "cache", createHash("sha256").update(normalized).digest("hex"));
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, "interrupted"), "not a bare repository");
+
+    await acquireGitSource(
+      {
+        kind: "git",
+        repoUrl: FIXTURE_REPOSITORY_URL,
+        revision: { mode: "pin", commit: repo.goodCommit },
+        subpath: "nested/personal-kit",
+      },
+      join(work, "mirror"),
+      {
+        cacheRoot: join(work, "cache"),
+        tmpRoot: join(work, "tmp"),
+        process: localGitProcess(repo.root),
+      },
+    );
+    expect(runGit(cache, "rev-parse", "--is-bare-repository")).toBe("true");
   });
 
   test("rejects an escaping link and retains the last-good Mirror", async () => {

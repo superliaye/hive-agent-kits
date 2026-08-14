@@ -2,7 +2,7 @@
 // server. Zod at the boundary; typed errors mapped to wire codes. Mirrors
 // `kit/routes.ts`.
 
-import type { AddSourceResult, Source } from "@hive/contract";
+import type { AddSourceResult, Source, SourceLocator } from "@hive/contract";
 import { AddSourceBody, ReorderSourceBody } from "@hive/contract";
 import type { Effect } from "effect";
 import { Hono } from "hono";
@@ -23,6 +23,9 @@ export type RunSources = <A, E>(
 // result — Q2/Q3 never-reject); `forgetMirror` is best-effort (an fs fault never
 // fails the already-committed delete).
 export type SourceLifecycle = {
+  prepareLocator(
+    locator: Exclude<SourceLocator, { kind: "starter" }>,
+  ): Effect.Effect<Exclude<SourceLocator, { kind: "starter" }>, Error>;
   onboard(source: Source): Effect.Effect<AddSourceResult>;
   forgetMirror(sourceId: string): Effect.Effect<void>;
 };
@@ -51,7 +54,17 @@ export function buildSourcesRoutes(
     if (!parsed.success) {
       return c.json({ error: "invalid source", issues: zodIssues(parsed.error) }, 400);
     }
-    const res = await run(registry.add(parsed.data));
+    const prepared = await run(lifecycle.prepareLocator(parsed.data.locator));
+    if (!prepared.ok) {
+      return c.json(
+        {
+          error: "invalid source",
+          issues: [{ path: "locator.repoRoot", message: "working tree locator is unavailable" }],
+        },
+        400,
+      );
+    }
+    const res = await run(registry.add({ ...parsed.data, locator: prepared.value }));
     if (!res.ok) {
       const err = res.error;
       if (err instanceof DuplicateOrigin) {

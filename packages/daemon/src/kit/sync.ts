@@ -186,7 +186,7 @@ export function syncSource(
 // override or a packaging miss) is a typed `missing_starter_root` SyncError, never
 // a raw throw; any other copy/swap fault maps to `io`. Returns only a status —
 // unlike `syncSource` there is no MirrorProvenance (the sync-status derives
-// "local" from Source.kind, never a synthetic sha). Always `synced` (re-copies
+// "local" from Source.locator.kind, never a synthetic sha). Always `synced` (re-copies
 // every run — a local mirror has no sha to short-circuit on).
 export function localSyncSource(
   mirrorRoot: string,

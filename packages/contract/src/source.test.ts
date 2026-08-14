@@ -54,6 +54,19 @@ describe("SourceLocator", () => {
         subpath: ".",
       }).success,
     ).toBe(false);
+    for (const repoUrl of [
+      "https://github.com/a/b?access_token=secret",
+      "https://github.com/a/b#secret",
+    ]) {
+      expect(
+        SourceLocator.safeParse({
+          kind: "git",
+          repoUrl,
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        }).success,
+      ).toBe(false);
+    }
   });
 
   test("accepts a Daemon-host working-tree subpath", () => {

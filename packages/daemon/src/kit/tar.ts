@@ -12,6 +12,14 @@ export type TarEntry =
   | { path: string; type: "special"; data: Uint8Array; mode: number };
 
 const BLOCK = 512;
+const DEFAULT_MAX_ENTRIES = 100_000;
+
+export class TarEntryLimitError extends Error {
+  override readonly name = "TarEntryLimitError";
+  constructor() {
+    super("tar archive exceeds entry limit");
+  }
+}
 
 function readString(buf: Uint8Array, offset: number, length: number): string {
   let end = offset;
@@ -65,13 +73,18 @@ function parsePax(data: Uint8Array): Map<string, string> {
 // Parse a decompressed tar buffer into entries. PAX/global and GNU long-name/
 // long-link metadata is consumed without materializing it; filesystem special
 // entries remain visible to the guarded extractor.
-export function parseTar(buf: Uint8Array, checkDeadline?: () => void): TarEntry[] {
+export function parseTar(
+  buf: Uint8Array,
+  checkDeadline?: () => void,
+  maxEntries = DEFAULT_MAX_ENTRIES,
+): TarEntry[] {
   const entries: TarEntry[] = [];
   let offset = 0;
   let longName: string | null = null;
   let longLink: string | null = null;
   let globalPax = new Map<string, string>();
   let nextPax = new Map<string, string>();
+  let headerCount = 0;
 
   while (offset + BLOCK <= buf.length) {
     checkDeadline?.();
@@ -84,6 +97,8 @@ export function parseTar(buf: Uint8Array, checkDeadline?: () => void): TarEntry[
       }
     }
     if (allZero) break;
+    headerCount++;
+    if (headerCount > maxEntries) throw new TarEntryLimitError();
 
     const name = readString(buf, offset, 100);
     const mode = readOctal(buf, offset + 100, 8);
