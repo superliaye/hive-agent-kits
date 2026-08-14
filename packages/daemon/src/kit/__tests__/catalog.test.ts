@@ -17,14 +17,26 @@ const CLONE = "D:/GitRepos/my-agent-kits";
 let gitRankSeq = 1;
 function source(id: string, over: Partial<Source> = {}): Source {
   const kind = over.kind ?? "git";
+  const origin = over.origin ?? `https://github.com/owner/${id}`;
   return {
-    id,
-    origin: `https://github.com/owner/${id}`,
-    kind: "git",
-    active: true,
-    createdAt: 0,
-    rank: kind === "local" ? 0 : gitRankSeq++,
     ...over,
+    id,
+    label: over.label ?? id,
+    locator:
+      over.locator ??
+      (kind === "local"
+        ? { kind: "starter" }
+        : {
+            kind: "git",
+            repoUrl: origin,
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          }),
+    origin,
+    kind,
+    active: over.active ?? true,
+    createdAt: over.createdAt ?? 0,
+    rank: over.rank ?? (kind === "local" ? 0 : gitRankSeq++),
   };
 }
 

@@ -7,10 +7,16 @@
 // failure; short-circuits when the resolved SHA equals the recorded one.
 
 import { Buffer } from "node:buffer";
+import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import type { Source } from "@hive/contract";
 import { Effect } from "effect";
 import { log } from "../lib/log.ts";
+import { type GitProcess } from "./acquisition/git-process.ts";
+import { acquireGitSource, GitAcquireError } from "./acquisition/git-source.ts";
+import { acquireWorkingTree, WorkingTreeAcquireError } from "./acquisition/working-tree.ts";
 import { SyncError } from "./effect/errors.ts";
+import { localSourceRootFor } from "./local-source-roots.ts";
 import {
   localSyncMirror,
   MissingStarterRoot,
@@ -18,6 +24,7 @@ import {
   readProvenance,
   writeMirror,
 } from "./mirror.ts";
+import type { DeployTargets } from "./targets.ts";
 import type { MirrorProvenance } from "./types.ts";
 
 // Parse a normalized https GitHub origin into owner/repo. The Source registry
@@ -51,6 +58,18 @@ export type SyncOutcome = {
   // "synced" — a new SHA landed; "unchanged" — already at the resolved SHA.
   status: "synced" | "unchanged";
   provenance: MirrorProvenance;
+};
+
+export type LocatorSyncOptions = {
+  // The daemon-owned Git process port. Production leaves this undefined and
+  // acquires the real bounded process; tests may inject a hermetic process.
+  gitProcess?: GitProcess;
+  // Configured at the composition root, read at sync time so config reloads are
+  // honored without a Hive-specific working-tree policy in this module.
+  workingTreeRoots?: readonly string[];
+  // Compatibility-only GitHub HTTP fixture port. Production leaves this unset
+  // and uses the dedicated Git process path below.
+  legacyGithubFixtureFetch?: HttpFetch;
 };
 
 const SHA_RE = /^[0-9a-f]{40}$/;
@@ -184,6 +203,97 @@ export function localSyncSource(
         ? new SyncError({ reason: "missing_starter_root", message: err.message })
         : new SyncError({ reason: "io", message: `local mirror write failed: ${String(err)}` }),
   });
+}
+
+const ACQUISITION_DETAILS = {
+  offline: "repository fetch failed",
+  auth_or_repository_unavailable: "repository access failed",
+  invalid_locator: "source locator is invalid",
+  missing_ref: "requested revision is unavailable",
+  invalid_subpath: "selected subpath is unavailable",
+  timeout: "source acquisition timed out",
+  budget_exceeded: "selected tree exceeds acquisition limits",
+  unsafe_tree: "selected tree is unsafe",
+  working_tree_not_allowed: "working tree is not allowed",
+  working_tree_changed: "working tree changed during capture",
+  io: "source acquisition failed",
+} as const;
+
+function acquisitionSyncError(error: unknown): SyncError {
+  if (error instanceof GitAcquireError || error instanceof WorkingTreeAcquireError) {
+    const detail = ACQUISITION_DETAILS[error.code];
+    return new SyncError({ reason: error.code, message: detail, detail });
+  }
+  return new SyncError({
+    reason: "io",
+    message: ACQUISITION_DETAILS.io,
+    detail: ACQUISITION_DETAILS.io,
+  });
+}
+
+// Transport dispatch for persisted Sources. The locator is authoritative: the
+// legacy `origin` and `kind` fields are display-only compatibility data. Each
+// acquisition writes directly to the Source-id scoped mirror through its atomic
+// stage/swap implementation, so an error leaves the exact prior provenance and
+// tree intact.
+export function syncLocatorSource(
+  source: Source,
+  targets: DeployTargets,
+  options: LocatorSyncOptions = {},
+): Effect.Effect<{ status: "synced" }, SyncError> {
+  const mirrorRoot = targets.mirrorRoot(source.id);
+  const locator = source.locator;
+  switch (locator.kind) {
+    case "starter": {
+      const root = localSourceRootFor(source, targets);
+      return root
+        ? localSyncSource(mirrorRoot, targets.kitTmpRoot(), root)
+        : Effect.fail(
+            new SyncError({
+              reason: "missing_starter_root",
+              message: "starter content root is unavailable",
+              detail: "starter content root is unavailable",
+            }),
+          );
+    }
+    case "git":
+      if (
+        options.legacyGithubFixtureFetch &&
+        locator.revision.mode === "track" &&
+        locator.revision.ref === "refs/heads/main" &&
+        locator.subpath === "."
+      ) {
+        return syncSource(
+          mirrorRoot,
+          targets.kitTmpRoot(),
+          locator.repoUrl,
+          options.legacyGithubFixtureFetch,
+        ).pipe(Effect.map(() => ({ status: "synced" }) as const));
+      }
+      return Effect.tryPromise({
+        try: async () => {
+          await acquireGitSource(locator, mirrorRoot, {
+            cacheRoot: join(dirname(targets.kitTmpRoot()), "git-cache"),
+            tmpRoot: targets.kitTmpRoot(),
+            ...(options.gitProcess ? { process: options.gitProcess } : {}),
+          });
+          return { status: "synced" } as const;
+        },
+        catch: acquisitionSyncError,
+      });
+    case "working-tree":
+      return Effect.tryPromise({
+        try: async () => {
+          await acquireWorkingTree(locator, mirrorRoot, {
+            allowedRoots: options.workingTreeRoots ?? [],
+            tmpRoot: targets.kitTmpRoot(),
+            ...(options.gitProcess ? { process: options.gitProcess } : {}),
+          });
+          return { status: "synced" } as const;
+        },
+        catch: acquisitionSyncError,
+      });
+  }
 }
 
 export function productionFetch(): HttpFetch {

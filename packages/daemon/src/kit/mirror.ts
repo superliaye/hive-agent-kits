@@ -144,7 +144,7 @@ export function writeMirror(
     const dest = join(stageDir, rel);
     if (entry.type === "dir") {
       mkdirSync(dest, { recursive: true });
-    } else {
+    } else if (entry.type === "file") {
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, entry.data);
     }
@@ -184,6 +184,15 @@ function swapMirror(mirrorRoot: string, stageDir: string): void {
       log().warn({ module: "kit/mirror", err: String(err) }, "prior mirror cleanup failed");
     }
   }
+}
+
+export function commitStagedMirror(
+  mirrorRoot: string,
+  stageDir: string,
+  provenance: MirrorProvenance,
+): void {
+  writeFileSync(join(stageDir, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
+  swapMirror(mirrorRoot, stageDir);
 }
 
 // Thrown by localSyncMirror when the bundled Starter content root (its

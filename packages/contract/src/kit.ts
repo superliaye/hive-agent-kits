@@ -97,6 +97,7 @@ export const SyncStatus = z.object({
   fetchedAt: z.number().nullable(),
   // Last sync error reason, when state is check_failed/rate_limited.
   errorReason: z.string().optional(),
+  errorDetail: z.string().max(160).optional(),
   rateLimitReset: z.number().optional(),
 });
 export type SyncStatus = z.infer<typeof SyncStatus>;
@@ -118,6 +119,7 @@ export const SyncRunResult = z.object({
       origin: z.string(),
       status: z.enum(["synced", "unchanged", "failed"]),
       errorReason: z.string().optional(),
+      errorDetail: z.string().max(160).optional(),
       rateLimitReset: z.number().optional(),
     }),
   ),

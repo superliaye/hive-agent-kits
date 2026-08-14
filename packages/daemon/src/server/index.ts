@@ -36,7 +36,7 @@ import { Kit, KitLive, type KitSvc } from "../kit/index.ts";
 import { removeMirror } from "../kit/mirror.ts";
 import { degradedOnboardResult, onboardSource } from "../kit/onboard.ts";
 import { buildKitRoutes, type RunKit } from "../kit/routes.ts";
-import { type HttpFetch, productionFetch } from "../kit/sync.ts";
+import type { HttpFetch } from "../kit/sync.ts";
 import { defaultDeployTargets } from "../kit/targets.ts";
 import { createLogger, log, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
@@ -141,9 +141,6 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // instance to Kit (Effect memoizes a Layer by reference → one acquire / one
   // store) AND merge it for the routes' own resolution.
   const sourcesLayer = SourceRegistryLive(sourcesOpts);
-  // The one HTTP fetch shared by Kit (launch sync) and the Sources lifecycle
-  // adapter (add-time onboard sync).
-  const httpFetch: HttpFetch = opts.fetch ?? productionFetch();
   // The deploy-target port needs the live `developer.allowRealHomeDeploy` toggle,
   // which is only known after Config resolves off the root runtime below. The
   // port's methods are call-time (deploy happens post-boot), so a closure-held
@@ -173,7 +170,11 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // Kit module (capability deploy-manager). Shares the deploy-target port +
     // HTTP fetch with the Sources lifecycle adapter; its exec adapter stays
     // module-internal. SourceRegistry is provided from the one shared layer.
-    KitLive({ targets: deployTargets, fetch: httpFetch }).pipe(Layer.provide(sourcesLayer)),
+    KitLive({
+      targets: deployTargets,
+      ...(opts.fetch ? { fetch: opts.fetch } : {}),
+      workingTreeRoots: () => configHolder.config?.get("sources").workingTreeRoots ?? [],
+    }).pipe(Layer.provide(sourcesLayer)),
     // Sources registry (ADR-0023). Hive-private JSON store; memory mode in
     // tests/dev writes no real ~/.hive/sources.json. Same shared instance.
     sourcesLayer,
@@ -332,7 +333,10 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // defensive, never the real defect sink.
     onboard: (s) =>
       Effect.catchDefect(
-        onboardSource(deployTargets, httpFetch, s, SYNC_TIMEOUT_MS),
+        onboardSource(deployTargets, s, SYNC_TIMEOUT_MS, {
+          ...(opts.fetch ? { legacyGithubFixtureFetch: opts.fetch } : {}),
+          workingTreeRoots: config.get("sources").workingTreeRoots,
+        }),
         (defect: unknown) => {
           log().error(
             { module: "sources/onboard", sourceId: s.id, err: String(defect) },

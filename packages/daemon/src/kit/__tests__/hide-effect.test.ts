@@ -39,6 +39,13 @@ function gitSource(id: string, active: boolean, createdAt: number): Source {
   // `createdAt` encodes the intended order; reuse it as the stored precedence rank.
   return {
     id,
+    label: id,
+    locator: {
+      kind: "git",
+      repoUrl: `https://github.com/owner/${id}`,
+      revision: { mode: "track", ref: "refs/heads/main" },
+      subpath: ".",
+    },
     origin: `https://github.com/owner/${id}`,
     kind: "git",
     active,

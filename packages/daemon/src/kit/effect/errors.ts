@@ -21,11 +21,22 @@ export type SyncFailureReason =
   | "parse"
   | "io"
   | "missing_starter_root"
-  | "timeout";
+  | "timeout"
+  | "auth_or_repository_unavailable"
+  | "invalid_locator"
+  | "missing_ref"
+  | "invalid_subpath"
+  | "budget_exceeded"
+  | "unsafe_tree"
+  | "working_tree_not_allowed"
+  | "working_tree_changed";
 
 export class SyncError extends Data.TaggedError("SyncError")<{
   readonly reason: SyncFailureReason;
   readonly message: string;
+  // A short, caller-safe description. Acquisition errors deliberately never
+  // expose Git stderr, repository URLs, paths, or credential-bearing text.
+  readonly detail?: string;
   // Epoch seconds from X-RateLimit-Reset, only on `rate_limited`.
   readonly rateLimitReset?: number;
 }> {}

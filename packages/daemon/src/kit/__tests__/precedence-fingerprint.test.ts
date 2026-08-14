@@ -46,6 +46,13 @@ function gitSource(id: string, createdAt: number): Source {
   // precedence rank (higher = later-added = wins a collision).
   return {
     id,
+    label: id,
+    locator: {
+      kind: "git",
+      repoUrl: `https://github.com/owner/${id}`,
+      revision: { mode: "track", ref: "refs/heads/main" },
+      subpath: ".",
+    },
     origin: `https://github.com/owner/${id}`,
     kind: "git",
     active: true,

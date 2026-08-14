@@ -71,6 +71,13 @@ function kitOver(origins: string[], fetchImpl: HttpFetch) {
     mode: "memory",
     initial: origins.map((origin, i) => ({
       id: `src-${i}`,
+      label: `src-${i}`,
+      locator: {
+        kind: "git" as const,
+        repoUrl: origin,
+        revision: { mode: "track" as const, ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin,
       kind: "git" as const,
       active: true,

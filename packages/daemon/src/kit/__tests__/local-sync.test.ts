@@ -123,7 +123,21 @@ function kitOver(
 ) {
   const sourcesLayer = SourceRegistryLive({
     mode: "memory",
-    initial: sources.map((s, i) => ({ ...s, createdAt: i, rank: i })),
+    initial: sources.map((s, i) => ({
+      ...s,
+      label: s.id,
+      locator:
+        s.kind === "local"
+          ? ({ kind: "starter" } as const)
+          : {
+              kind: "git" as const,
+              repoUrl: s.origin,
+              revision: { mode: "track" as const, ref: "refs/heads/main" },
+              subpath: ".",
+            },
+      createdAt: i,
+      rank: i,
+    })),
   });
   const rt = ManagedRuntime.make(
     Layer.merge(KitLive({ fetch: fetchImpl }).pipe(Layer.provide(sourcesLayer)), sourcesLayer),
@@ -186,6 +200,7 @@ describe("Kit.sync — local kind dispatch (#32)", () => {
         origin: "local:mystery",
         status: "failed",
         errorReason: "missing_starter_root",
+        errorDetail: "starter content root is unavailable",
       },
     ]);
     expect(kit.catalog().entries.some((e) => e.sourceIds.includes("mystery"))).toBe(false);
@@ -216,6 +231,8 @@ describe("deploy from the local mirror (#32, offline)", () => {
       initial: [
         {
           id: "starter",
+          label: "Starter",
+          locator: { kind: "starter" },
           origin: "local:starter",
           kind: "local",
           active: true,

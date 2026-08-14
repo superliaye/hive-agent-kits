@@ -29,7 +29,21 @@ afterEach(() => {
 });
 
 function gitSource(id: string, origin = "https://github.com/owner/repo"): Source {
-  return { id, origin, kind: "git", active: true, createdAt: 0, rank: 0 };
+  return {
+    id,
+    label: id,
+    locator: {
+      kind: "git",
+      repoUrl: origin,
+      revision: { mode: "track", ref: "refs/heads/main" },
+      subpath: ".",
+    },
+    origin,
+    kind: "git",
+    active: true,
+    createdAt: 0,
+    rank: 0,
+  };
 }
 
 function conformingTar(name = "foo"): Uint8Array {
@@ -51,7 +65,7 @@ describe("onboardSource", () => {
     const neverFetch: HttpFetch = () => new Promise<Response>(() => {});
     const src = gitSource("src-timeout");
     const result = await Effect.runPromise(
-      onboardSource(failSafeDeployTargets(), neverFetch, src, 50),
+      onboardSource(failSafeDeployTargets(), src, 50, { legacyGithubFixtureFetch: neverFetch }),
     );
     expect(result.sync.state).toBe("check_failed");
     expect(result.sync.errorReason).toBe("timeout");
@@ -68,7 +82,7 @@ describe("onboardSource", () => {
         : new Response(conformingTar("foo"), { status: 200 });
     const src = gitSource("src-ok");
     const result = await Effect.runPromise(
-      onboardSource(failSafeDeployTargets(), fetchImpl, src, 30_000),
+      onboardSource(failSafeDeployTargets(), src, 30_000, { legacyGithubFixtureFetch: fetchImpl }),
     );
     expect(result.sync.state).toBe("up_to_date");
     expect(result.validation.conformant).toBe(true);
@@ -83,7 +97,7 @@ describe("onboardSource", () => {
     const src = gitSource("src-offline");
     // onboard's error channel is `never` — runPromise resolves, never rejects.
     const result = await Effect.runPromise(
-      onboardSource(failSafeDeployTargets(), offline, src, 30_000),
+      onboardSource(failSafeDeployTargets(), src, 30_000, { legacyGithubFixtureFetch: offline }),
     );
     expect(result.sync.state).toBe("check_failed");
     expect(result.sync.errorReason).toBe("offline");

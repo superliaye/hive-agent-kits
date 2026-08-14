@@ -17,6 +17,7 @@ import { Context, Effect, Layer } from "effect";
 import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { SourceRegistry, type SourceRegistrySvc } from "../../sources/effect/sources-live.ts";
+import type { GitProcess } from "../acquisition/git-process.ts";
 import { readCatalog } from "../catalog.ts";
 import {
   type BinaryProbe,
@@ -27,10 +28,9 @@ import {
 } from "../deploy/adapter.ts";
 import { type DeployInput, runDeploy } from "../deploy/engine.ts";
 import { readLedger } from "../ledger.ts";
-import { localSourceRootFor } from "../local-source-roots.ts";
 import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
 import { catalogNameSets, computeDiff, resolveSelection } from "../selection.ts";
-import { type HttpFetch, localSyncSource, productionFetch, syncSource } from "../sync.ts";
+import { type HttpFetch, syncLocatorSource } from "../sync.ts";
 import { buildSourceSyncStatus, type LastSyncError } from "../sync-status.ts";
 import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import type { DeployAuditEvents } from "../types.ts";
@@ -60,8 +60,11 @@ export type CreateKitOptions = {
   // Override the deploy-target port (tests inject a redirected one). Defaults to
   // the env-overridable production port.
   targets?: DeployTargets;
-  // Override the HTTP fetch (tests inject offline/403/fixture). Defaults to global fetch.
+  // Compatibility-only GitHub HTTP fixture port. Production locator sync uses
+  // GitProcess; this remains for established root/main fixture tests.
   fetch?: HttpFetch;
+  gitProcess?: GitProcess;
+  workingTreeRoots?: () => readonly string[];
   // Override exec/probe (tests assert the installer is/isn't called).
   exec?: ExecPort;
   probe?: BinaryProbe;
@@ -73,7 +76,6 @@ function activeSources(registry: SourceRegistrySvc): readonly Source[] {
 
 function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
   const targets = opts.targets ?? failSafeDeployTargets();
-  const fetchImpl = opts.fetch ?? productionFetch();
   const fx: DeployFsExec = {
     targets,
     exec: opts.exec ?? bunExec,
@@ -110,39 +112,14 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
           sources,
           (source) =>
             Effect.gen(function* () {
-              // Branch on the Source kind — the ONE consumer that must differ
-              // between local and git. A local Source copies the bundled Starter
-              // (no fetch); a git Source syncs over the network. A local failure
-              // is a per-source SyncError VALUE in `E` (recorded in that Source's
-              // status), never a thrown defect — a raw throw in this Effect.forEach
-              // loop would sink every Source and could crash boot.
-              // Both branches normalize to a common `{ status }` so the
-              // conditional is one Effect type, not a union (Effect.result can't
-              // infer over a two-arm Effect union). The git path's provenance is
-              // unused here — only the status reaches the run result.
+              // Locator is the transport authority; legacy kind/origin remain
+              // display-only compatibility data.
               const syncEffect: Effect.Effect<{ status: "synced" | "unchanged" }, SyncError> =
-                source.kind === "local"
-                  ? (() => {
-                      const localRoot = localSourceRootFor(source, targets);
-                      return localRoot
-                        ? localSyncSource(
-                            targets.mirrorRoot(source.id),
-                            targets.kitTmpRoot(),
-                            localRoot,
-                          )
-                        : Effect.fail(
-                            new SyncError({
-                              reason: "missing_starter_root",
-                              message: `unknown local Source origin: ${source.origin}`,
-                            }),
-                          );
-                    })()
-                  : syncSource(
-                      targets.mirrorRoot(source.id),
-                      targets.kitTmpRoot(),
-                      source.origin,
-                      fetchImpl,
-                    ).pipe(Effect.map((o) => ({ status: o.status })));
+                syncLocatorSource(source, targets, {
+                  ...(opts.fetch ? { legacyGithubFixtureFetch: opts.fetch } : {}),
+                  ...(opts.gitProcess ? { gitProcess: opts.gitProcess } : {}),
+                  workingTreeRoots: opts.workingTreeRoots?.() ?? [],
+                });
               const result = yield* Effect.result(syncEffect);
               if (result._tag === "Success") {
                 lastSyncError.delete(source.id);
@@ -155,6 +132,7 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
               const err: SyncError = result.failure;
               lastSyncError.set(source.id, {
                 reason: err.reason,
+                ...(err.detail ? { detail: err.detail } : {}),
                 ...(err.rateLimitReset !== undefined ? { rateLimitReset: err.rateLimitReset } : {}),
               });
               return {
@@ -162,6 +140,7 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
                 origin: source.origin,
                 status: "failed",
                 errorReason: err.reason,
+                ...(err.detail ? { errorDetail: err.detail } : {}),
                 ...(err.rateLimitReset !== undefined ? { rateLimitReset: err.rateLimitReset } : {}),
               } satisfies SyncRunResult["sources"][number];
             }),

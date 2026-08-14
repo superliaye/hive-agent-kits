@@ -20,20 +20,19 @@ import { capabilitiesRoot } from "@hive/capability-schema-tools/node";
 import type { AddSourceResult, Source, SourceSyncStatus } from "@hive/contract";
 import { Effect } from "effect";
 import { SyncError } from "./effect/errors.ts";
-import type { HttpFetch } from "./sync.ts";
-import { syncSource } from "./sync.ts";
+import { type LocatorSyncOptions, syncLocatorSource } from "./sync.ts";
 import { buildSourceSyncStatus, type LastSyncError } from "./sync-status.ts";
 import type { DeployTargets } from "./targets.ts";
 
 // Onboard a freshly-added Source: bounded-sync its Mirror, then validate that
 // Mirror. `syncTimeoutMs` is REQUIRED (the server passes a production constant;
 // tests a small value) — the bounded sync guarantees the add never hangs the
-// request. git-only this slice (the add route only ever mints `git`).
+// request. Transport dispatch is locator-native, just like KitLive.
 export function onboardSource(
   targets: DeployTargets,
-  fetchImpl: HttpFetch,
   source: Source,
   syncTimeoutMs: number,
+  options: LocatorSyncOptions = {},
 ): Effect.Effect<AddSourceResult> {
   return Effect.gen(function* () {
     const mirrorRoot = targets.mirrorRoot(source.id);
@@ -44,7 +43,7 @@ export function onboardSource(
     // underlying request may linger until it settles and is discarded — acceptable;
     // threading an AbortSignal is a follow-on.)
     const syncResult = yield* Effect.result(
-      syncSource(mirrorRoot, targets.kitTmpRoot(), source.origin, fetchImpl).pipe(
+      syncLocatorSource(source, targets, options).pipe(
         Effect.timeoutOrElse({
           duration: syncTimeoutMs,
           orElse: () =>
@@ -60,6 +59,7 @@ export function onboardSource(
         ? undefined
         : {
             reason: syncResult.failure.reason,
+            ...(syncResult.failure.detail ? { detail: syncResult.failure.detail } : {}),
             ...(syncResult.failure.rateLimitReset !== undefined
               ? { rateLimitReset: syncResult.failure.rateLimitReset }
               : {}),
