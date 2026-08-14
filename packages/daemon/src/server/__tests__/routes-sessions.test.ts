@@ -61,8 +61,8 @@ describe("external session routes", () => {
       request(`/api/external-sessions/${session.sessionId}`, durableToken, { method: "DELETE" }),
     );
     expect(revoked.status).toBe(204);
-    expect(
-      (await server.app.fetch(request("/api/kit/state", session.sessionToken))).status,
-    ).toBe(401);
+    expect((await server.app.fetch(request("/api/kit/state", session.sessionToken))).status).toBe(
+      401,
+    );
   });
 });

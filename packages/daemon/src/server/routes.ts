@@ -3,7 +3,7 @@
 import { AppearanceConfigSchema } from "@hive/theming/schema";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { z, ZodError } from "zod";
+import { ZodError, z } from "zod";
 import type { Audit } from "../audit/index.ts";
 import type { BackendProbeSvc, BackendUpdaterSvc } from "../backend-probe/index.ts";
 import { BackendStatus, ProbeableBackend } from "../backend-probe/index.ts";

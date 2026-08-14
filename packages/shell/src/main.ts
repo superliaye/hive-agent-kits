@@ -11,16 +11,30 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
+import {
+  BrowserWindow,
+  app,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  shell,
+  systemPreferences,
+} from "electron";
 import { z } from "zod";
-import { hasDaemonToDrain, shouldConfirmClose } from "./close-guard";
+import { resolveShellLaunch } from "./connection";
+import {
+  type ActiveDaemonConnection,
+  createDaemonRequestHandler,
+} from "./daemon-request";
 import {
   canReuseReadyDaemon,
   incompatibleDaemonMessage,
   parseReadyProbe,
   type ReadyProbe,
   type ShellMode,
+  validateExternalReady,
 } from "./daemon-ready";
+import { shouldConfirmShellClose, shouldDrainShellDaemon } from "./lifecycle";
 
 // Renderer→main IPC contracts. AGENTS.md requires Zod at external
 // boundaries — the renderer process is its own untrusted context even
@@ -41,11 +55,25 @@ const SystemAccentResponseSchema = z
   .regex(/^#[0-9a-f]{6}$/i)
   .nullable();
 
+const DaemonRequestPayloadSchema = z
+  .object({
+    path: z.string().min(1).max(2048),
+    request: z
+      .object({
+        method: z.string().min(1).max(16).optional(),
+        headers: z.record(z.string().max(8192)).optional(),
+        body: z.string().max(16 * 1024 * 1024).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
 const isWin = process.platform === "win32";
 const PORT = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : 3117;
 const DAEMON_URL = `http://127.0.0.1:${PORT}`;
 const RUNTIME_ROOT = process.env.HIVE_RUNTIME_ROOT ?? join(homedir(), ".hive");
 const TOKEN_PATH = join(RUNTIME_ROOT, ".token");
+const SHELL_LAUNCH = resolveShellLaunch(process.argv);
 
 // __dirname = shell/dist after compile; repo root is two levels up.
 // Only meaningful in dev mode — packaged apps don't have a repo root.
@@ -57,8 +85,7 @@ const UI_DEV_URL = process.env.HIVE_UI_DEV_URL ?? "http://127.0.0.1:5173";
 // Default port 9333; HIVE_CDP_PORT lets parallel dev instances each open a
 // distinct port (dev.ps1/dev.ts derive it per -Instance, alongside HIVE_PORT
 // and the Vite URL, so isolated stacks never collide). Gated on !app.isPackaged
-// so the port can never open in a shipped build, where the renderer holds the
-// daemon bearer token. Must run before app.whenReady().
+// so the port can never open in a shipped build. Must run before app.whenReady().
 if (!app.isPackaged) {
   app.commandLine.appendSwitch("remote-debugging-port", process.env.HIVE_CDP_PORT ?? "9333");
   // Anti-occlusion / anti-backgrounding. The dev window is visible-but-unfocused
@@ -84,13 +111,15 @@ const UI_DIST_INDEX = app.isPackaged
 
 let daemon: ChildProcess | null = null;
 let spawnedByShell = false;
+let activeConnection: ActiveDaemonConnection | null = null;
+let authorizedWebContentsId: number | null = null;
 // Feature 3: set by the renderer over IPC while a Kit deploy mutation is pending.
 // before-quit consults it to confirm before SIGKILLing the daemon mid-write.
 let deployInFlight = false;
 
-async function probeDaemonReady(): Promise<ReadyProbe> {
+async function probeDaemonReady(baseUrl = DAEMON_URL): Promise<ReadyProbe> {
   try {
-    const res = await fetch(`${DAEMON_URL}/api/ready`);
+    const res = await fetch(`${baseUrl}/api/ready`);
     let body: unknown = null;
     try {
       body = await res.json();
@@ -101,6 +130,31 @@ async function probeDaemonReady(): Promise<ReadyProbe> {
   } catch {
     return { ready: false };
   }
+}
+
+async function connectDaemon(): Promise<ActiveDaemonConnection> {
+  if (SHELL_LAUNCH.kind === "managed") {
+    await ensureDaemon();
+    return {
+      kind: "managed",
+      baseUrl: DAEMON_URL,
+      token: readToken(),
+      displayName: "Local",
+    };
+  }
+
+  const probe = await probeDaemonReady(SHELL_LAUNCH.baseUrl);
+  if (!probe.ready || !probe.metadata) {
+    throw new Error("external daemon did not return compatible readiness metadata");
+  }
+  const validation = validateExternalReady(SHELL_LAUNCH, probe.metadata);
+  if (!validation.ok) throw new Error(validation.message);
+  return {
+    kind: "external",
+    baseUrl: SHELL_LAUNCH.baseUrl,
+    token: SHELL_LAUNCH.session.sessionToken,
+    displayName: SHELL_LAUNCH.displayName,
+  };
 }
 
 async function waitForReady(timeoutMs = 10_000): Promise<void> {
@@ -171,7 +225,7 @@ async function loadDevUrl(win: BrowserWindow, attempts = 30): Promise<void> {
 }
 
 async function createWindow(): Promise<void> {
-  const token = readToken();
+  if (!activeConnection) throw new Error("daemon connection is not initialized");
   const devMode = process.env.HIVE_UI_MODE === "dev" || process.env.NODE_ENV === "development";
   const win = new BrowserWindow({
     width: 1100,
@@ -199,9 +253,13 @@ async function createWindow(): Promise<void> {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--hive-base=${DAEMON_URL}`, `--hive-token=${token}`],
+      additionalArguments: [
+        `--hive-connection-kind=${activeConnection.kind}`,
+        `--hive-display-name=${encodeURIComponent(activeConnection.displayName)}`,
+      ],
     },
   });
+  authorizedWebContentsId = win.webContents.id;
   win.webContents.on("did-fail-load", (_e, code, desc, url) => {
     console.error(`[shell] did-fail-load: ${code} ${desc} ${url}`);
   });
@@ -274,6 +332,15 @@ ipcMain.handle("hive:setDeployInFlight", (_event, value: unknown) => {
   if (typeof value === "boolean") deployInFlight = value;
 });
 
+ipcMain.handle("hive:daemonRequest", async (event, path: unknown, request: unknown) => {
+  if (event.sender.id !== authorizedWebContentsId || !activeConnection) {
+    throw new Error("daemon request rejected for an unexpected renderer");
+  }
+  const parsed = DaemonRequestPayloadSchema.safeParse({ path, request });
+  if (!parsed.success) throw new Error("invalid daemon request payload");
+  return createDaemonRequestHandler(activeConnection)(parsed.data.path, parsed.data.request);
+});
+
 ipcMain.handle("hive:openExternal", async (_event, url: unknown) => {
   if (typeof url !== "string") {
     throw new Error("openExternal: url must be a string");
@@ -292,7 +359,7 @@ ipcMain.handle("hive:openExternal", async (_event, url: unknown) => {
 
 app.whenReady().then(async () => {
   try {
-    await ensureDaemon();
+    activeConnection = await connectDaemon();
     await createWindow();
   } catch (err) {
     console.error("[shell] startup failed:", err);
@@ -320,7 +387,7 @@ app.on("before-quit", (event) => {
   // Confirm BEFORE the drain when a deploy is in flight. Cancel keeps the app
   // open (no drain); "Close anyway" records the choice and falls through to the
   // existing daemon-drain sequencing below — no second preventDefault.
-  if (shouldConfirmClose(deployInFlight, closeConfirmed)) {
+  if (shouldConfirmShellClose(SHELL_LAUNCH.kind, deployInFlight, closeConfirmed)) {
     event.preventDefault();
     const choice = dialog.showMessageBoxSync({
       type: "warning",
@@ -340,7 +407,7 @@ app.on("before-quit", (event) => {
     // quit ourselves; the next before-quit pass has closeConfirmed set, so it
     // skips the dialog and either drains or quits cleanly.
     if (
-      !hasDaemonToDrain({
+      !shouldDrainShellDaemon(SHELL_LAUNCH.kind, {
         hasDaemon: daemon !== null,
         spawnedByShell,
         daemonKilled: daemon?.killed ?? true,
@@ -351,7 +418,16 @@ app.on("before-quit", (event) => {
     }
     // Otherwise fall through to the drain sequencing below in this same pass.
   }
-  if (!daemon || !spawnedByShell || daemon.killed || quitting) return;
+  if (
+    !shouldDrainShellDaemon(SHELL_LAUNCH.kind, {
+      hasDaemon: daemon !== null,
+      spawnedByShell,
+      daemonKilled: daemon?.killed ?? true,
+    }) ||
+    !daemon ||
+    quitting
+  )
+    return;
   event.preventDefault();
   quitting = true;
   const sig: NodeJS.Signals = isWin ? "SIGKILL" : "SIGTERM";

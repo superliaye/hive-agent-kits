@@ -48,8 +48,8 @@ import {
   SourceRegistry as SourceRegistryTag,
 } from "../sources/effect/sources-live.ts";
 import { buildSourcesRoutes, type RunSources, type SourceLifecycle } from "../sources/routes.ts";
-import { buildRoutes } from "./routes.ts";
 import { DAEMON_PROTOCOL_VERSION, HIVE_BUILD_VERSION, runtimeRootId } from "./identity.ts";
+import { buildRoutes } from "./routes.ts";
 import { createSessionRegistry } from "./sessions.ts";
 
 export type ServerMode = "file" | "memory";

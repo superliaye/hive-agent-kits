@@ -1,7 +1,7 @@
 // Electron preload — runs in an isolated context, exposes a narrow surface
 // to the renderer through contextBridge. Two responsibilities:
 //
-//   1. Daemon URL + bearer token (passed in via `additionalArguments`).
+//   1. Authenticated relative-path Daemon requests through sender-bound IPC.
 //   2. `openExternal(url)` — opens an http/https URL in the user's default
 //      browser via the main process's `shell.openExternal`. Used for the
 //      OAuth login flow so the user's browser handles the Anthropic
@@ -14,12 +14,22 @@ function readArg(prefix: string): string {
   return arg ? arg.slice(prefix.length) : "";
 }
 
-const baseUrl = readArg("--hive-base=");
-const token = readArg("--hive-token=");
+const connectionKind = readArg("--hive-connection-kind=") === "external" ? "external" : "managed";
+const displayName = decodeURIComponent(readArg("--hive-display-name="));
 
 contextBridge.exposeInMainWorld("__hive", {
-  baseUrl,
-  token,
+  connection: {
+    kind: connectionKind,
+    displayName,
+    status: "connected",
+  },
+  daemon: {
+    request: (
+      path: string,
+      init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+    ): Promise<{ status: number; statusText: string; body: string }> =>
+      ipcRenderer.invoke("hive:daemonRequest", path, init),
+  },
   /** "win32" | "darwin" | "linux" — renderer uses this to position the
    * window-controls reservation in the draggable top strip. */
   platform: process.platform,

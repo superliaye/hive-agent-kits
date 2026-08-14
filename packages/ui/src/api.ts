@@ -55,8 +55,17 @@ export type {
 declare global {
   interface Window {
     __hive?: {
-      baseUrl: string;
-      token: string;
+      connection?: {
+        kind: "managed" | "external";
+        displayName: string;
+        status: "connected" | "disconnected";
+      };
+      daemon?: {
+        request: (
+          path: string,
+          init: { method?: string; headers?: Record<string, string>; body?: string },
+        ) => Promise<{ status: number; statusText: string; body: string }>;
+      };
       /** "win32" | "darwin" | "linux" — undefined outside Electron. */
       platform?: string;
       // Open an http(s) URL in the user's default external browser. Only
@@ -100,15 +109,19 @@ export async function openUrl(url: string): Promise<void> {
   }
 }
 
-export type ApiConfig = { baseUrl: string; token: string };
+export type ApiConfig =
+  | { baseUrl: string; token: string }
+  | {
+      request: NonNullable<NonNullable<Window["__hive"]>["daemon"]>["request"];
+    };
 
 // Developer config slice — mirrors the daemon's DeveloperConfigSchema. Kept
 // local to the UI client (a tiny boolean slice, no contract entry warranted).
 export type DeveloperConfig = { allowRealHomeDeploy: boolean };
 
 export function resolveApiConfig(): ApiConfig {
-  if (typeof window !== "undefined" && window.__hive) {
-    return window.__hive;
+  if (typeof window !== "undefined" && window.__hive?.daemon) {
+    return { request: window.__hive.daemon.request };
   }
   if (typeof window !== "undefined") {
     const params = new URLSearchParams(window.location.search);
@@ -119,12 +132,32 @@ export function resolveApiConfig(): ApiConfig {
   return { baseUrl: "http://127.0.0.1:3117", token: "" };
 }
 
-async function call<T>(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
+async function request(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<Response> {
+  if ("request" in cfg) {
+    const headers = Object.fromEntries(new Headers(init.headers).entries());
+    const serialized = await cfg.request(path, {
+      method: init.method,
+      headers,
+      body: typeof init.body === "string" ? init.body : undefined,
+    });
+    const body = serialized.body === "" ? null : serialized.body;
+    return new Response(body, { status: serialized.status, statusText: serialized.statusText });
+  }
+  return fetch(`${cfg.baseUrl}${path}`, {
     ...init,
     headers: {
       ...(init.headers ?? {}),
       authorization: `Bearer ${cfg.token}`,
+      ...(init.body ? { "content-type": "application/json" } : {}),
+    },
+  });
+}
+
+async function call<T>(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<T> {
+  const res = await request(cfg, path, {
+    ...init,
+    headers: {
+      ...(init.headers ?? {}),
       ...(init.body ? { "content-type": "application/json" } : {}),
     },
   });
@@ -135,11 +168,10 @@ async function call<T>(cfg: ApiConfig, path: string, init: RequestInit = {}): Pr
 }
 
 async function callVoid(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<void> {
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
+  const res = await request(cfg, path, {
     ...init,
     headers: {
       ...(init.headers ?? {}),
-      authorization: `Bearer ${cfg.token}`,
       ...(init.body ? { "content-type": "application/json" } : {}),
     },
   });
@@ -169,11 +201,10 @@ export async function consumeSSE(
   onEvent: (name: string, data: unknown) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
+  const res = await request(cfg, path, {
     ...init,
     headers: {
       ...(init.headers ?? {}),
-      authorization: `Bearer ${cfg.token}`,
       ...(init.body ? { "content-type": "application/json" } : {}),
       accept: "text/event-stream",
     },
@@ -380,10 +411,9 @@ export const api = {
 
 async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResult> {
   const path = "/api/sources";
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
+  const res = await request(cfg, path, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${cfg.token}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({ origin }),
