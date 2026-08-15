@@ -6,7 +6,6 @@ import {
   openSync,
   readFileSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
@@ -82,7 +81,8 @@ export type DeploymentStateStoreOptions = {
   fsyncDirectory?: (directory: string) => void;
   write?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
   lockTimeoutMs?: number;
-  staleLockMs?: number;
+  close?: (fd: number) => void;
+  lockWrite?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
 };
 
 export type DeploymentStateStore = {
@@ -195,7 +195,8 @@ export function openDeploymentStateStore(
   const rename = options.rename ?? renameSync;
   const lockPath = `${path}.lock`;
   const lockTimeoutMs = options.lockTimeoutMs ?? 5_000;
-  const staleLockMs = options.staleLockMs ?? 30_000;
+  const close = options.close ?? closeSync;
+  const lockWrite = options.lockWrite ?? writeSync;
   const writeBytes =
     options.write ??
     ((fd: number, bytes: Uint8Array, offset: number, length: number) =>
@@ -266,31 +267,6 @@ export function openDeploymentStateStore(
     Atomics.wait(shared, 0, 0, 10);
   };
 
-  const ownerIsLive = (pid: number): boolean => {
-    if (!Number.isSafeInteger(pid) || pid <= 0) return true;
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-      // EPERM and unknown platform errors are deliberately treated as live: only
-      // an unambiguous ESRCH permits reclaiming a stale owner lock.
-      return code !== "ESRCH";
-    }
-  };
-
-  const staleOwnerIsDead = (): boolean => {
-    try {
-      const ownerText = readFileSync(lockPath, "utf8").trim();
-      if (!/^\d+$/.test(ownerText)) return false;
-      const owner = Number.parseInt(ownerText, 10);
-      return !ownerIsLive(owner);
-    } catch {
-      // An unreadable or malformed owner is uncertain, so fail safely by waiting.
-      return false;
-    }
-  };
-
   const withLock = <T>(work: () => T): T => {
     const directory = dirname(path);
     try {
@@ -307,7 +283,7 @@ export function openDeploymentStateStore(
           const bytes = Buffer.from(`${process.pid}\n`);
           let offset = 0;
           while (offset < bytes.length) {
-            const written = writeSync(lockFd, bytes, offset, bytes.length - offset);
+            const written = lockWrite(lockFd, bytes, offset, bytes.length - offset);
             if (!Number.isInteger(written) || written <= 0 || written > bytes.length - offset) {
               throw new DeploymentStateError("deployment_state_lock_failed");
             }
@@ -315,7 +291,11 @@ export function openDeploymentStateStore(
           }
           fsyncSync(lockFd);
         } catch {
-          closeSync(lockFd);
+          try {
+            close(lockFd);
+          } catch {
+            // Preserve the primary stable owner-write failure.
+          }
           try {
             unlinkSync(lockPath);
           } catch {
@@ -327,18 +307,6 @@ export function openDeploymentStateStore(
         if (error instanceof DeploymentStateError) throw error;
         const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
         if (code !== "EEXIST") throw new DeploymentStateError("deployment_state_lock_failed");
-        try {
-          if (Date.now() - statSync(lockPath).mtimeMs > staleLockMs && staleOwnerIsDead()) {
-            unlinkSync(lockPath);
-            fsyncDirectory(directory);
-            continue;
-          }
-        } catch (staleError) {
-          const staleCode =
-            staleError instanceof Error ? (staleError as NodeJS.ErrnoException).code : undefined;
-          if (staleCode !== "ENOENT")
-            throw new DeploymentStateError("deployment_state_lock_failed");
-        }
         if (Date.now() >= deadline) throw new DeploymentStateError("deployment_state_lock_timeout");
         waitForLock();
       }
@@ -347,7 +315,7 @@ export function openDeploymentStateStore(
       return work();
     } finally {
       try {
-        closeSync(lockFd);
+        close(lockFd);
       } catch {
         // A failed close cannot expose an OS error through the store API.
       }

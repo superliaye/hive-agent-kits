@@ -202,21 +202,23 @@ describe("DeploymentStateStore", () => {
     const lock = `${path}.lock`;
     writeFileSync(lock, `${process.pid}\n`);
     utimesSync(lock, 1, 1);
-    const state = openDeploymentStateStore(path, { lockTimeoutMs: 20, staleLockMs: 1 });
+    const state = openDeploymentStateStore(path, { lockTimeoutMs: 20 });
     expect(() =>
       state.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op"),
     ).toThrow("deployment_state_lock_timeout");
     expect(existsSync(lock)).toBe(true);
   });
 
-  test("recovers an old lock whose recorded owner is dead", () => {
+  test("leaves an old dead-owner lock for explicit manual recovery", () => {
     mkdirSync(join(root, "kit"), { recursive: true });
     const lock = `${path}.lock`;
     writeFileSync(lock, "99999999\n");
     utimesSync(lock, 1, 1);
-    const state = openDeploymentStateStore(path, { lockTimeoutMs: 100, staleLockMs: 1 });
-    state.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op");
-    expect(state.read(key, "claude")?.lastAttempt.operationId).toBe("op");
+    const state = openDeploymentStateStore(path, { lockTimeoutMs: 20 });
+    expect(() =>
+      state.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op"),
+    ).toThrow("deployment_state_lock_timeout");
+    expect(existsSync(lock)).toBe(true);
   });
 
   test("redacts Windows drive paths with spaces and UNC paths", () => {
@@ -242,5 +244,25 @@ describe("DeploymentStateStore", () => {
     expect(() =>
       inaccessible.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op"),
     ).toThrow("deployment_state_lock_failed");
+  });
+
+  test("preserves the stable owner-write error when cleanup close fails", () => {
+    const state = openDeploymentStateStore(path, {
+      lockWrite: () => 0,
+      close: () => {
+        throw new Error("EIO: close /private/lock");
+      },
+    });
+    let thrown: unknown;
+    try {
+      state.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    if (thrown instanceof Error) {
+      expect(thrown.message).toBe("deployment_state_lock_failed");
+      expect(thrown.message).not.toContain("/private/lock");
+    }
   });
 });
