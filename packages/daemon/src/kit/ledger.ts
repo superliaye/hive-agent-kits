@@ -8,7 +8,7 @@ import { type Ledger, LedgerSchema } from "@hive/contract";
 import {
   type AtomicWriteOptions,
   atomicWriteFile,
-  withAdvisoryFileLock,
+  withCooperativeFileLock,
 } from "../lib/durable-file.ts";
 import type { DeployTarget, DeployTargets } from "./targets.ts";
 
@@ -96,6 +96,8 @@ export type LedgerMergeInput = {
 
 export type LedgerWriteOptions = AtomicWriteOptions & {
   lockTimeoutMs?: number;
+  lockStaleMs?: number;
+  lockUpdateMs?: number;
   beforeCommit?: (attempt: number) => void;
 };
 
@@ -149,29 +151,34 @@ export function mergeLedger(
   };
 
   const path = targets.ledgerPath();
-  return withAdvisoryFileLock(path, options.lockTimeoutMs ?? 5_000, () => {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const before = readLedgerBytes(path);
-      const current = parseLedgerBytes(before);
-      const next: Ledger = {
-        kitVersion: input.kitVersion || current.kitVersion,
-        agents: Array.from(new Set([...current.agents, ...input.targets])),
-        skills: mergeNames(current.skills, input.skills, dropSkill),
-        agentDefs: mergeNames(current.agentDefs, input.agents, dropAgent),
-        // Instructions remain the byte-compatible agent-kit name list. The accepted
-        // plan may explicitly remove a contribution after its whole-file rewrite
-        // succeeds, so only those factual removals are dropped.
-        instructions: mergeNames(current.instructions, input.instructions, dropInstruction),
-        plugins: mergeNames(current.plugins, input.plugins, new Set()),
-        bundles: mergeBundles(current.bundles, input.bundles),
-      };
-      options.beforeCommit?.(attempt);
-      if (readLedgerBytes(path) !== before) continue;
-      atomicWriteFile(path, Buffer.from(`${JSON.stringify(next, null, 2)}\n`), options);
-      return next;
-    }
-    throw new Error("ledger_concurrent_update");
-  });
+  return withCooperativeFileLock(
+    path,
+    options.lockTimeoutMs ?? 5_000,
+    () => {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const before = readLedgerBytes(path);
+        const current = parseLedgerBytes(before);
+        const next: Ledger = {
+          kitVersion: input.kitVersion || current.kitVersion,
+          agents: Array.from(new Set([...current.agents, ...input.targets])),
+          skills: mergeNames(current.skills, input.skills, dropSkill),
+          agentDefs: mergeNames(current.agentDefs, input.agents, dropAgent),
+          // Instructions remain the byte-compatible agent-kit name list. The accepted
+          // plan may explicitly remove a contribution after its whole-file rewrite
+          // succeeds, so only those factual removals are dropped.
+          instructions: mergeNames(current.instructions, input.instructions, dropInstruction),
+          plugins: mergeNames(current.plugins, input.plugins, new Set()),
+          bundles: mergeBundles(current.bundles, input.bundles),
+        };
+        options.beforeCommit?.(attempt);
+        if (readLedgerBytes(path) !== before) continue;
+        atomicWriteFile(path, Buffer.from(`${JSON.stringify(next, null, 2)}\n`), options);
+        return next;
+      }
+      throw new Error("ledger_concurrent_update");
+    },
+    { staleMs: options.lockStaleMs, updateMs: options.lockUpdateMs },
+  );
 }
 
 // Compute owned-but-deselected names by RE-READING the on-disk ledger NOW (A3:

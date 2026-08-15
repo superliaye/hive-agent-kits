@@ -1238,6 +1238,63 @@ try {
     });
   });
 
+  test("recovery receipt preserves a newer attempt after mark succeeds but acknowledgement fails", () => {
+    const path = operationPath();
+    const action = plan().actions[0];
+    if (!action) throw new Error("missing fixture action");
+    const initial = openDeployOperationStore(path, { now: () => 10 });
+    initial.createQueued({
+      operationId: "operation-old",
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token-current",
+      plan: plan(),
+      staged: staged(),
+    });
+    const recoveryState = openDeploymentStateStore(join(path, "..", "recovery-state.json"), {
+      now: () => 20,
+    });
+
+    openDeployOperationStore(path, {
+      now: () => 20,
+      onInterrupted: (operation) => {
+        markInterruptedDeploymentState(recoveryState, operation);
+        throw new Error("crash before operation-store acknowledgement");
+      },
+    });
+    expect(openDeployOperationStore(path).read("operation-old")?.recoveryPendingActions).toEqual([
+      action,
+    ]);
+    expect(recoveryState.readAll().interruptionReceipts).toContainEqual({
+      key: action.key,
+      target: action.target,
+      action: action.action,
+      operationId: "operation-old",
+    });
+    recoveryState.recordSuccess(
+      action.key,
+      action.target,
+      {
+        sourceId: "source-new",
+        contentSha: "c".repeat(64),
+        renderedHash: "d".repeat(64),
+        appliedAt: 30,
+      },
+      "operation-new",
+    );
+    const newerAttempt = recoveryState.read(action.key, action.target);
+    const revisionAfterNewerAttempt = recoveryState.readAll().revision;
+
+    const recovered = openDeployOperationStore(path, {
+      now: () => 40,
+      onInterrupted: (operation) => markInterruptedDeploymentState(recoveryState, operation),
+    });
+
+    expect(recovered.read("operation-old")?.recoveryPendingActions).toEqual([]);
+    expect(recoveryState.read(action.key, action.target)).toEqual(newerAttempt);
+    expect(recoveryState.readAll().revision).toBe(revisionAfterNewerAttempt);
+  });
+
   test("running and terminal transitions retry bounded transient durable write failures", () => {
     const path = operationPath();
     let failuresRemaining = 0;

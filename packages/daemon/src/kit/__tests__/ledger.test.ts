@@ -288,35 +288,40 @@ describe("ledger", () => {
     expect(readLedger(targets)?.skills).toEqual([{ name: "partial" }]);
   });
 
-  test("retries a concurrent external agent-kit process write observed during Hive's RMW", async () => {
+  test("serializes a real agent-kit protocol writer with Hive so both RMW updates survive", async () => {
     const targets = failSafeDeployTargets();
     writeLedgerFile({ ...emptyLedger(), skills: [{ name: "before" }] });
     const ready = join(tmpRoot, "agent-kit.ready");
-    const trigger = join(tmpRoot, "agent-kit.trigger");
-    const done = join(tmpRoot, "agent-kit.done");
-    const external = {
-      ...emptyLedger(),
-      skills: [{ name: "before" }, { name: "agent-kit" }],
-    };
-    const child = Bun.spawn(
+    const release = join(tmpRoot, "agent-kit.release");
+    const hiveDone = join(tmpRoot, "hive.done");
+    const agentKit = Bun.spawn(
       [
         process.execPath,
         "-e",
-        `import { existsSync, writeFileSync } from "node:fs";
+        `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import lockfile from "proper-lockfile";
+const unlock = await lockfile.lock(process.env.LEDGER_PATH, {
+  realpath: false,
+  stale: 10000,
+  update: 2000,
+  retries: 0,
+});
+const current = JSON.parse(readFileSync(process.env.LEDGER_PATH, "utf8"));
 writeFileSync(process.env.READY_PATH, "ready");
 const wait = new Int32Array(new SharedArrayBuffer(4));
-while (!existsSync(process.env.TRIGGER_PATH)) Atomics.wait(wait, 0, 0, 5);
-writeFileSync(process.env.LEDGER_PATH, process.env.LEDGER_BYTES);
-writeFileSync(process.env.DONE_PATH, "done");`,
+while (!existsSync(process.env.RELEASE_PATH)) Atomics.wait(wait, 0, 0, 5);
+writeFileSync(process.env.LEDGER_PATH, JSON.stringify({
+  ...current,
+  skills: [...current.skills, { name: "agent-kit" }],
+}, null, 2) + "\\n");
+await unlock();`,
       ],
       {
         env: {
           ...process.env,
           READY_PATH: ready,
-          TRIGGER_PATH: trigger,
-          DONE_PATH: done,
+          RELEASE_PATH: release,
           LEDGER_PATH: targets.ledgerPath(),
-          LEDGER_BYTES: `${JSON.stringify(external, null, 2)}\n`,
         },
         stderr: "pipe",
       },
@@ -325,14 +330,86 @@ writeFileSync(process.env.DONE_PATH, "done");`,
       await Bun.sleep(5);
     }
     expect(existsSync(ready)).toBe(true);
-    let injected = false;
+    const ledgerModule = new URL("../ledger.ts", import.meta.url).href;
+    const targetsModule = new URL("../targets.ts", import.meta.url).href;
+    const hive = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { writeFileSync } from "node:fs";
+const { mergeLedger } = await import(process.env.LEDGER_MODULE);
+const { failSafeDeployTargets } = await import(process.env.TARGETS_MODULE);
+mergeLedger(failSafeDeployTargets(), {
+  kitVersion: "",
+  targets: ["claude"],
+  skills: ["hive"],
+  agents: [],
+  instructions: [],
+  plugins: [],
+  bundles: [],
+}, [], [], []);
+writeFileSync(process.env.HIVE_DONE_PATH, "done");`,
+      ],
+      {
+        env: {
+          ...process.env,
+          LEDGER_MODULE: ledgerModule,
+          TARGETS_MODULE: targetsModule,
+          HIVE_DONE_PATH: hiveDone,
+        },
+        stderr: "pipe",
+      },
+    );
+    await Bun.sleep(100);
+    const hiveWaited = !existsSync(hiveDone);
+    writeFileSync(release, "go");
+    expect(await agentKit.exited).toBe(0);
+    expect(await hive.exited).toBe(0);
+    expect(hiveWaited).toBe(true);
+
+    expect(
+      readLedger(targets)
+        ?.skills.map((entry) => entry.name)
+        .sort(),
+    ).toEqual(["agent-kit", "before", "hive"]);
+  });
+
+  test("recovers the cooperative Ledger lock after its owner process crashes", async () => {
+    const targets = failSafeDeployTargets();
+    writeLedgerFile({ ...emptyLedger(), skills: [{ name: "before" }] });
+    const ready = join(tmpRoot, "crashed-lock.ready");
+    const lockModule = new URL("../../lib/durable-file.ts", import.meta.url).href;
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { writeFileSync } from "node:fs";
+const { withCooperativeFileLock } = await import(process.env.LOCK_MODULE);
+withCooperativeFileLock(process.env.LEDGER_PATH, 0, () => {
+  writeFileSync(process.env.READY_PATH, "ready");
+  process.kill(process.pid, "SIGKILL");
+});`,
+      ],
+      {
+        env: {
+          ...process.env,
+          LOCK_MODULE: lockModule,
+          LEDGER_PATH: targets.ledgerPath(),
+          READY_PATH: ready,
+        },
+        stderr: "pipe",
+      },
+    );
+    await child.exited;
+    expect(existsSync(ready)).toBe(true);
+    expect(existsSync(`${targets.ledgerPath()}.lock`)).toBe(true);
 
     const merged = mergeLedger(
       targets,
       {
         kitVersion: "",
         targets: ["claude"],
-        skills: ["hive"],
+        skills: ["recovered"],
         agents: [],
         instructions: [],
         plugins: [],
@@ -341,23 +418,11 @@ writeFileSync(process.env.DONE_PATH, "done");`,
       [],
       [],
       [],
-      {
-        beforeCommit: () => {
-          if (injected) return;
-          injected = true;
-          writeFileSync(trigger, "go");
-          const wait = new Int32Array(new SharedArrayBuffer(4));
-          while (!existsSync(done)) Atomics.wait(wait, 0, 0, 5);
-        },
-      },
+      { lockTimeoutMs: 5_000, lockStaleMs: 2_000, lockUpdateMs: 1_000 },
     );
-    await child.exited;
 
-    expect(merged.skills.map((entry) => entry.name).sort()).toEqual([
-      "agent-kit",
-      "before",
-      "hive",
-    ]);
+    expect(merged.skills.map((entry) => entry.name).sort()).toEqual(["before", "recovered"]);
+    expect(existsSync(`${targets.ledgerPath()}.lock`)).toBe(false);
   });
 
   test("retains committed Ledger bytes when replacement crashes before rename", () => {

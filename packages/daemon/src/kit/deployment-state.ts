@@ -54,6 +54,13 @@ export const DeploymentStateRecord = z.object({
 });
 export type DeploymentStateRecord = z.infer<typeof DeploymentStateRecord>;
 
+const DeploymentInterruptionReceipt = z.object({
+  key: CapabilityKey,
+  target: DeployTarget,
+  action: AttemptAction,
+  operationId: z.string(),
+});
+
 const LegacyInstructionFingerprint = z.object({
   target: DeployTarget,
   renderedHash: z.string(),
@@ -65,6 +72,7 @@ export const DeploymentStateFile = z.object({
   revision: z.number().int().nonnegative(),
   records: z.array(DeploymentStateRecord),
   legacyInstructionFingerprints: z.array(LegacyInstructionFingerprint).default([]),
+  interruptionReceipts: z.array(DeploymentInterruptionReceipt).optional(),
 });
 export type DeploymentStateFile = z.infer<typeof DeploymentStateFile>;
 
@@ -117,7 +125,13 @@ export type DeploymentStateStore = {
 };
 
 function emptyFile(): DeploymentStateFile {
-  return { schemaVersion: 1, revision: 0, records: [], legacyInstructionFingerprints: [] };
+  return {
+    schemaVersion: 1,
+    revision: 0,
+    records: [],
+    legacyInstructionFingerprints: [],
+    interruptionReceipts: [],
+  };
 }
 
 function recordId(
@@ -125,6 +139,10 @@ function recordId(
   target: z.infer<typeof DeployTarget>,
 ): string {
   return `${serializeCapabilityKey(key)}\u0000${target}`;
+}
+
+function interruptionReceiptId(receipt: z.infer<typeof DeploymentInterruptionReceipt>): string {
+  return `${recordId(receipt.key, receipt.target)}\u0000${receipt.action}\u0000${receipt.operationId}`;
 }
 
 function redactDetail(detail: string): string {
@@ -414,25 +432,51 @@ export function openDeploymentStateStore(
       const parsedKey = CapabilityKey.parse(key);
       const parsedTarget = DeployTarget.parse(target);
       const parsedAction = AttemptAction.parse(action);
-      const existing = current().records.find(
-        (record) =>
-          recordId(record.key, record.target) === recordId(parsedKey, parsedTarget) &&
-          record.lastAttempt.outcome === "interrupted" &&
-          record.lastAttempt.operationId === operationId &&
-          record.lastAttempt.action === parsedAction,
-      );
-      if (existing) return existing;
-      return commit(parsedKey, parsedTarget, (previous) => ({
-        key: CapabilityKey.parse(key),
-        target: DeployTarget.parse(target),
-        ...(previous?.applied ? { applied: previous.applied } : {}),
-        lastAttempt: {
-          action: parsedAction,
-          outcome: "interrupted",
-          attemptedAt: now(),
-          operationId,
-        },
-      }));
+      const receipt = DeploymentInterruptionReceipt.parse({
+        key: parsedKey,
+        target: parsedTarget,
+        action: parsedAction,
+        operationId,
+      });
+      return withLock(() => {
+        const file = load() ?? migrate();
+        const id = recordId(parsedKey, parsedTarget);
+        const previous = file.records.find((record) => recordId(record.key, record.target) === id);
+        const receipts = file.interruptionReceipts ?? [];
+        const alreadyAccounted = receipts.some(
+          (candidate) => interruptionReceiptId(candidate) === interruptionReceiptId(receipt),
+        );
+        if (alreadyAccounted) {
+          if (!previous) throw new DeploymentStateError("deployment_state_corrupt");
+          return previous;
+        }
+        const sameLastAttempt =
+          previous?.lastAttempt.outcome === "interrupted" &&
+          previous.lastAttempt.operationId === operationId &&
+          previous.lastAttempt.action === parsedAction;
+        const nextRecord = sameLastAttempt
+          ? previous
+          : DeploymentStateRecord.parse({
+              key: parsedKey,
+              target: parsedTarget,
+              ...(previous?.applied ? { applied: previous.applied } : {}),
+              lastAttempt: {
+                action: parsedAction,
+                outcome: "interrupted",
+                attemptedAt: now(),
+                operationId,
+              },
+            });
+        const records = file.records.filter((record) => recordId(record.key, record.target) !== id);
+        records.push(nextRecord);
+        write({
+          ...file,
+          revision: file.revision + 1,
+          records,
+          interruptionReceipts: [...receipts, receipt],
+        });
+        return nextRecord;
+      });
     },
   };
 }
