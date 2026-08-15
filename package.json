@@ -7,6 +7,7 @@
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
     "test": "bun test",
+    "test:manifest-interop": "bun run scripts/test-cross-repo-manifest-lock.ts",
     "check": "biome check",
     "check:no-float": "bun run scripts/check-no-floating-suppressions.ts",
     "typecheck": "bun run --filter '*' typecheck",

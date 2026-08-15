@@ -21,14 +21,12 @@
     "effect": "4.0.0-beta.75",
     "hono": "^4.12.19",
     "pino": "^10.3.1",
-    "proper-lockfile": "4.1.2",
     "yaml": "^2.9.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^25.8.0",
-    "@types/proper-lockfile": "4.1.4",
     "drizzle-kit": "^0.31.10"
   },
   "peerDependencies": {
