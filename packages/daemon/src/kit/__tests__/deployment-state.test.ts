@@ -1,13 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type DeploymentApplied, openDeploymentStateStore } from "../deployment-state.ts";
@@ -359,28 +351,38 @@ describe("DeploymentStateStore", () => {
     expect(file.revision).toBe(2);
   });
 
-  test("does not reclaim an old lock whose owner is still live", () => {
-    mkdirSync(join(root, "kit"), { recursive: true });
-    const lock = `${path}.lock`;
-    writeFileSync(lock, `${process.pid}\n`);
-    utimesSync(lock, 1, 1);
-    const state = openDeploymentStateStore(path, { lockTimeoutMs: 20 });
-    expect(() =>
-      state.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op"),
-    ).toThrow("deployment_state_lock_timeout");
-    expect(existsSync(lock)).toBe(true);
-  });
+  test("recovers after a writer is killed while holding the state lock", async () => {
+    const moduleUrl = new URL("../deployment-state.ts", import.meta.url).href;
+    const writer = Bun.spawn({
+      cmd: [
+        "bun",
+        "-e",
+        `import { openDeploymentStateStore } from ${JSON.stringify(moduleUrl)};
+         openDeploymentStateStore(process.env.STATE_PATH, {
+           rename: () => process.kill(process.pid, "SIGKILL"),
+         }).recordFailure(
+           { kind: "skill", name: "crashed" },
+           "claude",
+           { action: "add", code: "io", detail: "write failed" },
+           "crashed-op",
+         );`,
+      ],
+      env: { ...process.env, STATE_PATH: path },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await writer.exited).not.toBe(0);
 
-  test("leaves an old dead-owner lock for explicit manual recovery", () => {
-    mkdirSync(join(root, "kit"), { recursive: true });
-    const lock = `${path}.lock`;
-    writeFileSync(lock, "99999999\n");
-    utimesSync(lock, 1, 1);
-    const state = openDeploymentStateStore(path, { lockTimeoutMs: 20 });
+    const recovered = openDeploymentStateStore(path, { lockTimeoutMs: 100 });
     expect(() =>
-      state.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op"),
-    ).toThrow("deployment_state_lock_timeout");
-    expect(existsSync(lock)).toBe(true);
+      recovered.recordFailure(
+        key,
+        "claude",
+        { action: "add", code: "io", detail: "write failed" },
+        "recovered-op",
+      ),
+    ).not.toThrow();
+    expect(recovered.read(key, "claude")?.lastAttempt.operationId).toBe("recovered-op");
   });
 
   test("redacts Windows drive paths with spaces and UNC paths", () => {
@@ -406,25 +408,5 @@ describe("DeploymentStateStore", () => {
     expect(() =>
       inaccessible.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op"),
     ).toThrow("deployment_state_lock_failed");
-  });
-
-  test("preserves the stable owner-write error when cleanup close fails", () => {
-    const state = openDeploymentStateStore(path, {
-      lockWrite: () => 0,
-      close: () => {
-        throw new Error("EIO: close /private/lock");
-      },
-    });
-    let thrown: unknown;
-    try {
-      state.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op");
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(Error);
-    if (thrown instanceof Error) {
-      expect(thrown.message).toBe("deployment_state_lock_failed");
-      expect(thrown.message).not.toContain("/private/lock");
-    }
   });
 });

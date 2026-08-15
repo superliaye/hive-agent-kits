@@ -13,6 +13,7 @@ import { dirname } from "node:path";
 import { CapabilityKey, serializeCapabilityKey } from "@hive/capability-schema";
 import { DeployTarget } from "@hive/contract";
 import { z } from "zod";
+import { withAdvisoryFileLock } from "../lib/durable-file.ts";
 import { readFingerprintSidecar } from "./fingerprint.ts";
 
 const AttemptAction = z.enum(["add", "update", "remove"]);
@@ -90,8 +91,6 @@ export type DeploymentStateStoreOptions = {
   fsyncDirectory?: (directory: string) => void;
   write?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
   lockTimeoutMs?: number;
-  close?: (fd: number) => void;
-  lockWrite?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
 };
 
 export type DeploymentStateStore = {
@@ -224,10 +223,7 @@ export function openDeploymentStateStore(
 ): DeploymentStateStore {
   const now = options.now ?? Date.now;
   const rename = options.rename ?? renameSync;
-  const lockPath = `${path}.lock`;
   const lockTimeoutMs = options.lockTimeoutMs ?? 5_000;
-  const close = options.close ?? closeSync;
-  const lockWrite = options.lockWrite ?? writeSync;
   const writeBytes =
     options.write ??
     ((fd: number, bytes: Uint8Array, offset: number, length: number) =>
@@ -315,69 +311,27 @@ export function openDeploymentStateStore(
     }
   };
 
-  const waitForLock = (): void => {
-    const shared = new Int32Array(new SharedArrayBuffer(4));
-    Atomics.wait(shared, 0, 0, 10);
-  };
-
   const withLock = <T>(work: () => T): T => {
-    const directory = dirname(path);
+    let workFailure: { error: unknown } | undefined;
     try {
-      mkdirSync(directory, { recursive: true });
-    } catch {
-      throw new DeploymentStateError("deployment_state_lock_failed");
-    }
-    const deadline = Date.now() + lockTimeoutMs;
-    let lockFd: number | undefined;
-    while (lockFd === undefined) {
-      try {
-        lockFd = openSync(lockPath, "wx", 0o600);
+      return withAdvisoryFileLock(path, lockTimeoutMs, () => {
         try {
-          const bytes = Buffer.from(`${process.pid}\n`);
-          let offset = 0;
-          while (offset < bytes.length) {
-            const written = lockWrite(lockFd, bytes, offset, bytes.length - offset);
-            if (!Number.isInteger(written) || written <= 0 || written > bytes.length - offset) {
-              throw new DeploymentStateError("deployment_state_lock_failed");
-            }
-            offset += written;
-          }
-          fsyncSync(lockFd);
-        } catch {
-          try {
-            close(lockFd);
-          } catch {
-            // Preserve the primary stable owner-write failure.
-          }
-          try {
-            unlinkSync(lockPath);
-          } catch {
-            // The failed lock is recovered by the next acquisition attempt.
-          }
-          throw new DeploymentStateError("deployment_state_lock_failed");
+          return work();
+        } catch (error) {
+          workFailure = { error };
+          throw error;
         }
-      } catch (error) {
-        if (error instanceof DeploymentStateError) throw error;
-        const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-        if (code !== "EEXIST") throw new DeploymentStateError("deployment_state_lock_failed");
-        if (Date.now() >= deadline) throw new DeploymentStateError("deployment_state_lock_timeout");
-        waitForLock();
+      });
+    } catch (error) {
+      if (workFailure) throw workFailure.error;
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String(error.code)
+          : undefined;
+      if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") {
+        throw new DeploymentStateError("deployment_state_lock_timeout");
       }
-    }
-    try {
-      return work();
-    } finally {
-      try {
-        close(lockFd);
-      } catch {
-        // A failed close cannot expose an OS error through the store API.
-      }
-      try {
-        unlinkSync(lockPath);
-        fsyncDirectory(directory);
-      } catch {
-        // A failed release cannot replace the committed outcome or its error.
-      }
+      throw new DeploymentStateError("deployment_state_lock_failed");
     }
   };
 

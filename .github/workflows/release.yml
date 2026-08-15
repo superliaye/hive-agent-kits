@@ -160,19 +160,10 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git ls-remote origin refs/heads/main | awk 'NR == 1 { print $1 }')" = "$SOURCE_COMMIT"
-          if gh release view "hive-g$SOURCE_COMMIT" >/dev/null 2>&1; then
-            echo "release tag already exists: hive-g$SOURCE_COMMIT" >&2
-            exit 1
-          fi
-          gh release create "hive-g$SOURCE_COMMIT" \
-            release-assets/Hive-darwin-arm64.tar.gz \
-            release-assets/Hive-darwin-x64.tar.gz \
-            release-assets/hive-daemon-linux-x64 \
-            stable.json \
-            --target "$SOURCE_COMMIT" \
-            --title "Hive g${SOURCE_COMMIT:0:12}" \
-            --notes "Verified matched Hive Shell and Daemon release from $SOURCE_COMMIT." \
-            --latest=false
+          scripts/publish-immutable-release.sh \
+            --source-commit "$SOURCE_COMMIT" \
+            --assets release-assets \
+            --manifest stable.json
       - name: Advance stable channel
         env:
           GH_TOKEN: ${{ github.token }}
