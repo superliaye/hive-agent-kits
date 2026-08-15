@@ -110,7 +110,6 @@ export function productionGitProcess(): GitProcess {
       signal(child, "SIGTERM");
       if (!killTimer) {
         killTimer = setTimeout(() => signal(child, "SIGKILL"), KILL_GRACE_MS);
-        killTimer.unref();
       }
     };
     const timer = setTimeout(() => terminate("timeout"), options.timeoutMs ?? 120_000);
@@ -129,6 +128,7 @@ export function productionGitProcess(): GitProcess {
         ]);
       } catch (error) {
         signal(child, "SIGKILL");
+        if (killTimer) clearTimeout(killTimer);
         await child.exited.catch(() => undefined);
         throw error;
       }
@@ -144,7 +144,6 @@ export function productionGitProcess(): GitProcess {
       return result;
     } finally {
       clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
     }
   };
 

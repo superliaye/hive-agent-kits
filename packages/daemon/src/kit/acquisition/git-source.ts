@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import type { SourceLocator } from "@hive/contract";
-import { commitStagedMirror } from "../mirror.ts";
+import { commitStagedMirror, createOwnedMirrorStage } from "../mirror.ts";
 import type { MirrorProvenance } from "../types.ts";
 import {
   type GitProcess,
@@ -116,6 +116,14 @@ function text(bytes: Uint8Array): string {
 }
 
 type GitPhase = "fetch" | "subpath" | "other";
+
+function httpsOnly(args: readonly string[]): readonly string[] {
+  return ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always", ...args];
+}
+
+function httpsOnlyEnv(daemonEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...daemonEnv, GIT_ALLOW_PROTOCOL: "https" };
+}
 
 function mapGitFailure(error: unknown, phase: GitPhase): GitAcquireError {
   if (error instanceof GitAcquireError) return error;
@@ -222,14 +230,7 @@ async function materializeRawTree(
     return remaining;
   };
   const metadataLimit = Math.max(1, Math.min(128 * 1024 * 1024, limits.maxFiles * 8192));
-  const httpsOnly = (args: readonly string[]) => [
-    "-c",
-    "protocol.allow=never",
-    "-c",
-    "protocol.https.allow=always",
-    ...args,
-  ];
-  const networkSafeEnv = { ...daemonEnv, GIT_ALLOW_PROTOCOL: "https" };
+  const networkSafeEnv = httpsOnlyEnv(daemonEnv);
   let listing: Uint8Array;
   try {
     listing = (
@@ -355,10 +356,11 @@ export async function acquireGitSource(
         args: readonly string[],
         phase: GitPhase = "other",
         maxStdoutBytes?: number,
+        networkCapable = false,
       ) => {
         try {
-          return await git.run(args, {
-            env: daemonEnv,
+          return await git.run(networkCapable ? httpsOnly(args) : args, {
+            env: networkCapable ? httpsOnlyEnv(daemonEnv) : daemonEnv,
             timeoutMs: remainingMs(),
             ...(maxStdoutBytes === undefined ? {} : { maxStdoutBytes }),
           });
@@ -486,7 +488,7 @@ export async function acquireGitSource(
           ? `${resolvedCommit}^{tree}`
           : `${resolvedCommit}:${locator.subpath}`;
       const selectedType = text(
-        (await run(["-C", cache, "cat-file", "-t", selectedObject], "subpath", 16)).stdout,
+        (await run(["-C", cache, "cat-file", "-t", selectedObject], "subpath", 16, true)).stdout,
       );
       if (selectedType !== "tree") {
         throw new GitAcquireError("invalid_subpath", "selected subpath is not a directory");
@@ -498,9 +500,8 @@ export async function acquireGitSource(
         throw new GitAcquireError("io", "git returned an invalid tree identity");
       }
 
-      mkdirSync(options.tmpRoot, { recursive: true });
       remainingMs();
-      stage = mkdtempSync(join(options.tmpRoot, "extract-git-"));
+      stage = createOwnedMirrorStage(options.tmpRoot);
       await materializeRawTree(git, cache, treeIdentity, stage, limits, deadlineMs, daemonEnv);
       const provenance: MirrorProvenance = {
         sha: resolvedCommit,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -444,5 +445,33 @@ describe("working-tree Source acquisition", () => {
       readFileSync(join(work, "mirror", "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
     ).toContain("name: tracked");
     expect(statusCalls).toBe(4);
+  });
+
+  test("rejects a same-path parent directory inode replacement during capture", async () => {
+    const repo = repository();
+    const work = workRoot();
+    const parent = join(repo, "nested", "kit", "capabilities", "skills", "tracked");
+    const held = join(work, "held");
+    const replacement = join(work, "replacement");
+    cpSync(parent, replacement, { recursive: true });
+    let statusCalls = 0;
+    const process = localGitProcess((args) => {
+      if (!args.includes("status")) return;
+      statusCalls++;
+      if (statusCalls === 2) {
+        renameSync(parent, held);
+        renameSync(replacement, parent);
+      }
+    });
+
+    await expectCode(
+      () =>
+        acquireWorkingTree(
+          { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
+          join(work, "mirror"),
+          { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
+        ),
+      "working_tree_changed",
+    );
   });
 });

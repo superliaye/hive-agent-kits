@@ -277,6 +277,44 @@ describe("git Source acquisition", () => {
     }
   });
 
+  test("still kills a TERM-resistant descendant after the Git leader and pipes exit", async () => {
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const bin = join(work, "bin");
+    const descendantFile = join(work, "descendant");
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "git"),
+      `#!/bin/sh
+trap 'exit 0' TERM
+(trap '' TERM; exec 1>&- 2>&-; while :; do sleep 1; done) &
+echo $! > "${descendantFile}"
+while :; do sleep 1; done
+`,
+    );
+    chmodSync(join(bin, "git"), 0o755);
+    const running = productionGitProcess().run(["status"], {
+      env: { PATH: bin },
+      timeoutMs: 20,
+    });
+
+    try {
+      await expect(running).rejects.toMatchObject({ timedOut: true });
+      await Bun.sleep(150);
+      const descendant = Number(readFileSync(descendantFile, "utf8"));
+      expect(() => process.kill(descendant, 0)).toThrow();
+    } finally {
+      if (existsSync(descendantFile)) {
+        try {
+          process.kill(Number(readFileSync(descendantFile, "utf8")), "SIGKILL");
+        } catch {
+          // The hardened runner already killed the descendant.
+        }
+      }
+      await running.catch(() => undefined);
+    }
+  });
+
   test("caps retained Git diagnostics while draining the child stream", async () => {
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
@@ -690,6 +728,34 @@ describe("git Source acquisition", () => {
     expect(blobRead?.args).toContain("protocol.allow=never");
     expect(blobRead?.args).toContain("protocol.https.allow=always");
     expect(blobRead?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+  });
+
+  test("protects selected-subpath lazy hydration with the HTTPS-only Git policy", async () => {
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
+    const git = testGitProcess(async (args, options) => {
+      calls.push({ args, env: options?.env });
+      return emptyTreeResult(args);
+    });
+
+    await acquireGitSource(
+      {
+        kind: "git",
+        repoUrl: "https://example.invalid/acme/kits.git",
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: "capabilities",
+      },
+      join(work, "mirror"),
+      { cacheRoot: join(work, "cache"), tmpRoot: join(work, "tmp"), process: git },
+    );
+
+    const typeLookup = calls.find(
+      (call) => call.args.includes("cat-file") && call.args.includes("-t"),
+    );
+    expect(typeLookup?.args).toContain("protocol.allow=never");
+    expect(typeLookup?.args).toContain("protocol.https.allow=always");
+    expect(typeLookup?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
   });
 
   test("blocks ambient insteadOf rewrites from HTTPS to a local protocol", async () => {

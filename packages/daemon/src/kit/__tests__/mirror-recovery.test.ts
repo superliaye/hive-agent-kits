@@ -16,7 +16,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { commitStagedMirror, localSyncMirror, mirrorExists, recoverMirror } from "../mirror.ts";
+import {
+  commitStagedMirror,
+  localSyncMirror,
+  mirrorExists,
+  recoverMirror,
+  sweepStaleTmp,
+} from "../mirror.ts";
 import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
@@ -84,6 +90,31 @@ describe("recoverMirror", () => {
     localSyncMirror(mirrorRoot, targets.kitTmpRoot(), starter);
 
     expect(existsSync(join(active, "owned"))).toBe(true);
+  });
+
+  test("startup cleanup preserves another live Daemon's stage and removes abandoned remnants", async () => {
+    const owner = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], {
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    const live = join(targets.kitTmpRoot(), `extract-owner-${owner.pid}-active`);
+    const legacy = join(targets.kitTmpRoot(), "extract-legacy-abandoned");
+    const malformed = join(targets.kitTmpRoot(), "extract-owner-not-a-pid");
+    mkdirSync(live, { recursive: true });
+    mkdirSync(legacy, { recursive: true });
+    mkdirSync(malformed, { recursive: true });
+
+    try {
+      sweepStaleTmp(targets.kitTmpRoot());
+
+      expect(existsSync(live)).toBe(true);
+      expect(existsSync(legacy)).toBe(false);
+      expect(existsSync(malformed)).toBe(false);
+    } finally {
+      owner.kill("SIGKILL");
+      await owner.exited;
+    }
   });
 
   test("commits the staged rename before running prior-Mirror cleanup", () => {

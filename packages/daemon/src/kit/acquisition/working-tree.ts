@@ -7,7 +7,6 @@ import {
   fstatSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   readlinkSync,
@@ -19,7 +18,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceLocator } from "@hive/contract";
-import { commitStagedMirror } from "../mirror.ts";
+import { commitStagedMirror, createOwnedMirrorStage } from "../mirror.ts";
 import type { MirrorProvenance } from "../types.ts";
 import { type GitProcess, GitProcessFailure, productionGitProcess } from "./git-process.ts";
 import { DEFAULT_TREE_LIMITS, type TreeLimits } from "./tree-guard.ts";
@@ -162,10 +161,11 @@ function validateSourcePath(
   repoRoot: string,
   selectedRoot: string,
   repoRelative: string,
+  pinnedParents: Map<string, DirectoryIdentity>,
 ): {
   source: string;
   selectedRelative: string;
-  parentIdentity: string;
+  parentIdentity: DirectoryIdentity;
 } {
   if (!safeRelativePath(repoRelative) || repoRelative === ".") {
     throw new WorkingTreeAcquireError("unsafe_tree", "Git listed an unsafe working tree path");
@@ -183,21 +183,35 @@ function validateSourcePath(
   }
   // Git should not enumerate through a symlinked parent, but make the staging
   // boundary independent of that implementation detail.
-  let parentIdentity: string;
+  let parentIdentity: DirectoryIdentity;
   try {
-    parentIdentity = realpathSync(dirname(source));
+    const path = realpathSync(dirname(source));
+    const parentStat = statSync(path);
+    if (!parentStat.isDirectory()) throw new Error("not a directory");
+    parentIdentity = { path, dev: parentStat.dev, ino: parentStat.ino };
   } catch {
     throw new WorkingTreeRaceError("working tree parent changed before capture");
   }
-  if (!containedBy(parentIdentity, selectedRoot)) {
+  if (!containedBy(parentIdentity.path, selectedRoot)) {
     throw new WorkingTreeAcquireError("unsafe_tree", "working tree path escapes the selected tree");
   }
+  const pinned = pinnedParents.get(parentIdentity.path);
+  if (pinned && !sameInode(pinned, parentIdentity)) {
+    throw new WorkingTreeRaceError("working tree parent changed before capture");
+  }
+  if (!pinned) pinnedParents.set(parentIdentity.path, parentIdentity);
   return { source, selectedRelative, parentIdentity };
 }
 
 class WorkingTreeRaceError extends Error {
   override readonly name = "WorkingTreeRaceError";
 }
+
+type DirectoryIdentity = {
+  path: string;
+  dev: number;
+  ino: number;
+};
 
 function sameInode(a: { dev: number; ino: number }, b: { dev: number; ino: number }): boolean {
   return a.dev === b.dev && a.ino === b.ino;
@@ -215,10 +229,20 @@ function descriptorResolvesWithin(fd: number, selectedRoot: string): boolean {
   return true;
 }
 
-function unchangedParent(parent: string, identity: string, selectedRoot: string): boolean {
+function unchangedParent(
+  parent: string,
+  identity: DirectoryIdentity,
+  selectedRoot: string,
+): boolean {
   try {
-    const after = realpathSync(parent);
-    return after === identity && containedBy(after, selectedRoot);
+    const path = realpathSync(parent);
+    const after = statSync(path);
+    return (
+      path === identity.path &&
+      after.isDirectory() &&
+      sameInode(after, identity) &&
+      containedBy(path, selectedRoot)
+    );
   } catch {
     return false;
   }
@@ -261,11 +285,13 @@ function readSourceEntry(
   repoRoot: string,
   selectedRoot: string,
   repoRelative: string,
+  pinnedParents: Map<string, DirectoryIdentity>,
 ): SourceEntry {
   const { source, selectedRelative, parentIdentity } = validateSourcePath(
     repoRoot,
     selectedRoot,
     repoRelative,
+    pinnedParents,
   );
   let sourceStat: ReturnType<typeof lstatSync>;
   try {
@@ -461,6 +487,7 @@ export async function acquireWorkingTree(
   const deadlineMs = Date.now() + limits.timeoutMs;
   const verified = await verifyWorkingTree(locator, options, true);
   const { topLevel, selectedRoot } = verified;
+  const pinnedParents = new Map<string, DirectoryIdentity>();
 
   for (let attempt = 0; attempt < 2; attempt++) {
     let stage: string | undefined;
@@ -482,9 +509,8 @@ export async function acquireWorkingTree(
         deadlineMs,
       );
       const paths = listed.split("\0").filter((path) => path.length > 0);
-      mkdirSync(options.tmpRoot, { recursive: true });
       checkDeadline(deadlineMs);
-      stage = mkdtempSync(join(options.tmpRoot, "extract-working-tree-"));
+      stage = createOwnedMirrorStage(options.tmpRoot);
       const identity = createHash("sha256");
       const seen = new Set<string>();
       const capturedFingerprints = new Map<string, string>();
@@ -492,7 +518,7 @@ export async function acquireWorkingTree(
       let bytes = 0;
       for (const repoRelative of paths) {
         checkDeadline(deadlineMs);
-        const entry = readSourceEntry(topLevel, selectedRoot, repoRelative);
+        const entry = readSourceEntry(topLevel, selectedRoot, repoRelative, pinnedParents);
         if (seen.has(entry.selectedRelative)) {
           throw new WorkingTreeAcquireError(
             "unsafe_tree",
@@ -529,7 +555,7 @@ export async function acquireWorkingTree(
         checkDeadline(deadlineMs);
         let entry: SourceEntry;
         try {
-          entry = readSourceEntry(topLevel, selectedRoot, repoRelative);
+          entry = readSourceEntry(topLevel, selectedRoot, repoRelative, pinnedParents);
         } catch {
           throw new WorkingTreeRaceError("working tree entry changed during verification");
         }

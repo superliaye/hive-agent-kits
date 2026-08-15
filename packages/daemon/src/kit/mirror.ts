@@ -8,6 +8,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -20,6 +21,7 @@ import { parseTar, topFolder } from "./tar.ts";
 import { MirrorProvenance } from "./types.ts";
 
 const PROVENANCE_FILE = ".hive-mirror.json";
+const OWNED_STAGE = /^extract-owner-([1-9]\d*)-/;
 
 export function readProvenance(mirrorRoot: string): MirrorProvenance | null {
   const p = join(mirrorRoot, PROVENANCE_FILE);
@@ -35,14 +37,32 @@ export function mirrorExists(mirrorRoot: string): boolean {
   return existsSync(join(mirrorRoot, "capabilities"));
 }
 
-// Sweep stale partial temp extract dirs from a prior aborted sync. This is a
-// startup-only operation: per-sync sweeps could delete another Source's live,
-// uniquely-named staging directory.
+function liveStageOwner(entry: string): boolean {
+  const match = OWNED_STAGE.exec(entry);
+  const rawPid = match?.[1];
+  if (!rawPid) return false;
+  const pid = Number(rawPid);
+  if (!Number.isSafeInteger(pid)) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
+  }
+}
+
+export function createOwnedMirrorStage(tmpRoot: string): string {
+  mkdirSync(tmpRoot, { recursive: true });
+  return mkdtempSync(join(tmpRoot, `extract-owner-${process.pid}-`));
+}
+
+// Sweep partial temp extract dirs from Daemons that are no longer alive. Legacy
+// and malformed names carry no live owner and are safe crash remnants to remove.
 export function sweepStaleTmp(tmpRoot: string): void {
   const root = tmpRoot;
   if (!existsSync(root)) return;
   for (const entry of readdirSync(root)) {
-    if (entry.startsWith("extract-")) {
+    if (entry.startsWith("extract-") && !liveStageOwner(entry)) {
       try {
         rmSync(join(root, entry), { recursive: true, force: true });
       } catch (err) {
@@ -123,9 +143,7 @@ export function writeMirror(
   tarBuf: Uint8Array,
   sha: string,
 ): MirrorProvenance {
-  mkdirSync(tmpRoot, { recursive: true });
-  const stageDir = join(tmpRoot, `extract-${sha.slice(0, 12)}-${Date.now()}`);
-  mkdirSync(stageDir, { recursive: true });
+  const stageDir = createOwnedMirrorStage(tmpRoot);
 
   const entries = parseTar(tarBuf);
   const strip = topFolder(entries);
@@ -221,9 +239,7 @@ export function localSyncMirror(mirrorRoot: string, tmpRoot: string, starterRoot
     throw new MissingStarterRoot(`starter capabilities not found at ${capsSrc}`);
   }
 
-  mkdirSync(tmpRoot, { recursive: true });
-  const stageDir = join(tmpRoot, `extract-local-${Date.now()}`);
-  mkdirSync(stageDir, { recursive: true });
+  const stageDir = createOwnedMirrorStage(tmpRoot);
 
   cpSync(capsSrc, join(stageDir, "capabilities"), { recursive: true });
   const presetsSrc = join(starterRoot, "presets");
