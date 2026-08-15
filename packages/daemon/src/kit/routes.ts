@@ -12,7 +12,11 @@ import { Effect } from "effect";
 import { Hono } from "hono";
 import { ZodError } from "zod";
 import { log } from "../lib/log.ts";
-import { DeployInProgressError, PlanStaleError } from "./deploy-coordinator.ts";
+import {
+  DeployInProgressError,
+  ImmutableInstallerStagingError,
+  PlanStaleError,
+} from "./deploy-coordinator.ts";
 import { DeployError } from "./effect/errors.ts";
 import type { KitSvc } from "./effect/kit-live.ts";
 import { DeploymentSnapshotChangedError } from "./overview.ts";
@@ -154,6 +158,9 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
       }
       if (error instanceof DeployInProgressError) {
         return c.json({ error: "deploy_in_progress", operationId: error.operationId }, 409);
+      }
+      if (error instanceof ImmutableInstallerStagingError) {
+        return c.json({ error: error.code }, 409);
       }
       log().error(
         { module: "kit/routes", route: "deploy", err: String(error) },

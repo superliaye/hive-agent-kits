@@ -410,17 +410,29 @@ export function openDeploymentStateStore(
         target: DeployTarget.parse(target),
         lastAttempt: { action: "remove", outcome: "succeeded", attemptedAt: now(), operationId },
       })),
-    markInterrupted: (key, target, action, operationId) =>
-      commit(key, target, (previous) => ({
+    markInterrupted: (key, target, action, operationId) => {
+      const parsedKey = CapabilityKey.parse(key);
+      const parsedTarget = DeployTarget.parse(target);
+      const parsedAction = AttemptAction.parse(action);
+      const existing = current().records.find(
+        (record) =>
+          recordId(record.key, record.target) === recordId(parsedKey, parsedTarget) &&
+          record.lastAttempt.outcome === "interrupted" &&
+          record.lastAttempt.operationId === operationId &&
+          record.lastAttempt.action === parsedAction,
+      );
+      if (existing) return existing;
+      return commit(parsedKey, parsedTarget, (previous) => ({
         key: CapabilityKey.parse(key),
         target: DeployTarget.parse(target),
         ...(previous?.applied ? { applied: previous.applied } : {}),
         lastAttempt: {
-          action: AttemptAction.parse(action),
+          action: parsedAction,
           outcome: "interrupted",
           attemptedAt: now(),
           operationId,
         },
-      })),
+      }));
+    },
   };
 }

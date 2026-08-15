@@ -6,8 +6,6 @@ import { mirrorContentSha } from "./content-sha.ts";
 import {
   backupIfExists,
   type DeployFsExec,
-  execInstaller,
-  probeBinary,
   readSkillSource,
   removeDir,
   removeFile,
@@ -90,6 +88,15 @@ export class DeployInProgressError extends Error {
   }
 }
 
+export class ImmutableInstallerStagingError extends Error {
+  readonly code = "immutable_installer_unavailable";
+
+  constructor() {
+    super("immutable_installer_unavailable");
+    this.name = "ImmutableInstallerStagingError";
+  }
+}
+
 export type DeployAcceptedAudit = {
   operationId: string;
   selectionRevision: number;
@@ -117,7 +124,11 @@ export type CreateDeployCoordinatorOptions = {
   ): Promise<void>;
   onAccepted(event: DeployAcceptedAudit): Promise<void>;
   clearRemovalIntents(
-    entries: readonly { key: DeployPlan["actions"][number]["key"]; targets: DeployTarget[] }[],
+    entries: readonly {
+      key: DeployPlan["actions"][number]["key"];
+      target: DeployTarget;
+      generation: string;
+    }[],
   ): Promise<void>;
   operationId?: () => string;
   now?: () => number;
@@ -148,24 +159,33 @@ function outcomeId(value: Pick<DeployOperationOutcome, "key" | "target">): strin
   return `${serializeCapabilityKey(value.key)}\u0000${value.target}`;
 }
 
-function successfulRemovalIntents(
-  operation: DeployOperation,
-): Array<{ key: DeployPlan["actions"][number]["key"]; targets: DeployTarget[] }> {
-  const grouped = new Map<
-    string,
-    { key: DeployPlan["actions"][number]["key"]; targets: DeployTarget[] }
-  >();
+function successfulRemovalIntents(operation: DeployOperation): Array<{
+  key: DeployPlan["actions"][number]["key"];
+  target: DeployTarget;
+  generation: string;
+}> {
+  const completed: Array<{
+    key: DeployPlan["actions"][number]["key"];
+    target: DeployTarget;
+    generation: string;
+  }> = [];
   for (const outcome of operation.outcomes) {
     if (outcome.action !== "remove" || outcome.outcome !== "succeeded") continue;
-    const id = serializeCapabilityKey(outcome.key);
-    const current = grouped.get(id) ?? { key: outcome.key, targets: [] };
-    if (!current.targets.includes(outcome.target)) current.targets.push(outcome.target);
-    grouped.set(id, current);
+    const accepted = operation.plan.actions.find(
+      (action) => action.action === "remove" && outcomeId(action) === outcomeId(outcome),
+    );
+    if (!accepted?.removalIntentGeneration) continue;
+    completed.push({
+      key: outcome.key,
+      target: outcome.target,
+      generation: accepted.removalIntentGeneration,
+    });
   }
-  return [...grouped.values()].map((entry) => ({
-    key: entry.key,
-    targets: [...entry.targets].sort(),
-  }));
+  return completed.sort(
+    (left, right) =>
+      serializeCapabilityKey(left.key).localeCompare(serializeCapabilityKey(right.key)) ||
+      left.target.localeCompare(right.target),
+  );
 }
 
 export function createDeployCoordinator(
@@ -177,9 +197,8 @@ export function createDeployCoordinator(
   const running = new Map<string, Promise<void>>();
 
   const execute = async (id: string): Promise<void> => {
-    let runningOperation: DeployOperation | undefined;
     try {
-      runningOperation = options.operations.markRunning(id);
+      const runningOperation = options.operations.markRunning(id);
       await options.execute(runningOperation, async (outcomes) => {
         options.operations.recordOutcomes(id, outcomes);
       });
@@ -197,17 +216,21 @@ export function createDeployCoordinator(
         incomplete ? "incomplete" : undefined,
       );
     } catch {
-      const current = options.operations.read(id);
-      if (current?.state === "running") {
-        const removals = successfulRemovalIntents(current);
-        if (removals.length > 0) {
-          try {
-            await options.clearRemovalIntents(removals);
-          } catch {
-            // The operation remains failed; a later explicit Deploy can retry.
+      try {
+        const current = options.operations.read(id);
+        if (current?.state === "running") {
+          const removals = successfulRemovalIntents(current);
+          if (removals.length > 0) {
+            try {
+              await options.clearRemovalIntents(removals);
+            } catch {
+              // The operation remains failed; a later explicit Deploy can retry.
+            }
           }
         }
-        options.operations.finish(id, "failed", "execution_failed");
+        options.operations.fail(id, "execution_failed");
+      } catch {
+        // A queued/running record remains restart-recoverable when storage is unavailable.
       }
     }
   };
@@ -219,10 +242,12 @@ export function createDeployCoordinator(
     });
     running.set(id, done);
     schedule(() => {
-      void execute(id).finally(() => {
-        resolveDone();
-        running.delete(id);
-      });
+      void execute(id)
+        .catch(() => {})
+        .finally(() => {
+          resolveDone();
+          running.delete(id);
+        });
     });
   };
 
@@ -249,6 +274,7 @@ export function createDeployCoordinator(
             planToken: currentToken,
             plan: captured.plan,
             staged,
+            auditState: "pending",
           });
         } catch (error) {
           if (error instanceof DeployOperationStoreError && error.code === "operation_active") {
@@ -256,8 +282,18 @@ export function createDeployCoordinator(
           }
           throw error;
         }
+        try {
+          await options.onAccepted(auditEvent(id, captured.plan));
+          options.operations.markAuditRecorded(id);
+        } catch (error) {
+          try {
+            options.operations.fail(id, "audit_failed");
+          } catch {
+            // Pending audit state is terminalized as audit_interrupted on restart.
+          }
+          throw error;
+        }
         start(id);
-        await options.onAccepted(auditEvent(id, captured.plan));
         return { operationId: id };
       }),
     wait: async (id) => {
@@ -292,6 +328,9 @@ function requiredActionSource(action: DeployPlan["actions"][number]): {
   if (!action.sourceId || !action.contentSha) throw new PlanStaleError();
   return { sourceId: action.sourceId, contentSha: action.contentSha };
 }
+
+const skipPlugin = (): boolean => process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL === "1";
+const skipBundle = (): boolean => process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL === "1";
 
 export function stageDeployPlan(
   targets: DeployTargets,
@@ -421,6 +460,7 @@ export function stageDeployPlan(
       if (action.key.kind === "plugin") {
         const metadata = pluginMeta(targets.mirrorRoot(sourceId), action.key.name);
         if (!metadata || action.target !== "claude") throw new PlanStaleError();
+        if (!skipPlugin()) throw new ImmutableInstallerStagingError();
         tasks.push({
           type: "plugin",
           action: action.action,
@@ -428,14 +468,13 @@ export function stageDeployPlan(
           target: "claude",
           sourceId,
           contentSha,
-          marketplaceSource: metadata.source,
-          marketplaceName: metadata.market,
-          pluginName: metadata.pluginName,
+          execution: "skipped",
         });
         continue;
       }
       const metadata = bundleMeta(targets.mirrorRoot(sourceId), action.key.name);
       if (!metadata) throw new PlanStaleError();
+      if (!skipBundle()) throw new ImmutableInstallerStagingError();
       tasks.push({
         type: "bundle",
         action: action.action,
@@ -443,11 +482,7 @@ export function stageDeployPlan(
         target: action.target,
         sourceId,
         contentSha,
-        installerKind: metadata.installerKind,
-        command: metadata.command,
-        flags: metadata.flags,
-        hostFlags: metadata.hostFlagMap[action.target] ?? [],
-        package: metadata.pkg,
+        execution: "skipped",
         pin:
           (metadata.installerKind === "npx-skills" ? metadata.pkg : metadata.pinnedCommit) || null,
       });
@@ -475,9 +510,6 @@ export function markInterruptedDeploymentState(
     );
   }
 }
-
-const skipPlugin = (): boolean => process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL === "1";
-const skipBundle = (): boolean => process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL === "1";
 
 function taskActions(task: StagedDeployTask): Array<{
   action: "add" | "update" | "remove";
@@ -514,61 +546,9 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
       }
       return;
     case "plugin": {
-      if (skipPlugin()) return;
-      if (!probeBinary(fx, "claude")) throw new Error("missing_binary");
-      const added = execInstaller(
-        fx,
-        {
-          command: "claude",
-          args: ["plugin", "marketplace", "add", task.marketplaceSource],
-        },
-        "claude",
-      );
-      if (added.status !== 0) throw new Error("installer_failed");
-      const installed = execInstaller(
-        fx,
-        {
-          command: "claude",
-          args: [
-            "plugin",
-            "install",
-            `${task.pluginName}@${task.marketplaceName}`,
-            "--scope",
-            "user",
-          ],
-        },
-        "claude",
-      );
-      if (installed.status !== 0) throw new Error("installer_failed");
       return;
     }
     case "bundle": {
-      if (skipBundle()) return;
-      const tool = task.installerKind === "npx-skills" ? "npx" : "git";
-      if (!probeBinary(fx, tool)) throw new Error("missing_binary");
-      const request =
-        task.installerKind === "npx-skills"
-          ? {
-              command: "npx",
-              args: [
-                "-y",
-                "skills",
-                "add",
-                task.package,
-                "--global",
-                "--agent",
-                task.target === "claude" ? "claude-code" : "codex",
-                "--skill",
-                "*",
-                "--yes",
-              ],
-            }
-          : {
-              command: "bash",
-              args: [task.command, ...task.flags, ...task.hostFlags],
-            };
-      const result = execInstaller(fx, request, tool);
-      if (result.status !== 0) throw new Error("installer_failed");
       return;
     }
   }
@@ -657,7 +637,10 @@ export async function executeStagedDeploy(
   const prunedInstructions = new Set<string>();
   for (const action of operation.plan.actions) {
     if (action.action !== "remove" || !successful.has(outcomeId(action))) continue;
-    if (options.deploymentState.read(action.key, action.target)?.applied) continue;
+    const remainsApplied = (["claude", "codex"] as const).some(
+      (target) => options.deploymentState.read(action.key, target)?.applied !== undefined,
+    );
+    if (remainsApplied) continue;
     if (action.key.kind === "skill") prunedSkills.add(action.key.name);
     if (action.key.kind === "agent") prunedAgents.add(action.key.name);
     if (action.key.kind === "instruction") prunedInstructions.add(action.key.name);

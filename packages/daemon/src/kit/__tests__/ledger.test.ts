@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -243,5 +251,142 @@ describe("ledger", () => {
     // Both survive — mergeLedger has no prune set for plugins/bundles.
     expect(merged.plugins.map((e) => e.name)).toContain("oldplugin");
     expect(merged.bundles.map((e) => e.name)).toContain("oldbundle");
+  });
+
+  test("completes partial Ledger writes and fsyncs the containing directory", () => {
+    const targets = failSafeDeployTargets();
+    let writes = 0;
+    let directoryFsyncs = 0;
+
+    mergeLedger(
+      targets,
+      {
+        kitVersion: "",
+        targets: ["claude"],
+        skills: ["partial"],
+        agents: [],
+        instructions: [],
+        plugins: [],
+        bundles: [],
+      },
+      [],
+      [],
+      [],
+      {
+        write: (fd, bytes, offset, length) => {
+          writes += 1;
+          return writeSync(fd, bytes, offset, Math.min(length, 5));
+        },
+        fsyncDirectory: () => {
+          directoryFsyncs += 1;
+        },
+      },
+    );
+
+    expect(writes).toBeGreaterThan(1);
+    expect(directoryFsyncs).toBe(1);
+    expect(readLedger(targets)?.skills).toEqual([{ name: "partial" }]);
+  });
+
+  test("retries a concurrent external agent-kit process write observed during Hive's RMW", async () => {
+    const targets = failSafeDeployTargets();
+    writeLedgerFile({ ...emptyLedger(), skills: [{ name: "before" }] });
+    const ready = join(tmpRoot, "agent-kit.ready");
+    const trigger = join(tmpRoot, "agent-kit.trigger");
+    const done = join(tmpRoot, "agent-kit.done");
+    const external = {
+      ...emptyLedger(),
+      skills: [{ name: "before" }, { name: "agent-kit" }],
+    };
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { existsSync, writeFileSync } from "node:fs";
+writeFileSync(process.env.READY_PATH, "ready");
+const wait = new Int32Array(new SharedArrayBuffer(4));
+while (!existsSync(process.env.TRIGGER_PATH)) Atomics.wait(wait, 0, 0, 5);
+writeFileSync(process.env.LEDGER_PATH, process.env.LEDGER_BYTES);
+writeFileSync(process.env.DONE_PATH, "done");`,
+      ],
+      {
+        env: {
+          ...process.env,
+          READY_PATH: ready,
+          TRIGGER_PATH: trigger,
+          DONE_PATH: done,
+          LEDGER_PATH: targets.ledgerPath(),
+          LEDGER_BYTES: `${JSON.stringify(external, null, 2)}\n`,
+        },
+        stderr: "pipe",
+      },
+    );
+    for (let attempt = 0; attempt < 100 && !existsSync(ready); attempt += 1) {
+      await Bun.sleep(5);
+    }
+    expect(existsSync(ready)).toBe(true);
+    let injected = false;
+
+    const merged = mergeLedger(
+      targets,
+      {
+        kitVersion: "",
+        targets: ["claude"],
+        skills: ["hive"],
+        agents: [],
+        instructions: [],
+        plugins: [],
+        bundles: [],
+      },
+      [],
+      [],
+      [],
+      {
+        beforeCommit: () => {
+          if (injected) return;
+          injected = true;
+          writeFileSync(trigger, "go");
+          const wait = new Int32Array(new SharedArrayBuffer(4));
+          while (!existsSync(done)) Atomics.wait(wait, 0, 0, 5);
+        },
+      },
+    );
+    await child.exited;
+
+    expect(merged.skills.map((entry) => entry.name).sort()).toEqual([
+      "agent-kit",
+      "before",
+      "hive",
+    ]);
+  });
+
+  test("retains committed Ledger bytes when replacement crashes before rename", () => {
+    const targets = failSafeDeployTargets();
+    writeLedgerFile({ ...emptyLedger(), skills: [{ name: "committed" }] });
+    const before = readFileSync(targets.ledgerPath(), "utf8");
+
+    expect(() =>
+      mergeLedger(
+        targets,
+        {
+          kitVersion: "",
+          targets: ["claude"],
+          skills: ["uncommitted"],
+          agents: [],
+          instructions: [],
+          plugins: [],
+          bundles: [],
+        },
+        [],
+        [],
+        [],
+        {
+          rename: () => {
+            throw new Error("crash before rename");
+          },
+        },
+      ),
+    ).toThrow("crash before rename");
+    expect(readFileSync(targets.ledgerPath(), "utf8")).toBe(before);
   });
 });

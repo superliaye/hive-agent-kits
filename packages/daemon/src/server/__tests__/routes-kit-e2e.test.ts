@@ -130,6 +130,34 @@ function sourceBadEntries(): TarFixtureEntry[] {
   ];
 }
 
+const ORIGIN_INSTALLERS = "https://github.com/org/source-pb";
+const SHA_INSTALLERS = "d".repeat(40);
+function installerEntries(): TarFixtureEntry[] {
+  const top = tarTop(SHA_INSTALLERS);
+  return [
+    { path: `${top}/` },
+    {
+      path: `${top}/capabilities/plugins/myplugin.plugin.md`,
+      content:
+        "---\ndescription: p\nmarketplace_source: owner/market\nmarketplace_name: market\nplugin_name: myplugin\n---\nplugin\n",
+    },
+    {
+      path: `${top}/capabilities/bundles/mybundle.bundle.md`,
+      content:
+        "---\ndescription: b\nsource: https://example.com/x.git\npinned_commit: abc123\ninstaller:\n  command: ./setup\n  flags: []\n---\nbundle\n",
+    },
+  ];
+}
+
+function installerFetch(): HttpFetch {
+  return async (url) => {
+    if (url.includes("api.github.com")) {
+      return new Response(JSON.stringify({ sha: SHA_INSTALLERS }), { status: 200 });
+    }
+    return new Response(buildGzipTar(installerEntries()), { status: 200 });
+  };
+}
+
 // A stub fetch serving the synthetic tarballs, keyed by the EXACT `<owner>/<repo>`
 // in the URL — the commits API returns that repo's sha; codeload returns its tar.
 // The repo is extracted by an exact path-segment parse, never a loose substring
@@ -686,6 +714,58 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
     }
   });
 
+  test("unstaged installers return the stable 409 without accepting an operation", async () => {
+    delete process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL;
+    delete process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL;
+    const server = await serverWith(installerFetch());
+    try {
+      const add = await postOrigin(server, ORIGIN_INSTALLERS);
+      expect(add.status).toBe(201);
+      const selection = (await (
+        await server.app.fetch(authed("/api/kit/selection"))
+      ).json()) as SelectionSnapshot;
+      const changed = await server.app.fetch(
+        authed("/api/kit/selection", {
+          method: "PATCH",
+          body: JSON.stringify({
+            expectedRevision: selection.revision,
+            changes: [
+              {
+                key: { kind: "plugin", name: "myplugin" },
+                enabled: true,
+                targets: ["claude"],
+              },
+            ],
+          }),
+        }),
+      );
+      expect(changed.status).toBe(200);
+      const overview = (await (
+        await server.app.fetch(authed("/api/kit/overview"))
+      ).json()) as DeploymentOverview;
+
+      const response = await server.app.fetch(
+        authed("/api/kit/deploy", {
+          method: "POST",
+          body: JSON.stringify({
+            selectionRevision: overview.selectionRevision,
+            planToken: overview.planToken,
+          }),
+        }),
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "immutable_installer_unavailable" });
+      expect(existsSync(join(tmpRoot, "runtime", "kit", "deploy-operations.json"))).toBe(false);
+      const audit = (await (await server.app.fetch(authed("/api/audit?source=deploy"))).json()) as {
+        event_type: string;
+      }[];
+      expect(audit.some((row) => row.event_type === "deploy.accepted")).toBe(false);
+    } finally {
+      await server.dispose();
+    }
+  });
+
   test("(optional) plugin/bundle installer path is reached under SKIP hatches, no real exec", async () => {
     // The skip-hatches let the deploy REACH the installer bookkeeping (record the
     // applied name / pin) without spawning a real claude/git/npx — proving the
@@ -696,31 +776,9 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
     process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL = "1";
     process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL = "1";
     // Re-use a Source carrying a plugin + bundle capability.
-    const PLUGIN_ORIGIN = "https://github.com/org/source-pb";
-    const PLUGIN_SHA = "d".repeat(40);
-    const top = tarTop(PLUGIN_SHA);
-    const pbEntries: TarFixtureEntry[] = [
-      { path: `${top}/` },
-      {
-        path: `${top}/capabilities/plugins/myplugin.plugin.md`,
-        content:
-          "---\ndescription: p\nmarketplace_source: owner/market\nmarketplace_name: market\nplugin_name: myplugin\n---\nplugin\n",
-      },
-      {
-        path: `${top}/capabilities/bundles/mybundle.bundle.md`,
-        content:
-          "---\ndescription: b\nsource: https://example.com/x.git\npinned_commit: abc123\ninstaller:\n  command: ./setup\n  flags: []\n---\nbundle\n",
-      },
-    ];
-    const pbFetch: HttpFetch = async (url) => {
-      if (url.includes("api.github.com")) {
-        return new Response(JSON.stringify({ sha: PLUGIN_SHA }), { status: 200 });
-      }
-      return new Response(buildGzipTar(pbEntries), { status: 200 });
-    };
-    const server = await serverWith(pbFetch);
+    const server = await serverWith(installerFetch());
     try {
-      const add = await postOrigin(server, PLUGIN_ORIGIN);
+      const add = await postOrigin(server, ORIGIN_INSTALLERS);
       expect(add.status).toBe(201);
       // (#45) The well-formed plugin + bundle pass the now-stricter validate() gate
       // end-to-end — a conformance flip would otherwise slip through this e2e, which

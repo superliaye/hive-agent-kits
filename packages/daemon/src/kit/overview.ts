@@ -193,11 +193,13 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
   const selectedByKey = new Map(
     snapshot.selection.enabled.map((entry) => [serializeCapabilityKey(entry.key), entry] as const),
   );
-  const intentByKey = new Map(
-    snapshot.selection.removalIntents.map(
-      (entry) => [serializeCapabilityKey(entry.key), entry] as const,
-    ),
-  );
+  const intentTargetsByKey = new Map<string, Set<DeployTarget>>();
+  for (const entry of snapshot.selection.removalIntents) {
+    const id = serializeCapabilityKey(entry.key);
+    const targets = intentTargetsByKey.get(id) ?? new Set<DeployTarget>();
+    for (const target of entry.targets) targets.add(target);
+    intentTargetsByKey.set(id, targets);
+  }
   const owned = ledgerKeySet(snapshot.ledger.value);
   const ownership = ledgerOwnershipByKey(snapshot.ledger.value);
 
@@ -218,7 +220,7 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
       const state = catalogState(variants);
       const winner = variants.find((entry) => entry.deployable);
       const selected = selectedByKey.get(id);
-      const intent = intentByKey.get(id);
+      const intentTargets = intentTargetsByKey.get(id);
       const keyRecords = snapshot.deploymentState.records.filter(
         (record) => serializeCapabilityKey(record.key) === id,
       );
@@ -226,7 +228,7 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
       const targets: OverviewTargetState[] = applicableTargets(key).map((target) => {
         const record = recordsByPair.get(pairId(key, target));
         const selectedOnTarget = selected?.targets.includes(target) ?? false;
-        const intentOnTarget = intent?.targets.includes(target) ?? false;
+        const intentOnTarget = intentTargets?.has(target) ?? false;
         const ledgerOwned = ownership.get(id)?.has(target) ?? false;
         const action = actionByPair.get(pairId(key, target));
         let reconciliation: ReconciliationState = "in_sync";

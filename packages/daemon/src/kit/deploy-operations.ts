@@ -1,18 +1,8 @@
-import {
-  closeSync,
-  existsSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { CapabilityKey } from "@hive/capability-schema";
 import { DeployOperationState, type DeployOperationSummary, DeployTarget } from "@hive/contract";
 import { z } from "zod";
+import { atomicWriteFile, withAdvisoryFileLock } from "../lib/durable-file.ts";
 import type { DeployPlan, DeployPlanAction } from "./deploy-plan.ts";
 
 const ArtifactObservation = z.object({
@@ -28,6 +18,7 @@ const DeployPlanActionSchema = z.object({
   sourceId: z.string().optional(),
   contentSha: z.string().optional(),
   renderedHash: z.string().nullable().optional(),
+  removalIntentGeneration: z.string().optional(),
   artifact: ArtifactObservation,
 });
 
@@ -114,9 +105,7 @@ const StagedPluginTask = z.object({
   target: z.literal("claude"),
   sourceId: z.string(),
   contentSha: z.string(),
-  marketplaceSource: z.string(),
-  marketplaceName: z.string(),
-  pluginName: z.string(),
+  execution: z.literal("skipped").default("skipped"),
 });
 
 const StagedBundleTask = z.object({
@@ -126,11 +115,7 @@ const StagedBundleTask = z.object({
   target: DeployTarget,
   sourceId: z.string(),
   contentSha: z.string(),
-  installerKind: z.enum(["setup-script", "npx-skills"]),
-  command: z.string(),
-  flags: z.array(z.string()),
-  hostFlags: z.array(z.string()),
-  package: z.string(),
+  execution: z.literal("skipped").default("skipped"),
   pin: z.string().nullable(),
 });
 
@@ -180,7 +165,9 @@ const PersistedDeployOperation = z.object({
   planToken: z.string().min(1),
   plan: DeployPlanSchema,
   staged: StagedDeployPayloadSchema,
+  auditState: z.enum(["pending", "recorded"]).default("recorded"),
   outcomes: z.array(DeployOperationOutcomeSchema).default([]),
+  recoveryPendingActions: z.array(DeployPlanActionSchema).default([]),
   errorCode: z.string().max(80).optional(),
 });
 
@@ -204,6 +191,7 @@ export type QueuedDeployOperation = {
   planToken: string;
   plan: DeployPlan;
   staged: StagedDeployPayload;
+  auditState?: "pending" | "recorded";
 };
 
 export type DeployOperationStoreOptions = {
@@ -243,6 +231,8 @@ export type DeployOperationStore = {
   createQueued(input: QueuedDeployOperation): DeployOperation;
   markRunning(operationId: string): DeployOperation;
   recordOutcomes(operationId: string, outcomes: readonly DeployOperationOutcome[]): DeployOperation;
+  markAuditRecorded(operationId: string): DeployOperation;
+  fail(operationId: string, errorCode: string): DeployOperation;
   finish(operationId: string, state: "completed" | "failed", errorCode?: string): DeployOperation;
 };
 
@@ -274,22 +264,6 @@ export function openDeployOperationStore(
   options: DeployOperationStoreOptions = {},
 ): DeployOperationStore {
   const now = options.now ?? Date.now;
-  const rename = options.rename ?? renameSync;
-  const writeBytes =
-    options.write ??
-    ((fd: number, bytes: Uint8Array, offset: number, length: number) =>
-      writeSync(fd, bytes, offset, length));
-  const fsyncDirectory =
-    options.fsyncDirectory ??
-    ((directory: string) => {
-      const fd = openSync(directory, "r");
-      try {
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-    });
-  const lockPath = `${path}.lock`;
   const lockTimeoutMs = options.lockTimeoutMs ?? 5_000;
 
   const load = (): DeployOperationsFile => {
@@ -306,116 +280,47 @@ export function openDeployOperationStore(
   };
 
   const write = (file: DeployOperationsFile): void => {
-    const directory = dirname(path);
-    const temporary = `${path}.tmp-${process.pid}-${crypto.randomUUID()}`;
-    let renamed = false;
     try {
-      mkdirSync(directory, { recursive: true });
-      const fd = openSync(temporary, "w", 0o600);
-      try {
-        const bytes = Buffer.from(`${JSON.stringify(file, null, 2)}\n`);
-        let offset = 0;
-        while (offset < bytes.length) {
-          const written = writeBytes(fd, bytes, offset, bytes.length - offset);
-          if (!Number.isInteger(written) || written <= 0 || written > bytes.length - offset) {
-            throw new Error("operation store write made no progress");
-          }
-          offset += written;
-        }
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      rename(temporary, path);
-      renamed = true;
-      fsyncDirectory(directory);
+      atomicWriteFile(path, Buffer.from(`${JSON.stringify(file, null, 2)}\n`), options);
     } catch {
       throw new DeployOperationStoreError("operation_store_write_failed");
-    } finally {
-      if (!renamed && existsSync(temporary)) {
-        try {
-          unlinkSync(temporary);
-        } catch {
-          // Preserve the stable primary write error.
-        }
-      }
     }
-  };
-
-  const waitForLock = (): void => {
-    const shared = new Int32Array(new SharedArrayBuffer(4));
-    Atomics.wait(shared, 0, 0, 10);
   };
 
   const withLock = <A>(work: (file: DeployOperationsFile) => A): A => {
-    const directory = dirname(path);
     try {
-      mkdirSync(directory, { recursive: true });
-    } catch {
+      return withAdvisoryFileLock(path, lockTimeoutMs, () => work(load()));
+    } catch (error) {
+      if (error instanceof DeployOperationStoreError) throw error;
       throw new DeployOperationStoreError("operation_store_lock_failed");
     }
-    const deadline = Date.now() + lockTimeoutMs;
-    let fd: number | undefined;
-    while (fd === undefined) {
+  };
+
+  const mutate = <A>(work: (file: DeployOperationsFile) => A): A => {
+    let last: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        fd = openSync(lockPath, "wx", 0o600);
-        const owner = Buffer.from(`${process.pid}\n`);
-        let offset = 0;
-        while (offset < owner.length) {
-          const written = writeSync(fd, owner, offset, owner.length - offset);
-          if (!Number.isInteger(written) || written <= 0 || written > owner.length - offset) {
-            throw new Error("operation lock write made no progress");
-          }
-          offset += written;
-        }
-        fsyncSync(fd);
+        return withLock(work);
       } catch (error) {
-        if (fd !== undefined) {
-          try {
-            closeSync(fd);
-          } catch {
-            // Preserve the stable lock error.
-          }
-          fd = undefined;
-          try {
-            unlinkSync(lockPath);
-          } catch {
-            // The next acquisition attempt handles a remaining owner file.
-          }
-          throw new DeployOperationStoreError("operation_store_lock_failed");
+        last = error;
+        if (
+          !(error instanceof DeployOperationStoreError) ||
+          (error.code !== "operation_store_write_failed" &&
+            error.code !== "operation_store_lock_failed" &&
+            error.code !== "operation_store_lock_timeout")
+        ) {
+          throw error;
         }
-        const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-        if (code !== "EEXIST") {
-          throw new DeployOperationStoreError("operation_store_lock_failed");
-        }
-        if (Date.now() >= deadline) {
-          throw new DeployOperationStoreError("operation_store_lock_timeout");
-        }
-        waitForLock();
       }
     }
-    try {
-      return work(load());
-    } finally {
-      try {
-        closeSync(fd);
-      } catch {
-        // The committed outcome remains authoritative.
-      }
-      try {
-        unlinkSync(lockPath);
-        fsyncDirectory(directory);
-      } catch {
-        // Release cleanup cannot replace the committed outcome.
-      }
-    }
+    throw last;
   };
 
   const replace = (
     operationId: string,
     update: (operation: PersistedDeployOperation) => PersistedDeployOperation,
   ): DeployOperation =>
-    withLock((file) => {
+    mutate((file) => {
       const index = file.operations.findIndex((operation) => operation.operationId === operationId);
       const current = file.operations[index];
       if (!current) throw new DeployOperationStoreError("operation_not_found", operationId);
@@ -426,30 +331,54 @@ export function openDeployOperationStore(
       return cloneOperation(next);
     });
 
-  const interrupted: DeployOperation[] = [];
-  withLock((file) => {
+  mutate((file) => {
     let changed = false;
     const operations = file.operations.map((operation) => {
       if (operation.state !== "queued" && operation.state !== "running") return operation;
       changed = true;
+      if (operation.state === "queued" && operation.auditState === "pending") {
+        return PersistedDeployOperation.parse({
+          ...operation,
+          state: "failed",
+          completedAt: now(),
+          errorCode: "audit_interrupted",
+          recoveryPendingActions: [],
+        });
+      }
       const finished = new Set(operation.outcomes.map(actionId));
-      const recovered = PersistedDeployOperation.parse({
+      return PersistedDeployOperation.parse({
         ...operation,
         state: "interrupted",
         completedAt: now(),
         errorCode: "interrupted",
-      });
-      interrupted.push({
-        ...cloneOperation(recovered),
-        unfinishedActions: recovered.plan.actions.filter(
+        recoveryPendingActions: operation.plan.actions.filter(
           (action) => !finished.has(actionId(action)),
-        ) as DeployPlanAction[],
+        ),
       });
-      return recovered;
     });
     if (changed) write({ ...file, revision: file.revision + 1, operations });
   });
-  for (const operation of interrupted) options.onInterrupted?.(operation);
+
+  if (options.onInterrupted) {
+    for (const operation of load().operations) {
+      for (const action of operation.recoveryPendingActions) {
+        try {
+          options.onInterrupted({
+            ...cloneOperation(operation),
+            unfinishedActions: [action as DeployPlanAction],
+          });
+          replace(operation.operationId, (current) => ({
+            ...current,
+            recoveryPendingActions: current.recoveryPendingActions.filter(
+              (candidate) => actionId(candidate) !== actionId(action as DeployPlanAction),
+            ),
+          }));
+        } catch {
+          // Pending recovery remains durable and is retried on the next startup.
+        }
+      }
+    }
+  }
 
   return {
     path,
@@ -466,7 +395,11 @@ export function openDeployOperationStore(
       ),
     lastSummary: () => summary(load().operations.at(-1)),
     createQueued: (input) =>
-      withLock((file) => {
+      mutate((file) => {
+        const existing = file.operations.find(
+          (operation) => operation.operationId === input.operationId,
+        );
+        if (existing) return cloneOperation(existing);
         const active = [...file.operations]
           .reverse()
           .find((operation) => operation.state === "queued" || operation.state === "running");
@@ -474,7 +407,9 @@ export function openDeployOperationStore(
         const operation = PersistedDeployOperation.parse({
           ...input,
           state: "queued",
+          auditState: input.auditState ?? "recorded",
           outcomes: [],
+          recoveryPendingActions: [],
         });
         write({
           ...file,
@@ -485,7 +420,11 @@ export function openDeployOperationStore(
       }),
     markRunning: (operationId) =>
       replace(operationId, (operation) => {
+        if (operation.state === "running") return operation;
         if (operation.state !== "queued") {
+          throw new DeployOperationStoreError("operation_invalid_transition", operationId);
+        }
+        if (operation.auditState !== "recorded") {
           throw new DeployOperationStoreError("operation_invalid_transition", operationId);
         }
         return { ...operation, state: "running" };
@@ -502,8 +441,28 @@ export function openDeployOperationStore(
         }
         return { ...operation, outcomes: [...byAction.values()] };
       }),
+    markAuditRecorded: (operationId) =>
+      replace(operationId, (operation) => {
+        if (operation.auditState === "recorded") return operation;
+        if (operation.state !== "queued") {
+          throw new DeployOperationStoreError("operation_invalid_transition", operationId);
+        }
+        return { ...operation, auditState: "recorded" };
+      }),
+    fail: (operationId, errorCode) =>
+      replace(operationId, (operation) => {
+        if (
+          operation.state === "completed" ||
+          operation.state === "failed" ||
+          operation.state === "interrupted"
+        ) {
+          return operation;
+        }
+        return { ...operation, state: "failed", completedAt: now(), errorCode };
+      }),
     finish: (operationId, state, errorCode) =>
       replace(operationId, (operation) => {
+        if (operation.state === state) return operation;
         if (operation.state !== "running") {
           throw new DeployOperationStoreError("operation_invalid_transition", operationId);
         }

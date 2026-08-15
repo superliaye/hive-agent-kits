@@ -24,8 +24,21 @@ import {
 import { z } from "zod";
 
 const SelectionEntry = z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) });
+const RemovalIntent = z.object({
+  key: CapabilityKey,
+  targets: z.tuple([DeployTarget]),
+  generation: z.string().min(1),
+});
 
 export const SelectionFile = z.object({
+  schemaVersion: z.literal(2),
+  initialized: z.literal(true),
+  revision: z.number().int().nonnegative(),
+  enabled: z.array(SelectionEntry),
+  removalIntents: z.array(RemovalIntent),
+});
+
+const LegacySelectionFile = z.object({
   schemaVersion: z.literal(1),
   initialized: z.literal(true),
   revision: z.number().int().nonnegative(),
@@ -34,10 +47,11 @@ export const SelectionFile = z.object({
 });
 
 const UninitializedSelectionFile = z
-  .object({ schemaVersion: z.literal(1), initialized: z.literal(false) })
+  .object({ schemaVersion: z.union([z.literal(1), z.literal(2)]), initialized: z.literal(false) })
   .strict();
 
 type SelectionEntry = z.infer<typeof SelectionEntry>;
+type RemovalIntent = z.infer<typeof RemovalIntent>;
 type SelectionFile = z.infer<typeof SelectionFile>;
 
 const targetOrder: Record<z.infer<typeof DeployTarget>, number> = { claude: 0, codex: 1 };
@@ -56,6 +70,7 @@ export type SelectionStoreOptions = {
   rename?: (oldPath: string, newPath: string) => void;
   fsyncDirectory?: (directory: string) => void;
   write?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
+  generation?: () => string;
 };
 
 export type SelectionStore = {
@@ -64,7 +79,9 @@ export type SelectionStore = {
   mutate(body: z.input<typeof SelectionMutation>, ledger?: Ledger | null): SelectionSnapshotType;
   // Internal seam for a later successful Deploy removal outcome. It changes only
   // matching intents and never lets Deployment State author Selection.
-  clearRemovalIntents(entries: readonly SelectionEntry[]): SelectionSnapshotType;
+  clearRemovalIntents(
+    entries: readonly { key: SelectionEntry["key"]; target: DeployTarget; generation: string }[],
+  ): SelectionSnapshotType;
 };
 
 function snapshot(file: SelectionFile): SelectionSnapshotType {
@@ -91,8 +108,20 @@ function canonical(entries: Iterable<SelectionEntry>): SelectionEntry[] {
     .sort((a, b) => serializeCapabilityKey(a.key).localeCompare(serializeCapabilityKey(b.key)));
 }
 
+function intentId(key: SelectionEntry["key"], target: DeployTarget): string {
+  return `${serializeCapabilityKey(key)}\u0000${target}`;
+}
+
+function canonicalIntents(entries: Iterable<RemovalIntent>): RemovalIntent[] {
+  return [...entries]
+    .map((entry) => RemovalIntent.parse(entry))
+    .sort((left, right) =>
+      intentId(left.key, left.targets[0]).localeCompare(intentId(right.key, right.targets[0])),
+    );
+}
+
 function emptyFile(): SelectionFile {
-  return { schemaVersion: 1, initialized: true, revision: 1, enabled: [], removalIntents: [] };
+  return { schemaVersion: 2, initialized: true, revision: 1, enabled: [], removalIntents: [] };
 }
 
 function targetsFromLedger(ledger: Ledger): z.infer<typeof DeployTarget>[] {
@@ -164,6 +193,10 @@ function entryMap(entries: readonly SelectionEntry[]): Map<string, SelectionEntr
   return out;
 }
 
+function intentMap(entries: readonly RemovalIntent[]): Map<string, RemovalIntent> {
+  return new Map(entries.map((entry) => [intentId(entry.key, entry.targets[0]), entry]));
+}
+
 function removeTargets(
   entry: SelectionEntry | undefined,
   targets: readonly z.infer<typeof DeployTarget>[],
@@ -193,6 +226,7 @@ export function openSelectionStore(
         closeSync(fd);
       }
     });
+  const generation = options.generation ?? (() => crypto.randomUUID());
 
   const load = (): SelectionFile | undefined => {
     if (!existsSync(path)) return undefined;
@@ -204,6 +238,26 @@ export function openSelectionStore(
     }
     const parsed = SelectionFile.safeParse(raw);
     if (parsed.success) return parsed.data;
+    const legacy = LegacySelectionFile.safeParse(raw);
+    if (legacy.success) {
+      const migrated: SelectionFile = {
+        schemaVersion: 2,
+        initialized: true,
+        revision: legacy.data.revision,
+        enabled: canonical(legacy.data.enabled),
+        removalIntents: canonicalIntents(
+          legacy.data.removalIntents.flatMap((entry) =>
+            entry.targets.map((target) => ({
+              key: entry.key,
+              targets: [target] as [DeployTarget],
+              generation: generation(),
+            })),
+          ),
+        ),
+      };
+      write(migrated);
+      return migrated;
+    }
     if (UninitializedSelectionFile.safeParse(raw).success) return undefined;
     throw new Error(`selection_corrupt: ${parsed.error.message}`);
   };
@@ -264,7 +318,7 @@ export function openSelectionStore(
         throw new SelectionConflictError(current.revision);
       }
       const enabled = entryMap(current.enabled);
-      const removalIntents = entryMap(current.removalIntents);
+      const removalIntents = intentMap(current.removalIntents);
       for (const change of mutation.changes) {
         const id = serializeCapabilityKey(change.key);
         const targets = uniqueTargets(change.targets);
@@ -274,9 +328,7 @@ export function openSelectionStore(
             key: change.key,
             targets: uniqueTargets([...(old?.targets ?? []), ...targets]),
           });
-          const remainingIntent = removeTargets(removalIntents.get(id), targets);
-          if (remainingIntent) removalIntents.set(id, remainingIntent);
-          else removalIntents.delete(id);
+          for (const target of targets) removalIntents.delete(intentId(change.key, target));
           continue;
         }
         const old = enabled.get(id);
@@ -286,43 +338,43 @@ export function openSelectionStore(
         if (remainingEnabled) enabled.set(id, remainingEnabled);
         else enabled.delete(id);
         if (disabledAnEnabledTarget || ledgerOwns(ledger, change.key)) {
-          const oldIntent = removalIntents.get(id);
-          removalIntents.set(id, {
-            key: change.key,
-            targets: uniqueTargets([...(oldIntent?.targets ?? []), ...targets]),
-          });
+          for (const target of targets) {
+            const targetId = intentId(change.key, target);
+            if (removalIntents.has(targetId)) continue;
+            removalIntents.set(targetId, {
+              key: change.key,
+              targets: [target],
+              generation: generation(),
+            });
+          }
         }
       }
       const next: SelectionFile = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         initialized: true,
         revision: current.revision + 1,
         enabled: canonical(enabled.values()),
-        removalIntents: canonical(removalIntents.values()),
+        removalIntents: canonicalIntents(removalIntents.values()),
       };
       write(next);
       return snapshot(next);
     },
     clearRemovalIntents: (entries) => {
       const current = initialized();
-      const removalIntents = entryMap(current.removalIntents);
+      const removalIntents = intentMap(current.removalIntents);
       let changed = false;
       for (const entry of entries) {
-        const id = serializeCapabilityKey(entry.key);
+        const id = intentId(entry.key, entry.target);
         const currentIntent = removalIntents.get(id);
-        const removesAnIntentTarget =
-          currentIntent?.targets.some((target) => entry.targets.includes(target)) ?? false;
-        if (!removesAnIntentTarget) continue;
-        const remaining = removeTargets(currentIntent, entry.targets);
-        if (remaining) removalIntents.set(id, remaining);
-        else removalIntents.delete(id);
+        if (currentIntent?.generation !== entry.generation) continue;
+        removalIntents.delete(id);
         changed = true;
       }
       if (!changed) return snapshot(current);
       const next: SelectionFile = {
         ...current,
         revision: current.revision + 1,
-        removalIntents: canonical(removalIntents.values()),
+        removalIntents: canonicalIntents(removalIntents.values()),
       };
       write(next);
       return snapshot(next);

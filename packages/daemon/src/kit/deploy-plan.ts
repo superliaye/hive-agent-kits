@@ -55,6 +55,7 @@ export type DeployPlanAction = {
   sourceId?: string;
   contentSha?: string;
   renderedHash?: string | null;
+  removalIntentGeneration?: string;
   artifact: Omit<ArtifactObservation, "key" | "target">;
 };
 
@@ -369,6 +370,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
         action: "remove",
         key: intent.key,
         target,
+        ...(intent.generation ? { removalIntentGeneration: intent.generation } : {}),
         artifact: artifactFor(snapshot.artifacts, intent.key, target),
       });
     }

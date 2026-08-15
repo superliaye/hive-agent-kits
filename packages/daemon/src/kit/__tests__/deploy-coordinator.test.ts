@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
   writeSync,
@@ -18,6 +20,7 @@ import {
   createDeploymentMutationCoordinator,
   DeployInProgressError,
   executeStagedDeploy,
+  ImmutableInstallerStagingError,
   markInterruptedDeploymentState,
   PlanStaleError,
   type StagedDeployPayload,
@@ -31,7 +34,7 @@ import {
 } from "../deploy-operations.ts";
 import type { DeploymentSnapshot, DeployPlan } from "../deploy-plan.ts";
 import { openDeploymentStateStore } from "../deployment-state.ts";
-import { readLedger } from "../ledger.ts";
+import { mergeLedger, readLedger } from "../ledger.ts";
 import { readMirrorIdentity } from "../overview.ts";
 import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
@@ -338,6 +341,132 @@ describe("persisted asynchronous Deploy coordinator", () => {
     expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
   });
 
+  test("rejects a relative setup command when no immutable checkout and cwd can be staged", () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-setup-stage-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const mirror = targets.mirrorRoot("source-a");
+    const descriptor = join(mirror, "capabilities", "bundles", "setup.bundle.md");
+    mkdirSync(join(descriptor, ".."), { recursive: true });
+    writeFileSync(
+      descriptor,
+      `---
+description: setup
+source: https://example.invalid/setup.git
+pinned_commit: ${"a".repeat(40)}
+installer:
+  kind: setup-script
+  command: ./setup
+---
+setup
+`,
+    );
+    const contentSha = mirrorContentSha(mirror, "bundle", "setup");
+    if (!contentSha) throw new Error("missing setup ContentSha");
+    const action: DeployPlan["actions"][number] = {
+      action: "add",
+      key: { kind: "bundle", name: "setup" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha,
+      renderedHash: contentSha,
+      artifact: { existence: "missing", hash: null },
+    };
+    const deployPlan = plan({
+      mirrors: [{ sourceId: "source-a", precedence: 1, identity: readMirrorIdentity(mirror) }],
+      actions: [action],
+    });
+
+    expect(() => stageDeployPlan(targets, snapshot(deployPlan), deployPlan)).toThrow(
+      expect.objectContaining({ code: "immutable_installer_unavailable" }),
+    );
+    expect(() => stageDeployPlan(targets, snapshot(deployPlan), deployPlan)).toThrow(
+      ImmutableInstallerStagingError,
+    );
+  });
+
+  test("rejects a plugin even when its mutable descriptor claims a pinned commit", () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-plugin-stage-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const mirror = targets.mirrorRoot("source-a");
+    const descriptor = join(mirror, "capabilities", "plugins", "plug.plugin.md");
+    mkdirSync(join(descriptor, ".."), { recursive: true });
+    writeFileSync(
+      descriptor,
+      `---
+description: plugin
+marketplace_source: owner/market
+marketplace_name: market
+plugin_name: plug
+pinned_commit: ${"b".repeat(40)}
+---
+plugin
+`,
+    );
+    const contentSha = mirrorContentSha(mirror, "plugin", "plug");
+    if (!contentSha) throw new Error("missing plugin ContentSha");
+    const action: DeployPlan["actions"][number] = {
+      action: "add",
+      key: { kind: "plugin", name: "plug" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha,
+      renderedHash: contentSha,
+      artifact: { existence: "missing", hash: null },
+    };
+    const deployPlan = plan({
+      mirrors: [{ sourceId: "source-a", precedence: 1, identity: readMirrorIdentity(mirror) }],
+      actions: [action],
+    });
+
+    expect(() => stageDeployPlan(targets, snapshot(deployPlan), deployPlan)).toThrow(
+      expect.objectContaining({ code: "immutable_installer_unavailable" }),
+    );
+  });
+
+  test("rejects a mutable npx package instead of resolving it after acceptance", () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-npx-stage-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const mirror = targets.mirrorRoot("source-a");
+    const descriptor = join(mirror, "capabilities", "bundles", "skills.bundle.md");
+    mkdirSync(join(descriptor, ".."), { recursive: true });
+    writeFileSync(
+      descriptor,
+      `---
+description: npx
+installer:
+  kind: npx-skills
+  package: owner/repository
+---
+npx
+`,
+    );
+    const contentSha = mirrorContentSha(mirror, "bundle", "skills");
+    if (!contentSha) throw new Error("missing npx ContentSha");
+    const action: DeployPlan["actions"][number] = {
+      action: "add",
+      key: { kind: "bundle", name: "skills" },
+      target: "codex",
+      sourceId: "source-a",
+      contentSha,
+      renderedHash: contentSha,
+      artifact: { existence: "missing", hash: null },
+    };
+    const deployPlan = plan({
+      mirrors: [{ sourceId: "source-a", precedence: 1, identity: readMirrorIdentity(mirror) }],
+      actions: [action],
+    });
+
+    expect(() => stageDeployPlan(targets, snapshot(deployPlan), deployPlan)).toThrow(
+      expect.objectContaining({ code: "immutable_installer_unavailable" }),
+    );
+  });
+
   test("keeps successful targets factual when another staged target fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "deploy-partial-target-"));
     roots.push(root);
@@ -422,6 +551,145 @@ describe("persisted asynchronous Deploy coordinator", () => {
     expect(readLedger(targets)).toMatchObject({ agents: ["claude"], skills: [{ name: "alpha" }] });
   });
 
+  test("preserves Ledger ownership until the last applied target removal succeeds", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-partial-removal-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    mergeLedger(
+      targets,
+      {
+        kitVersion: "",
+        targets: ["claude", "codex"],
+        skills: ["alpha"],
+        agents: [],
+        instructions: [],
+        plugins: [],
+        bundles: [],
+      },
+      [],
+      [],
+    );
+    const state = openDeploymentStateStore(targets.deploymentStatePath(), { now: () => 10 });
+    for (const target of ["claude", "codex"] as const) {
+      state.recordSuccess(
+        { kind: "skill", name: "alpha" },
+        target,
+        {
+          sourceId: "source-a",
+          contentSha: "a".repeat(64),
+          renderedHash: "b".repeat(64),
+          appliedAt: 10,
+        },
+        "seed",
+      );
+    }
+    const claudeAction: DeployPlan["actions"][number] = {
+      action: "remove",
+      key: { kind: "skill", name: "alpha" },
+      target: "claude",
+      artifact: { existence: "present", hash: "old" },
+    };
+    const codexAction = { ...claudeAction, target: "codex" as const };
+    const firstPlan = plan({ actions: [claudeAction, codexAction], mirrors: [] }, claudeAction);
+    const failingState = {
+      ...state,
+      recordRemoval: (
+        key: Parameters<typeof state.recordRemoval>[0],
+        target: Parameters<typeof state.recordRemoval>[1],
+        operationId: string,
+      ) => {
+        if (target === "codex") throw new Error("Codex removal state unavailable");
+        return state.recordRemoval(key, target, operationId);
+      },
+    };
+    const first = coordinatorFixture({
+      deployPlan: firstPlan,
+      stage: () => ({
+        tasks: [
+          {
+            type: "remove",
+            action: "remove",
+            key: { kind: "skill", name: "alpha" },
+            target: "claude",
+          },
+          {
+            type: "remove",
+            action: "remove",
+            key: { kind: "skill", name: "alpha" },
+            target: "codex",
+          },
+        ],
+        metadata: {},
+      }),
+      execute: (operation, record) =>
+        executeStagedDeploy(
+          {
+            fx: {
+              targets,
+              exec: () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: () => false,
+            },
+            deploymentState: failingState,
+            now: () => 20,
+          },
+          operation,
+          record,
+        ),
+    });
+
+    const accepted = await first.coordinator.accept({
+      selectionRevision: 7,
+      planToken: "token-current",
+    });
+    await first.coordinator.wait(accepted.operationId);
+    expect(first.operations.read(accepted.operationId)).toMatchObject({
+      state: "failed",
+      outcomes: [
+        { target: "claude", outcome: "succeeded" },
+        { target: "codex", outcome: "failed" },
+      ],
+    });
+    expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
+
+    const retryPlan = plan({ actions: [codexAction], mirrors: [] }, codexAction);
+    const retry = coordinatorFixture({
+      deployPlan: retryPlan,
+      stage: () => ({
+        tasks: [
+          {
+            type: "remove",
+            action: "remove",
+            key: { kind: "skill", name: "alpha" },
+            target: "codex",
+          },
+        ],
+        metadata: {},
+      }),
+      execute: (operation, record) =>
+        executeStagedDeploy(
+          {
+            fx: {
+              targets,
+              exec: () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: () => false,
+            },
+            deploymentState: state,
+            now: () => 30,
+          },
+          operation,
+          record,
+        ),
+    });
+    const retried = await retry.coordinator.accept({
+      selectionRevision: 7,
+      planToken: "token-current",
+    });
+    await retry.coordinator.wait(retried.operationId);
+    expect(retry.operations.read(retried.operationId)?.state).toBe("completed");
+    expect(readLedger(targets)?.skills).toEqual([]);
+  });
+
   test("continues staged tasks when Deployment State failure recording also fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "deploy-state-failure-"));
     roots.push(root);
@@ -502,7 +770,7 @@ describe("persisted asynchronous Deploy coordinator", () => {
     expect(readLedger(targets)?.skills).toEqual([]);
   });
 
-  test("starts a durably queued operation even when acceptance audit persistence fails", async () => {
+  test("fails a durably queued operation without execution when acceptance audit persistence fails", async () => {
     const scheduled: Array<() => void> = [];
     const { coordinator, operations } = coordinatorFixture({
       schedule: (task) => scheduled.push(task),
@@ -514,12 +782,39 @@ describe("persisted asynchronous Deploy coordinator", () => {
     await expect(
       coordinator.accept({ selectionRevision: 7, planToken: "token-current" }),
     ).rejects.toThrow("audit unavailable");
-    expect(operations.read("operation-1")?.state).toBe("queued");
-    expect(scheduled).toHaveLength(1);
+    expect(scheduled).toHaveLength(0);
+    expect(operations.read("operation-1")).toMatchObject({
+      state: "failed",
+      errorCode: "audit_failed",
+    });
+  });
 
-    scheduled[0]?.();
-    await coordinator.wait("operation-1");
-    expect(operations.read("operation-1")?.state).toBe("completed");
+  test("does not schedule execution until the acceptance audit is durable", async () => {
+    const scheduled: Array<() => void> = [];
+    let releaseAudit: (() => void) | undefined;
+    let markAuditStarted: (() => void) | undefined;
+    const audit = new Promise<void>((resolve) => {
+      releaseAudit = resolve;
+    });
+    const auditStarted = new Promise<void>((resolve) => {
+      markAuditStarted = resolve;
+    });
+    const { coordinator, operations } = coordinatorFixture({
+      schedule: (task) => scheduled.push(task),
+      onAccepted: () => {
+        markAuditStarted?.();
+        return audit;
+      },
+    });
+
+    const accepting = coordinator.accept({ selectionRevision: 7, planToken: "token-current" });
+    await auditStarted;
+    expect(operations.read("operation-1")?.state).toBe("queued");
+    expect(scheduled).toHaveLength(0);
+
+    releaseAudit?.();
+    await expect(accepting).resolves.toEqual({ operationId: "operation-1" });
+    expect(scheduled).toHaveLength(1);
   });
 
   test("persists and executes the canonical instructionWrites operation directly", async () => {
@@ -590,16 +885,19 @@ describe("persisted asynchronous Deploy coordinator", () => {
       action: "remove",
       key: { kind: "skill", name: "old" },
       target: "claude",
+      removalIntentGeneration: "intent-claude",
       artifact: { existence: "present", hash: "old-claude" },
     };
     const removeCodex: DeployPlan["actions"][number] = {
       ...removeClaude,
       target: "codex",
+      removalIntentGeneration: "intent-codex",
       artifact: { existence: "present", hash: "old-codex" },
     };
     const cleared: Array<{
       key: DeployPlan["actions"][number]["key"];
-      targets: DeployTarget[];
+      target: DeployTarget;
+      generation: string;
     }> = [];
     const { coordinator, operations } = coordinatorFixture({
       deployPlan: plan({ actions: [removeClaude, removeCodex] }, removeClaude),
@@ -640,7 +938,13 @@ describe("persisted asynchronous Deploy coordinator", () => {
         { target: "codex", outcome: "failed", code: "io" },
       ],
     });
-    expect(cleared).toEqual([{ key: { kind: "skill", name: "old" }, targets: ["claude"] }]);
+    expect(cleared).toEqual([
+      {
+        key: { kind: "skill", name: "old" },
+        target: "claude",
+        generation: "intent-claude",
+      },
+    ]);
   });
 
   test("emits exactly one refs-only acceptance audit event and no transition duplicates", async () => {
@@ -726,6 +1030,321 @@ describe("persisted asynchronous Deploy coordinator", () => {
       });
       expect(interrupted).toHaveLength(1);
       expect(interrupted[0]?.plan.actions).toEqual(plan().actions);
+    }
+  });
+
+  test("a crashed pathname-lock owner cannot block restart recovery", async () => {
+    const path = operationPath();
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { openSync, writeSync } from "node:fs";
+const fd = openSync(process.env.CRASH_LOCK_PATH, "wx", 0o600);
+writeSync(fd, String(process.pid));
+process.kill(process.pid, "SIGKILL");`,
+      ],
+      { env: { ...process.env, CRASH_LOCK_PATH: `${path}.lock` }, stderr: "pipe" },
+    );
+    await child.exited;
+    expect(existsSync(`${path}.lock`)).toBe(true);
+
+    expect(() => openDeployOperationStore(path, { lockTimeoutMs: 25 })).not.toThrow();
+  });
+
+  test("the advisory transaction lock is OS-released after a real owner crash", async () => {
+    const path = operationPath();
+    const moduleUrl = new URL("../../lib/durable-file.ts", import.meta.url).href;
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `const { withAdvisoryFileLock } = await import(process.env.LOCK_MODULE_URL);
+withAdvisoryFileLock(process.env.OP_PATH, 5000, () => {
+  process.kill(process.pid, "SIGKILL");
+});`,
+      ],
+      {
+        env: { ...process.env, LOCK_MODULE_URL: moduleUrl, OP_PATH: path },
+        stderr: "pipe",
+      },
+    );
+    await child.exited;
+
+    expect(() => openDeployOperationStore(path, { lockTimeoutMs: 100 })).not.toThrow();
+    expect(openDeployOperationStore(path).list()).toEqual([]);
+  });
+
+  test("concurrent process writers serialize to one active operation", async () => {
+    const path = operationPath();
+    const root = join(path, "..");
+    const go = join(root, "go");
+    const moduleUrl = new URL("../deploy-operations.ts", import.meta.url).href;
+    const input = JSON.stringify({
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token-current",
+      plan: plan(),
+      staged: staged(),
+      auditState: "recorded",
+    });
+    const children = ["first", "second"].map((id) => {
+      const ready = join(root, `${id}.ready`);
+      const result = join(root, `${id}.result`);
+      const code = `import { existsSync, writeFileSync } from "node:fs";
+const { openDeployOperationStore } = await import(process.env.OP_MODULE_URL);
+const store = openDeployOperationStore(process.env.OP_PATH);
+writeFileSync(process.env.READY_PATH, "ready");
+const wait = new Int32Array(new SharedArrayBuffer(4));
+while (!existsSync(process.env.GO_PATH)) Atomics.wait(wait, 0, 0, 5);
+try {
+  store.createQueued({ ...JSON.parse(process.env.OP_INPUT), operationId: process.env.OP_ID });
+  writeFileSync(process.env.RESULT_PATH, "accepted");
+} catch (error) {
+  writeFileSync(process.env.RESULT_PATH, error?.code ?? "error");
+}`;
+      return {
+        ready,
+        result,
+        child: Bun.spawn([process.execPath, "-e", code], {
+          env: {
+            ...process.env,
+            OP_MODULE_URL: moduleUrl,
+            OP_PATH: path,
+            OP_INPUT: input,
+            OP_ID: `operation-${id}`,
+            READY_PATH: ready,
+            RESULT_PATH: result,
+            GO_PATH: go,
+          },
+          stderr: "pipe",
+        }),
+      };
+    });
+    for (
+      let attempt = 0;
+      attempt < 100 && children.some((item) => !existsSync(item.ready));
+      attempt += 1
+    ) {
+      await Bun.sleep(5);
+    }
+    expect(children.every((item) => existsSync(item.ready))).toBe(true);
+    writeFileSync(go, "go");
+    await Promise.all(children.map((item) => item.child.exited));
+
+    expect(children.map((item) => readFileSync(item.result, "utf8")).sort()).toEqual([
+      "accepted",
+      "operation_active",
+    ]);
+    expect(openDeployOperationStore(path).list()).toHaveLength(1);
+  });
+
+  test("pending audit recovery fails without execution and recorded audit transition is idempotent", () => {
+    const path = operationPath();
+    const store = openDeployOperationStore(path, { now: () => 10 });
+    store.createQueued({
+      operationId: "operation-pending-audit",
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token-current",
+      plan: plan(),
+      staged: staged(),
+      auditState: "pending",
+    });
+    let recoveryCalls = 0;
+    const recoveredPending = openDeployOperationStore(path, {
+      now: () => 20,
+      onInterrupted: () => {
+        recoveryCalls += 1;
+      },
+    });
+    expect(recoveredPending.read("operation-pending-audit")).toMatchObject({
+      state: "failed",
+      errorCode: "audit_interrupted",
+      auditState: "pending",
+    });
+    expect(recoveryCalls).toBe(0);
+
+    store.createQueued({
+      operationId: "operation-recorded-audit",
+      acceptedAt: 30,
+      selectionRevision: 7,
+      planToken: "token-current",
+      plan: plan(),
+      staged: staged(),
+      auditState: "pending",
+    });
+    expect(store.markAuditRecorded("operation-recorded-audit").auditState).toBe("recorded");
+    expect(store.markAuditRecorded("operation-recorded-audit").auditState).toBe("recorded");
+    const recoveredRecorded = openDeployOperationStore(path, { now: () => 40 });
+    expect(recoveredRecorded.read("operation-recorded-audit")?.state).toBe("interrupted");
+  });
+
+  test("recovery marking failures stay pending, do not abort startup, and replay once", () => {
+    const path = operationPath();
+    const baseAction = plan().actions[0];
+    if (!baseAction) throw new Error("missing fixture action");
+    const actions: DeployPlan["actions"] = [baseAction, { ...baseAction, target: "codex" }];
+    const codexAction = actions[1];
+    if (!codexAction) throw new Error("missing Codex fixture action");
+    const initial = openDeployOperationStore(path, { now: () => 10 });
+    initial.createQueued({
+      operationId: "operation-recovery",
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token-current",
+      plan: plan({ actions }),
+      staged: staged(),
+    });
+    const recoveryState = openDeploymentStateStore(join(path, "..", "recovery-state.json"), {
+      now: () => 30,
+    });
+    const firstCalls: DeployTarget[] = [];
+
+    expect(() =>
+      openDeployOperationStore(path, {
+        now: () => 30,
+        onInterrupted: (operation) => {
+          const target = operation.unfinishedActions?.[0]?.target;
+          if (!target) throw new Error("missing recovery action");
+          firstCalls.push(target);
+          markInterruptedDeploymentState(recoveryState, operation);
+          if (target === "codex") throw new Error("state unavailable");
+        },
+      }),
+    ).not.toThrow();
+    expect(firstCalls).toEqual(["claude", "codex"]);
+    expect(
+      openDeployOperationStore(path).read("operation-recovery")?.recoveryPendingActions,
+    ).toEqual([codexAction]);
+    const revisionAfterCrashWindow = recoveryState.readAll().revision;
+
+    const replayed: DeployTarget[] = [];
+    const recovered = openDeployOperationStore(path, {
+      onInterrupted: (operation) => {
+        const target = operation.unfinishedActions?.[0]?.target;
+        if (target) replayed.push(target);
+        markInterruptedDeploymentState(recoveryState, operation);
+      },
+    });
+    expect(replayed).toEqual(["codex"]);
+    expect(recovered.read("operation-recovery")?.recoveryPendingActions).toEqual([]);
+    expect(recoveryState.readAll().revision).toBe(revisionAfterCrashWindow);
+
+    openDeployOperationStore(path, {
+      onInterrupted: () => {
+        throw new Error("acknowledged work must not replay");
+      },
+    });
+  });
+
+  test("running and terminal transitions retry bounded transient durable write failures", () => {
+    const path = operationPath();
+    let failuresRemaining = 0;
+    const store = openDeployOperationStore(path, {
+      now: () => 10,
+      rename: (from, to) => {
+        if (failuresRemaining > 0) {
+          failuresRemaining -= 1;
+          throw new Error("transient rename failure");
+        }
+        renameSync(from, to);
+      },
+    });
+    store.createQueued({
+      operationId: "operation-retry",
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token-current",
+      plan: plan(),
+      staged: staged(),
+    });
+
+    failuresRemaining = 2;
+    expect(store.markRunning("operation-retry").state).toBe("running");
+    failuresRemaining = 2;
+    expect(store.finish("operation-retry", "failed", "execution_failed")).toMatchObject({
+      state: "failed",
+      errorCode: "execution_failed",
+    });
+    expect(store.activeSummary()).toBeNull();
+  });
+
+  test("queued creation retry after post-rename fsync failure stays idempotent", () => {
+    const path = operationPath();
+    let failFsync = true;
+    const store = openDeployOperationStore(path, {
+      now: () => 10,
+      fsyncDirectory: () => {
+        if (failFsync) {
+          failFsync = false;
+          throw new Error("directory fsync interrupted");
+        }
+      },
+    });
+
+    expect(
+      store.createQueued({
+        operationId: "operation-idempotent-create",
+        acceptedAt: 10,
+        selectionRevision: 7,
+        planToken: "token-current",
+        plan: plan(),
+        staged: staged(),
+      }).operationId,
+    ).toBe("operation-idempotent-create");
+    expect(store.list().map((operation) => operation.operationId)).toEqual([
+      "operation-idempotent-create",
+    ]);
+  });
+
+  test("persistent transition write failure remains restart-recoverable instead of permanently active", async () => {
+    for (const blockedState of ["running", "completed"] as const) {
+      const path = operationPath();
+      let blockTransitions = false;
+      const operations = openDeployOperationStore(path, {
+        now: () => 10,
+        rename: (from, to) => {
+          const pending = readFileSync(from, "utf8");
+          if (
+            blockTransitions &&
+            (pending.includes(`"state": "${blockedState}"`) ||
+              pending.includes('"state": "failed"'))
+          ) {
+            throw new Error("persistent transition failure");
+          }
+          renameSync(from, to);
+        },
+      });
+      const coordinator = createDeployCoordinator({
+        mutationCoordinator: createDeploymentMutationCoordinator(),
+        operations,
+        capture: () => ({ snapshot: snapshot(), plan: plan() }),
+        tokenForPlan: () => "token-current",
+        stage: () => staged(),
+        execute: async (operation, record) => {
+          await record([successOutcome(operation)]);
+          if (blockedState === "completed") blockTransitions = true;
+        },
+        onAccepted: async () => {
+          if (blockedState === "running") blockTransitions = true;
+        },
+        clearRemovalIntents: () => Promise.resolve(),
+        operationId: () => `operation-${blockedState}`,
+        now: () => 10,
+      });
+
+      const accepted = await coordinator.accept({
+        selectionRevision: 7,
+        planToken: "token-current",
+      });
+      await coordinator.wait(accepted.operationId);
+      expect(operations.activeSummary()?.operationId).toBe(accepted.operationId);
+
+      blockTransitions = false;
+      const restarted = openDeployOperationStore(path, { now: () => 20 });
+      expect(restarted.activeSummary()).toBeNull();
+      expect(restarted.read(accepted.operationId)?.state).toBe("interrupted");
     }
   });
 

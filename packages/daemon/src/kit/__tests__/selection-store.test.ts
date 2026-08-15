@@ -63,6 +63,34 @@ describe("SelectionStore", () => {
     expect(readFileSync(path(), "utf8")).toContain('"bad"');
   });
 
+  test("migrates v1 target intents to generated v2 identities", () => {
+    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
+    writeFileSync(
+      path(),
+      JSON.stringify({
+        schemaVersion: 1,
+        initialized: true,
+        revision: 4,
+        enabled: [],
+        removalIntents: [{ key, targets: ["claude", "codex"] }],
+      }),
+    );
+    const generations = ["migrated-claude", "migrated-codex"];
+    const store = openSelectionStore(path(), {
+      generation: () => generations.shift() ?? "unexpected",
+    });
+
+    expect(store.read()).toEqual({
+      revision: 4,
+      enabled: [],
+      removalIntents: [
+        { key, targets: ["claude"], generation: "migrated-claude" },
+        { key, targets: ["codex"], generation: "migrated-codex" },
+      ],
+    });
+    expect(JSON.parse(readFileSync(path(), "utf8"))).toMatchObject({ schemaVersion: 2 });
+  });
+
   test("keeps exact target sets and exposes no mutable internal state", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     const store = openSelectionStore(path());
@@ -76,7 +104,9 @@ describe("SelectionStore", () => {
       key,
       targets: ["claude"],
     });
-    expect(changed.removalIntents).toEqual([{ key, targets: ["codex"] }]);
+    expect(changed.removalIntents).toEqual([
+      { key, targets: ["codex"], generation: expect.any(String) },
+    ]);
     changed.enabled[0]?.targets.push("codex");
     expect(store.read().enabled.find((entry) => entry.key.name === "alpha")?.targets).toEqual([
       "claude",
@@ -93,7 +123,7 @@ describe("SelectionStore", () => {
         { expectedRevision: 1, changes: [{ key: unavailable, enabled: false, targets: codex }] },
         ledger,
       ).removalIntents,
-    ).toEqual([{ key: unavailable, targets: ["codex"] }]);
+    ).toEqual([{ key: unavailable, targets: ["codex"], generation: expect.any(String) }]);
     expect(
       store.mutate({
         expectedRevision: 2,
@@ -113,11 +143,13 @@ describe("SelectionStore", () => {
     const store = openSelectionStore(path());
     store.seedOnce(ledger);
     store.mutate({ expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
-    expect(store.clearRemovalIntents([{ key, targets: ["claude"] }])).toMatchObject({
+    const generation = store.read().removalIntents[0]?.generation;
+    if (!generation) throw new Error("missing removal generation");
+    expect(store.clearRemovalIntents([{ key, target: "claude", generation }])).toMatchObject({
       revision: 2,
-      removalIntents: [{ key, targets: ["codex"] }],
+      removalIntents: [{ key, targets: ["codex"], generation }],
     });
-    expect(store.clearRemovalIntents([{ key, targets: codex }])).toEqual({
+    expect(store.clearRemovalIntents([{ key, target: "codex", generation }])).toEqual({
       revision: 3,
       enabled: [
         { key: { kind: "agent", name: "helper" }, targets: ["claude", "codex"] },
@@ -132,17 +164,42 @@ describe("SelectionStore", () => {
     const store = openSelectionStore(path());
     store.seedOnce(ledger);
     store.mutate({ expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
+    const generation = store.read().removalIntents[0]?.generation;
+    if (!generation) throw new Error("missing removal generation");
     const later = { kind: "skill" as const, name: "later" };
     store.mutate({
       expectedRevision: 2,
       changes: [{ key: later, enabled: true, targets: ["claude"] }],
     });
 
-    expect(store.clearRemovalIntents([{ key, targets: codex }])).toMatchObject({
+    expect(store.clearRemovalIntents([{ key, target: "codex", generation }])).toMatchObject({
       revision: 4,
       enabled: expect.arrayContaining([{ key: later, targets: ["claude"] }]),
       removalIntents: [],
     });
+  });
+
+  test("old completion cannot clear a recreated same-target removal intent", () => {
+    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
+    const generations = ["intent-old", "intent-new"];
+    const store = openSelectionStore(path(), {
+      generation: () => generations.shift() ?? "unexpected-generation",
+    });
+    store.seedOnce(ledger);
+    store.mutate({ expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
+    const acceptedGeneration = store.read().removalIntents[0]?.generation;
+    expect(acceptedGeneration).toBe("intent-old");
+    store.mutate({ expectedRevision: 2, changes: [{ key, enabled: true, targets: codex }] });
+    store.mutate({ expectedRevision: 3, changes: [{ key, enabled: false, targets: codex }] });
+    expect(store.read().removalIntents[0]?.generation).toBe("intent-new");
+
+    store.clearRemovalIntents([
+      { key, target: "codex", generation: acceptedGeneration ?? "missing" },
+    ]);
+
+    expect(store.read().removalIntents).toEqual([
+      { key, targets: ["codex"], generation: "intent-new" },
+    ]);
   });
 
   test("rejects a stale revision with the current revision", () => {
@@ -186,6 +243,7 @@ describe("SelectionStore", () => {
 
     expect(writes).toBeGreaterThan(1);
     expect(SelectionFile.parse(JSON.parse(readFileSync(path(), "utf8")))).toMatchObject({
+      schemaVersion: 2,
       revision: 2,
     });
     expect(openSelectionStore(path()).read()).toEqual(committed);

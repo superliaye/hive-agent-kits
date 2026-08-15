@@ -84,6 +84,20 @@ describe("DeploymentStateStore", () => {
     expect(record?.lastAttempt.detail?.length ?? 0).toBeLessThanOrEqual(512);
   });
 
+  test("replayed interruption marking is idempotent for the same operation action", () => {
+    let clock = 100;
+    const state = openDeploymentStateStore(path, { now: () => clock });
+    const first = state.markInterrupted(key, "claude", "add", "operation-recovery");
+    const revision = state.readAll().revision;
+    clock = 200;
+
+    const replay = state.markInterrupted(key, "claude", "add", "operation-recovery");
+
+    expect(replay).toEqual(first);
+    expect(state.readAll().revision).toBe(revision);
+    expect(replay.lastAttempt.attemptedAt).toBe(100);
+  });
+
   test("retains the previous file when a partial temporary write cannot complete", () => {
     const stable = openDeploymentStateStore(path, { now: () => 100 });
     stable.recordSuccess(key, "claude", appliedV1, "op-1");

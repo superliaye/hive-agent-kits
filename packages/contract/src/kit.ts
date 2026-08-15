@@ -151,7 +151,11 @@ export type Selection = z.infer<typeof SelectionSchema>;
 export const DesiredSelection = z.object({
   enabled: z.array(z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) })),
   removalIntents: z.array(
-    z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) }),
+    z.object({
+      key: CapabilityKey,
+      targets: z.array(DeployTarget).min(1),
+      generation: z.string().min(1).optional(),
+    }),
   ),
 });
 export type DesiredSelection = z.infer<typeof DesiredSelection>;

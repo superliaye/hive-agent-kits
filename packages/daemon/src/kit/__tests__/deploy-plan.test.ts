@@ -128,7 +128,7 @@ describe("buildDeployPlan", () => {
           revision: 10,
           enabled: [],
           removalIntents: [
-            { key: unavailable, targets: ["claude"] },
+            { key: unavailable, targets: ["claude"], generation: "intent-old-skill" },
             { key: plugin, targets: ["claude"] },
             { key: bundle, targets: ["codex"] },
           ],
@@ -167,6 +167,7 @@ describe("buildDeployPlan", () => {
     expect(plan.actions.map((action) => [action.key.kind, action.action])).toEqual([
       ["skill", "remove"],
     ]);
+    expect(plan.actions[0]?.removalIntentGeneration).toBe("intent-old-skill");
   });
 
   test("blocks the whole instruction target while other kinds continue best-effort", () => {
