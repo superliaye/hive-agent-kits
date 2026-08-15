@@ -90,15 +90,19 @@ ADR-0023; only the Shell-to-Daemon control connection crosses machines.
 | `universe/experimental/leon-ye_data/hive-arca/` | Mac launcher, remote lifecycle helper, installer, tests, README | Arca CLI integration, Daemon bootstrap, tunnel supervision, and Hive app launch |
 | `universe/experimental/leon-ye_data/agent-kits/` | `capabilities/`, `presets/`, authoring docs | Databricks/repository-specific Capabilities in Hive's normal kit format |
 | `my-agent-kits` | No topology-specific changes | Repo-agnostic Capabilities, maintained and released as today |
-| Mac installed state | `/Applications/Hive.app`, `~/.local/share/hive-arca/`, `~/.local/bin/hive-arca`, one temporary connection directory per launch | UI, launcher, and ephemeral transport only |
+| Mac installed state | `~/.local/share/hive-arca/apps/<commit>/Hive.app`, versioned launcher payloads, `~/.local/bin/hive-arca`, one temporary connection directory per launch | UI, launcher, and ephemeral transport only |
 | Arca runtime state | `~/.hive/`, `~/.agent-kit/manifest.json`, `~/.claude/`, `~/.codex/`, `~/.agents/` | All Source, desired, deployed, audit, and actual CLI-home authority |
 
 Canonical adapter source lives in Universe. A one-time bootstrap installs a
 versioned copy under `~/.local/share/hive-arca/<version>/` and updates
 `~/.local/bin/hive-arca`. The bootstrap may copy from an explicitly supplied Mac
-checkout or fetch the payload through `arca et`. It may symlink
+checkout or fetch the payload through the Arca command transport. It may symlink
 only when the canonical source itself exists on the Mac; no Mac Universe checkout
-is assumed. Installed files are not a second source of truth.
+is assumed. When the Shell is absent, bootstrap streams an exact clean Hive
+commit from Arca, builds the native app on the Mac, publishes it under that
+commit's versioned app directory, and stores the absolute app path as inert
+launcher configuration. No Mac Hive checkout is assumed. Installed files are
+not a second source of truth.
 
 ## Generic external-Daemon seam
 

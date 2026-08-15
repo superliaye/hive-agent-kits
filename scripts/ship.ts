@@ -16,20 +16,15 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { resolveShipTarget } from "./ship-target";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const isWin = process.platform === "win32";
 const EXE = isWin ? ".exe" : "";
-
-const COMPILE_TARGET =
-  process.platform === "win32"
-    ? "bun-windows-x64"
-    : process.platform === "darwin"
-      ? "bun-darwin-x64"
-      : "bun-linux-x64";
-
-const ELECTRON_PLATFORM =
-  process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux";
+const { compileTarget, electronPlatform, electronArch } = resolveShipTarget(
+  process.platform,
+  process.arch,
+);
 
 function run(cmd: string, args: string[], cwd: string): void {
   console.log(`\n→ ${cmd} ${args.join(" ")}  [cwd=${cwd}]`);
@@ -54,7 +49,7 @@ run(
   [
     "build",
     "--compile",
-    `--target=${COMPILE_TARGET}`,
+    `--target=${compileTarget}`,
     "packages/daemon/src/server/start.ts",
     "--outfile",
     join("packages", "shell", "staging", `hive-daemon${EXE}`),
@@ -114,8 +109,8 @@ run(
     "electron-packager",
     ".",
     "Hive",
-    `--platform=${ELECTRON_PLATFORM}`,
-    "--arch=x64",
+    `--platform=${electronPlatform}`,
+    `--arch=${electronArch}`,
     `--out=${releaseDir}`,
     "--overwrite",
     // Curated app-dir node_modules (prod deps staged above); skip galactus's
@@ -145,7 +140,7 @@ run(
 );
 
 console.log("\n=== Verifying build ===");
-const appDir = join(releaseDir, `Hive-${ELECTRON_PLATFORM}-x64`);
+const appDir = join(releaseDir, `Hive-${electronPlatform}-${electronArch}`);
 // The two artifacts that make the folder actually runnable: the Electron
 // launcher and the self-contained daemon binary (in Resources/). Missing
 // either means a broken ship.
