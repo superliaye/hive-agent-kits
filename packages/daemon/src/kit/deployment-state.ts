@@ -20,6 +20,16 @@ const AttemptAction = z.enum(["add", "update", "remove"]);
 const AttemptOutcome = z.enum(["succeeded", "failed", "interrupted"]);
 const FailureCode = z.enum(["io", "source_missing", "installer_failed", "unknown"]);
 
+export class DeploymentStateError extends Error {
+  readonly code: string;
+
+  constructor(code: string) {
+    super(code);
+    this.name = "DeploymentStateError";
+    this.code = code;
+  }
+}
+
 export const DeploymentApplied = z.object({
   sourceId: z.string().nullable(),
   contentSha: z.string().nullable(),
@@ -126,6 +136,11 @@ function redactDetail(detail: string): string {
       "$1=<redacted>",
     )
     .replace(/(?:https?|ssh):\/\/[^\s,;]+/gi, "<redacted-url>")
+    .replace(/[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*/g, "<redacted-path>")
+    .replace(
+      /\\\\[^\\/:*?"<>|\r\n]+\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*/g,
+      "<redacted-path>",
+    )
     .replace(/(?:[A-Za-z]:\\|\/)(?:[^\s,;]+[\\/])*[^\s,;]*/g, "<redacted-path>")
     .replace(/\s+/g, " ")
     .trim()
@@ -202,19 +217,19 @@ export function openDeploymentStateStore(
     try {
       raw = JSON.parse(readFileSync(path, "utf8"));
     } catch {
-      throw new Error("deployment_state_corrupt");
+      throw new DeploymentStateError("deployment_state_corrupt");
     }
     const parsed = DeploymentStateFile.safeParse(raw);
     if (parsed.success) return parsed.data;
-    throw new Error("deployment_state_corrupt");
+    throw new DeploymentStateError("deployment_state_corrupt");
   };
 
   const write = (file: DeploymentStateFile): void => {
     const directory = dirname(path);
-    mkdirSync(directory, { recursive: true });
     const temporary = `${path}.tmp-${process.pid}-${crypto.randomUUID()}`;
     let renamed = false;
     try {
+      mkdirSync(directory, { recursive: true });
       const fd = openSync(temporary, "w", 0o600);
       try {
         const bytes = Buffer.from(`${JSON.stringify(file, null, 2)}\n`);
@@ -234,7 +249,7 @@ export function openDeploymentStateStore(
       renamed = true;
       fsyncDirectory(directory);
     } catch {
-      throw new Error("deployment_state_write_failed");
+      throw new DeploymentStateError("deployment_state_write_failed");
     } finally {
       if (!renamed && existsSync(temporary)) {
         try {
@@ -251,19 +266,69 @@ export function openDeploymentStateStore(
     Atomics.wait(shared, 0, 0, 10);
   };
 
+  const ownerIsLive = (pid: number): boolean => {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+      // EPERM and unknown platform errors are deliberately treated as live: only
+      // an unambiguous ESRCH permits reclaiming a stale owner lock.
+      return code !== "ESRCH";
+    }
+  };
+
+  const staleOwnerIsDead = (): boolean => {
+    try {
+      const ownerText = readFileSync(lockPath, "utf8").trim();
+      if (!/^\d+$/.test(ownerText)) return false;
+      const owner = Number.parseInt(ownerText, 10);
+      return !ownerIsLive(owner);
+    } catch {
+      // An unreadable or malformed owner is uncertain, so fail safely by waiting.
+      return false;
+    }
+  };
+
   const withLock = <T>(work: () => T): T => {
     const directory = dirname(path);
-    mkdirSync(directory, { recursive: true });
+    try {
+      mkdirSync(directory, { recursive: true });
+    } catch {
+      throw new DeploymentStateError("deployment_state_lock_failed");
+    }
     const deadline = Date.now() + lockTimeoutMs;
     let lockFd: number | undefined;
     while (lockFd === undefined) {
       try {
         lockFd = openSync(lockPath, "wx", 0o600);
-      } catch (error) {
-        const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
-        if (code !== "EEXIST") throw new Error("deployment_state_lock_failed");
         try {
-          if (Date.now() - statSync(lockPath).mtimeMs > staleLockMs) {
+          const bytes = Buffer.from(`${process.pid}\n`);
+          let offset = 0;
+          while (offset < bytes.length) {
+            const written = writeSync(lockFd, bytes, offset, bytes.length - offset);
+            if (!Number.isInteger(written) || written <= 0 || written > bytes.length - offset) {
+              throw new DeploymentStateError("deployment_state_lock_failed");
+            }
+            offset += written;
+          }
+          fsyncSync(lockFd);
+        } catch {
+          closeSync(lockFd);
+          try {
+            unlinkSync(lockPath);
+          } catch {
+            // The failed lock is recovered by the next acquisition attempt.
+          }
+          throw new DeploymentStateError("deployment_state_lock_failed");
+        }
+      } catch (error) {
+        if (error instanceof DeploymentStateError) throw error;
+        const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+        if (code !== "EEXIST") throw new DeploymentStateError("deployment_state_lock_failed");
+        try {
+          if (Date.now() - statSync(lockPath).mtimeMs > staleLockMs && staleOwnerIsDead()) {
             unlinkSync(lockPath);
             fsyncDirectory(directory);
             continue;
@@ -271,16 +336,21 @@ export function openDeploymentStateStore(
         } catch (staleError) {
           const staleCode =
             staleError instanceof Error ? (staleError as NodeJS.ErrnoException).code : undefined;
-          if (staleCode !== "ENOENT") throw new Error("deployment_state_lock_failed");
+          if (staleCode !== "ENOENT")
+            throw new DeploymentStateError("deployment_state_lock_failed");
         }
-        if (Date.now() >= deadline) throw new Error("deployment_state_lock_timeout");
+        if (Date.now() >= deadline) throw new DeploymentStateError("deployment_state_lock_timeout");
         waitForLock();
       }
     }
     try {
       return work();
     } finally {
-      closeSync(lockFd);
+      try {
+        closeSync(lockFd);
+      } catch {
+        // A failed close cannot expose an OS error through the store API.
+      }
       try {
         unlinkSync(lockPath);
         fsyncDirectory(directory);

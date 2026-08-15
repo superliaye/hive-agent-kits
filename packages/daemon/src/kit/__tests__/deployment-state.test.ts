@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type DeploymentApplied, openDeploymentStateStore } from "../deployment-state.ts";
@@ -187,5 +195,52 @@ describe("DeploymentStateStore", () => {
     const file = openDeploymentStateStore(path).readAll();
     expect(file.records.map((record) => record.key.name).sort()).toEqual(["first", "second"]);
     expect(file.revision).toBe(2);
+  });
+
+  test("does not reclaim an old lock whose owner is still live", () => {
+    mkdirSync(join(root, "kit"), { recursive: true });
+    const lock = `${path}.lock`;
+    writeFileSync(lock, `${process.pid}\n`);
+    utimesSync(lock, 1, 1);
+    const state = openDeploymentStateStore(path, { lockTimeoutMs: 20, staleLockMs: 1 });
+    expect(() =>
+      state.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op"),
+    ).toThrow("deployment_state_lock_timeout");
+    expect(existsSync(lock)).toBe(true);
+  });
+
+  test("recovers an old lock whose recorded owner is dead", () => {
+    mkdirSync(join(root, "kit"), { recursive: true });
+    const lock = `${path}.lock`;
+    writeFileSync(lock, "99999999\n");
+    utimesSync(lock, 1, 1);
+    const state = openDeploymentStateStore(path, { lockTimeoutMs: 100, staleLockMs: 1 });
+    state.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op");
+    expect(state.read(key, "claude")?.lastAttempt.operationId).toBe("op");
+  });
+
+  test("redacts Windows drive paths with spaces and UNC paths", () => {
+    const state = openDeploymentStateStore(path);
+    state.recordFailure(
+      key,
+      "claude",
+      {
+        action: "add",
+        code: "io",
+        detail:
+          "EACCES C:\\Users\\Jane Doe\\Hive State\\state.json and \\\\server\\team share\\secret.txt",
+      },
+      "op-windows",
+    );
+    const detail = state.read(key, "claude")?.lastAttempt.detail ?? "";
+    expect(detail).not.toContain("C:\\Users\\Jane Doe\\Hive State\\state.json");
+    expect(detail).not.toContain("\\\\server\\team share\\secret.txt");
+  });
+
+  test("converts inaccessible-parent errors to a stable path-free code", () => {
+    const inaccessible = openDeploymentStateStore("/dev/null/deployment-state.json");
+    expect(() =>
+      inaccessible.recordFailure(key, "claude", { action: "add", code: "io", detail: "x" }, "op"),
+    ).toThrow("deployment_state_lock_failed");
   });
 });
