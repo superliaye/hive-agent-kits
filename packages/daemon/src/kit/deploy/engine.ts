@@ -729,8 +729,7 @@ export function runDeploy(
           );
         }
       },
-      catch: (err) =>
-        new DeployError({ reason: "io", message: `deployment state write failed: ${String(err)}` }),
+      catch: () => new DeployError({ reason: "io", message: "deployment state write failed" }),
     });
 
     // Record integrity fingerprints for EXACTLY what landed (hashing the on-disk

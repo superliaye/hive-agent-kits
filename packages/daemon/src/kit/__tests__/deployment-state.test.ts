@@ -87,7 +87,9 @@ describe("DeploymentStateStore", () => {
         throw new Error("rename failed");
       },
     });
-    expect(() => partial.recordRemoval(key, "claude", "op-2")).toThrow("rename failed");
+    expect(() => partial.recordRemoval(key, "claude", "op-2")).toThrow(
+      "deployment_state_write_failed",
+    );
     expect(readFileSync(path, "utf8")).toBe(before);
   });
 
@@ -118,5 +120,72 @@ describe("DeploymentStateStore", () => {
       appliedAt: 77,
     });
     expect(existsSync(path)).toBe(true);
+  });
+
+  test("imports the legacy whole-instruction fingerprint without corrupting later records", () => {
+    const legacy = join(root, "kit", "fingerprints.json");
+    mkdirSync(join(root, "kit"), { recursive: true });
+    writeFileSync(
+      legacy,
+      JSON.stringify({
+        version: 2,
+        entries: [
+          {
+            kind: "instruction",
+            name: "",
+            target: "claude",
+            hash: "d".repeat(64),
+            deployedAt: 77,
+          },
+        ],
+      }),
+    );
+    const state = openDeploymentStateStore(path, { legacyFingerprintPath: legacy });
+    expect(() => state.readAll()).not.toThrow();
+    const reopened = openDeploymentStateStore(path);
+    reopened.recordSuccess(key, "claude", appliedV1, "op-after-migration");
+    expect(openDeploymentStateStore(path).read(key, "claude")?.applied).toEqual(appliedV1);
+  });
+
+  test("redacts complete bearer credentials and filesystem paths", () => {
+    const state = openDeploymentStateStore(path);
+    state.recordFailure(
+      key,
+      "claude",
+      {
+        action: "add",
+        code: "io",
+        detail: "Authorization: Bearer token.secret-value EACCES: /private/user/.hive/state.json",
+      },
+      "op-redacted",
+    );
+    const detail = state.read(key, "claude")?.lastAttempt.detail ?? "";
+    expect(detail).not.toContain("token.secret-value");
+    expect(detail).not.toContain("/private/user/.hive/state.json");
+  });
+
+  test("serializes real concurrent writers without dropping either outcome", async () => {
+    const moduleUrl = new URL("../deployment-state.ts", import.meta.url).href;
+    const worker = (name: string) =>
+      Bun.spawn({
+        cmd: [
+          "bun",
+          "-e",
+          `import { openDeploymentStateStore } from ${JSON.stringify(moduleUrl)};
+           const store = openDeploymentStateStore(process.argv.at(-2));
+           store.recordFailure({ kind: "skill", name: process.argv.at(-1) }, "claude", { action: "add", code: "io", detail: "write failed" }, process.argv.at(-1));`,
+          path,
+          name,
+        ],
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+    const first = worker("first");
+    const second = worker("second");
+    expect(await first.exited).toBe(0);
+    expect(await second.exited).toBe(0);
+    const file = openDeploymentStateStore(path).readAll();
+    expect(file.records.map((record) => record.key.name).sort()).toEqual(["first", "second"]);
+    expect(file.revision).toBe(2);
   });
 });

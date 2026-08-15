@@ -6,6 +6,7 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
@@ -44,10 +45,17 @@ export const DeploymentStateRecord = z.object({
 });
 export type DeploymentStateRecord = z.infer<typeof DeploymentStateRecord>;
 
+const LegacyInstructionFingerprint = z.object({
+  target: DeployTarget,
+  renderedHash: z.string(),
+  appliedAt: z.number().int().nonnegative(),
+});
+
 export const DeploymentStateFile = z.object({
   schemaVersion: z.literal(1),
   revision: z.number().int().nonnegative(),
   records: z.array(DeploymentStateRecord),
+  legacyInstructionFingerprints: z.array(LegacyInstructionFingerprint).default([]),
 });
 export type DeploymentStateFile = z.infer<typeof DeploymentStateFile>;
 
@@ -63,6 +71,8 @@ export type DeploymentStateStoreOptions = {
   rename?: (oldPath: string, newPath: string) => void;
   fsyncDirectory?: (directory: string) => void;
   write?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
+  lockTimeoutMs?: number;
+  staleLockMs?: number;
 };
 
 export type DeploymentStateStore = {
@@ -97,7 +107,7 @@ export type DeploymentStateStore = {
 };
 
 function emptyFile(): DeploymentStateFile {
-  return { schemaVersion: 1, revision: 0, records: [] };
+  return { schemaVersion: 1, revision: 0, records: [], legacyInstructionFingerprints: [] };
 }
 
 function recordId(
@@ -109,6 +119,8 @@ function recordId(
 
 function redactDetail(detail: string): string {
   return detail
+    .replace(/\bauthorization\s*[:=]\s*bearer\s+[^\s,;]+/gi, "authorization=<redacted>")
+    .replace(/\bbearer\s+[^\s,;]+/gi, "bearer <redacted>")
     .replace(
       /\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi,
       "$1=<redacted>",
@@ -125,23 +137,39 @@ function normalizeCode(code: string): z.infer<typeof FailureCode> {
   return parsed.success ? parsed.data : "unknown";
 }
 
-function readLegacyFingerprint(path: string): DeploymentStateRecord[] {
-  return readFingerprintSidecar(path).entries.map((entry) => ({
-    key: { kind: entry.kind, name: entry.name },
-    target: entry.target,
-    applied: {
-      sourceId: entry.winnerSourceId ?? null,
-      contentSha: null,
-      renderedHash: entry.hash,
-      appliedAt: entry.deployedAt,
-    },
-    lastAttempt: {
-      action: "add" as const,
-      outcome: "succeeded" as const,
-      attemptedAt: entry.deployedAt,
-      operationId: "legacy-fingerprint-import",
-    },
-  }));
+function readLegacyFingerprint(
+  path: string,
+): Pick<DeploymentStateFile, "records" | "legacyInstructionFingerprints"> {
+  const records = new Map<string, DeploymentStateRecord>();
+  const legacyInstructionFingerprints: z.infer<typeof LegacyInstructionFingerprint>[] = [];
+  for (const entry of readFingerprintSidecar(path).entries) {
+    if (entry.kind === "instruction" && entry.name === "") {
+      legacyInstructionFingerprints.push({
+        target: entry.target,
+        renderedHash: entry.hash,
+        appliedAt: entry.deployedAt,
+      });
+      continue;
+    }
+    const record = DeploymentStateRecord.parse({
+      key: { kind: entry.kind, name: entry.name },
+      target: entry.target,
+      applied: {
+        sourceId: entry.winnerSourceId ?? null,
+        contentSha: null,
+        renderedHash: entry.hash,
+        appliedAt: entry.deployedAt,
+      },
+      lastAttempt: {
+        action: "add",
+        outcome: "succeeded",
+        attemptedAt: entry.deployedAt,
+        operationId: "legacy-fingerprint-import",
+      },
+    });
+    records.set(recordId(record.key, record.target), record);
+  }
+  return { records: [...records.values()], legacyInstructionFingerprints };
 }
 
 export function openDeploymentStateStore(
@@ -150,6 +178,9 @@ export function openDeploymentStateStore(
 ): DeploymentStateStore {
   const now = options.now ?? Date.now;
   const rename = options.rename ?? renameSync;
+  const lockPath = `${path}.lock`;
+  const lockTimeoutMs = options.lockTimeoutMs ?? 5_000;
+  const staleLockMs = options.staleLockMs ?? 30_000;
   const writeBytes =
     options.write ??
     ((fd: number, bytes: Uint8Array, offset: number, length: number) =>
@@ -170,12 +201,12 @@ export function openDeploymentStateStore(
     let raw: unknown;
     try {
       raw = JSON.parse(readFileSync(path, "utf8"));
-    } catch (error) {
-      throw new Error(`deployment_state_corrupt: ${String(error)}`);
+    } catch {
+      throw new Error("deployment_state_corrupt");
     }
     const parsed = DeploymentStateFile.safeParse(raw);
     if (parsed.success) return parsed.data;
-    throw new Error(`deployment_state_corrupt: ${parsed.error.message}`);
+    throw new Error("deployment_state_corrupt");
   };
 
   const write = (file: DeploymentStateFile): void => {
@@ -202,21 +233,83 @@ export function openDeploymentStateStore(
       rename(temporary, path);
       renamed = true;
       fsyncDirectory(directory);
+    } catch {
+      throw new Error("deployment_state_write_failed");
     } finally {
-      if (!renamed && existsSync(temporary)) unlinkSync(temporary);
+      if (!renamed && existsSync(temporary)) {
+        try {
+          unlinkSync(temporary);
+        } catch {
+          // The primary write failure is the only useful semantic outcome.
+        }
+      }
     }
+  };
+
+  const waitForLock = (): void => {
+    const shared = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(shared, 0, 0, 10);
+  };
+
+  const withLock = <T>(work: () => T): T => {
+    const directory = dirname(path);
+    mkdirSync(directory, { recursive: true });
+    const deadline = Date.now() + lockTimeoutMs;
+    let lockFd: number | undefined;
+    while (lockFd === undefined) {
+      try {
+        lockFd = openSync(lockPath, "wx", 0o600);
+      } catch (error) {
+        const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+        if (code !== "EEXIST") throw new Error("deployment_state_lock_failed");
+        try {
+          if (Date.now() - statSync(lockPath).mtimeMs > staleLockMs) {
+            unlinkSync(lockPath);
+            fsyncDirectory(directory);
+            continue;
+          }
+        } catch (staleError) {
+          const staleCode =
+            staleError instanceof Error ? (staleError as NodeJS.ErrnoException).code : undefined;
+          if (staleCode !== "ENOENT") throw new Error("deployment_state_lock_failed");
+        }
+        if (Date.now() >= deadline) throw new Error("deployment_state_lock_timeout");
+        waitForLock();
+      }
+    }
+    try {
+      return work();
+    } finally {
+      closeSync(lockFd);
+      try {
+        unlinkSync(lockPath);
+        fsyncDirectory(directory);
+      } catch {
+        // A failed release cannot replace the committed outcome or its error.
+      }
+    }
+  };
+
+  const migrate = (): DeploymentStateFile => {
+    const imported = options.legacyFingerprintPath
+      ? readLegacyFingerprint(options.legacyFingerprintPath)
+      : { records: [], legacyInstructionFingerprints: [] };
+    if (imported.records.length === 0 && imported.legacyInstructionFingerprints.length === 0) {
+      return emptyFile();
+    }
+    const initial = DeploymentStateFile.parse({
+      schemaVersion: 1,
+      revision: 1,
+      ...imported,
+    });
+    write(initial);
+    return initial;
   };
 
   const current = (): DeploymentStateFile => {
     const loaded = load();
     if (loaded) return loaded;
-    const migrated = options.legacyFingerprintPath
-      ? readLegacyFingerprint(options.legacyFingerprintPath)
-      : [];
-    if (migrated.length === 0) return emptyFile();
-    const initial: DeploymentStateFile = { schemaVersion: 1, revision: 1, records: migrated };
-    write(initial);
-    return initial;
+    return withLock(() => load() ?? migrate());
   };
 
   const commit = (
@@ -226,14 +319,16 @@ export function openDeploymentStateStore(
   ): DeploymentStateRecord => {
     const key = CapabilityKey.parse(keyInput);
     const target = DeployTarget.parse(targetInput);
-    const file = current();
-    const id = recordId(key, target);
-    const previous = file.records.find((record) => recordId(record.key, record.target) === id);
-    const nextRecord = DeploymentStateRecord.parse(change(previous));
-    const records = file.records.filter((record) => recordId(record.key, record.target) !== id);
-    records.push(nextRecord);
-    write({ ...file, revision: file.revision + 1, records });
-    return nextRecord;
+    return withLock(() => {
+      const file = load() ?? migrate();
+      const id = recordId(key, target);
+      const previous = file.records.find((record) => recordId(record.key, record.target) === id);
+      const nextRecord = DeploymentStateRecord.parse(change(previous));
+      const records = file.records.filter((record) => recordId(record.key, record.target) !== id);
+      records.push(nextRecord);
+      write({ ...file, revision: file.revision + 1, records });
+      return nextRecord;
+    });
   };
 
   return {

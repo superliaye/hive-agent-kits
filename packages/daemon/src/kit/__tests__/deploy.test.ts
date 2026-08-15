@@ -191,6 +191,35 @@ describe("runDeploy", () => {
     );
   });
 
+  test("normalizes a deployment-state filesystem fault without exposing its path", async () => {
+    seedSkill("state-path");
+    const brokenStatePath: DeployTargets = {
+      ...targets,
+      deploymentStatePath: () => "/dev/null/deployment-state.json",
+    };
+    const exit = await Effect.runPromiseExit(
+      runDeploy(
+        { targets: brokenStatePath, exec: makeSpy().port, probe: () => true },
+        {
+          selection: resolved({ skills: ["state-path"], targets: ["claude"] }),
+          kitSha: "sha1",
+          kitVersion: "1.0.0",
+          activeMirrorRoots: [mirror],
+          activeCatalogNames: activeCatalogNames(),
+        },
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const error = Cause.squash(exit.cause);
+      expect(error).toBeInstanceOf(Error);
+      if (error instanceof Error) {
+        expect(error.message).toBe("deployment state write failed");
+        expect(error.message).not.toContain("/dev/null");
+      }
+    }
+  });
+
   test("(a) skill lands in both homes; no SOURCE.md / _unshipped", async () => {
     seedSkill("alpha");
     const spy = makeSpy();
