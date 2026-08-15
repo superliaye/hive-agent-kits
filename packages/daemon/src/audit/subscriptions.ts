@@ -117,9 +117,20 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
 }
 
 // Deploy: a Kit deploy is a user action. run_id/agent_id are NULL (a deploy has
-// neither). Payload is the exact refs-only allow-list — kitSha + per-kind applied
-// counts + the target CLIs — never file contents, marketplace tokens, or secrets.
+// neither). Each event has an explicit refs-only allow-list; neither accepted
+// plans nor legacy applied results expose file contents, tokens, or secrets.
 const deployNormalizer: Normalizer<DeployAuditEvents> = {
+  "deploy.accepted": (event) => ({
+    event_type: "deploy.accepted",
+    run_id: null,
+    agent_id: null,
+    payload: {
+      operationId: event.operationId,
+      selectionRevision: event.selectionRevision,
+      perKindActionCounts: event.perKindActionCounts,
+      targetClis: event.targetClis,
+    },
+  }),
   "deploy.applied": (event) => ({
     event_type: "deploy.applied",
     run_id: null,

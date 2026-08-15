@@ -64,10 +64,7 @@ export type SelectionStore = {
   mutate(body: z.input<typeof SelectionMutation>, ledger?: Ledger | null): SelectionSnapshotType;
   // Internal seam for a later successful Deploy removal outcome. It changes only
   // matching intents and never lets Deployment State author Selection.
-  clearRemovalIntents(
-    expectedRevision: number,
-    entries: readonly SelectionEntry[],
-  ): SelectionSnapshotType;
+  clearRemovalIntents(entries: readonly SelectionEntry[]): SelectionSnapshotType;
 };
 
 function snapshot(file: SelectionFile): SelectionSnapshotType {
@@ -306,11 +303,8 @@ export function openSelectionStore(
       write(next);
       return snapshot(next);
     },
-    clearRemovalIntents: (expectedRevision, entries) => {
+    clearRemovalIntents: (entries) => {
       const current = initialized();
-      if (expectedRevision !== current.revision) {
-        throw new SelectionConflictError(current.revision);
-      }
       const removalIntents = entryMap(current.removalIntents);
       let changed = false;
       for (const entry of entries) {

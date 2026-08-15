@@ -5,12 +5,15 @@
 
 import { join } from "node:path";
 import type {
+  AcceptedDeployRequest,
   Catalog,
   DeployDiff,
   DeploymentOverview,
   DeployResult,
   KitState,
   Selection,
+  SelectionMutation as SelectionMutationType,
+  SelectionSnapshot,
   Source,
   SyncRunResult,
   VerifyReport,
@@ -30,6 +33,16 @@ import {
   type ExecPort,
 } from "../deploy/adapter.ts";
 import { type DeployInput, runDeploy } from "../deploy/engine.ts";
+import {
+  createDeployCoordinator,
+  createDeploymentMutationCoordinator,
+  type DeploymentMutationCoordinator,
+  executeStagedDeploy,
+  markInterruptedDeploymentState,
+  stageDeployPlan,
+} from "../deploy-coordinator.ts";
+import { openDeployOperationStore } from "../deploy-operations.ts";
+import { buildDeployPlan, tokenForPlan } from "../deploy-plan.ts";
 import { openDeploymentStateStore } from "../deployment-state.ts";
 import { readLedger } from "../ledger.ts";
 import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
@@ -50,6 +63,9 @@ export type KitSvc = {
   state(): KitState;
   // One authoritative point-in-time projection for the deployment UI.
   overview(): DeploymentOverview;
+  selection(): SelectionSnapshot;
+  mutateSelection(mutation: SelectionMutationType): Promise<SelectionSnapshot>;
+  acceptDeploy(request: AcceptedDeployRequest): Promise<{ operationId: string }>;
   // Run a per-Source sync over the active Sources; one Source's failure never
   // fails the whole run. Returns the per-Source outcomes.
   sync(): Effect.Effect<SyncRunResult>;
@@ -58,7 +74,8 @@ export type KitSvc = {
   // On-disk self-check: per-capability per-target status (present/missing/drifted/
   // recorded). Read-only — emits no audit row.
   verify(): VerifyReport;
-  // Apply a Selection. Emits exactly one `deploy.applied` audit event.
+  // Legacy synchronous engine seam retained for internal compatibility tests.
+  // HTTP acceptance uses acceptDeploy and emits `deploy.accepted` instead.
   deploy(selection: Selection): Effect.Effect<DeployResult, DeployError>;
   // Audit source emitter (source: 'deploy').
   events: TypedEmitter<DeployAuditEvents>;
@@ -73,6 +90,7 @@ export type CreateKitOptions = {
   fetch?: HttpFetch;
   gitProcess?: GitProcess;
   workingTreeRoots?: () => readonly string[];
+  mutationCoordinator?: DeploymentMutationCoordinator;
   // Override exec/probe (tests assert the installer is/isn't called).
   exec?: ExecPort;
   probe?: BinaryProbe;
@@ -84,6 +102,7 @@ function activeSources(registry: SourceRegistrySvc): readonly Source[] {
 
 function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
   const targets = opts.targets ?? failSafeDeployTargets();
+  const mutationCoordinator = opts.mutationCoordinator ?? createDeploymentMutationCoordinator();
   const fx: DeployFsExec = {
     targets,
     exec: opts.exec ?? bunExec,
@@ -94,6 +113,15 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
   const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
     legacyFingerprintPath: targets.fingerprintPath(),
   });
+  selectionStore.seedOnce(readLedger(targets));
+  const operations = openDeployOperationStore(
+    join(runtimeRoot(), "kit", "deploy-operations.json"),
+    {
+      onInterrupted: (operation) => {
+        markInterruptedDeploymentState(deploymentState, operation);
+      },
+    },
+  );
 
   // Per-Source last sync error, keyed by Source id. A Map so a lookup miss is a
   // clean `undefined` under noUncheckedIndexedAccess — never an `as`.
@@ -107,9 +135,42 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
   const mirrorRootsOf = (active: readonly Source[]): readonly string[] =>
     active.map((s) => targets.mirrorRoot(s.id));
 
+  const capture = () => {
+    const captured = captureCoherentDeploymentSnapshot(targets, {
+      readSourceRegistry: () => registry.currentSnapshot(),
+      readCatalog: (active) => readCatalog(targets, active),
+      readLedger: () => readLedger(targets),
+      readSelection: () => selectionStore.read(),
+      readDeploymentState: () => deploymentState.readAll(),
+      readActiveOperation: () => operations.activeSummary(),
+      readLastOperation: () => operations.lastSummary(),
+    });
+    return { snapshot: captured, plan: buildDeployPlan(captured) };
+  };
+
+  const deployCoordinator = createDeployCoordinator({
+    mutationCoordinator,
+    operations,
+    capture,
+    tokenForPlan,
+    stage: (snapshot, plan) => stageDeployPlan(targets, snapshot, plan),
+    execute: (operation, record) => executeStagedDeploy({ fx, deploymentState }, operation, record),
+    onAccepted: (event) => events.emit("deploy.accepted", event),
+    clearRemovalIntents: (entries) =>
+      mutationCoordinator.runExclusive(async () => {
+        selectionStore.clearRemovalIntents(entries);
+      }),
+  });
+
   return {
     events,
     catalog: () => readCatalog(targets, activeSources(registry)),
+    selection: () => selectionStore.read(),
+    mutateSelection: (mutation) =>
+      mutationCoordinator.runExclusive(async () =>
+        selectionStore.mutate(mutation, readLedger(targets)),
+      ),
+    acceptDeploy: (request) => deployCoordinator.accept(request),
     state: () => ({
       sync: activeSources(registry).map((s) =>
         buildSourceSyncStatus(s, targets.mirrorRoot(s.id), lastSyncError.get(s.id)),
@@ -117,18 +178,12 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
       ledger: readLedger(targets),
     }),
     overview: () => {
-      const snapshot = captureCoherentDeploymentSnapshot(targets, {
-        readSourceRegistry: () => registry.currentSnapshot(),
-        readCatalog: (active) => readCatalog(targets, active),
-        readLedger: () => readLedger(targets),
-        readSelection: (ledger) => selectionStore.seedOnce(ledger),
-        readDeploymentState: () => deploymentState.readAll(),
-      });
+      const snapshot = capture().snapshot;
       return buildOverview(snapshot);
     },
     verify: () => runVerify(targets),
-    sync: () =>
-      Effect.gen(function* () {
+    sync: () => {
+      const run = Effect.gen(function* () {
         const sources = activeSources(registry);
         const outcomes = yield* Effect.forEach(
           sources,
@@ -169,7 +224,9 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
           { concurrency: 1 },
         );
         return { sources: outcomes };
-      }),
+      });
+      return Effect.promise(() => mutationCoordinator.runExclusive(() => Effect.runPromise(run)));
+    },
     diff: (selection) =>
       Effect.try({
         try: () => {

@@ -15,7 +15,8 @@
 // `emit` preserves block-on-failure (an audit persist fault fails the op).
 
 import type { AddSourceInput, Source } from "@hive/contract";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Exit, Layer } from "effect";
+import type { DeploymentMutationCoordinator } from "../../kit/deploy-coordinator.ts";
 import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { SourcesPersistence } from "../persistence.ts";
@@ -23,9 +24,10 @@ import { createSourcesStore, type ReorderDirection, type SourcesStore } from "..
 import { SOURCES_FILE_VERSION, type SourcesAuditEvents, type SourcesFile } from "../types.ts";
 import { DuplicateOrigin, SourceIoError, SourceNotFound } from "./errors.ts";
 
-export type CreateSourceRegistryOptions =
+export type CreateSourceRegistryOptions = (
   | { mode: "memory"; initial?: Source[] }
-  | { mode: "file"; path: string; seedFixtureSources?: boolean };
+  | { mode: "file"; path: string; seedFixtureSources?: boolean }
+) & { mutationCoordinator?: DeploymentMutationCoordinator };
 
 export type SourceRegistrySvc = {
   list(): Effect.Effect<readonly Source[], SourceIoError>;
@@ -128,7 +130,27 @@ function ioGuard<A>(thunk: () => A): Effect.Effect<A, SourceIoError> {
   });
 }
 
-function buildSvc(store: SourcesStore): SourceRegistrySvc {
+function serializeMutation<A, E>(
+  coordinator: DeploymentMutationCoordinator | undefined,
+  effect: Effect.Effect<A, E>,
+): Effect.Effect<A, E> {
+  if (!coordinator) return effect;
+  return Effect.callback<A, E>((resume) => {
+    void coordinator
+      .runExclusive(() => Effect.runPromiseExit(effect))
+      .then((exit) =>
+        Exit.match(exit, {
+          onSuccess: (value) => resume(Effect.succeed(value)),
+          onFailure: (cause) => resume(Effect.failCause(cause)),
+        }),
+      );
+  });
+}
+
+function buildSvc(
+  store: SourcesStore,
+  mutationCoordinator?: DeploymentMutationCoordinator,
+): SourceRegistrySvc {
   const events = new TypedEmitter<SourcesAuditEvents>();
 
   return {
@@ -141,65 +163,80 @@ function buildSvc(store: SourcesStore): SourceRegistrySvc {
     currentSnapshot: () => store.snapshot(),
 
     add: (input) =>
-      Effect.flatMap(
-        ioGuard(() => store.add(input)),
-        (res) =>
-          res.ok
-            ? Effect.promise(() =>
-                events.emit("source.added", { id: res.source.id, origin: res.source.origin }),
-              ).pipe(Effect.as(res.source))
-            : Effect.fail(
-                new DuplicateOrigin({
-                  origin:
-                    input.locator.kind === "git" ? input.locator.repoUrl : input.locator.repoRoot,
-                }),
-              ),
+      serializeMutation(
+        mutationCoordinator,
+        Effect.flatMap(
+          ioGuard(() => store.add(input)),
+          (res) =>
+            res.ok
+              ? Effect.promise(() =>
+                  events.emit("source.added", { id: res.source.id, origin: res.source.origin }),
+                ).pipe(Effect.as(res.source))
+              : Effect.fail(
+                  new DuplicateOrigin({
+                    origin:
+                      input.locator.kind === "git" ? input.locator.repoUrl : input.locator.repoRoot,
+                  }),
+                ),
+        ),
       ),
 
     activate: (id) =>
-      Effect.flatMap(
-        ioGuard(() => store.activate(id)),
-        (res) =>
-          res.ok
-            ? Effect.promise(() => events.emit("source.activated", { id })).pipe(
-                Effect.as(res.source),
-              )
-            : Effect.fail(new SourceNotFound({ id })),
+      serializeMutation(
+        mutationCoordinator,
+        Effect.flatMap(
+          ioGuard(() => store.activate(id)),
+          (res) =>
+            res.ok
+              ? Effect.promise(() => events.emit("source.activated", { id })).pipe(
+                  Effect.as(res.source),
+                )
+              : Effect.fail(new SourceNotFound({ id })),
+        ),
       ),
 
     deactivate: (id) =>
-      Effect.flatMap(
-        ioGuard(() => store.deactivate(id)),
-        (res) =>
-          res.ok
-            ? Effect.promise(() => events.emit("source.deactivated", { id })).pipe(
-                Effect.as(res.source),
-              )
-            : Effect.fail(new SourceNotFound({ id })),
+      serializeMutation(
+        mutationCoordinator,
+        Effect.flatMap(
+          ioGuard(() => store.deactivate(id)),
+          (res) =>
+            res.ok
+              ? Effect.promise(() => events.emit("source.deactivated", { id })).pipe(
+                  Effect.as(res.source),
+                )
+              : Effect.fail(new SourceNotFound({ id })),
+        ),
       ),
 
     delete: (id) =>
-      Effect.flatMap(
-        ioGuard(() => store.delete(id)),
-        (res) =>
-          res.ok
-            ? Effect.promise(() => events.emit("source.removed", { id }))
-            : Effect.fail(new SourceNotFound({ id })),
+      serializeMutation(
+        mutationCoordinator,
+        Effect.flatMap(
+          ioGuard(() => store.delete(id)),
+          (res) =>
+            res.ok
+              ? Effect.promise(() => events.emit("source.removed", { id }))
+              : Effect.fail(new SourceNotFound({ id })),
+        ),
       ),
 
     reorder: (id, direction) =>
-      Effect.flatMap(
-        ioGuard(() => store.reorder(id, direction)),
-        (res) => {
-          if (!res.ok) return Effect.fail(new SourceNotFound({ id }));
-          // Emit the audit row only for a genuine swap (ranks moved + persisted) —
-          // a no-op (already at the requested end) wrote nothing, so it records no
-          // user-action row (AGENTS.md: audit reflects a real mutation).
-          if (!res.changed) return Effect.succeed(res.source);
-          return Effect.promise(() =>
-            events.emit("source.reordered", { id, rank: res.source.rank }),
-          ).pipe(Effect.as(res.source));
-        },
+      serializeMutation(
+        mutationCoordinator,
+        Effect.flatMap(
+          ioGuard(() => store.reorder(id, direction)),
+          (res) => {
+            if (!res.ok) return Effect.fail(new SourceNotFound({ id }));
+            // Emit the audit row only for a genuine swap (ranks moved + persisted) —
+            // a no-op (already at the requested end) wrote nothing, so it records no
+            // user-action row (AGENTS.md: audit reflects a real mutation).
+            if (!res.changed) return Effect.succeed(res.source);
+            return Effect.promise(() =>
+              events.emit("source.reordered", { id, rank: res.source.rank }),
+            ).pipe(Effect.as(res.source));
+          },
+        ),
       ),
   };
 }
@@ -208,7 +245,7 @@ export function SourceRegistryLive(opts: CreateSourceRegistryOptions): Layer.Lay
   return Layer.effect(
     SourceRegistry,
     Effect.acquireRelease(
-      Effect.sync(() => buildSvc(openStore(opts))),
+      Effect.sync(() => buildSvc(openStore(opts), opts.mutationCoordinator)),
       () => Effect.void,
     ),
   );

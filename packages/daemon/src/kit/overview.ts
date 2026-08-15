@@ -328,7 +328,7 @@ function mirrorTreeIdentity(root: string): string {
   return hash.digest("hex");
 }
 
-function mirrorIdentity(root: string): string {
+export function readMirrorIdentity(root: string): string {
   const provenance = readProvenance(root);
   if (!provenance) return mirrorTreeIdentity(root);
   return sha256(
@@ -350,7 +350,7 @@ function captureMirrors(
       return {
         sourceId: source.id,
         precedence: source.rank,
-        identity: mirrorIdentity(targets.mirrorRoot(source.id)),
+        identity: readMirrorIdentity(targets.mirrorRoot(source.id)),
       };
     } catch {
       return {

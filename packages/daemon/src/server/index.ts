@@ -33,6 +33,7 @@ import {
   type Config,
 } from "../config/index.ts";
 import { canonicalizeWorkingTreeLocator } from "../kit/acquisition/working-tree.ts";
+import { createDeploymentMutationCoordinator } from "../kit/deploy-coordinator.ts";
 import { Kit, KitLive, type KitSvc } from "../kit/index.ts";
 import { removeMirror } from "../kit/mirror.ts";
 import { degradedOnboardResult, onboardSource } from "../kit/onboard.ts";
@@ -115,6 +116,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const fixtureSources =
     devMode && (opts.fixtureSources ?? process.env.HIVE_DEV_FIXTURE_SOURCES === "1");
   const legacyGithubFixtureFetch = legacyGithubFixtureFetchForMode(opts.mode, opts.fetch);
+  const deploymentMutationCoordinator = createDeploymentMutationCoordinator();
 
   // The surviving modules compose into ONE root Layer owned by a single
   // ManagedRuntime (ADR-0011). The `mode`-driven adapter choice stays here at
@@ -135,8 +137,13 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       : ({ mode: "file", path: files.secrets() } as const);
   const sourcesOpts =
     opts.mode === "memory"
-      ? ({ mode: "memory" } as const)
-      : ({ mode: "file", path: files.sources(), seedFixtureSources: fixtureSources } as const);
+      ? ({ mode: "memory", mutationCoordinator: deploymentMutationCoordinator } as const)
+      : ({
+          mode: "file",
+          path: files.sources(),
+          seedFixtureSources: fixtureSources,
+          mutationCoordinator: deploymentMutationCoordinator,
+        } as const);
   // Audit keeps its OWN sqlite file (~/.hive/audit.db).
   const auditOpts =
     opts.mode === "memory"
@@ -187,6 +194,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       targets: deployTargets,
       ...(legacyGithubFixtureFetch ? { fetch: legacyGithubFixtureFetch } : {}),
       workingTreeRoots: () => configHolder.config?.get("sources").workingTreeRoots ?? [],
+      mutationCoordinator: deploymentMutationCoordinator,
     }).pipe(Layer.provide(sourcesLayer)),
     // Sources registry (ADR-0023). Hive-private JSON store; memory mode in
     // tests/dev writes no real ~/.hive/sources.json. Same shared instance.
@@ -356,10 +364,16 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // defensive, never the real defect sink.
     onboard: (s) =>
       Effect.catchDefect(
-        onboardSource(deployTargets, s, SYNC_TIMEOUT_MS, {
-          ...(legacyGithubFixtureFetch ? { legacyGithubFixtureFetch } : {}),
-          workingTreeRoots: config.get("sources").workingTreeRoots,
-        }),
+        Effect.promise(() =>
+          deploymentMutationCoordinator.runExclusive(() =>
+            Effect.runPromise(
+              onboardSource(deployTargets, s, SYNC_TIMEOUT_MS, {
+                ...(legacyGithubFixtureFetch ? { legacyGithubFixtureFetch } : {}),
+                workingTreeRoots: config.get("sources").workingTreeRoots,
+              }),
+            ),
+          ),
+        ),
         (defect: unknown) => {
           log().error(
             { module: "sources/onboard", sourceId: s.id, err: String(defect) },
@@ -368,7 +382,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
           return Effect.succeed(degradedOnboardResult(s));
         },
       ),
-    forgetMirror: (id) => Effect.sync(() => removeMirror(deployTargets.mirrorRoot(id))),
+    forgetMirror: (id) =>
+      Effect.promise(() =>
+        deploymentMutationCoordinator.runExclusive(async () => {
+          removeMirror(deployTargets.mirrorRoot(id));
+        }),
+      ),
   };
   app.route("/", buildSourcesRoutes(sourceRegistry, runSources, lifecycle));
 

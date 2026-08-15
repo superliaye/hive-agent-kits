@@ -33,6 +33,12 @@ export type MirrorProvenance = z.infer<typeof MirrorProvenance>;
 // ---- Audit event (source: 'deploy') ----
 
 export type DeployAuditEvents = {
+  "deploy.accepted": {
+    operationId: string;
+    selectionRevision: number;
+    perKindActionCounts: Record<string, number>;
+    targetClis: DeployTarget[];
+  };
   "deploy.applied": {
     kitSha: string | null;
     perKindCounts: Record<string, number>;

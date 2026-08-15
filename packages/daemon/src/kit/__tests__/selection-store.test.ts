@@ -113,16 +113,34 @@ describe("SelectionStore", () => {
     const store = openSelectionStore(path());
     store.seedOnce(ledger);
     store.mutate({ expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
-    expect(store.clearRemovalIntents(2, [{ key, targets: ["claude"] }])).toMatchObject({
+    expect(store.clearRemovalIntents([{ key, targets: ["claude"] }])).toMatchObject({
       revision: 2,
       removalIntents: [{ key, targets: ["codex"] }],
     });
-    expect(store.clearRemovalIntents(2, [{ key, targets: codex }])).toEqual({
+    expect(store.clearRemovalIntents([{ key, targets: codex }])).toEqual({
       revision: 3,
       enabled: [
         { key: { kind: "agent", name: "helper" }, targets: ["claude", "codex"] },
         { key, targets: ["claude"] },
       ],
+      removalIntents: [],
+    });
+  });
+
+  test("successful removal clearing preserves Selection edits committed after acceptance", () => {
+    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
+    const store = openSelectionStore(path());
+    store.seedOnce(ledger);
+    store.mutate({ expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
+    const later = { kind: "skill" as const, name: "later" };
+    store.mutate({
+      expectedRevision: 2,
+      changes: [{ key: later, enabled: true, targets: ["claude"] }],
+    });
+
+    expect(store.clearRemovalIntents([{ key, targets: codex }])).toMatchObject({
+      revision: 4,
+      enabled: expect.arrayContaining([{ key: later, targets: ["claude"] }]),
       removalIntents: [],
     });
   });

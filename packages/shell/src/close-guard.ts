@@ -5,7 +5,7 @@
 // before-quit must first show a confirm dialog. Factored out so the decision is
 // unit-tested even though the dialog itself is manual.
 //
-//   inFlight         — a renderer deploy mutation is currently pending.
+//   inFlight         — the Daemon reports a durable deploy operation as active.
 //   alreadyConfirmed — the user already chose "Close anyway" this quit cycle, so
 //                      we must NOT prompt again (the second before-quit pass after
 //                      the dialog falls straight through to the drain).

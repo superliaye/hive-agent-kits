@@ -399,5 +399,8 @@ export type DeploymentOverview = z.infer<typeof DeploymentOverview>;
 export const AcceptedDeployRequest = z.object({
   selectionRevision: z.number().int().nonnegative(),
   planToken: z.string().regex(/^[0-9a-f]{64}$/),
-});
+}).strict();
 export type AcceptedDeployRequest = z.infer<typeof AcceptedDeployRequest>;
+
+export const AcceptedDeployResponse = z.object({ operationId: z.string().min(1) }).strict();
+export type AcceptedDeployResponse = z.infer<typeof AcceptedDeployResponse>;

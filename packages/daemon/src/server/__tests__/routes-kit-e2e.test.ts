@@ -27,6 +27,7 @@ import {
   type DeploymentOverview,
   type DiffEntry,
   type Ledger,
+  type SelectionSnapshot,
 } from "@hive/contract";
 import {
   buildGzipTar,
@@ -214,6 +215,105 @@ async function postDiff(
   return (await res.json()) as { entries: DiffEntry[] };
 }
 
+function desiredEntries(sel: SelectionInput): SelectionSnapshot["enabled"] {
+  const targets = sel.targets ?? ["claude", "codex"];
+  return [
+    ...(sel.instructions ?? []).map((name) => ({
+      key: { kind: "instruction" as const, name },
+      targets,
+    })),
+    ...(sel.skills ?? []).map((name) => ({ key: { kind: "skill" as const, name }, targets })),
+    ...(sel.agents ?? []).map((name) => ({ key: { kind: "agent" as const, name }, targets })),
+  ];
+}
+
+function selectionEntryId(entry: SelectionSnapshot["enabled"][number]): string {
+  return `${entry.key.kind}:${entry.key.name}`;
+}
+
+async function acceptSelection(
+  server: ServerHandles,
+  sel: SelectionInput & { plugins?: string[]; bundles?: string[] },
+): Promise<DeploymentOverview> {
+  const current = (await (
+    await server.app.fetch(authed("/api/kit/selection"))
+  ).json()) as SelectionSnapshot;
+  const targets = sel.targets ?? ["claude", "codex"];
+  const desired = [
+    ...desiredEntries(sel),
+    ...(sel.plugins ?? []).map((name) => ({
+      key: { kind: "plugin" as const, name },
+      targets,
+    })),
+    ...(sel.bundles ?? []).map((name) => ({
+      key: { kind: "bundle" as const, name },
+      targets,
+    })),
+  ];
+  const desiredByKey = new Map(desired.map((entry) => [selectionEntryId(entry), entry]));
+  const currentByKey = new Map(current.enabled.map((entry) => [selectionEntryId(entry), entry]));
+  const changes: Array<{
+    key: SelectionSnapshot["enabled"][number]["key"];
+    enabled: boolean;
+    targets: ("claude" | "codex")[];
+  }> = [];
+  for (const entry of current.enabled) {
+    const wanted = desiredByKey.get(selectionEntryId(entry));
+    const removedTargets = entry.targets.filter((target) => !wanted?.targets.includes(target));
+    if (removedTargets.length > 0) {
+      changes.push({ key: entry.key, enabled: false, targets: removedTargets });
+    }
+  }
+  for (const entry of desired) {
+    const prior = currentByKey.get(selectionEntryId(entry));
+    const addedTargets = entry.targets.filter((target) => !prior?.targets.includes(target));
+    if (addedTargets.length > 0) {
+      changes.push({ key: entry.key, enabled: true, targets: addedTargets });
+    }
+  }
+  if (changes.length > 0) {
+    const changed = await server.app.fetch(
+      authed("/api/kit/selection", {
+        method: "PATCH",
+        body: JSON.stringify({ expectedRevision: current.revision, changes }),
+      }),
+    );
+    expect(changed.status).toBe(200);
+  }
+
+  let operationId = "";
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const overview = (await (
+      await server.app.fetch(authed("/api/kit/overview"))
+    ).json()) as DeploymentOverview;
+    const accepted = await server.app.fetch(
+      authed("/api/kit/deploy", {
+        method: "POST",
+        body: JSON.stringify({
+          selectionRevision: overview.selectionRevision,
+          planToken: overview.planToken,
+        }),
+      }),
+    );
+    const rejected = (await accepted.clone().json()) as { error?: string };
+    if (accepted.status === 409 && rejected.error === "plan_stale") continue;
+    expect(accepted.status).toBe(202);
+    operationId = ((await accepted.json()) as { operationId: string }).operationId;
+    break;
+  }
+  expect(operationId).not.toBe("");
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const overview = (await (
+      await server.app.fetch(authed("/api/kit/overview"))
+    ).json()) as DeploymentOverview;
+    if (overview.lastOperation?.operationId === operationId && !overview.activeOperation) {
+      return overview;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`operation ${operationId} did not finish`);
+}
+
 function entriesNamed(entries: CapabilityEntry[], kind: string, name: string): CapabilityEntry[] {
   return entries.filter((e) => e.kind === kind && e.name === name);
 }
@@ -335,6 +435,90 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
     }
   });
 
+  test("POST /api/kit/deploy accepts only the reviewed plan reference and persists before 202", async () => {
+    const server = await serverWith(twoSourceFetch());
+    try {
+      const overview = (await (
+        await server.app.fetch(authed("/api/kit/overview"))
+      ).json()) as DeploymentOverview;
+      const stale = await server.app.fetch(
+        authed("/api/kit/deploy", {
+          method: "POST",
+          body: JSON.stringify({
+            selectionRevision: overview.selectionRevision,
+            planToken: "0".repeat(64),
+          }),
+        }),
+      );
+      expect(stale.status).toBe(409);
+      expect(await stale.json()).toEqual({ error: "plan_stale" });
+
+      const invalid = await server.app.fetch(
+        authed("/api/kit/deploy", {
+          method: "POST",
+          body: JSON.stringify({
+            selectionRevision: overview.selectionRevision,
+            planToken: overview.planToken,
+            selection: { injected: true },
+          }),
+        }),
+      );
+      expect(invalid.status).toBe(400);
+
+      const accepted = await server.app.fetch(
+        authed("/api/kit/deploy", {
+          method: "POST",
+          body: JSON.stringify({
+            selectionRevision: overview.selectionRevision,
+            planToken: overview.planToken,
+          }),
+        }),
+      );
+      expect(accepted.status).toBe(202);
+      const body = (await accepted.json()) as { operationId: string };
+      expect(body).toEqual({ operationId: expect.any(String) });
+      expect(
+        JSON.parse(readFileSync(join(tmpRoot, "runtime", "kit", "deploy-operations.json"), "utf8")),
+      ).toMatchObject({ operations: [{ operationId: body.operationId }] });
+
+      let after = (await (
+        await server.app.fetch(authed("/api/kit/overview"))
+      ).json()) as DeploymentOverview;
+      for (let attempt = 0; after.activeOperation && attempt < 50; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        after = (await (
+          await server.app.fetch(authed("/api/kit/overview"))
+        ).json()) as DeploymentOverview;
+      }
+      expect(after.activeOperation).toBeNull();
+      expect(after.lastOperation).toMatchObject({
+        operationId: body.operationId,
+        state: "completed",
+      });
+
+      const audit = await server.app.fetch(authed("/api/audit?source=deploy"));
+      const rows = (await audit.json()) as {
+        event_type: string;
+        payload: Record<string, unknown>;
+      }[];
+      const acceptedRows = rows.filter((row) => row.event_type === "deploy.accepted");
+      expect(acceptedRows).toHaveLength(1);
+      expect(acceptedRows[0]).toMatchObject({
+        event_type: "deploy.accepted",
+        payload: {
+          operationId: body.operationId,
+          selectionRevision: overview.selectionRevision,
+          perKindActionCounts: {},
+          targetClis: [],
+        },
+      });
+      expect(JSON.stringify(acceptedRows)).not.toContain("planToken");
+      expect(JSON.stringify(acceptedRows)).not.toContain("contentSha");
+    } finally {
+      await server.dispose();
+    }
+  });
+
   test("(a–i) full add→deploy→merge→shadow→hide/remove chain over two Sources", async () => {
     const server = await serverWith(twoSourceFetch());
     try {
@@ -374,10 +558,8 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
       );
 
       // ---- (d) deploy file-copy kinds → bytes land, include resolves, ledger names ----
-      const dep1 = await server.app.fetch(
-        authed("/api/kit/deploy", { method: "POST", body: selectionBody(sel) }),
-      );
-      expect(dep1.status).toBe(200);
+      const dep1 = await acceptSelection(server, sel);
+      expect(dep1.lastOperation?.state).toBe("completed");
 
       // Skills land under claude (HIVE_CLAUDE_HOME/skills) and codex (HIVE_AGENTS_HOME/skills).
       const alphaClaude = join(homes.claudeHome, "skills", "alpha", "SKILL.md");
@@ -410,10 +592,8 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
       for (const name of ["alpha", "merged", "helper", "house-rules"]) {
         expect(diff2.entries.some((e) => e.name === name)).toBe(false);
       }
-      const dep2 = await server.app.fetch(
-        authed("/api/kit/deploy", { method: "POST", body: selectionBody(sel) }),
-      );
-      expect(dep2.status).toBe(200);
+      const dep2 = await acceptSelection(server, sel);
+      expect(dep2.lastOperation?.state).toBe("completed");
       // The ledger is byte-identical (idempotent re-deploy writes the same set).
       expect(readFileSync(homes.ledgerPath, "utf8")).toBe(ledgerBytesBefore);
 
@@ -442,10 +622,8 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
 
       // Deploying `conflict` writes B's bytes (the winner), never A's shadowed bytes.
       const conflictSel: SelectionInput = { skills: ["conflict"], targets: ["claude"] };
-      const depConflict = await server.app.fetch(
-        authed("/api/kit/deploy", { method: "POST", body: selectionBody(conflictSel) }),
-      );
-      expect(depConflict.status).toBe(200);
+      const depConflict = await acceptSelection(server, conflictSel);
+      expect(depConflict.lastOperation?.state).toBe("completed");
       const deployedConflict = readFileSync(
         join(homes.claudeHome, "skills", "conflict", "SKILL.md"),
         "utf8",
@@ -495,18 +673,12 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
       const body = AddSourceResult.parse(await add.json());
       expect(body.validation.capabilityCount).toBeGreaterThan(0);
 
-      const sel = selectionBody({ skills: ["wrecked"], targets: ["claude"] });
-      const dep = await server.app.fetch(authed("/api/kit/deploy", { method: "POST", body: sel }));
-      expect(dep.status).toBe(200);
-      const result = (await dep.json()) as {
-        perKind: { kind: string; applied: string[]; failed: { name: string; error: string }[] }[];
-      };
-      const skillKind = result.perKind.find((k) => k.kind === "skill");
-      // The skill is NOT applied; it is reported failed naming the unresolved include.
-      expect(skillKind?.applied).not.toContain("wrecked");
-      const failure = skillKind?.failed.find((f) => f.name === "wrecked");
-      expect(failure).toBeDefined();
-      expect(failure?.error).toContain("include 'NOPE' not found");
+      const dep = await acceptSelection(server, { skills: ["wrecked"], targets: ["claude"] });
+      expect(dep.lastOperation?.state).toBe("completed");
+      const row = dep.rows.find(
+        (entry) => entry.key.kind === "skill" && entry.key.name === "wrecked",
+      );
+      expect(row).toMatchObject({ reconciliation: "waiting_for_source" });
       // No bytes landed for the skill under the redirected claude home.
       expect(existsSync(join(homes.claudeHome, "skills", "wrecked", "SKILL.md"))).toBe(false);
     } finally {
@@ -554,22 +726,15 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
       // end-to-end — a conformance flip would otherwise slip through this e2e, which
       // previously checked only HTTP 201 + the `applied` lists.
       expect(AddSourceResult.parse(await add.json()).validation.conformant).toBe(true);
-      const sel = JSON.stringify({
-        presets: [],
-        add: { plugins: ["myplugin"], bundles: ["mybundle"] },
-        remove: {},
+      const dep = await acceptSelection(server, {
+        plugins: ["myplugin"],
+        bundles: ["mybundle"],
         targets: ["claude"],
       });
-      const dep = await server.app.fetch(authed("/api/kit/deploy", { method: "POST", body: sel }));
-      expect(dep.status).toBe(200);
-      const result = (await dep.json()) as {
-        perKind: { kind: string; applied: string[] }[];
-      };
-      const plugin = result.perKind.find((k) => k.kind === "plugin");
-      const bundle = result.perKind.find((k) => k.kind === "bundle");
-      // The skip-hatch marks the name applied without any real exec.
-      expect(plugin?.applied).toContain("myplugin");
-      expect(bundle?.applied).toContain("mybundle");
+      expect(dep.lastOperation?.state).toBe("completed");
+      const ledger = JSON.parse(readFileSync(homes.ledgerPath, "utf8")) as Ledger;
+      expect(ledger.plugins.map((entry) => entry.name)).toContain("myplugin");
+      expect(ledger.bundles.map((entry) => entry.name)).toContain("mybundle");
     } finally {
       await server.dispose();
       delete process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL;

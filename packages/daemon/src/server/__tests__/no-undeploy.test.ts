@@ -3,7 +3,7 @@
 // HTTP boundary, where the kit deploy emitter IS wired (createServer) — NOT in
 // audit-emission.test.ts, which never wires that emitter (vacuous there).
 //
-// After a real deploy: deactivate / delete a Source emits no new `deploy.applied`
+// After a real deploy: deactivate / delete a Source emits no new `deploy.accepted`
 // audit row and writes no new bytes under the CLI-home target paths. Hermetic:
 // stub fetch builds the Mirror; redirected temp homes; mode:"memory".
 
@@ -16,6 +16,7 @@ import { buildGzipTar, clearHomeEnv, redirectHomeEnv } from "../../kit/__tests__
 import type { HttpFetch } from "../../kit/sync.ts";
 import { failSafeDeployTargets } from "../../kit/targets.ts";
 import { createServer, type ServerHandles } from "../index.ts";
+import { acceptDesiredSelection } from "./accepted-deploy-helpers.ts";
 
 const TOKEN = "test-token";
 const SHA = "a".repeat(40);
@@ -98,26 +99,24 @@ describe("server — toggle/delete never undeploys (#36 Q8)", () => {
       }),
     );
     const { source } = AddSourceResult.parse(await add.json());
-    const deploy = await server.app.fetch(
-      authed("/api/kit/deploy", {
-        method: "POST",
-        body: JSON.stringify({
-          presets: [],
-          add: { skills: ["foo"] },
-          remove: {},
-          targets: ["claude"],
-        }),
-      }),
-    );
-    expect(deploy.status).toBe(200);
+    const deploy = await acceptDesiredSelection(server, TOKEN, [
+      { key: { kind: "skill", name: "foo" }, targets: ["claude"] },
+    ]);
+    expect(deploy.lastOperation?.state).toBe("completed");
     return source.id;
   }
 
-  test("deactivate after deploy: no new deploy.applied row, no new CLI-home bytes", async () => {
+  async function acceptedDeployRows(): Promise<number> {
+    return (await server.audit.query({ source: "deploy" })).filter(
+      (row) => row.event_type === "deploy.accepted",
+    ).length;
+  }
+
+  test("deactivate after deploy: no new deploy.accepted row, no new CLI-home bytes", async () => {
     const id = await addAndDeploy();
     const claudeHome = failSafeDeployTargets().claudeHome();
 
-    const deployRowsBefore = (await server.audit.query({ source: "deploy" })).length;
+    const deployRowsBefore = await acceptedDeployRows();
     expect(deployRowsBefore).toBe(1); // the one real deploy
     const treeBefore = snapshotTree(claudeHome);
     expect(treeBefore.some((p) => p.includes("foo"))).toBe(true);
@@ -126,23 +125,23 @@ describe("server — toggle/delete never undeploys (#36 Q8)", () => {
     expect(off.status).toBe(200);
 
     // No new Deploy: the deploy-source audit count is unchanged.
-    expect((await server.audit.query({ source: "deploy" })).length).toBe(deployRowsBefore);
+    expect(await acceptedDeployRows()).toBe(deployRowsBefore);
     // No undeploy: the already-landed bytes are untouched (byte-identical tree).
     expect(snapshotTree(claudeHome)).toEqual(treeBefore);
   });
 
-  test("delete after deploy: no new deploy.applied row, no new CLI-home bytes", async () => {
+  test("delete after deploy: no new deploy.accepted row, no new CLI-home bytes", async () => {
     const id = await addAndDeploy();
     const claudeHome = failSafeDeployTargets().claudeHome();
 
-    const deployRowsBefore = (await server.audit.query({ source: "deploy" })).length;
+    const deployRowsBefore = await acceptedDeployRows();
     expect(deployRowsBefore).toBe(1);
     const treeBefore = snapshotTree(claudeHome);
 
     const del = await server.app.fetch(authed(`/api/sources/${id}`, { method: "DELETE" }));
     expect(del.status).toBe(204);
 
-    expect((await server.audit.query({ source: "deploy" })).length).toBe(deployRowsBefore);
+    expect(await acceptedDeployRows()).toBe(deployRowsBefore);
     // The deployed artifacts survive the Source's deletion (never auto-undeployed).
     expect(snapshotTree(claudeHome)).toEqual(treeBefore);
   });

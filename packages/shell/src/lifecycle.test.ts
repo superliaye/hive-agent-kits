@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { shouldConfirmShellClose, shouldDrainShellDaemon, shouldManageDaemon } from "./lifecycle.ts";
+import {
+  deploymentActiveFromOverview,
+  shouldConfirmShellClose,
+  shouldDrainShellDaemon,
+  shouldManageDaemon,
+} from "./lifecycle.ts";
 
 describe("Shell launch lifecycle", () => {
   test("managed mode owns the local Daemon lifecycle", () => {
@@ -24,5 +29,17 @@ describe("Shell launch lifecycle", () => {
         daemonKilled: false,
       }),
     ).toBe(false);
+  });
+
+  test("uses durable Overview activity and fails closed on an unreadable response", () => {
+    expect(deploymentActiveFromOverview(200, '{"activeOperation":null}')).toBe(false);
+    expect(
+      deploymentActiveFromOverview(
+        200,
+        '{"activeOperation":{"operationId":"operation-1","state":"running"}}',
+      ),
+    ).toBe(true);
+    expect(deploymentActiveFromOverview(500, "unavailable")).toBe(true);
+    expect(deploymentActiveFromOverview(200, "not-json")).toBe(true);
   });
 });

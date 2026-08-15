@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { SourceRegistry, SourceRegistryLive } from "../../../sources/effect/sources-live.ts";
 import { buildGzipTar, clearHomeEnv, redirectHomeEnv } from "../../__tests__/helpers.ts";
+import { createDeploymentMutationCoordinator, PlanStaleError } from "../../deploy-coordinator.ts";
 import { mirrorExists } from "../../mirror.ts";
 import type { HttpFetch } from "../../sync.ts";
 import { failSafeDeployTargets } from "../../targets.ts";
@@ -98,6 +99,74 @@ function kitOver(origins: string[], fetchImpl: HttpFetch) {
 }
 
 describe("Kit.sync — per-Source (#30)", () => {
+  test("Source sync holds the shared mutation gate across its Mirror swap and acceptance revalidates after", async () => {
+    const mutationCoordinator = createDeploymentMutationCoordinator();
+    let releaseDownload = (): void => {};
+    let downloadStarted = (): void => {};
+    const started = new Promise<void>((resolve) => {
+      downloadStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const fetchImpl: HttpFetch = async (url) => {
+      if (url.includes("api.github.com")) {
+        return new Response(JSON.stringify({ sha: SHA }), { status: 200 });
+      }
+      downloadStarted();
+      await release;
+      return tarball(SHA, "foo");
+    };
+    const origin = "https://github.com/owner/a";
+    const sourcesLayer = SourceRegistryLive({
+      mode: "memory",
+      mutationCoordinator,
+      initial: [
+        {
+          id: "src-0",
+          label: "src-0",
+          locator: {
+            kind: "git",
+            repoUrl: origin,
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          },
+          origin,
+          kind: "git",
+          active: true,
+          createdAt: 0,
+          rank: 0,
+        },
+      ],
+    });
+    const rt = ManagedRuntime.make(
+      Layer.merge(
+        KitLive({ fetch: fetchImpl, mutationCoordinator }).pipe(Layer.provide(sourcesLayer)),
+        sourcesLayer,
+      ),
+    );
+    const kit = rt.runSync(Kit);
+    const reviewed = kit.overview();
+    const syncing = Effect.runPromise(kit.sync());
+    await started;
+    let settled = false;
+    const accepting = kit
+      .acceptDeploy({
+        selectionRevision: reviewed.selectionRevision,
+        planToken: reviewed.planToken,
+      })
+      .finally(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseDownload();
+    await syncing;
+    await expect(accepting).rejects.toBeInstanceOf(PlanStaleError);
+    rt.dispose();
+  });
+
   test("two active Sources sync into two distinct mirrors; state() has one entry each", async () => {
     const { kit, registry, rt } = kitOver(
       ["https://github.com/owner/a", "https://github.com/owner/b"],

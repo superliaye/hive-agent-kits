@@ -34,7 +34,11 @@ import {
   type ShellMode,
   validateExternalReady,
 } from "./daemon-ready";
-import { shouldConfirmShellClose, shouldDrainShellDaemon } from "./lifecycle";
+import {
+  deploymentActiveFromOverview,
+  shouldConfirmShellClose,
+  shouldDrainShellDaemon,
+} from "./lifecycle";
 
 // Renderer→main IPC contracts. AGENTS.md requires Zod at external
 // boundaries — the renderer process is its own untrusted context even
@@ -113,9 +117,6 @@ let daemon: ChildProcess | null = null;
 let spawnedByShell = false;
 let activeConnection: ActiveDaemonConnection | null = null;
 let authorizedWebContentsId: number | null = null;
-// Feature 3: set by the renderer over IPC while a Kit deploy mutation is pending.
-// before-quit consults it to confirm before SIGKILLing the daemon mid-write.
-let deployInFlight = false;
 
 async function probeDaemonReady(baseUrl = DAEMON_URL): Promise<ReadyProbe> {
   try {
@@ -326,11 +327,9 @@ ipcMain.handle("hive:getSystemAccent", (): string | null => {
   return parsed.success ? parsed.data : null;
 });
 
-// Renderer → main: the Kit deploy mutation toggles its in-flight state. A boolean
-// payload only; anything else is ignored (the flag stays at its prior value).
-ipcMain.handle("hive:setDeployInFlight", (_event, value: unknown) => {
-  if (typeof value === "boolean") deployInFlight = value;
-});
+// Compatibility-only renderer signal. Accepted operations outlive their request,
+// so shutdown uses the Daemon's durable operation truth below.
+ipcMain.handle("hive:setDeployInFlight", () => {});
 
 ipcMain.handle("hive:daemonRequest", async (event, path: unknown, request: unknown) => {
   if (event.sender.id !== authorizedWebContentsId || !activeConnection) {
@@ -383,40 +382,47 @@ let quitting = false;
 // Set once the user picks "Close anyway" so the confirm isn't re-shown on the
 // fall-through (and on any subsequent before-quit pass) this quit cycle.
 let closeConfirmed = false;
+let daemonActivityChecked = false;
+let checkingDaemonActivity = false;
+
+async function daemonDeployIsActive(): Promise<boolean> {
+  if (SHELL_LAUNCH.kind === "external" || !activeConnection) return false;
+  try {
+    const response = await createDaemonRequestHandler(activeConnection)("/api/kit/overview", {});
+    return deploymentActiveFromOverview(response.status, response.body);
+  } catch {
+    return true;
+  }
+}
+
 app.on("before-quit", (event) => {
-  // Confirm BEFORE the drain when a deploy is in flight. Cancel keeps the app
-  // open (no drain); "Close anyway" records the choice and falls through to the
-  // existing daemon-drain sequencing below — no second preventDefault.
-  if (shouldConfirmShellClose(SHELL_LAUNCH.kind, deployInFlight, closeConfirmed)) {
+  if (
+    SHELL_LAUNCH.kind === "managed" &&
+    !closeConfirmed &&
+    !daemonActivityChecked
+  ) {
     event.preventDefault();
-    const choice = dialog.showMessageBoxSync({
-      type: "warning",
-      buttons: ["Cancel", "Close anyway"],
-      defaultId: 0,
-      cancelId: 0,
-      title: "Deploy in progress",
-      message: "A capability deploy is still in progress.",
-      detail: "Closing now will interrupt it and may leave a partial deploy on disk.",
-    });
-    if (choice === 0) return; // Cancel — stay open, do NOT drain.
-    closeConfirmed = true;
-    // We already preventDefaulted to show the dialog, so the quit is cancelled.
-    // If there is no shell-spawned daemon to drain (the dev path spawns the
-    // daemon separately, so daemon===null/spawnedByShell===false here), the drain
-    // block below would early-return and the app would hang open. Re-issue the
-    // quit ourselves; the next before-quit pass has closeConfirmed set, so it
-    // skips the dialog and either drains or quits cleanly.
-    if (
-      !shouldDrainShellDaemon(SHELL_LAUNCH.kind, {
-        hasDaemon: daemon !== null,
-        spawnedByShell,
-        daemonKilled: daemon?.killed ?? true,
-      })
-    ) {
+    if (checkingDaemonActivity) return;
+    checkingDaemonActivity = true;
+    void daemonDeployIsActive().then((active) => {
+      checkingDaemonActivity = false;
+      if (shouldConfirmShellClose(SHELL_LAUNCH.kind, active, closeConfirmed)) {
+        const choice = dialog.showMessageBoxSync({
+          type: "warning",
+          buttons: ["Cancel", "Close anyway"],
+          defaultId: 0,
+          cancelId: 0,
+          title: "Deploy in progress",
+          message: "A capability deploy is still in progress.",
+          detail: "Closing now will interrupt it and may leave a partial deploy on disk.",
+        });
+        if (choice === 0) return;
+        closeConfirmed = true;
+      }
+      daemonActivityChecked = true;
       app.quit();
-      return;
-    }
-    // Otherwise fall through to the drain sequencing below in this same pass.
+    });
+    return;
   }
   if (
     !shouldDrainShellDaemon(SHELL_LAUNCH.kind, {

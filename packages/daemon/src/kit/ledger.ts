@@ -107,10 +107,12 @@ export function mergeLedger(
   input: LedgerMergeInput,
   prunedSkills: string[],
   prunedAgents: string[],
+  prunedInstructions: string[] = [],
 ): Ledger {
   const current = readLedger(targets) ?? emptyLedger();
   const dropSkill = new Set(prunedSkills);
   const dropAgent = new Set(prunedAgents);
+  const dropInstruction = new Set(prunedInstructions);
 
   const mergeNames = (existing: { name: string }[], add: string[], drop: Set<string>) => {
     const set = new Map<string, { name: string }>();
@@ -134,9 +136,10 @@ export function mergeLedger(
     agents: Array.from(new Set([...current.agents, ...input.targets])),
     skills: mergeNames(current.skills, input.skills, dropSkill),
     agentDefs: mergeNames(current.agentDefs, input.agents, dropAgent),
-    // Instructions are whole-file ownership; merge by name (no prune — agent-kit
-    // never prunes instructions and re-concat overwrites).
-    instructions: mergeNames(current.instructions, input.instructions, new Set()),
+    // Instructions remain the byte-compatible agent-kit name list. The accepted
+    // plan may explicitly remove a contribution after its whole-file rewrite
+    // succeeds, so only those factual removals are dropped.
+    instructions: mergeNames(current.instructions, input.instructions, dropInstruction),
     plugins: mergeNames(current.plugins, input.plugins, new Set()),
     bundles: mergeBundles(current.bundles, input.bundles),
   };
