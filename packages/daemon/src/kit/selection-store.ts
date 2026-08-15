@@ -55,6 +55,7 @@ export class SelectionConflictError extends Error {
 export type SelectionStoreOptions = {
   rename?: (oldPath: string, newPath: string) => void;
   fsyncDirectory?: (directory: string) => void;
+  write?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
 };
 
 export type SelectionStore = {
@@ -181,6 +182,10 @@ export function openSelectionStore(
   options: SelectionStoreOptions = {},
 ): SelectionStore {
   const rename = options.rename ?? renameSync;
+  const writeBytes =
+    options.write ??
+    ((fd: number, bytes: Uint8Array, offset: number, length: number) =>
+      writeSync(fd, bytes, offset, length));
   const fsyncDirectory =
     options.fsyncDirectory ??
     ((directory: string) => {
@@ -214,7 +219,15 @@ export function openSelectionStore(
     try {
       const fd = openSync(temporary, "w", 0o600);
       try {
-        writeSync(fd, `${JSON.stringify(file, null, 2)}\n`);
+        const bytes = Buffer.from(`${JSON.stringify(file, null, 2)}\n`);
+        let offset = 0;
+        while (offset < bytes.length) {
+          const written = writeBytes(fd, bytes, offset, bytes.length - offset);
+          if (!Number.isInteger(written) || written <= 0 || written > bytes.length - offset) {
+            throw new Error("selection_write_failed: write made no progress");
+          }
+          offset += written;
+        }
         fsyncSync(fd);
       } finally {
         closeSync(fd);

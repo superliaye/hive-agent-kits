@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Ledger } from "@hive/contract";
-import { openSelectionStore, SelectionConflictError } from "../selection-store.ts";
+import { openSelectionStore, SelectionConflictError, SelectionFile } from "../selection-store.ts";
 
 const ledger: Ledger = {
   kitVersion: "",
@@ -149,6 +149,62 @@ describe("SelectionStore", () => {
       },
     });
     expect(() => failing.mutate({ expectedRevision: 1, changes: [] })).toThrow("disk full");
+    expect(readFileSync(path(), "utf8")).toBe(before);
+  });
+
+  test("completes partial writes before fsync and rename", () => {
+    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
+    const initial = openSelectionStore(path());
+    initial.seedOnce(ledger);
+    let writes = 0;
+    const partial = openSelectionStore(path(), {
+      write: (fd, bytes, offset, length) => {
+        writes += 1;
+        return writeSync(fd, bytes, offset, Math.min(length, 7));
+      },
+    });
+
+    const committed = partial.mutate({ expectedRevision: 1, changes: [] });
+
+    expect(writes).toBeGreaterThan(1);
+    expect(SelectionFile.parse(JSON.parse(readFileSync(path(), "utf8")))).toMatchObject({
+      revision: 2,
+    });
+    expect(openSelectionStore(path()).read()).toEqual(committed);
+  });
+
+  test("rejects zero-progress writes without replacing the committed selection", () => {
+    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
+    const initial = openSelectionStore(path());
+    initial.seedOnce(ledger);
+    const before = readFileSync(path(), "utf8");
+    let writes = 0;
+    const stalled = openSelectionStore(path(), {
+      write: () => {
+        writes += 1;
+        return 0;
+      },
+    });
+
+    expect(() => stalled.mutate({ expectedRevision: 1, changes: [] })).toThrow(
+      "selection_write_failed",
+    );
+    expect(writes).toBe(1);
+    expect(readFileSync(path(), "utf8")).toBe(before);
+  });
+
+  test("retains the committed selection when a write throws", () => {
+    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
+    const initial = openSelectionStore(path());
+    initial.seedOnce(ledger);
+    const before = readFileSync(path(), "utf8");
+    const failing = openSelectionStore(path(), {
+      write: () => {
+        throw new Error("write interrupted");
+      },
+    });
+
+    expect(() => failing.mutate({ expectedRevision: 1, changes: [] })).toThrow("write interrupted");
     expect(readFileSync(path(), "utf8")).toBe(before);
   });
 });
