@@ -15,6 +15,7 @@ import { log } from "../lib/log.ts";
 import { runtimeRoot } from "../lib/paths.ts";
 import { DeployError } from "./effect/errors.ts";
 import type { KitSvc } from "./effect/kit-live.ts";
+import { DeploymentSnapshotChangedError } from "./overview.ts";
 import { openSelectionStore, SelectionConflictError } from "./selection-store.ts";
 
 // Discharge a Kit Effect off the root runtime. Returns a Promise<Either>-like.
@@ -48,7 +49,20 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
 
   app.get("/api/kit/state", (c) => c.json(kit.state()));
 
-  app.get("/api/kit/overview", (c) => c.json(kit.overview()));
+  app.get("/api/kit/overview", (c) => {
+    try {
+      return c.json(kit.overview());
+    } catch (error) {
+      if (error instanceof DeploymentSnapshotChangedError) {
+        return c.json({ error: error.code }, 409);
+      }
+      log().error(
+        { module: "kit/routes", route: "overview", err: String(error) },
+        "overview snapshot failed",
+      );
+      return c.json({ error: "overview_unavailable" }, 500);
+    }
+  });
 
   app.get("/api/kit/selection", (c) => {
     try {

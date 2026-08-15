@@ -33,7 +33,7 @@ import { type DeployInput, runDeploy } from "../deploy/engine.ts";
 import { openDeploymentStateStore } from "../deployment-state.ts";
 import { readLedger } from "../ledger.ts";
 import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
-import { buildOverview, captureDeploymentSnapshot } from "../overview.ts";
+import { buildOverview, captureCoherentDeploymentSnapshot } from "../overview.ts";
 import { catalogNameSets, computeDiff, resolveSelection } from "../selection.ts";
 import { openSelectionStore } from "../selection-store.ts";
 import { type HttpFetch, syncLocatorSource } from "../sync.ts";
@@ -117,15 +117,12 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
       ledger: readLedger(targets),
     }),
     overview: () => {
-      const sourceRegistry = registry.currentSnapshot();
-      const active = sourceRegistry.sources.filter((source) => source.active);
-      const ledger = readLedger(targets);
-      const snapshot = captureDeploymentSnapshot(targets, {
-        sourceRegistry,
-        catalog: readCatalog(targets, active),
-        selection: selectionStore.seedOnce(ledger),
-        ledger,
-        deploymentState: deploymentState.readAll(),
+      const snapshot = captureCoherentDeploymentSnapshot(targets, {
+        readSourceRegistry: () => registry.currentSnapshot(),
+        readCatalog: (active) => readCatalog(targets, active),
+        readLedger: () => readLedger(targets),
+        readSelection: (ledger) => selectionStore.seedOnce(ledger),
+        readDeploymentState: () => deploymentState.readAll(),
       });
       return buildOverview(snapshot);
     },

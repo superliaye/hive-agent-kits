@@ -15,6 +15,7 @@ import {
   type Ledger,
   type OverviewCatalogState,
   type OverviewLastAttempt,
+  type OverviewMirror,
   type OverviewRow,
   type OverviewTargetState,
   type ReconciliationState,
@@ -38,6 +39,8 @@ import {
   buildDeployPlan,
   type DeploymentSnapshot,
   identityForLedger,
+  ledgerOwnershipByKey,
+  stableJson,
   tokenForPlan,
   type WouldDeployArtifact,
 } from "./deploy-plan.ts";
@@ -196,11 +199,7 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
     ),
   );
   const owned = ledgerKeySet(snapshot.ledger.value);
-  const ledgerTargets = new Set(
-    (snapshot.ledger.value?.agents ?? []).filter(
-      (target): target is DeployTarget => target === "claude" || target === "codex",
-    ),
-  );
+  const ownership = ledgerOwnershipByKey(snapshot.ledger.value);
 
   const rows: OverviewRow[] = [...keys.values()]
     .sort((left, right) =>
@@ -228,7 +227,7 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
         const record = recordsByPair.get(pairId(key, target));
         const selectedOnTarget = selected?.targets.includes(target) ?? false;
         const intentOnTarget = intent?.targets.includes(target) ?? false;
-        const ledgerOwned = isLedgerKey && ledgerTargets.has(target);
+        const ledgerOwned = ownership.get(id)?.has(target) ?? false;
         const action = actionByPair.get(pairId(key, target));
         let reconciliation: ReconciliationState = "in_sync";
         if (action) {
@@ -241,8 +240,8 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
         } else if (intentOnTarget && (key.kind === "plugin" || key.kind === "bundle")) {
           reconciliation = "manual_removal_required";
         } else if (selectedOnTarget && !winner) {
-          reconciliation = record?.applied || isLedgerKey ? "orphaned" : "waiting_for_source";
-        } else if (ledgerOwned && keyRecords.length === 0) {
+          reconciliation = record?.applied || ledgerOwned ? "orphaned" : "waiting_for_source";
+        } else if (ledgerOwned && !record) {
           reconciliation = "unmanaged_owned";
         } else if (selectedOnTarget && wouldByPair.get(pairId(key, target))?.error) {
           reconciliation = "waiting_for_source";
@@ -340,6 +339,28 @@ function mirrorIdentity(root: string): string {
       dirty: provenance.dirty ?? false,
     }),
   );
+}
+
+function captureMirrors(
+  targets: DeployTargets,
+  activeSources: readonly Source[],
+): OverviewMirror[] {
+  return activeSources.map((source) => {
+    try {
+      return {
+        sourceId: source.id,
+        precedence: source.rank,
+        identity: mirrorIdentity(targets.mirrorRoot(source.id)),
+      };
+    } catch {
+      return {
+        sourceId: source.id,
+        precedence: source.rank,
+        identity: null,
+        error: "unavailable" as const,
+      };
+    }
+  });
 }
 
 function probeArtifact(
@@ -517,6 +538,7 @@ function wouldDeployArtifacts(
 export function captureDeploymentSnapshot(
   targets: DeployTargets,
   input: CaptureDeploymentSnapshotInput,
+  capturedMirrors?: OverviewMirror[],
 ): DeploymentSnapshot {
   const activeSources = input.sourceRegistry.sources.filter((source) => source.active);
   const sources = input.sourceRegistry.sources.map((source) => ({
@@ -526,22 +548,7 @@ export function captureDeploymentSnapshot(
     active: source.active,
     rank: source.rank,
   }));
-  const mirrors = activeSources.map((source) => {
-    try {
-      return {
-        sourceId: source.id,
-        precedence: source.rank,
-        identity: mirrorIdentity(targets.mirrorRoot(source.id)),
-      };
-    } catch {
-      return {
-        sourceId: source.id,
-        precedence: source.rank,
-        identity: null,
-        error: "unavailable" as const,
-      };
-    }
-  });
+  const mirrors = capturedMirrors ?? captureMirrors(targets, activeSources);
   const ledgerOwned = ledgerKeySet(input.ledger);
   const ledgerTargets = new Set(
     (input.ledger?.agents ?? []).filter(
@@ -586,4 +593,59 @@ export function captureDeploymentSnapshot(
     activeOperation: input.activeOperation ?? null,
     lastOperation: input.lastOperation ?? null,
   };
+}
+
+export type DeploymentSnapshotReaders = {
+  readSourceRegistry(): { revision: number; sources: readonly Source[] };
+  readCatalog(activeSources: readonly Source[]): Catalog;
+  readLedger(): Ledger | null;
+  readSelection(ledger: Ledger | null): SelectionSnapshot;
+  readDeploymentState(): DeploymentStateFile;
+  readActiveOperation?(): DeployOperationSummary | null;
+  readLastOperation?(): DeployOperationSummary | null;
+};
+
+export class DeploymentSnapshotChangedError extends Error {
+  readonly code = "deployment_snapshot_changed";
+
+  constructor() {
+    super("deployment_snapshot_changed");
+    this.name = "DeploymentSnapshotChangedError";
+  }
+}
+
+export function captureCoherentDeploymentSnapshot(
+  targets: DeployTargets,
+  readers: DeploymentSnapshotReaders,
+  maxAttempts = 3,
+): DeploymentSnapshot {
+  const attempts = Math.max(1, Math.floor(maxAttempts));
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const before = readers.readSourceRegistry();
+    const activeSources = before.sources.filter((source) => source.active);
+    const beforeMirrors = captureMirrors(targets, activeSources);
+    const ledger = readers.readLedger();
+    const snapshot = captureDeploymentSnapshot(
+      targets,
+      {
+        sourceRegistry: before,
+        catalog: readers.readCatalog(activeSources),
+        selection: readers.readSelection(ledger),
+        ledger,
+        deploymentState: readers.readDeploymentState(),
+        activeOperation: readers.readActiveOperation?.() ?? null,
+        lastOperation: readers.readLastOperation?.() ?? null,
+      },
+      beforeMirrors,
+    );
+    const afterMirrors = captureMirrors(targets, activeSources);
+    const after = readers.readSourceRegistry();
+    if (
+      before.revision === after.revision &&
+      stableJson(beforeMirrors) === stableJson(afterMirrors)
+    ) {
+      return snapshot;
+    }
+  }
+  throw new DeploymentSnapshotChangedError();
 }

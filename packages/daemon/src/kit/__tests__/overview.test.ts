@@ -1,8 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { CapabilityKey } from "@hive/capability-schema";
-import type { OverviewRow } from "@hive/contract";
+import type { OverviewRow, Source } from "@hive/contract";
 import type { DeploymentSnapshot } from "../deploy-plan.ts";
-import { buildOverview } from "../overview.ts";
+import {
+  buildOverview,
+  captureCoherentDeploymentSnapshot,
+  DeploymentSnapshotChangedError,
+} from "../overview.ts";
+import type { DeployTargets } from "../targets.ts";
 
 const key = (kind: CapabilityKey["kind"], name: string): CapabilityKey => ({ kind, name });
 
@@ -383,7 +391,7 @@ describe("authoritative Overview union and state matrix", () => {
     expect(target(row(overview, dual), "codex").reconciliation).toBe("in_sync");
   });
 
-  test("keeps targetless Ledger-only ownership unmanaged and selected unavailable ownership orphaned", () => {
+  test("keeps targetless Ledger-only ownership unmanaged without claiming target ownership", () => {
     const unmanaged = key("skill", "ledger-only");
     const orphan = key("agent", "selected-ledger-only");
     const overview = buildOverview(
@@ -409,6 +417,205 @@ describe("authoritative Overview union and state matrix", () => {
       }),
     );
     expect(row(overview, unmanaged).reconciliation).toBe("unmanaged_owned");
-    expect(row(overview, orphan).reconciliation).toBe("orphaned");
+    expect(row(overview, orphan).reconciliation).toBe("waiting_for_source");
+  });
+
+  test("uses target-scoped Ledger ownership for available and unavailable Codex selections", () => {
+    const available = key("skill", "available-on-codex");
+    const unavailable = key("agent", "missing-on-codex");
+    const overview = buildOverview(
+      fixture({
+        catalog: { entries: [variant(available)], presets: [], problems: [] },
+        selection: {
+          revision: 8,
+          enabled: [available, unavailable].map((selected) => ({
+            key: selected,
+            targets: ["codex"],
+          })),
+          removalIntents: [],
+        },
+        ledger: {
+          revision: null,
+          identity: "claude-only-ledger",
+          value: {
+            kitVersion: "",
+            agents: ["claude"],
+            skills: [{ name: available.name }],
+            agentDefs: [{ name: unavailable.name }],
+            instructions: [],
+            plugins: [],
+            bundles: [],
+          },
+        },
+        wouldDeploy: [
+          {
+            key: available,
+            target: "codex",
+            sourceId: "source-win",
+            contentSha: "available-on-codex-sha",
+            renderedHash: "codex-render",
+          },
+        ],
+        artifacts: [
+          { key: available, target: "codex", existence: "missing", hash: null },
+          { key: unavailable, target: "codex", existence: "missing", hash: null },
+        ],
+      }),
+    );
+
+    expect(target(row(overview, available), "codex").reconciliation).toBe("pending_add");
+    expect(target(row(overview, unavailable), "codex").reconciliation).toBe("waiting_for_source");
+  });
+});
+
+function testTargets(root: string): DeployTargets {
+  return {
+    claudeHome: () => join(root, ".claude"),
+    codexHome: () => join(root, ".codex"),
+    agentsHome: () => join(root, ".agents"),
+    ledgerPath: () => join(root, "manifest.json"),
+    mirrorRoot: (sourceId) => join(root, "mirrors", sourceId),
+    fingerprintPath: () => join(root, "fingerprints.json"),
+    deploymentStatePath: () => join(root, "deployment-state.json"),
+    kitTmpRoot: () => join(root, "tmp"),
+    starterRoot: () => join(root, "starter"),
+    childEnv: (base) => ({ ...base }),
+    isChildEnvRedirected: () => true,
+  };
+}
+
+const coherentSource: Source = {
+  id: "source-a",
+  label: "A",
+  locator: {
+    kind: "git",
+    repoUrl: "https://github.com/owner/a",
+    revision: { mode: "track", ref: "refs/heads/main" },
+    subpath: ".",
+  },
+  origin: "https://github.com/owner/a",
+  kind: "git",
+  active: true,
+  createdAt: 1,
+  rank: 1,
+};
+
+function coherentReaders(onCatalog: () => void) {
+  return {
+    readSourceRegistry: () => ({ version: 4 as const, revision: 3, sources: [coherentSource] }),
+    readCatalog: () => {
+      onCatalog();
+      return { entries: [], presets: [], problems: [] };
+    },
+    readLedger: () => null,
+    readSelection: () => ({ revision: 1, enabled: [], removalIntents: [] }),
+    readDeploymentState: () => ({
+      schemaVersion: 1 as const,
+      revision: 0,
+      records: [],
+      legacyInstructionFingerprints: [],
+    }),
+  };
+}
+
+describe("coherent runtime snapshot capture", () => {
+  test("retries when the Source revision changes during capture", () => {
+    const root = mkdtempSync(join(tmpdir(), "overview-snapshot-"));
+    try {
+      const targets = testTargets(root);
+      let registryReads = 0;
+      let catalogReads = 0;
+      const stable = captureCoherentDeploymentSnapshot(
+        targets,
+        {
+          ...coherentReaders(() => {
+            catalogReads += 1;
+          }),
+          readSourceRegistry: () => {
+            registryReads += 1;
+            return {
+              version: 4 as const,
+              revision: registryReads === 1 ? 3 : 4,
+              sources: [coherentSource],
+            };
+          },
+        },
+        2,
+      );
+
+      expect(catalogReads).toBe(2);
+      expect(stable.sourceRegistryRevision).toBe(4);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("retries when a Mirror swaps during capture and returns only the stable generation", () => {
+    const root = mkdtempSync(join(tmpdir(), "overview-snapshot-"));
+    try {
+      const targets = testTargets(root);
+      const marker = join(
+        targets.mirrorRoot("source-a"),
+        "capabilities",
+        "skills",
+        "alpha",
+        "SKILL.md",
+      );
+      mkdirSync(join(marker, ".."), { recursive: true });
+      writeFileSync(marker, "old");
+      let catalogReads = 0;
+      const stable = captureCoherentDeploymentSnapshot(
+        targets,
+        coherentReaders(() => {
+          catalogReads += 1;
+          if (catalogReads === 1) writeFileSync(marker, "new");
+        }),
+        2,
+      );
+
+      expect(catalogReads).toBe(2);
+      expect(stable.mirrors[0]?.identity).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails with a stable error after bounded retries instead of tokening a mixed snapshot", () => {
+    const root = mkdtempSync(join(tmpdir(), "overview-snapshot-"));
+    try {
+      const targets = testTargets(root);
+      const marker = join(
+        targets.mirrorRoot("source-a"),
+        "capabilities",
+        "skills",
+        "alpha",
+        "SKILL.md",
+      );
+      mkdirSync(join(marker, ".."), { recursive: true });
+      writeFileSync(marker, "zero");
+      let generation = 0;
+      let observed: unknown;
+      try {
+        captureCoherentDeploymentSnapshot(
+          targets,
+          coherentReaders(() => {
+            generation += 1;
+            writeFileSync(marker, `generation-${generation}`);
+          }),
+          2,
+        );
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBeInstanceOf(DeploymentSnapshotChangedError);
+      if (!(observed instanceof DeploymentSnapshotChangedError)) {
+        throw new Error("expected DeploymentSnapshotChangedError");
+      }
+      expect(observed.code).toBe("deployment_snapshot_changed");
+      expect(observed.message).toBe("deployment_snapshot_changed");
+      expect(generation).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

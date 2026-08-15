@@ -64,6 +64,19 @@ export type DeployPlanBlock = {
   keys: CapabilityKey[];
 };
 
+export type InstructionContribution = {
+  key: { kind: "instruction"; name: string };
+  sourceId: string;
+  contentSha: string;
+};
+
+export type InstructionWriteOperation = {
+  target: DeployTarget;
+  contributions: InstructionContribution[];
+  renderedHash: string;
+  artifact: Omit<ArtifactObservation, "key" | "target">;
+};
+
 export type DeployPlan = {
   selectionRevision: number;
   sourceRegistryRevision: number;
@@ -71,6 +84,7 @@ export type DeployPlan = {
   ledger: { revision: number | null; identity: string };
   deploymentStateRevision: number;
   actions: DeployPlanAction[];
+  instructionWrites: InstructionWriteOperation[];
   blocked: DeployPlanBlock[];
 };
 
@@ -100,36 +114,68 @@ function artifactFor(
   };
 }
 
-function ledgerKeys(ledger: Ledger | null): Set<string> {
-  const keys = new Set<string>();
-  if (!ledger) return keys;
-  for (const entry of ledger.skills)
-    keys.add(serializeCapabilityKey({ kind: "skill", name: entry.name }));
-  for (const entry of ledger.agentDefs)
-    keys.add(serializeCapabilityKey({ kind: "agent", name: entry.name }));
-  for (const entry of ledger.instructions)
-    keys.add(serializeCapabilityKey({ kind: "instruction", name: entry.name }));
-  for (const entry of ledger.plugins)
-    keys.add(serializeCapabilityKey({ kind: "plugin", name: entry.name }));
-  for (const entry of ledger.bundles)
-    keys.add(serializeCapabilityKey({ kind: "bundle", name: entry.name }));
-  return keys;
+function ledgerCapabilityKeys(ledger: Ledger | null): CapabilityKey[] {
+  if (!ledger) return [];
+  return [
+    ...ledger.skills.map((entry) => ({ kind: "skill" as const, name: entry.name })),
+    ...ledger.agentDefs.map((entry) => ({ kind: "agent" as const, name: entry.name })),
+    ...ledger.instructions.map((entry) => ({
+      kind: "instruction" as const,
+      name: entry.name,
+    })),
+    ...ledger.plugins.map((entry) => ({ kind: "plugin" as const, name: entry.name })),
+    ...ledger.bundles.map((entry) => ({ kind: "bundle" as const, name: entry.name })),
+  ];
+}
+
+export function ledgerOwnershipByKey(
+  ledger: Ledger | null,
+): ReadonlyMap<string, ReadonlySet<DeployTarget>> {
+  const ownership = new Map<string, Set<DeployTarget>>();
+  if (!ledger) return ownership;
+  const ledgerTargets = ledger.agents.filter(
+    (target): target is DeployTarget => target === "claude" || target === "codex",
+  );
+  for (const key of ledgerCapabilityKeys(ledger)) {
+    const applicable = new Set(applicableTargets(key));
+    ownership.set(
+      serializeCapabilityKey(key),
+      new Set(ledgerTargets.filter((target) => applicable.has(target))),
+    );
+  }
+  return ownership;
 }
 
 function actionOrder(left: DeployPlanAction, right: DeployPlanAction): number {
   return (
     serializeCapabilityKey(left.key).localeCompare(serializeCapabilityKey(right.key)) ||
     left.target.localeCompare(right.target) ||
-    left.action.localeCompare(right.action)
+    left.action.localeCompare(right.action) ||
+    stableJson(left).localeCompare(stableJson(right))
   );
 }
 
 function blockOrder(left: DeployPlanBlock, right: DeployPlanBlock): number {
-  return left.target.localeCompare(right.target);
+  return (
+    left.target.localeCompare(right.target) || stableJson(left).localeCompare(stableJson(right))
+  );
+}
+
+function instructionWriteOrder(
+  left: InstructionWriteOperation,
+  right: InstructionWriteOperation,
+): number {
+  return (
+    left.target.localeCompare(right.target) || stableJson(left).localeCompare(stableJson(right))
+  );
 }
 
 function mirrorOrder(left: OverviewMirror, right: OverviewMirror): number {
-  return right.precedence - left.precedence || left.sourceId.localeCompare(right.sourceId);
+  return (
+    right.precedence - left.precedence ||
+    left.sourceId.localeCompare(right.sourceId) ||
+    stableJson(left).localeCompare(stableJson(right))
+  );
 }
 
 function canonicalPlan(plan: DeployPlan): DeployPlan {
@@ -144,10 +190,20 @@ function canonicalPlan(plan: DeployPlan): DeployPlan {
       key: { ...action.key },
       artifact: { ...action.artifact },
     })),
+    instructionWrites: [...plan.instructionWrites].sort(instructionWriteOrder).map((operation) => ({
+      ...operation,
+      contributions: operation.contributions.map((contribution) => ({
+        ...contribution,
+        key: { ...contribution.key },
+      })),
+      artifact: { ...operation.artifact },
+    })),
     blocked: [...plan.blocked].sort(blockOrder).map((block) => ({
       ...block,
-      keys: [...block.keys].sort((left, right) =>
-        serializeCapabilityKey(left).localeCompare(serializeCapabilityKey(right)),
+      keys: [...block.keys].sort(
+        (left, right) =>
+          serializeCapabilityKey(left).localeCompare(serializeCapabilityKey(right)) ||
+          stableJson(left).localeCompare(stableJson(right)),
       ),
     })),
   };
@@ -175,7 +231,20 @@ export function tokenForPlan(plan: DeployPlan): string {
 }
 
 export function identityForLedger(ledger: Ledger | null): string {
-  return createHash("sha256").update(stableJson(ledger)).digest("hex");
+  const byName = <T extends { name: string }>(left: T, right: T): number =>
+    left.name.localeCompare(right.name) || stableJson(left).localeCompare(stableJson(right));
+  const canonical = ledger
+    ? {
+        kitVersion: ledger.kitVersion,
+        agents: [...ledger.agents].sort((left, right) => left.localeCompare(right)),
+        skills: [...ledger.skills].sort(byName),
+        agentDefs: [...ledger.agentDefs].sort(byName),
+        instructions: [...ledger.instructions].sort(byName),
+        plugins: [...ledger.plugins].sort(byName),
+        bundles: [...ledger.bundles].sort(byName),
+      }
+    : null;
+  return createHash("sha256").update(stableJson(canonical)).digest("hex");
 }
 
 export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
@@ -192,19 +261,62 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
   const wouldDeploy = new Map(
     snapshot.wouldDeploy.map((item) => [pairId(item.key, item.target), item] as const),
   );
-  const owned = ledgerKeys(snapshot.ledger.value);
+  const owned = ledgerOwnershipByKey(snapshot.ledger.value);
 
   const blockedByTarget = new Map<DeployTarget, CapabilityKey[]>();
+  const instructionIntents = new Map<
+    DeployTarget,
+    { contributions: InstructionContribution[]; renderedHash: string }
+  >();
+  const selectedInstructions = new Map<
+    DeployTarget,
+    Array<{ key: { kind: "instruction"; name: string }; rendered?: WouldDeployArtifact }>
+  >();
   for (const selected of snapshot.selection.enabled) {
     if (selected.key.kind !== "instruction") continue;
     for (const target of selected.targets) {
-      const available = winner.has(serializeCapabilityKey(selected.key));
-      const rendered = wouldDeploy.get(pairId(selected.key, target));
-      if (available && rendered && !rendered.error) continue;
-      const keys = blockedByTarget.get(target) ?? [];
-      keys.push(selected.key);
-      blockedByTarget.set(target, keys);
+      if (!applicableTargets(selected.key).includes(target)) continue;
+      const entries = selectedInstructions.get(target) ?? [];
+      entries.push({
+        key: { kind: "instruction", name: selected.key.name },
+        rendered: wouldDeploy.get(pairId(selected.key, target)),
+      });
+      selectedInstructions.set(target, entries);
     }
+  }
+  for (const [target, selected] of selectedInstructions) {
+    const unavailable = selected.filter(({ key, rendered }) => {
+      const available = winner.has(serializeCapabilityKey(key));
+      return !available || !rendered || rendered.renderedHash === null || Boolean(rendered.error);
+    });
+    const hashes = new Set(
+      selected.flatMap(({ rendered }) =>
+        rendered?.renderedHash && !rendered.error ? [rendered.renderedHash] : [],
+      ),
+    );
+    if (unavailable.length > 0 || hashes.size !== 1) {
+      blockedByTarget.set(
+        target,
+        unavailable.length > 0 ? unavailable.map(({ key }) => key) : selected.map(({ key }) => key),
+      );
+      continue;
+    }
+    const renderedHash = [...hashes][0];
+    if (!renderedHash) continue;
+    const contributions: InstructionContribution[] = [];
+    for (const { key, rendered } of selected) {
+      if (!rendered || rendered.renderedHash === null || rendered.error) continue;
+      contributions.push({
+        key,
+        sourceId: rendered.sourceId,
+        contentSha: rendered.contentSha,
+      });
+    }
+    if (contributions.length !== selected.length) continue;
+    instructionIntents.set(target, {
+      contributions,
+      renderedHash,
+    });
   }
 
   const actions: DeployPlanAction[] = [];
@@ -216,7 +328,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       if (selected.key.kind === "instruction" && blockedByTarget.has(target)) continue;
       const id = pairId(selected.key, target);
       const deployment = records.get(id);
-      if (!deployment && owned.has(serializeCapabilityKey(selected.key))) continue;
+      if (!deployment && owned.get(serializeCapabilityKey(selected.key))?.has(target)) continue;
       const rendered = wouldDeploy.get(id);
       if (!rendered || rendered.error) continue;
       const artifact = artifactFor(snapshot.artifacts, selected.key, target);
@@ -262,6 +374,22 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     }
   }
 
+  const instructionActionTargets = new Set(
+    actions.filter((action) => action.key.kind === "instruction").map((action) => action.target),
+  );
+  const instructionWrites: InstructionWriteOperation[] = [];
+  for (const [target, intent] of instructionIntents) {
+    if (!instructionActionTargets.has(target)) continue;
+    const first = intent.contributions[0];
+    if (!first) continue;
+    instructionWrites.push({
+      target,
+      contributions: intent.contributions,
+      renderedHash: intent.renderedHash,
+      artifact: artifactFor(snapshot.artifacts, first.key, target),
+    });
+  }
+
   return canonicalPlan({
     selectionRevision: snapshot.selection.revision,
     sourceRegistryRevision: snapshot.sourceRegistryRevision,
@@ -269,6 +397,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     ledger: { revision: snapshot.ledger.revision, identity: snapshot.ledger.identity },
     deploymentStateRevision: snapshot.deploymentState.revision,
     actions,
+    instructionWrites,
     blocked: [...blockedByTarget].map(([target, keys]) => ({
       kind: "instruction",
       target,
