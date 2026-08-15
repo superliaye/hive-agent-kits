@@ -130,6 +130,17 @@ const deployNormalizer: Normalizer<DeployAuditEvents> = {
       targetClis: event.targetClis,
     },
   }),
+  "selection.changed": (event) => ({
+    event_type: "selection.changed",
+    run_id: null,
+    agent_id: null,
+    payload: {
+      revision: event.revision,
+      addedPerKind: event.addedPerKind,
+      removedPerKind: event.removedPerKind,
+      targetClis: event.targetClis,
+    },
+  }),
 };
 
 // Backend (update action): the user-triggered delegated CLI self-update, on the

@@ -38,6 +38,12 @@ export type DeployAuditEvents = {
     perKindCounts: Record<string, number>;
     targetClis: DeployTarget[];
   };
+  "selection.changed": {
+    revision: number;
+    addedPerKind: Record<string, number>;
+    removedPerKind: Record<string, number>;
+    targetClis: DeployTarget[];
+  };
 };
 
 export type KitEventEmitter = TypedEmitter<DeployAuditEvents>;

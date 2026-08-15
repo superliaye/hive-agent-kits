@@ -5,7 +5,7 @@
 // daemon internals, so the UI's Vite bundle can pull this in without dragging
 // Effect/Hono/vendor SDKs into the renderer.
 
-import { CapabilityKind } from "@hive/capability-schema";
+import { CapabilityKey, CapabilityKind } from "@hive/capability-schema";
 import { z } from "zod";
 
 // The five deployable capability kinds (upstream taxonomy) — re-exported from the
@@ -144,6 +144,34 @@ export const SelectionSchema = z.object({
   targets: z.array(DeployTarget).min(1),
 });
 export type Selection = z.infer<typeof SelectionSchema>;
+
+// Durable desired state. Unlike the legacy SelectionSchema above, this retains
+// resolved deploy identities and their exact target sets only: a Source and a
+// ContentSha are deliberately not part of desired state.
+export const DesiredSelection = z.object({
+  enabled: z.array(z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) })),
+  removalIntents: z.array(
+    z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) }),
+  ),
+});
+export type DesiredSelection = z.infer<typeof DesiredSelection>;
+
+export const SelectionMutation = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  changes: z.array(
+    z.object({
+      key: CapabilityKey,
+      enabled: z.boolean(),
+      targets: z.array(DeployTarget).min(1),
+    }),
+  ),
+});
+export type SelectionMutation = z.infer<typeof SelectionMutation>;
+
+export const SelectionSnapshot = DesiredSelection.extend({
+  revision: z.number().int().nonnegative(),
+});
+export type SelectionSnapshot = z.infer<typeof SelectionSnapshot>;
 
 // ---- Deployment Ledger ----
 

@@ -1,13 +1,21 @@
 // Kit HTTP routes (Plan A6). Mounted additively behind the surviving server.
 // Zod at the boundary; typed errors mapped to wire codes.
 
-import { SelectionSchema } from "@hive/contract";
+import { join } from "node:path";
+import {
+  type DeployTarget,
+  SelectionMutation,
+  SelectionSchema,
+  SelectionSnapshot,
+} from "@hive/contract";
 import { Effect } from "effect";
 import { Hono } from "hono";
 import { ZodError } from "zod";
 import { log } from "../lib/log.ts";
+import { runtimeRoot } from "../lib/paths.ts";
 import { DeployError } from "./effect/errors.ts";
 import type { KitSvc } from "./effect/kit-live.ts";
+import { openSelectionStore, SelectionConflictError } from "./selection-store.ts";
 
 // Discharge a Kit Effect off the root runtime. Returns a Promise<Either>-like.
 export type RunKit = <A, E>(
@@ -32,10 +40,62 @@ function deployErrorCode(err: DeployError): 422 | 500 {
 
 export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
   const app = new Hono();
+  const selection = openSelectionStore(join(runtimeRoot(), "kit", "selection.json"));
+
+  const seedSelection = () => selection.seedOnce(kit.state().ledger);
 
   app.get("/api/kit/catalog", (c) => c.json(kit.catalog()));
 
   app.get("/api/kit/state", (c) => c.json(kit.state()));
+
+  app.get("/api/kit/selection", (c) => {
+    try {
+      return c.json(SelectionSnapshot.parse(seedSelection()));
+    } catch (error) {
+      log().error(
+        { module: "kit/routes", route: "selection.read", err: String(error) },
+        "selection read failed",
+      );
+      return c.json({ error: "selection unavailable", message: String(error) }, 500);
+    }
+  });
+
+  app.patch("/api/kit/selection", async (c) => {
+    const body = await readJson(c);
+    if (!body.ok) return c.json({ error: "invalid JSON body" }, 400);
+    const parsed = SelectionMutation.safeParse(body.value);
+    if (!parsed.success) {
+      return c.json({ error: "invalid selection mutation", issues: zodIssues(parsed.error) }, 400);
+    }
+    try {
+      seedSelection();
+      const committed = SelectionSnapshot.parse(selection.mutate(parsed.data, kit.state().ledger));
+      const addedPerKind: Record<string, number> = {};
+      const removedPerKind: Record<string, number> = {};
+      const targetClis = new Set<DeployTarget>();
+      for (const change of parsed.data.changes) {
+        const counts = change.enabled ? addedPerKind : removedPerKind;
+        counts[change.key.kind] = (counts[change.key.kind] ?? 0) + 1;
+        for (const target of change.targets) targetClis.add(target);
+      }
+      await kit.events.emit("selection.changed", {
+        revision: committed.revision,
+        addedPerKind,
+        removedPerKind,
+        targetClis: [...targetClis].sort(),
+      });
+      return c.json(committed);
+    } catch (error) {
+      if (error instanceof SelectionConflictError) {
+        return c.json({ error: "selection_conflict", currentRevision: error.currentRevision }, 409);
+      }
+      log().error(
+        { module: "kit/routes", route: "selection.mutate", err: String(error) },
+        "selection mutation failed",
+      );
+      return c.json({ error: "selection mutation failed", message: String(error) }, 500);
+    }
+  });
 
   // On-disk self-check (Feature 1/2). Read-only — no audit row, no body.
   app.get("/api/kit/verify", (c) => c.json(kit.verify()));

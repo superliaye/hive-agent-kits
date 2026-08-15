@@ -231,6 +231,54 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
     return createServer({ mode: "memory", token: TOKEN, fetch });
   }
 
+  test("durable selection GET/PATCH revision contract and one refs-only audit event", async () => {
+    const server = await serverWith(twoSourceFetch());
+    try {
+      const initial = await server.app.fetch(authed("/api/kit/selection"));
+      expect(initial.status).toBe(200);
+      expect(await initial.json()).toEqual({ revision: 1, enabled: [], removalIntents: [] });
+
+      const mutation = {
+        expectedRevision: 1,
+        changes: [{ key: { kind: "skill", name: "alpha" }, enabled: true, targets: ["codex"] }],
+      };
+      const changed = await server.app.fetch(
+        authed("/api/kit/selection", { method: "PATCH", body: JSON.stringify(mutation) }),
+      );
+      expect(changed.status).toBe(200);
+      expect(await changed.json()).toEqual({
+        revision: 2,
+        enabled: [{ key: { kind: "skill", name: "alpha" }, targets: ["codex"] }],
+        removalIntents: [],
+      });
+
+      const conflict = await server.app.fetch(
+        authed("/api/kit/selection", { method: "PATCH", body: JSON.stringify(mutation) }),
+      );
+      expect(conflict.status).toBe(409);
+      expect(await conflict.json()).toEqual({ error: "selection_conflict", currentRevision: 2 });
+
+      const audit = await server.app.fetch(authed("/api/audit?source=deploy"));
+      const rows = (await audit.json()) as {
+        event_type: string;
+        payload: Record<string, unknown>;
+      }[];
+      const changes = rows.filter((row) => row.event_type === "selection.changed");
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toMatchObject({
+        event_type: "selection.changed",
+        payload: {
+          revision: 2,
+          addedPerKind: { skill: 1 },
+          removedPerKind: {},
+          targetClis: ["codex"],
+        },
+      });
+    } finally {
+      await server.dispose();
+    }
+  });
+
   test("(a–i) full add→deploy→merge→shadow→hide/remove chain over two Sources", async () => {
     const server = await serverWith(twoSourceFetch());
     try {
