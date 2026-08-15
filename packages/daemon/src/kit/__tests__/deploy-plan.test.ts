@@ -146,6 +146,7 @@ describe("buildDeployPlan", () => {
                 contentSha: "old",
                 renderedHash: "old",
                 appliedAt: 1,
+                operationId: "op-old",
               },
               lastAttempt: {
                 action: "add",
@@ -168,6 +169,115 @@ describe("buildDeployPlan", () => {
       ["skill", "remove"],
     ]);
     expect(plan.actions[0]?.removalIntentGeneration).toBe("intent-old-skill");
+  });
+
+  test("plans an explicit target removal from Ledger ownership without Hive-private applied state", () => {
+    const owned = skill("agent-kit-owned");
+    const planned = buildDeployPlan(
+      snapshot({
+        catalog: { entries: [], presets: [], problems: [] },
+        selection: {
+          revision: 14,
+          enabled: [],
+          removalIntents: [{ key: owned, targets: ["codex"], generation: "remove-codex" }],
+        },
+        ledger: {
+          revision: null,
+          identity: "agent-kit-ledger",
+          value: {
+            kitVersion: "",
+            agents: ["codex"],
+            skills: [{ name: owned.name }],
+            agentDefs: [],
+            instructions: [],
+            plugins: [],
+            bundles: [],
+          },
+        },
+        deploymentState: {
+          schemaVersion: 1,
+          revision: 0,
+          records: [],
+          legacyInstructionFingerprints: [],
+        },
+        wouldDeploy: [],
+        artifacts: [{ key: owned, target: "codex", existence: "present", hash: "disk" }],
+      }),
+    );
+
+    expect(planned.actions).toEqual([
+      {
+        action: "remove",
+        key: owned,
+        target: "codex",
+        removalIntentGeneration: "remove-codex",
+        artifact: { existence: "present", hash: "disk" },
+      },
+    ]);
+  });
+
+  test("uses imported whole-instruction provenance to plan a changed whole-file rewrite", () => {
+    const rules = { kind: "instruction" as const, name: "rules" };
+    const planned = buildDeployPlan(
+      snapshot({
+        catalog: {
+          entries: [
+            {
+              ...rules,
+              description: "Rules",
+              group: "",
+              deployable: true,
+              shadowed: false,
+              sourceIds: ["source-a"],
+              contentSha: "rules-content",
+            },
+          ],
+          presets: [],
+          problems: [],
+        },
+        selection: {
+          revision: 15,
+          enabled: [{ key: rules, targets: ["claude"] }],
+          removalIntents: [],
+        },
+        ledger: {
+          revision: null,
+          identity: "legacy-instruction-ledger",
+          value: {
+            kitVersion: "",
+            agents: ["claude"],
+            skills: [],
+            agentDefs: [],
+            instructions: [{ name: rules.name }],
+            plugins: [],
+            bundles: [],
+          },
+        },
+        deploymentState: {
+          schemaVersion: 1,
+          revision: 1,
+          records: [],
+          legacyInstructionFingerprints: [
+            { target: "claude", renderedHash: "legacy-whole", appliedAt: 1 },
+          ],
+        },
+        wouldDeploy: [
+          {
+            key: rules,
+            target: "claude",
+            sourceId: "source-a",
+            contentSha: "rules-content",
+            renderedHash: "new-whole",
+          },
+        ],
+        artifacts: [{ key: rules, target: "claude", existence: "present", hash: "legacy-whole" }],
+      }),
+    );
+
+    expect(planned.actions).toContainEqual(
+      expect.objectContaining({ action: "update", key: rules, target: "claude" }),
+    );
+    expect(planned.instructionWrites).toHaveLength(1);
   });
 
   test("blocks the whole instruction target while other kinds continue best-effort", () => {
@@ -277,6 +387,7 @@ describe("buildDeployPlan", () => {
                 contentSha: "content-0",
                 renderedHash: wholeHash,
                 appliedAt: 1,
+                operationId: "op-first",
               },
               lastAttempt: {
                 action: "update",

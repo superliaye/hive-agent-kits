@@ -88,6 +88,7 @@ function applied(capabilityKey: CapabilityKey, renderedHash: string, targetName 
       contentSha: `${capabilityKey.name}-sha`,
       renderedHash,
       appliedAt: 1,
+      operationId: `op-${capabilityKey.name}-${targetName}`,
     },
     lastAttempt: {
       action: "update" as const,

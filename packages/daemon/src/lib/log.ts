@@ -20,6 +20,7 @@ export type LogMode = "silent" | "file" | "stdout";
 // daemon installs the real one via `setLogger(createLogger({mode: "file"}))`
 // during boot.
 let current: Logger = pino({ level: "silent" });
+const destinations = new WeakMap<Logger, ReturnType<typeof pino.destination>>();
 
 export function log(): Logger {
   return current;
@@ -27,6 +28,31 @@ export function log(): Logger {
 
 export function setLogger(logger: Logger): void {
   current = logger;
+}
+
+export async function closeLogger(logger: Logger): Promise<void> {
+  if (current === logger) current = silentLogger();
+  const destination = destinations.get(logger);
+  if (!destination) return;
+  destinations.delete(logger);
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      destination.off("close", finish);
+      destination.off("error", finish);
+      resolve();
+    };
+    destination.once("close", finish);
+    destination.once("error", finish);
+    try {
+      destination.end();
+    } catch {
+      finish();
+    }
+  });
 }
 
 export function silentLogger(): Logger {
@@ -44,7 +70,10 @@ export function createLogger(opts: { mode: LogMode; level?: pino.Level }): Logge
       try {
         const logPath = `${files.logsDir()}/daemon.log`;
         mkdirSync(files.logsDir(), { recursive: true });
-        return pino({ level }, pino.destination({ dest: logPath, sync: false, mkdir: true }));
+        const destination = pino.destination({ dest: logPath, sync: false, mkdir: true });
+        const logger = pino({ level }, destination);
+        destinations.set(logger, destination);
+        return logger;
       } catch {
         // Fall back to stdout JSONL if the runtime dir isn't writable.
         return pino({ level });

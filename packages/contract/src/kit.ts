@@ -382,6 +382,8 @@ export const DeployOperationSummary = z.object({
   operationId: z.string(),
   state: DeployOperationState,
   acceptedAt: z.number().int().nonnegative(),
+  selectionRevision: z.number().int().nonnegative(),
+  planToken: z.string().regex(/^[0-9a-f]{64}$/).or(z.string().min(1)),
   completedAt: z.number().int().nonnegative().optional(),
 });
 export type DeployOperationSummary = z.infer<typeof DeployOperationSummary>;

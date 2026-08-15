@@ -22,6 +22,7 @@ import {
   type SelectionSnapshot as SelectionSnapshotType,
 } from "@hive/contract";
 import { z } from "zod";
+import { applicableTargetSet } from "./capability-targets.ts";
 
 const SelectionEntry = z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) });
 const RemovalIntent = z.object({
@@ -31,6 +32,14 @@ const RemovalIntent = z.object({
 });
 
 export const SelectionFile = z.object({
+  schemaVersion: z.literal(3),
+  initialized: z.literal(true),
+  revision: z.number().int().nonnegative(),
+  enabled: z.array(SelectionEntry),
+  removalIntents: z.array(RemovalIntent),
+});
+
+const LegacySelectionFileV2 = z.object({
   schemaVersion: z.literal(2),
   initialized: z.literal(true),
   revision: z.number().int().nonnegative(),
@@ -47,7 +56,10 @@ const LegacySelectionFile = z.object({
 });
 
 const UninitializedSelectionFile = z
-  .object({ schemaVersion: z.union([z.literal(1), z.literal(2)]), initialized: z.literal(false) })
+  .object({
+    schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    initialized: z.literal(false),
+  })
   .strict();
 
 type SelectionEntry = z.infer<typeof SelectionEntry>;
@@ -63,6 +75,15 @@ export class SelectionConflictError extends Error {
     super(`selection_conflict: current revision is ${currentRevision}`);
     this.name = "SelectionConflictError";
     this.currentRevision = currentRevision;
+  }
+}
+
+export class SelectionTargetNotApplicableError extends Error {
+  readonly code = "selection_target_not_applicable";
+
+  constructor() {
+    super("selection_target_not_applicable");
+    this.name = "SelectionTargetNotApplicableError";
   }
 }
 
@@ -102,7 +123,9 @@ function canonical(entries: Iterable<SelectionEntry>): SelectionEntry[] {
   return [...entries]
     .map((entry) => ({
       key: CapabilityKey.parse(entry.key),
-      targets: uniqueTargets(entry.targets),
+      targets: uniqueTargets(entry.targets).filter((target) =>
+        applicableTargetSet(entry.key).has(target),
+      ),
     }))
     .filter((entry) => entry.targets.length > 0)
     .sort((a, b) => serializeCapabilityKey(a.key).localeCompare(serializeCapabilityKey(b.key)));
@@ -114,6 +137,7 @@ function intentId(key: SelectionEntry["key"], target: DeployTarget): string {
 
 function canonicalIntents(entries: Iterable<RemovalIntent>): RemovalIntent[] {
   return [...entries]
+    .filter((entry) => applicableTargetSet(entry.key).has(entry.targets[0]))
     .map((entry) => RemovalIntent.parse(entry))
     .sort((left, right) =>
       intentId(left.key, left.targets[0]).localeCompare(intentId(right.key, right.targets[0])),
@@ -121,7 +145,7 @@ function canonicalIntents(entries: Iterable<RemovalIntent>): RemovalIntent[] {
 }
 
 function emptyFile(): SelectionFile {
-  return { schemaVersion: 2, initialized: true, revision: 1, enabled: [], removalIntents: [] };
+  return { schemaVersion: 3, initialized: true, revision: 1, enabled: [], removalIntents: [] };
 }
 
 function targetsFromLedger(ledger: Ledger): z.infer<typeof DeployTarget>[] {
@@ -164,8 +188,9 @@ function seedFile(ledger: Ledger | null): SelectionFile {
 function ledgerOwns(
   ledger: Ledger | null | undefined,
   key: z.infer<typeof CapabilityKey>,
+  target: z.infer<typeof DeployTarget>,
 ): boolean {
-  if (!ledger) return false;
+  if (!ledger?.agents.includes(target)) return false;
   switch (key.kind) {
     case "instruction":
       return ledger.instructions.some((entry) => entry.name === key.name);
@@ -238,10 +263,22 @@ export function openSelectionStore(
     }
     const parsed = SelectionFile.safeParse(raw);
     if (parsed.success) return parsed.data;
+    const legacyV2 = LegacySelectionFileV2.safeParse(raw);
+    if (legacyV2.success) {
+      const migrated: SelectionFile = {
+        schemaVersion: 3,
+        initialized: true,
+        revision: legacyV2.data.revision,
+        enabled: canonical(legacyV2.data.enabled),
+        removalIntents: canonicalIntents(legacyV2.data.removalIntents),
+      };
+      write(migrated);
+      return migrated;
+    }
     const legacy = LegacySelectionFile.safeParse(raw);
     if (legacy.success) {
       const migrated: SelectionFile = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         initialized: true,
         revision: legacy.data.revision,
         enabled: canonical(legacy.data.enabled),
@@ -322,6 +359,10 @@ export function openSelectionStore(
       for (const change of mutation.changes) {
         const id = serializeCapabilityKey(change.key);
         const targets = uniqueTargets(change.targets);
+        const applicable = applicableTargetSet(change.key);
+        if (targets.some((target) => !applicable.has(target))) {
+          throw new SelectionTargetNotApplicableError();
+        }
         if (change.enabled) {
           const old = enabled.get(id);
           enabled.set(id, {
@@ -332,25 +373,23 @@ export function openSelectionStore(
           continue;
         }
         const old = enabled.get(id);
-        const disabledAnEnabledTarget =
-          old?.targets.some((target) => targets.includes(target)) ?? false;
+        const previouslyEnabled = new Set(old?.targets ?? []);
         const remainingEnabled = removeTargets(old, targets);
         if (remainingEnabled) enabled.set(id, remainingEnabled);
         else enabled.delete(id);
-        if (disabledAnEnabledTarget || ledgerOwns(ledger, change.key)) {
-          for (const target of targets) {
-            const targetId = intentId(change.key, target);
-            if (removalIntents.has(targetId)) continue;
-            removalIntents.set(targetId, {
-              key: change.key,
-              targets: [target],
-              generation: generation(),
-            });
-          }
+        for (const target of targets) {
+          if (!previouslyEnabled.has(target) && !ledgerOwns(ledger, change.key, target)) continue;
+          const targetId = intentId(change.key, target);
+          if (removalIntents.has(targetId)) continue;
+          removalIntents.set(targetId, {
+            key: change.key,
+            targets: [target],
+            generation: generation(),
+          });
         }
       }
       const next: SelectionFile = {
-        schemaVersion: 2,
+        schemaVersion: 3,
         initialized: true,
         revision: current.revision + 1,
         enabled: canonical(enabled.values()),

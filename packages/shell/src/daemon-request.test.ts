@@ -9,6 +9,48 @@ const connection = {
 };
 
 describe("authenticated daemon request handler", () => {
+  test("reports real HTTP socket disconnect and recovery transitions", async () => {
+    const statuses: string[] = [];
+    let server = Bun.serve({
+      port: 0,
+      fetch: () => Response.json({ ok: true }),
+    });
+    const port = server.port;
+    const handler = createDaemonRequestHandler(
+      { ...connection, baseUrl: `http://127.0.0.1:${port}` },
+      fetch,
+      (status) => statuses.push(status),
+    );
+
+    await expect(handler("/api/ready", {})).resolves.toMatchObject({ status: 200 });
+    await server.stop(true);
+    await expect(handler("/api/ready", {})).rejects.toThrow();
+    server = Bun.serve({ port, fetch: () => Response.json({ ok: true }) });
+    await expect(handler("/api/ready", {})).resolves.toMatchObject({ status: 200 });
+
+    expect(statuses).toEqual(["connected", "disconnected", "connected"]);
+    await server.stop(true);
+  });
+
+  test("reports a disconnect when the response body socket aborts", async () => {
+    const statuses: string[] = [];
+    const handler = createDaemonRequestHandler(
+      connection,
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error("socket aborted while reading body"));
+            },
+          }),
+        ),
+      (status) => statuses.push(status),
+    );
+
+    await expect(handler("/api/kit/overview", {})).rejects.toThrow("socket aborted");
+    expect(statuses).toEqual(["disconnected"]);
+  });
+
   test("attaches authorization in the privileged handler", async () => {
     let request: Request | undefined;
     const handler = createDaemonRequestHandler(connection, async (input, init) => {

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { serializeCapabilityKey } from "@hive/capability-schema";
 import type { AcceptedDeployRequest, DeployTarget } from "@hive/contract";
+import { log } from "../lib/log.ts";
 import { mirrorContentSha } from "./content-sha.ts";
 import {
   backupIfExists,
@@ -37,9 +38,9 @@ import {
   type StagedDeployPayload,
   type StagedDeployTask,
 } from "./deploy-operations.ts";
-import type { DeploymentSnapshot, DeployPlan } from "./deploy-plan.ts";
+import { type DeploymentSnapshot, type DeployPlan, ledgerOwnershipByKey } from "./deploy-plan.ts";
 import type { DeploymentStateStore } from "./deployment-state.ts";
-import { mergeLedger } from "./ledger.ts";
+import { type LedgerWriteOptions, mergeLedger, readLedger } from "./ledger.ts";
 import { readMirrorIdentity } from "./overview.ts";
 import type { DeployTargets } from "./targets.ts";
 
@@ -118,10 +119,8 @@ export type CreateDeployCoordinatorOptions = {
     snapshot: DeploymentSnapshot,
     plan: DeployPlan,
   ): StagedDeployPayload | Promise<StagedDeployPayload>;
-  execute(
-    operation: DeployOperation,
-    record: (outcomes: readonly DeployOperationOutcome[]) => Promise<void>,
-  ): Promise<void>;
+  execute(operation: DeployOperation, journal: DeployExecutionJournal): Promise<void>;
+  resume?(operation: DeployOperation, journal: DeployExecutionJournal): Promise<void>;
   onAccepted(event: DeployAcceptedAudit): Promise<void>;
   clearRemovalIntents(
     entries: readonly {
@@ -133,6 +132,15 @@ export type CreateDeployCoordinatorOptions = {
   operationId?: () => string;
   now?: () => number;
   schedule?: (task: () => void) => void;
+};
+
+export type DeployExecutionJournal = ((
+  outcomes: readonly DeployOperationOutcome[],
+) => Promise<void>) & {
+  provisional(outcomes: readonly DeployOperationOutcome[]): Promise<void>;
+  markLedgerPending(): void;
+  markLedgerCommitted(): void;
+  markFinalizing(): void;
 };
 
 export type DeployCoordinator = {
@@ -193,43 +201,83 @@ export function createDeployCoordinator(
 ): DeployCoordinator {
   const operationId = options.operationId ?? (() => crypto.randomUUID());
   const now = options.now ?? Date.now;
-  const schedule = options.schedule ?? ((task: () => void) => queueMicrotask(task));
+  const schedule = options.schedule ?? ((task: () => void) => setTimeout(task, 0));
   const running = new Map<string, Promise<void>>();
+  const background = new Set<Promise<void>>();
+  let recovery: Promise<void> | null = null;
+
+  const journalFor = (id: string): DeployExecutionJournal =>
+    Object.assign(
+      async (outcomes: readonly DeployOperationOutcome[]): Promise<void> => {
+        options.operations.recordOutcomes(id, outcomes);
+      },
+      {
+        provisional: async (outcomes: readonly DeployOperationOutcome[]): Promise<void> => {
+          options.operations.recordProvisionalOutcomes(id, outcomes);
+        },
+        markLedgerPending: (): void => {
+          options.operations.markLedgerPending(id);
+        },
+        markLedgerCommitted: (): void => {
+          options.operations.markLedgerCommitted(id);
+        },
+        markFinalizing: (): void => {
+          options.operations.markFinalizing(id);
+        },
+      },
+    );
+
+  const finish = async (id: string): Promise<void> => {
+    const completed = options.operations.read(id);
+    if (!completed) throw new Error("operation_not_found");
+    const expected = new Set(completed.plan.actions.map(outcomeId));
+    const actual = new Set(completed.outcomes.map(outcomeId));
+    const incomplete = [...expected].some((action) => !actual.has(action));
+    const failed = completed.outcomes.some((outcome) => outcome.outcome === "failed");
+    const removals = successfulRemovalIntents(completed);
+    if (removals.length > 0) await options.clearRemovalIntents(removals);
+    options.operations.finish(
+      id,
+      failed || incomplete ? "failed" : "completed",
+      incomplete ? "incomplete" : undefined,
+    );
+  };
+
+  const resumeRecoverable = async (): Promise<void> => {
+    if (!options.resume) return;
+    for (const operation of options.operations.recoverable()) {
+      await options.resume(operation, journalFor(operation.operationId));
+      await finish(operation.operationId);
+    }
+  };
+
+  const recover = (): Promise<void> | null => {
+    if (recovery) return recovery;
+    if (!options.resume || options.operations.recoverable().length === 0) return null;
+    const task = resumeRecoverable().finally(() => {
+      if (recovery === task) recovery = null;
+    });
+    recovery = task;
+    return task;
+  };
 
   const execute = async (id: string): Promise<void> => {
     try {
       const runningOperation = options.operations.markRunning(id);
-      await options.execute(runningOperation, async (outcomes) => {
-        options.operations.recordOutcomes(id, outcomes);
-      });
-      const completed = options.operations.read(id);
-      if (!completed) throw new Error("operation_not_found");
-      const expected = new Set(completed.plan.actions.map(outcomeId));
-      const actual = new Set(completed.outcomes.map(outcomeId));
-      const incomplete = [...expected].some((action) => !actual.has(action));
-      const failed = completed.outcomes.some((outcome) => outcome.outcome === "failed");
-      const removals = successfulRemovalIntents(completed);
-      if (removals.length > 0) await options.clearRemovalIntents(removals);
-      options.operations.finish(
-        id,
-        failed || incomplete ? "failed" : "completed",
-        incomplete ? "incomplete" : undefined,
+      await options.execute(runningOperation, journalFor(id));
+      await finish(id);
+    } catch (error) {
+      log().warn(
+        { module: "kit/deploy-coordinator", operationId: id, err: String(error) },
+        "durable deploy execution failed",
       );
-    } catch {
       try {
-        const current = options.operations.read(id);
-        if (current?.state === "running") {
-          const removals = successfulRemovalIntents(current);
-          if (removals.length > 0) {
-            try {
-              await options.clearRemovalIntents(removals);
-            } catch {
-              // The operation remains failed; a later explicit Deploy can retry.
-            }
-          }
-        }
         options.operations.fail(id, "execution_failed");
-      } catch {
+      } catch (storeError) {
+        log().warn(
+          { module: "kit/deploy-coordinator", operationId: id, err: String(storeError) },
+          "durable deploy failure state remains pending",
+        );
         // A queued/running record remains restart-recoverable when storage is unavailable.
       }
     }
@@ -242,18 +290,43 @@ export function createDeployCoordinator(
     });
     running.set(id, done);
     schedule(() => {
-      void execute(id)
-        .catch(() => {})
+      const task = execute(id)
+        .catch((error) => {
+          log().warn(
+            { module: "kit/deploy-coordinator", operationId: id, err: String(error) },
+            "background deploy execution rejected",
+          );
+        })
         .finally(() => {
           resolveDone();
           running.delete(id);
+          background.delete(task);
         });
+      background.add(task);
     });
   };
 
+  if (options.resume && options.operations.recoverable().length > 0) {
+    schedule(() => {
+      const pending = recover();
+      if (!pending) return;
+      const task = pending
+        .catch((error) => {
+          log().warn(
+            { module: "kit/deploy-coordinator", err: String(error) },
+            "durable deploy recovery remains pending",
+          );
+        })
+        .finally(() => background.delete(task));
+      background.add(task);
+    });
+  }
+
   return {
-    accept: (request) =>
-      options.mutationCoordinator.runExclusive(async () => {
+    accept: async (request) => {
+      const pending = recover();
+      if (pending) await pending;
+      return options.mutationCoordinator.runExclusive(async () => {
         const active = options.operations.activeSummary();
         if (active) throw new DeployInProgressError(active.operationId);
         const captured = await options.capture();
@@ -265,6 +338,14 @@ export function createDeployCoordinator(
           throw new PlanStaleError();
         }
         const staged = await options.stage(captured.snapshot, captured.plan);
+        const recaptured = await options.capture();
+        const recapturedToken = options.tokenForPlan(recaptured.plan);
+        if (
+          recaptured.plan.selectionRevision !== captured.plan.selectionRevision ||
+          recapturedToken !== currentToken
+        ) {
+          throw new PlanStaleError();
+        }
         const id = operationId();
         try {
           options.operations.createQueued({
@@ -295,7 +376,8 @@ export function createDeployCoordinator(
         }
         start(id);
         return { operationId: id };
-      }),
+      });
+    },
     wait: async (id) => {
       const active = running.get(id);
       if (active) await active;
@@ -328,9 +410,6 @@ function requiredActionSource(action: DeployPlan["actions"][number]): {
   if (!action.sourceId || !action.contentSha) throw new PlanStaleError();
   return { sourceId: action.sourceId, contentSha: action.contentSha };
 }
-
-const skipPlugin = (): boolean => process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL === "1";
-const skipBundle = (): boolean => process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL === "1";
 
 export function stageDeployPlan(
   targets: DeployTargets,
@@ -460,32 +539,11 @@ export function stageDeployPlan(
       if (action.key.kind === "plugin") {
         const metadata = pluginMeta(targets.mirrorRoot(sourceId), action.key.name);
         if (!metadata || action.target !== "claude") throw new PlanStaleError();
-        if (!skipPlugin()) throw new ImmutableInstallerStagingError();
-        tasks.push({
-          type: "plugin",
-          action: action.action,
-          key: { kind: "plugin", name: action.key.name },
-          target: "claude",
-          sourceId,
-          contentSha,
-          execution: "skipped",
-        });
-        continue;
+        throw new ImmutableInstallerStagingError();
       }
       const metadata = bundleMeta(targets.mirrorRoot(sourceId), action.key.name);
       if (!metadata) throw new PlanStaleError();
-      if (!skipBundle()) throw new ImmutableInstallerStagingError();
-      tasks.push({
-        type: "bundle",
-        action: action.action,
-        key: { kind: "bundle", name: action.key.name },
-        target: action.target,
-        sourceId,
-        contentSha,
-        execution: "skipped",
-        pin:
-          (metadata.installerKind === "npx-skills" ? metadata.pkg : metadata.pinnedCommit) || null,
-      });
+      throw new ImmutableInstallerStagingError();
     }
   }
   return { tasks, metadata: {} };
@@ -495,6 +553,7 @@ export type ExecuteStagedDeployOptions = {
   fx: DeployFsExec;
   deploymentState: DeploymentStateStore;
   now?: () => number;
+  ledgerWriteOptions?: LedgerWriteOptions;
 };
 
 export function markInterruptedDeploymentState(
@@ -546,10 +605,10 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
       }
       return;
     case "plugin": {
-      return;
+      throw new ImmutableInstallerStagingError();
     }
     case "bundle": {
-      return;
+      throw new ImmutableInstallerStagingError();
     }
   }
 }
@@ -563,83 +622,84 @@ function errorCode(error: unknown): string {
 export async function executeStagedDeploy(
   options: ExecuteStagedDeployOptions,
   operation: DeployOperation,
-  record: (outcomes: readonly DeployOperationOutcome[]) => Promise<void>,
+  journal:
+    | DeployExecutionJournal
+    | ((outcomes: readonly DeployOperationOutcome[]) => Promise<void>),
 ): Promise<void> {
   const now = options.now ?? Date.now;
-  const succeededTasks: StagedDeployTask[] = [];
+  const provisional: DeployOperationOutcome[] = [];
   for (const task of operation.staged.tasks) {
     const actions = taskActions(task);
     let failureCode: string | undefined;
     try {
       applyStagedTask(options.fx, task);
-      if (task.type === "instruction") {
-        for (const contribution of task.contributions) {
-          options.deploymentState.recordSuccess(
-            contribution.key,
-            task.target,
-            {
-              sourceId: contribution.sourceId,
-              contentSha: contribution.contentSha,
-              renderedHash: task.renderedHash ?? "",
-              appliedAt: now(),
-            },
-            operation.operationId,
-          );
-        }
-        for (const action of task.actions.filter((candidate) => candidate.action === "remove")) {
-          options.deploymentState.recordRemoval(action.key, action.target, operation.operationId);
-        }
-      } else if (task.type === "remove") {
-        options.deploymentState.recordRemoval(task.key, task.target, operation.operationId);
-      } else {
-        options.deploymentState.recordSuccess(
-          task.key,
-          task.target,
-          {
-            sourceId: task.sourceId,
-            contentSha: task.contentSha,
-            renderedHash:
-              task.type === "skill" || task.type === "agent" ? task.renderedHash : task.contentSha,
-            appliedAt: now(),
-          },
-          operation.operationId,
-        );
-      }
-      succeededTasks.push(task);
     } catch (error) {
       failureCode = errorCode(error);
-      for (const action of actions) {
-        try {
-          options.deploymentState.recordFailure(
-            action.key,
-            action.target,
-            { action: action.action, code: failureCode, detail: "deploy action failed" },
-            operation.operationId,
-          );
-        } catch {
-          // The durable operation outcome remains the fallback checkpoint.
-        }
-      }
     }
-    await record(
-      actions.map((action) => ({
-        ...action,
-        outcome: failureCode ? ("failed" as const) : ("succeeded" as const),
-        attemptedAt: now(),
-        ...(failureCode ? { code: failureCode } : {}),
-      })),
-    );
+    const outcomes = actions.map((action) => ({
+      ...action,
+      outcome: failureCode ? ("failed" as const) : ("succeeded" as const),
+      attemptedAt: now(),
+      ...(failureCode ? { code: failureCode } : {}),
+    }));
+    provisional.push(...outcomes);
+    if ("provisional" in journal) await journal.provisional(outcomes);
   }
 
-  const successful = new Set(succeededTasks.flatMap((task) => taskActions(task).map(outcomeId)));
+  const checkpointed = { ...operation, provisionalOutcomes: provisional };
+  if ("markLedgerPending" in journal) journal.markLedgerPending();
+  commitProvisionalLedger(options, checkpointed);
+  if ("markLedgerCommitted" in journal) journal.markLedgerCommitted();
+  if ("markFinalizing" in journal) journal.markFinalizing();
+  finalizeCommittedDeployment(options, checkpointed);
+  await journal(provisional);
+}
+
+function successfulTasks(operation: DeployOperation): StagedDeployTask[] {
+  const successful = new Set(
+    operation.provisionalOutcomes
+      .filter((outcome) => outcome.outcome === "succeeded")
+      .map(outcomeId),
+  );
+  return operation.staged.tasks.filter((task) =>
+    taskActions(task).every((action) => successful.has(outcomeId(action))),
+  );
+}
+
+function commitProvisionalLedger(
+  options: ExecuteStagedDeployOptions,
+  operation: DeployOperation,
+): void {
+  const succeededTasks = successfulTasks(operation);
+  const importedOwnership = ledgerOwnershipByKey(readLedger(options.fx.targets));
+  const successfulRemovalTargets = new Map<string, Set<DeployTarget>>();
+  for (const outcome of operation.provisionalOutcomes) {
+    if (outcome.outcome !== "succeeded" || outcome.action !== "remove") continue;
+    const id = serializeCapabilityKey(outcome.key);
+    const targets = successfulRemovalTargets.get(id) ?? new Set<DeployTarget>();
+    targets.add(outcome.target);
+    successfulRemovalTargets.set(id, targets);
+  }
+
   const prunedSkills = new Set<string>();
   const prunedAgents = new Set<string>();
   const prunedInstructions = new Set<string>();
   for (const action of operation.plan.actions) {
-    if (action.action !== "remove" || !successful.has(outcomeId(action))) continue;
-    const remainsApplied = (["claude", "codex"] as const).some(
-      (target) => options.deploymentState.read(action.key, target)?.applied !== undefined,
-    );
+    if (
+      action.action !== "remove" ||
+      !successfulRemovalTargets.get(serializeCapabilityKey(action.key))?.has(action.target)
+    ) {
+      continue;
+    }
+    const remainsApplied = (["claude", "codex"] as const).some((target) => {
+      if (successfulRemovalTargets.get(serializeCapabilityKey(action.key))?.has(target)) {
+        return false;
+      }
+      const record = options.deploymentState.read(action.key, target);
+      return record
+        ? record.applied !== undefined
+        : (importedOwnership.get(serializeCapabilityKey(action.key))?.has(target) ?? false);
+    });
     if (remainsApplied) continue;
     if (action.key.kind === "skill") prunedSkills.add(action.key.name);
     if (action.key.kind === "agent") prunedAgents.add(action.key.name);
@@ -679,5 +739,98 @@ export async function executeStagedDeploy(
     [...prunedSkills],
     [...prunedAgents],
     [...prunedInstructions],
+    options.ledgerWriteOptions,
   );
+}
+
+function finalizeCommittedDeployment(
+  options: ExecuteStagedDeployOptions,
+  operation: DeployOperation,
+): void {
+  const now = options.now ?? Date.now;
+  const outcomes = new Map(
+    operation.provisionalOutcomes.map((outcome) => [outcomeId(outcome), outcome]),
+  );
+  let firstError: unknown;
+  for (const task of operation.staged.tasks) {
+    const actions = taskActions(task);
+    const succeeded = actions.every(
+      (action) => outcomes.get(outcomeId(action))?.outcome === "succeeded",
+    );
+    try {
+      if (!succeeded) {
+        for (const action of actions) {
+          const outcome = outcomes.get(outcomeId(action));
+          options.deploymentState.recordFailure(
+            action.key,
+            action.target,
+            {
+              action: action.action,
+              code: outcome?.code ?? "unknown",
+              detail: "deploy action failed",
+            },
+            operation.operationId,
+          );
+        }
+        continue;
+      }
+      if (task.type === "instruction") {
+        for (const contribution of task.contributions) {
+          options.deploymentState.recordSuccess(
+            contribution.key,
+            task.target,
+            {
+              sourceId: contribution.sourceId,
+              contentSha: contribution.contentSha,
+              renderedHash: task.renderedHash ?? "",
+              appliedAt: now(),
+            },
+            operation.operationId,
+          );
+        }
+        for (const action of task.actions.filter((candidate) => candidate.action === "remove")) {
+          options.deploymentState.recordRemoval(action.key, action.target, operation.operationId);
+        }
+      } else if (task.type === "remove") {
+        options.deploymentState.recordRemoval(task.key, task.target, operation.operationId);
+      } else if (task.type === "plugin" || task.type === "bundle") {
+        throw new ImmutableInstallerStagingError();
+      } else {
+        options.deploymentState.recordSuccess(
+          task.key,
+          task.target,
+          {
+            sourceId: task.sourceId,
+            contentSha: task.contentSha,
+            renderedHash: task.renderedHash,
+            appliedAt: now(),
+          },
+          operation.operationId,
+        );
+      }
+    } catch (error) {
+      firstError ??= error;
+    }
+  }
+  if (firstError) throw firstError;
+}
+
+export async function resumeStagedDeploy(
+  options: ExecuteStagedDeployOptions,
+  operation: DeployOperation,
+  journal: DeployExecutionJournal,
+): Promise<void> {
+  let phase = operation.executionPhase;
+  if (phase === "ledger_pending") {
+    commitProvisionalLedger(options, operation);
+    journal.markLedgerCommitted();
+    phase = "ledger_committed";
+  }
+  if (phase === "ledger_committed") {
+    journal.markFinalizing();
+    phase = "finalizing";
+  }
+  if (phase !== "finalizing") throw new Error("operation_not_recoverable");
+  finalizeCommittedDeployment(options, operation);
+  await journal(operation.provisionalOutcomes);
 }

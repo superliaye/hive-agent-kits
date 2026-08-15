@@ -16,13 +16,32 @@ function readArg(prefix: string): string {
 
 const connectionKind = readArg("--hive-connection-kind=") === "external" ? "external" : "managed";
 const displayName = decodeURIComponent(readArg("--hive-display-name="));
+type ConnectionStatus = "connected" | "disconnected";
+const initialConnectionStatus: ConnectionStatus =
+  readArg("--hive-connection-status=") === "disconnected" ? "disconnected" : "connected";
+const connection: {
+  kind: "managed" | "external";
+  displayName: string;
+  status: ConnectionStatus;
+} = {
+  kind: connectionKind,
+  displayName,
+  status: initialConnectionStatus,
+};
+
+ipcRenderer.on("hive:connectionStatus", (_event, status: unknown) => {
+  if (status !== "connected" && status !== "disconnected") return;
+  connection.status = status;
+  window.dispatchEvent(
+    new CustomEvent("hive:connection-changed", {
+      detail: { ...connection },
+    }),
+  );
+});
 
 contextBridge.exposeInMainWorld("__hive", {
-  connection: {
-    kind: connectionKind,
-    displayName,
-    status: "connected",
-  },
+  connection,
+  getConnection: () => ({ ...connection }),
   daemon: {
     request: (
       path: string,

@@ -9,7 +9,10 @@ import type {
   OverviewSource,
   SelectionSnapshot,
 } from "@hive/contract";
+import { applicableTargets } from "./capability-targets.ts";
 import type { DeploymentStateFile } from "./deployment-state.ts";
+
+export { applicableTargets } from "./capability-targets.ts";
 
 export type ArtifactObservation = {
   key: CapabilityKey;
@@ -88,12 +91,6 @@ export type DeployPlan = {
   instructionWrites: InstructionWriteOperation[];
   blocked: DeployPlanBlock[];
 };
-
-const TARGETS: readonly DeployTarget[] = ["claude", "codex"];
-
-export function applicableTargets(key: CapabilityKey): DeployTarget[] {
-  return key.kind === "plugin" ? ["claude"] : [...TARGETS];
-}
 
 function pairId(key: CapabilityKey, target: DeployTarget): string {
   return `${serializeCapabilityKey(key)}\u0000${target}`;
@@ -263,6 +260,9 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     snapshot.wouldDeploy.map((item) => [pairId(item.key, item.target), item] as const),
   );
   const owned = ledgerOwnershipByKey(snapshot.ledger.value);
+  const legacyInstructions = new Map(
+    snapshot.deploymentState.legacyInstructionFingerprints.map((entry) => [entry.target, entry]),
+  );
 
   const blockedByTarget = new Map<DeployTarget, CapabilityKey[]>();
   const instructionIntents = new Map<
@@ -329,21 +329,40 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       if (selected.key.kind === "instruction" && blockedByTarget.has(target)) continue;
       const id = pairId(selected.key, target);
       const deployment = records.get(id);
-      if (!deployment && owned.get(serializeCapabilityKey(selected.key))?.has(target)) continue;
+      const legacyInstruction =
+        selected.key.kind === "instruction" ? legacyInstructions.get(target) : undefined;
+      if (
+        !deployment &&
+        !legacyInstruction &&
+        owned.get(serializeCapabilityKey(selected.key))?.has(target)
+      ) {
+        continue;
+      }
       const rendered = wouldDeploy.get(id);
       if (!rendered || rendered.error) continue;
       const artifact = artifactFor(snapshot.artifacts, selected.key, target);
       let action: "add" | "update" | undefined;
-      if (!deployment?.applied) {
+      const applied =
+        deployment?.applied ??
+        (legacyInstruction
+          ? {
+              sourceId: null,
+              contentSha: null,
+              renderedHash: legacyInstruction.renderedHash,
+              appliedAt: legacyInstruction.appliedAt,
+              operationId: "legacy-fingerprint-import",
+            }
+          : undefined);
+      if (!applied) {
         action = "add";
       } else if (selected.key.kind === "plugin" || selected.key.kind === "bundle") {
-        if (deployment.applied.contentSha !== rendered.contentSha) action = "update";
+        if (applied.contentSha !== rendered.contentSha) action = "update";
       } else if (
-        deployment.applied.renderedHash !== rendered.renderedHash ||
+        applied.renderedHash !== rendered.renderedHash ||
         artifact.existence === "missing" ||
         (artifact.existence === "present" &&
           artifact.hash !== null &&
-          artifact.hash !== deployment.applied.renderedHash)
+          artifact.hash !== applied.renderedHash)
       ) {
         action = "update";
       }
@@ -365,7 +384,11 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     for (const target of intent.targets) {
       if (!applicableTargets(intent.key).includes(target)) continue;
       if (intent.key.kind === "instruction" && blockedByTarget.has(target)) continue;
-      if (!records.get(pairId(intent.key, target))?.applied) continue;
+      const privatelyApplied = records.get(pairId(intent.key, target))?.applied;
+      const ledgerOwned = owned.get(serializeCapabilityKey(intent.key))?.has(target) ?? false;
+      const legacyInstructionOwned =
+        intent.key.kind === "instruction" && legacyInstructions.has(target);
+      if (!privatelyApplied && !ledgerOwned && !legacyInstructionOwned) continue;
       actions.push({
         action: "remove",
         key: intent.key,

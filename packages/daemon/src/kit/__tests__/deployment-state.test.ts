@@ -34,13 +34,14 @@ describe("DeploymentStateStore", () => {
   test("persists revisioned success, preserves applied through failure, and clears only on removal", () => {
     const state = openDeploymentStateStore(path, { now: () => 100 });
     state.recordSuccess(key, "codex", appliedV1, "op-1");
+    expect(state.read(key, "codex")?.applied?.operationId).toBe("op-1");
     state.recordFailure(
       key,
       "codex",
       { action: "update", code: "io", detail: "write failed" },
       "op-2",
     );
-    expect(state.read(key, "codex")?.applied).toEqual(appliedV1);
+    expect(state.read(key, "codex")?.applied).toEqual({ ...appliedV1, operationId: "op-1" });
     expect(state.read(key, "codex")?.lastAttempt).toMatchObject({
       action: "update",
       outcome: "failed",
@@ -77,7 +78,7 @@ describe("DeploymentStateStore", () => {
       "op-3",
     );
     const record = state.read(key, "claude");
-    expect(record?.applied).toEqual(appliedV1);
+    expect(record?.applied).toEqual({ ...appliedV1, operationId: "op-1" });
     expect(record?.lastAttempt.outcome).toBe("failed");
     expect(record?.lastAttempt.detail).not.toContain("super-secret");
     expect(record?.lastAttempt.detail).not.toContain("/private/path");
@@ -140,8 +141,152 @@ describe("DeploymentStateStore", () => {
       contentSha: null,
       renderedHash: "c".repeat(64),
       appliedAt: 77,
+      operationId: "legacy-fingerprint-import",
     });
     expect(existsSync(path)).toBe(true);
+  });
+
+  test("migrates an applied record that predates successful provenance operation IDs", () => {
+    mkdirSync(join(root, "kit"), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        revision: 3,
+        records: [
+          {
+            key,
+            target: "claude",
+            applied: appliedV1,
+            lastAttempt: {
+              action: "add",
+              outcome: "succeeded",
+              attemptedAt: 100,
+              operationId: "legacy-success-op",
+            },
+          },
+        ],
+        legacyInstructionFingerprints: [],
+      }),
+    );
+
+    expect(openDeploymentStateStore(path).read(key, "claude")?.applied?.operationId).toBe(
+      "legacy-success-op",
+    );
+  });
+
+  test("serializes successful-provenance migration with a concurrent writer", async () => {
+    mkdirSync(join(root, "kit"), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        revision: 3,
+        records: [
+          {
+            key,
+            target: "claude",
+            applied: appliedV1,
+            lastAttempt: {
+              action: "add",
+              outcome: "succeeded",
+              attemptedAt: 100,
+              operationId: "legacy-success-op",
+            },
+          },
+        ],
+        legacyInstructionFingerprints: [],
+      }),
+    );
+    const moduleUrl = new URL("../deployment-state.ts", import.meta.url).href;
+    const ready = join(root, "migration-ready");
+    const release = join(root, "migration-release");
+    const migrator = Bun.spawn({
+      cmd: [
+        "bun",
+        "-e",
+        `import { existsSync, renameSync, writeFileSync } from "node:fs";
+         import { openDeploymentStateStore } from ${JSON.stringify(moduleUrl)};
+         const wait = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+         const store = openDeploymentStateStore(process.env.STATE_PATH, {
+           rename: (from, to) => {
+             writeFileSync(process.env.READY_PATH, "ready");
+             while (!existsSync(process.env.RELEASE_PATH)) wait();
+             renameSync(from, to);
+           },
+         });
+         store.readAll();`,
+      ],
+      env: {
+        ...process.env,
+        STATE_PATH: path,
+        READY_PATH: ready,
+        RELEASE_PATH: release,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    while (!existsSync(ready)) {
+      if (migrator.exitCode !== null) throw new Error("migration worker exited before pausing");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const writer = Bun.spawn({
+      cmd: [
+        "bun",
+        "-e",
+        `import { openDeploymentStateStore } from ${JSON.stringify(moduleUrl)};
+         openDeploymentStateStore(process.env.STATE_PATH).recordFailure(
+           { kind: "skill", name: "beta" },
+           "claude",
+           { action: "add", code: "io", detail: "write failed" },
+           "concurrent-op",
+         );`,
+      ],
+      env: { ...process.env, STATE_PATH: path },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const writerBeforeRelease = await Promise.race([
+      writer.exited.then(() => "exited" as const),
+      new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 200)),
+    ]);
+    writeFileSync(release, "release");
+
+    expect(writerBeforeRelease).toBe("blocked");
+    expect(await migrator.exited).toBe(0);
+    expect(await writer.exited).toBe(0);
+    const records = openDeploymentStateStore(path).readAll().records;
+    expect(records.map((record) => record.key.name).sort()).toEqual(["alpha", "beta"]);
+  });
+
+  test("does not attribute legacy applied provenance to a later failed attempt", () => {
+    mkdirSync(join(root, "kit"), { recursive: true });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        revision: 3,
+        records: [
+          {
+            key,
+            target: "claude",
+            applied: appliedV1,
+            lastAttempt: {
+              action: "update",
+              outcome: "failed",
+              attemptedAt: 200,
+              operationId: "failed-update-op",
+              code: "io",
+            },
+          },
+        ],
+        legacyInstructionFingerprints: [],
+      }),
+    );
+
+    expect(openDeploymentStateStore(path).read(key, "claude")?.applied?.operationId).toBe(
+      "legacy-deployment-import",
+    );
   });
 
   test("imports the legacy whole-instruction fingerprint without corrupting later records", () => {
@@ -166,7 +311,10 @@ describe("DeploymentStateStore", () => {
     expect(() => state.readAll()).not.toThrow();
     const reopened = openDeploymentStateStore(path);
     reopened.recordSuccess(key, "claude", appliedV1, "op-after-migration");
-    expect(openDeploymentStateStore(path).read(key, "claude")?.applied).toEqual(appliedV1);
+    expect(openDeploymentStateStore(path).read(key, "claude")?.applied).toEqual({
+      ...appliedV1,
+      operationId: "op-after-migration",
+    });
   });
 
   test("redacts complete bearer credentials and filesystem paths", () => {

@@ -29,6 +29,62 @@ afterEach(() => {
 });
 
 describe("SelectionStore", () => {
+  test("seeds only applicable Ledger targets and rejects new ghost target pairs", () => {
+    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
+    const store = openSelectionStore(path());
+    const seeded = store.seedOnce({
+      ...ledger,
+      plugins: [{ name: "claude-only" }],
+    });
+    expect(seeded.enabled).toContainEqual({
+      key: { kind: "plugin", name: "claude-only" },
+      targets: ["claude"],
+    });
+    expect(() =>
+      store.mutate({
+        expectedRevision: seeded.revision,
+        changes: [
+          {
+            key: { kind: "plugin", name: "claude-only" },
+            enabled: true,
+            targets: ["codex"],
+          },
+        ],
+      }),
+    ).toThrow("selection_target_not_applicable");
+  });
+
+  test("migrates persisted ghost target pairs out of Selection", () => {
+    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
+    writeFileSync(
+      path(),
+      JSON.stringify({
+        schemaVersion: 2,
+        initialized: true,
+        revision: 9,
+        enabled: [
+          { key: { kind: "plugin", name: "plug" }, targets: ["claude", "codex"] },
+          { key: { kind: "skill", name: "skill" }, targets: ["codex"] },
+        ],
+        removalIntents: [
+          {
+            key: { kind: "plugin", name: "plug" },
+            targets: ["codex"],
+            generation: "ghost",
+          },
+        ],
+      }),
+    );
+
+    expect(openSelectionStore(path()).read()).toEqual({
+      revision: 9,
+      enabled: [
+        { key: { kind: "plugin", name: "plug" }, targets: ["claude"] },
+        { key: { kind: "skill", name: "skill" }, targets: ["codex"] },
+      ],
+      removalIntents: [],
+    });
+  });
   test("persists a seeded selection across restart and seeds only once", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     const store = openSelectionStore(path());
@@ -63,7 +119,7 @@ describe("SelectionStore", () => {
     expect(readFileSync(path(), "utf8")).toContain('"bad"');
   });
 
-  test("migrates v1 target intents to generated v2 identities", () => {
+  test("migrates v1 target intents to generated current identities", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     writeFileSync(
       path(),
@@ -88,7 +144,7 @@ describe("SelectionStore", () => {
         { key, targets: ["codex"], generation: "migrated-codex" },
       ],
     });
-    expect(JSON.parse(readFileSync(path(), "utf8"))).toMatchObject({ schemaVersion: 2 });
+    expect(JSON.parse(readFileSync(path(), "utf8"))).toMatchObject({ schemaVersion: 3 });
   });
 
   test("keeps exact target sets and exposes no mutable internal state", () => {
@@ -136,6 +192,26 @@ describe("SelectionStore", () => {
         changes: [{ key: { kind: "skill", name: "absent" }, enabled: false, targets: codex }],
       }).removalIntents,
     ).toEqual([]);
+  });
+
+  test("creates removal intents only for targets that were selected or Ledger-owned", () => {
+    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
+    const claudeOnlyLedger: Ledger = { ...ledger, agents: ["claude"] };
+    const store = openSelectionStore(path());
+    const seeded = store.seedOnce(claudeOnlyLedger);
+
+    const changed = store.mutate(
+      {
+        expectedRevision: seeded.revision,
+        changes: [{ key, enabled: false, targets: ["claude", "codex"] }],
+      },
+      claudeOnlyLedger,
+    );
+
+    expect(changed.enabled.find((entry) => entry.key.name === "alpha")).toBeUndefined();
+    expect(changed.removalIntents).toEqual([
+      { key, targets: ["claude"], generation: expect.any(String) },
+    ]);
   });
 
   test("clears only completed removal intents through the internal atomic seam", () => {
@@ -243,7 +319,7 @@ describe("SelectionStore", () => {
 
     expect(writes).toBeGreaterThan(1);
     expect(SelectionFile.parse(JSON.parse(readFileSync(path(), "utf8")))).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       revision: 2,
     });
     expect(openSelectionStore(path()).read()).toEqual(committed);

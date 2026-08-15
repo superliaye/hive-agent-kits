@@ -1,6 +1,7 @@
 // Kit HTTP routes (Plan A6). Mounted additively behind the surviving server.
 // Zod at the boundary; typed errors mapped to wire codes.
 
+import { serializeCapabilityKey } from "@hive/capability-schema";
 import {
   AcceptedDeployRequest,
   type DeployTarget,
@@ -20,7 +21,7 @@ import {
 import { DeployError } from "./effect/errors.ts";
 import type { KitSvc } from "./effect/kit-live.ts";
 import { DeploymentSnapshotChangedError } from "./overview.ts";
-import { SelectionConflictError } from "./selection-store.ts";
+import { SelectionConflictError, SelectionTargetNotApplicableError } from "./selection-store.ts";
 
 // Discharge a Kit Effect off the root runtime. Returns a Promise<Either>-like.
 export type RunKit = <A, E>(
@@ -85,14 +86,34 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
       return c.json({ error: "invalid selection mutation", issues: zodIssues(parsed.error) }, 400);
     }
     try {
+      const before = SelectionSnapshot.parse(kit.selection());
       const committed = SelectionSnapshot.parse(await kit.mutateSelection(parsed.data));
       const addedPerKind: Record<string, number> = {};
       const removedPerKind: Record<string, number> = {};
       const targetClis = new Set<DeployTarget>();
-      for (const change of parsed.data.changes) {
-        const counts = change.enabled ? addedPerKind : removedPerKind;
-        counts[change.key.kind] = (counts[change.key.kind] ?? 0) + 1;
-        for (const target of change.targets) targetClis.add(target);
+      const pairs = (selection: typeof committed) =>
+        new Map(
+          selection.enabled.flatMap((entry) =>
+            entry.targets.map(
+              (target) =>
+                [
+                  `${serializeCapabilityKey(entry.key)}\u0000${target}`,
+                  { key: entry.key, target },
+                ] as const,
+            ),
+          ),
+        );
+      const beforePairs = pairs(before);
+      const afterPairs = pairs(committed);
+      for (const [id, pair] of afterPairs) {
+        if (beforePairs.has(id)) continue;
+        addedPerKind[pair.key.kind] = (addedPerKind[pair.key.kind] ?? 0) + 1;
+        targetClis.add(pair.target);
+      }
+      for (const [id, pair] of beforePairs) {
+        if (afterPairs.has(id)) continue;
+        removedPerKind[pair.key.kind] = (removedPerKind[pair.key.kind] ?? 0) + 1;
+        targetClis.add(pair.target);
       }
       await kit.events.emit("selection.changed", {
         revision: committed.revision,
@@ -104,6 +125,9 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
     } catch (error) {
       if (error instanceof SelectionConflictError) {
         return c.json({ error: "selection_conflict", currentRevision: error.currentRevision }, 409);
+      }
+      if (error instanceof SelectionTargetNotApplicableError) {
+        return c.json({ error: error.code }, 400);
       }
       log().error(
         { module: "kit/routes", route: "selection.mutate", err: String(error) },

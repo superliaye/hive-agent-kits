@@ -22,6 +22,8 @@ export type DaemonFetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export type DaemonConnectionStatus = "connected" | "disconnected";
+
 function validateRelativeApiPath(path: string): URL {
   if (!path.startsWith("/api/") || path.includes("\\")) {
     throw new Error("daemon path must be a relative /api/* path");
@@ -37,6 +39,7 @@ function validateRelativeApiPath(path: string): URL {
 export function createDaemonRequestHandler(
   connection: ActiveDaemonConnection,
   daemonFetch: DaemonFetch = fetch,
+  onStatus?: (status: DaemonConnectionStatus) => void,
 ): (path: string, request: SerializedDaemonRequest) => Promise<SerializedDaemonResponse> {
   return async (path, request) => {
     const parsedPath = validateRelativeApiPath(path);
@@ -45,18 +48,27 @@ export function createDaemonRequestHandler(
       throw new Error("renderer must not provide an authorization header");
     }
     headers.set("authorization", `Bearer ${connection.token}`);
-    const response = await daemonFetch(
-      `${connection.baseUrl}${parsedPath.pathname}${parsedPath.search}`,
-      {
-        method: request.method,
-        headers,
-        body: request.body,
-      },
-    );
+    let response: Response;
+    let body: string;
+    try {
+      response = await daemonFetch(
+        `${connection.baseUrl}${parsedPath.pathname}${parsedPath.search}`,
+        {
+          method: request.method,
+          headers,
+          body: request.body,
+        },
+      );
+      body = await response.text();
+      onStatus?.("connected");
+    } catch (error) {
+      onStatus?.("disconnected");
+      throw error;
+    }
     return {
       status: response.status,
       statusText: response.statusText,
-      body: await response.text(),
+      body,
     };
   };
 }

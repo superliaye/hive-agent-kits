@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { memTree } from "./mem-tree.ts";
 import { validate } from "./validate.ts";
 
@@ -462,11 +463,13 @@ describe("validate (strict) — real my-agent-kits reference content stays confo
 
 // Exhaustive reference-content regression guard (acceptance criterion 4): run the
 // new agent + instruction schemas against EVERY `AGENT.md` and `*.instructions.md`
-// in the my-agent-kits clone (current HEAD; not a hand-picked few). If ANY real
+// at the pinned my-agent-kits production revision (not a hand-picked few). If ANY real
 // frontmatter is rejected, the lenient-superset claim is false — the test fails
 // loudly naming the offender, so the schema (not the content) is revisited.
 describe("validate (strict) — ALL real my-agent-kits agent + instruction content stays conformant", () => {
-  const CLONE = "D:/GitRepos/my-agent-kits";
+  const CLONE = fileURLToPath(
+    new URL("../../../scripts/fixtures/my-agent-kits", import.meta.url),
+  );
   const CAPS = join(CLONE, "capabilities");
 
   // Recursive walk — agents legitimately nest under @-groups, so AGENT.md markers

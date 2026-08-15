@@ -80,6 +80,11 @@ declare global {
         displayName: string;
         status: "connected" | "disconnected";
       };
+      getConnection?: () => {
+        kind: "managed" | "external";
+        displayName: string;
+        status: "connected" | "disconnected";
+      };
       daemon?: {
         request: (
           path: string,

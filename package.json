@@ -11,7 +11,7 @@
     "check": "biome check",
     "check:no-float": "bun run scripts/check-no-floating-suppressions.ts",
     "typecheck": "bun run --filter '*' typecheck",
-    "verify": "bun run check:no-float && bun run check && bun run typecheck && bun run test",
+    "verify": "bun run check:no-float && bun run check && bun run typecheck && bun run test:manifest-interop && bun run test",
     "format": "biome format --write",
     "dev:full": "bun run scripts/dev.ts",
     "screenshot": "bun run scripts/screenshot.ts",

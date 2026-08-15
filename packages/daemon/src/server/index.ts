@@ -40,7 +40,7 @@ import { degradedOnboardResult, onboardSource } from "../kit/onboard.ts";
 import { buildKitRoutes, type RunKit } from "../kit/routes.ts";
 import type { HttpFetch } from "../kit/sync.ts";
 import { defaultDeployTargets } from "../kit/targets.ts";
-import { createLogger, log, setLogger } from "../lib/log.ts";
+import { closeLogger, createLogger, log, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
 import type { Secrets } from "../secrets/index.ts";
@@ -107,7 +107,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     mkdirSync(runtimeRoot(), { recursive: true });
   }
   // Install the trace logger before any other module emits a log line.
-  setLogger(createLogger({ mode: opts.mode === "memory" ? "silent" : "file" }));
+  const traceLogger = createLogger({ mode: opts.mode === "memory" ? "silent" : "file" });
+  setLogger(traceLogger);
 
   // Packaging signal (B5): the packaged launch sets HIVE_PACKAGED=1. Absent → dev
   // (or an unknown / hand-run daemon), which resolves the per-instance SANDBOX —
@@ -430,6 +431,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       // Audit ($client.close), and the backend modules — each exactly once via
       // Layer memoization.
       await runtime.dispose();
+      await closeLogger(traceLogger);
     },
   };
 }

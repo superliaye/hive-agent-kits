@@ -58,7 +58,7 @@ type DeployAttempt = {
   planToken: string;
   baselineOperationIds: string[];
 };
-type AmbiguousDeploy = Pick<DeployAttempt, "baselineOperationIds"> & {
+type AmbiguousDeploy = DeployAttempt & {
   overviewUpdatedAt: number;
 };
 
@@ -74,13 +74,17 @@ function shortIdentity(identity: string | null): string {
 
 function operationAfter(
   overview: DeploymentOverview,
-  baselineOperationIds: string[],
+  attempt: Pick<DeployAttempt, "baselineOperationIds" | "selectionRevision" | "planToken">,
 ): NonNullable<DeploymentOverview["activeOperation"]> | null {
-  const baseline = new Set(baselineOperationIds);
-  if (overview.activeOperation && !baseline.has(overview.activeOperation.operationId)) {
+  const baseline = new Set(attempt.baselineOperationIds);
+  const matches = (operation: NonNullable<DeploymentOverview["activeOperation"]>): boolean =>
+    !baseline.has(operation.operationId) &&
+    operation.selectionRevision === attempt.selectionRevision &&
+    operation.planToken === attempt.planToken;
+  if (overview.activeOperation && matches(overview.activeOperation)) {
     return overview.activeOperation;
   }
-  if (overview.lastOperation && !baseline.has(overview.lastOperation.operationId)) {
+  if (overview.lastOperation && matches(overview.lastOperation)) {
     return overview.lastOperation;
   }
   return null;
@@ -98,7 +102,8 @@ export function syncToast(result: SyncRunResult): { kind: "success" | "error"; m
 }
 
 function connectionSnapshot(): NonNullable<Window["__hive"]>["connection"] {
-  return typeof window === "undefined" ? undefined : window.__hive?.connection;
+  if (typeof window === "undefined") return undefined;
+  return window.__hive?.getConnection?.() ?? window.__hive?.connection;
 }
 
 export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
@@ -120,6 +125,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     queryKey: ["kit", "overview"],
     queryFn: () => api.getKitOverview(apiConfig),
     refetchOnReconnect: true,
+    refetchIntervalInBackground: true,
     refetchInterval: (query) =>
       acceptedOperationId !== null ||
       query.state.data?.activeOperation ||
@@ -127,14 +133,29 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       stalePlanToken !== null ||
       ambiguousDeploy !== null
         ? 750
-        : false,
+        : connection
+          ? 2_000
+          : false,
   });
   const overview = overviewQuery.data;
 
   useEffect(() => {
-    const reconnect = (): void => {
-      setConnection(connectionSnapshot());
-      void overviewQuery.refetch();
+    const reconnect = (event: Event): void => {
+      if (event.type === "online") {
+        void overviewQuery.refetch();
+        return;
+      }
+      const detail = event instanceof CustomEvent ? event.detail : undefined;
+      const next =
+        detail &&
+        (detail.status === "connected" || detail.status === "disconnected") &&
+        (detail.kind === "managed" || detail.kind === "external")
+          ? detail
+          : connectionSnapshot();
+      setConnection(next);
+      if (!next || next.status === "connected") {
+        void overviewQuery.refetch();
+      }
     };
     window.addEventListener("online", reconnect);
     window.addEventListener("hive:connection-changed", reconnect);
@@ -261,12 +282,14 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
 
       const ambiguous = {
         baselineOperationIds: attempt.baselineOperationIds,
+        selectionRevision: attempt.selectionRevision,
+        planToken: attempt.planToken,
         overviewUpdatedAt: overviewQuery.dataUpdatedAt,
       };
       setAmbiguousDeploy(ambiguous);
       const reloaded = await overviewQuery.refetch();
       if (!reloaded.isSuccess || !reloaded.data) return;
-      const accepted = operationAfter(reloaded.data, ambiguous.baselineOperationIds);
+      const accepted = operationAfter(reloaded.data, ambiguous);
       if (!accepted) {
         setAmbiguousDeploy(null);
         return;
@@ -297,7 +320,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
 
   useEffect(() => {
     if (!ambiguousDeploy || !overview) return;
-    const accepted = operationAfter(overview, ambiguousDeploy.baselineOperationIds);
+    const accepted = operationAfter(overview, ambiguousDeploy);
     if (accepted) {
       setAcceptedOperationId(accepted.operationId);
       setTransportAcceptanceProven(true);
@@ -326,7 +349,12 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   const actionable = (overview?.diff.entries.length ?? 0) > 0;
   const deployArmed = overview !== undefined && armedPlanToken === overview.planToken;
   const authorityUnknown =
-    staleSelectionRevision !== null || stalePlanToken !== null || ambiguousDeploy !== null;
+    staleSelectionRevision !== null ||
+    stalePlanToken !== null ||
+    ambiguousDeploy !== null ||
+    connection?.status === "disconnected" ||
+    overview === undefined ||
+    overviewQuery.isError;
   const deployEnabled =
     actionable && !operationInFlight && !deployMutation.isPending && !authorityUnknown;
   const deployLabel = authorityUnknown
@@ -403,6 +431,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
               <SourceRows
                 sources={sources}
                 mirrors={overview?.mirrors ?? []}
+                disabled={authorityUnknown}
                 onToggle={(source) => toggleSource.mutate(source)}
                 pendingId={toggleSource.isPending ? toggleSource.variables?.id : undefined}
                 onDelete={(source) => deleteSource.mutate(source)}
@@ -419,6 +448,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
                 apiConfig={apiConfig}
                 inputRef={addSourceInputRef}
                 onChanged={refetchOverview}
+                disabled={authorityUnknown}
               />
             </div>
           </div>
@@ -428,7 +458,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
             type="button"
             className="button ghost"
             onClick={() => syncMutation.mutate()}
-            disabled={syncMutation.isPending}
+            disabled={syncMutation.isPending || authorityUnknown}
             data-testid="kit-check-updates"
           >
             {syncMutation.isPending ? "Checking…" : "Check for updates"}
@@ -552,6 +582,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
                 type="button"
                 className="button primary"
                 onClick={() => addSourceInputRef.current?.focus()}
+                disabled={authorityUnknown}
                 data-testid="kit-empty-add-source"
               >
                 Add a Source
@@ -571,7 +602,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
                 pendingKey={
                   selectionMutation.isPending ? selectionMutation.variables?.row.key : undefined
                 }
-                selectionDisabled={staleSelectionRevision !== null}
+                selectionDisabled={authorityUnknown}
                 onToggle={(row) =>
                   selectionMutation.mutate({
                     row,
@@ -619,10 +650,12 @@ function AddSourceForm({
   apiConfig,
   inputRef,
   onChanged,
+  disabled,
 }: {
   apiConfig: ApiConfig;
   inputRef: RefObject<HTMLInputElement>;
   onChanged: () => void;
+  disabled: boolean;
 }): JSX.Element {
   const [empty, setEmpty] = useState(true);
   const addSource = useMutation<AddSourceResult, AddSourceError, string>({
@@ -639,6 +672,7 @@ function AddSourceForm({
         data-testid="add-source-form"
         onSubmit={(event) => {
           event.preventDefault();
+          if (disabled) return;
           const origin = inputRef.current?.value.trim() ?? "";
           if (!origin) return;
           addSource.mutate(origin, {
@@ -653,7 +687,7 @@ function AddSourceForm({
           ref={inputRef}
           type="text"
           placeholder="https://github.com/owner/repo"
-          disabled={addSource.isPending}
+          disabled={addSource.isPending || disabled}
           onInput={(event) => {
             setEmpty(event.currentTarget.value.trim().length === 0);
             if (!addSource.isPending && (addSource.isError || addSource.data)) addSource.reset();
@@ -664,7 +698,7 @@ function AddSourceForm({
         <button
           type="submit"
           className="button"
-          disabled={addSource.isPending || empty}
+          disabled={addSource.isPending || empty || disabled}
           data-testid="add-source-submit"
         >
           {addSource.isPending ? "Adding…" : "Add Source"}
@@ -741,6 +775,7 @@ function addSourceErrorMessage(error: AddSourceError): string {
 function SourceRows({
   sources,
   mirrors,
+  disabled,
   onToggle,
   pendingId,
   onDelete,
@@ -751,6 +786,7 @@ function SourceRows({
 }: {
   sources: OverviewSource[];
   mirrors: OverviewMirror[];
+  disabled: boolean;
   onToggle: (source: OverviewSource) => void;
   pendingId: string | undefined;
   onDelete: (source: OverviewSource) => void;
@@ -767,6 +803,7 @@ function SourceRows({
           key={source.id}
           source={source}
           mirror={mirrorBySource.get(source.id)}
+          disabled={disabled}
           onToggle={() => onToggle(source)}
           togglePending={pendingId === source.id}
           onDelete={() => onDelete(source)}
@@ -785,6 +822,7 @@ function SourceRows({
 function SourceRow({
   source,
   mirror,
+  disabled,
   onToggle,
   togglePending,
   onDelete,
@@ -797,6 +835,7 @@ function SourceRow({
 }: {
   source: OverviewSource;
   mirror: OverviewMirror | undefined;
+  disabled: boolean;
   onToggle: () => void;
   togglePending: boolean;
   onDelete: () => void;
@@ -845,7 +884,7 @@ function SourceRow({
           className="kit-source-switch"
           checked={source.active}
           onChange={onToggle}
-          disabled={togglePending}
+          disabled={togglePending || disabled}
           data-testid={`kit-source-toggle-${source.id}`}
           aria-label={`${source.active ? "Deactivate" : "Activate"} ${source.label}`}
         />
@@ -858,7 +897,7 @@ function SourceRow({
           type="button"
           className="kit-source-up"
           onClick={() => onReorder("up")}
-          disabled={reorderPending || isFirst}
+          disabled={reorderPending || isFirst || disabled}
           aria-label={`Raise precedence of ${source.label}`}
           data-testid={`kit-source-up-${source.id}`}
         >
@@ -868,7 +907,7 @@ function SourceRow({
           type="button"
           className="kit-source-down"
           onClick={() => onReorder("down")}
-          disabled={reorderPending || isLast}
+          disabled={reorderPending || isLast || disabled}
           aria-label={`Lower precedence of ${source.label}`}
           data-testid={`kit-source-down-${source.id}`}
         >
@@ -885,7 +924,7 @@ function SourceRow({
             type="button"
             className="kit-source-delete-go"
             onClick={onDelete}
-            disabled={deletePending}
+            disabled={deletePending || disabled}
             data-testid={`kit-source-delete-confirm-${source.id}`}
           >
             {deletePending ? "Removing…" : "Remove"}
@@ -904,6 +943,7 @@ function SourceRow({
           type="button"
           className="kit-source-delete"
           onClick={() => setConfirming(true)}
+          disabled={disabled}
           aria-label={`Remove ${source.label}`}
           data-testid={`kit-source-delete-${source.id}`}
         >

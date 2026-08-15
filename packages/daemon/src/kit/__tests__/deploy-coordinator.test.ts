@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeployTarget } from "@hive/contract";
+import { withCooperativeFileLock } from "../../lib/durable-file.ts";
 import { mirrorContentSha } from "../content-sha.ts";
 import { hashSkillFiles } from "../deploy/artifact-hash.ts";
 import {
@@ -23,6 +24,7 @@ import {
   ImmutableInstallerStagingError,
   markInterruptedDeploymentState,
   PlanStaleError,
+  resumeStagedDeploy,
   type StagedDeployPayload,
   stageDeployPlan,
 } from "../deploy-coordinator.ts";
@@ -126,25 +128,29 @@ function successOutcome(
 function coordinatorFixture(options: {
   deployPlan?: DeployPlan;
   planToken?: string;
+  tokenForPlan?: Parameters<typeof createDeployCoordinator>[0]["tokenForPlan"];
   schedule?: (task: () => void) => void;
   execute?: Parameters<typeof createDeployCoordinator>[0]["execute"];
+  resume?: Parameters<typeof createDeployCoordinator>[0]["resume"];
   stage?: Parameters<typeof createDeployCoordinator>[0]["stage"];
   onAccepted?: Parameters<typeof createDeployCoordinator>[0]["onAccepted"];
   clearRemovalIntents?: Parameters<typeof createDeployCoordinator>[0]["clearRemovalIntents"];
+  capture?: Parameters<typeof createDeployCoordinator>[0]["capture"];
 }) {
   const deployPlan = options.deployPlan ?? plan();
   const operations = openDeployOperationStore(operationPath(), { now: () => 10 });
   const coordinator = createDeployCoordinator({
     mutationCoordinator: createDeploymentMutationCoordinator(),
     operations,
-    capture: () => ({ snapshot: snapshot(deployPlan), plan: deployPlan }),
-    tokenForPlan: () => options.planToken ?? "token-current",
+    capture: options.capture ?? (() => ({ snapshot: snapshot(deployPlan), plan: deployPlan })),
+    tokenForPlan: options.tokenForPlan ?? (() => options.planToken ?? "token-current"),
     stage: options.stage ?? (() => staged()),
     execute:
       options.execute ??
       (async (operation, record) => {
         await record([successOutcome(operation)]);
       }),
+    ...(options.resume ? { resume: options.resume } : {}),
     onAccepted: options.onAccepted ?? (() => Promise.resolve()),
     clearRemovalIntents: options.clearRemovalIntents ?? (() => Promise.resolve()),
     operationId: () => "operation-1",
@@ -155,6 +161,26 @@ function coordinatorFixture(options: {
 }
 
 describe("persisted asynchronous Deploy coordinator", () => {
+  test("rejects when the canonical snapshot changes while immutable bytes are staged", async () => {
+    const first = plan();
+    const changed = plan({ sourceRegistryRevision: first.sourceRegistryRevision + 1 });
+    let captures = 0;
+    const { coordinator, operations } = coordinatorFixture({
+      capture: () => {
+        const current = captures++ === 0 ? first : changed;
+        return { snapshot: snapshot(current), plan: current };
+      },
+      stage: () => staged("expensive-staged-bytes"),
+      tokenForPlan: (current) => `token-${current.sourceRegistryRevision}`,
+    });
+
+    await expect(
+      coordinator.accept({ selectionRevision: 7, planToken: "token-3" }),
+    ).rejects.toMatchObject({ code: "plan_stale" });
+    expect(captures).toBe(2);
+    expect(operations.list()).toEqual([]);
+  });
+
   test("rejects a stale Selection revision or plan token before staging or persistence", async () => {
     let stageCalls = 0;
     const { coordinator, operations } = coordinatorFixture({
@@ -339,6 +365,373 @@ describe("persisted asynchronous Deploy coordinator", () => {
       renderedHash,
     });
     expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
+  });
+
+  test("keeps filesystem success provisional when the real Ledger commit fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-ledger-failure-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const baseTargets = failSafeDeployTargets();
+    const blockedLedgerParent = join(root, "ledger-parent-is-a-file");
+    writeFileSync(blockedLedgerParent, "not a directory");
+    const targets = {
+      ...baseTargets,
+      ledgerPath: () => join(blockedLedgerParent, "manifest.json"),
+    };
+    const deploymentState = openDeploymentStateStore(baseTargets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const operations = openDeployOperationStore(operationPath(), { now: () => 20 });
+    const files = [{ rel: "SKILL.md", content: "---\ndescription: staged\n---\nstaged\n" }];
+    const action = plan().actions[0];
+    if (!action) throw new Error("missing action fixture");
+    const payload: StagedDeployPayload = {
+      tasks: [
+        {
+          type: "skill",
+          action: "add",
+          key: { kind: "skill", name: "alpha" },
+          target: "claude",
+          sourceId: "source-a",
+          contentSha: "a".repeat(64),
+          renderedHash: hashSkillFiles(files),
+          files,
+        },
+      ],
+      metadata: {},
+    };
+    operations.createQueued({
+      operationId: "ledger-failure",
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token",
+      plan: plan(),
+      staged: payload,
+    });
+    const operation = operations.markRunning("ledger-failure");
+
+    await expect(
+      executeStagedDeploy(
+        {
+          fx: {
+            targets,
+            exec: () => ({ status: 0, stdout: "", stderr: "" }),
+            probe: () => false,
+          },
+          deploymentState,
+          now: () => 20,
+        },
+        operation,
+        async (outcomes) => {
+          operations.recordOutcomes(operation.operationId, outcomes);
+        },
+      ),
+    ).rejects.toThrow();
+
+    expect(readFileSync(join(homes.claudeHome, "skills", "alpha", "SKILL.md"), "utf8")).toBe(
+      files[0]?.content ?? "",
+    );
+    expect(deploymentState.read(action.key, action.target)?.applied).toBeUndefined();
+    expect(operations.read(operation.operationId)?.outcomes).toEqual([]);
+  });
+
+  test("recovers filesystem-only success when the Ledger-pending checkpoint write fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-ledger-checkpoint-failure-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const files = [{ rel: "SKILL.md", content: "---\ndescription: alpha\n---\nalpha\n" }];
+    const renderedHash = hashSkillFiles(files);
+    const action = {
+      action: "add",
+      key: { kind: "skill", name: "alpha" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha: "a".repeat(64),
+      renderedHash,
+      artifact: { existence: "missing", hash: null },
+    } satisfies DeployPlan["actions"][number];
+    const acceptedPlan = plan({ actions: [action], mirrors: [] }, action);
+    const durableOperations = openDeployOperationStore(operationPath(), { now: () => 20 });
+    const operations = {
+      ...durableOperations,
+      markLedgerPending: () => {
+        throw new Error("checkpoint persistence unavailable");
+      },
+    };
+    const coordinator = createDeployCoordinator({
+      mutationCoordinator: createDeploymentMutationCoordinator(),
+      operations,
+      capture: () => ({ snapshot: snapshot(acceptedPlan), plan: acceptedPlan }),
+      tokenForPlan: () => "token-current",
+      stage: () => ({
+        tasks: [
+          {
+            type: "skill",
+            action: "add",
+            key: action.key,
+            target: action.target,
+            sourceId: "source-a",
+            contentSha: "a".repeat(64),
+            renderedHash,
+            files,
+          },
+        ],
+        metadata: {},
+      }),
+      execute: (operation, journal) =>
+        executeStagedDeploy(
+          {
+            fx: {
+              targets,
+              exec: () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: () => false,
+            },
+            deploymentState,
+            now: () => 20,
+          },
+          operation,
+          journal,
+        ),
+      onAccepted: () => Promise.resolve(),
+      clearRemovalIntents: () => Promise.resolve(),
+      operationId: () => "checkpoint-failure",
+      now: () => 20,
+    });
+
+    const accepted = await coordinator.accept({
+      selectionRevision: 7,
+      planToken: "token-current",
+    });
+    await coordinator.wait(accepted.operationId);
+    expect(readFileSync(join(homes.claudeHome, "skills", "alpha", "SKILL.md"), "utf8")).toBe(
+      files[0]?.content ?? "",
+    );
+    expect(readLedger(targets)).toBeNull();
+    expect(deploymentState.read(action.key, action.target)?.applied).toBeUndefined();
+    expect(durableOperations.read(accepted.operationId)).toMatchObject({
+      state: "failed",
+      executionPhase: "ledger_pending",
+      provisionalOutcomes: [{ outcome: "succeeded", target: "claude" }],
+    });
+
+    const reopened = openDeployOperationStore(durableOperations.path, { now: () => 30 });
+    const nextPlan = plan({ selectionRevision: 8, actions: [], mirrors: [] });
+    const restarted = createDeployCoordinator({
+      mutationCoordinator: createDeploymentMutationCoordinator(),
+      operations: reopened,
+      capture: () => ({ snapshot: snapshot(nextPlan), plan: nextPlan }),
+      tokenForPlan: () => "token-next",
+      stage: () => ({ tasks: [], metadata: {} }),
+      execute: (operation, journal) =>
+        executeStagedDeploy(
+          {
+            fx: {
+              targets,
+              exec: () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: () => false,
+            },
+            deploymentState,
+            now: () => 30,
+          },
+          operation,
+          journal,
+        ),
+      resume: (operation, journal) =>
+        resumeStagedDeploy(
+          {
+            fx: {
+              targets,
+              exec: () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: () => false,
+            },
+            deploymentState,
+            now: () => 30,
+          },
+          operation,
+          journal,
+        ),
+      onAccepted: () => Promise.resolve(),
+      clearRemovalIntents: () => Promise.resolve(),
+      operationId: () => "operation-after-recovery",
+      now: () => 30,
+    });
+
+    const next = await restarted.accept({ selectionRevision: 8, planToken: "token-next" });
+    await restarted.wait(next.operationId);
+    expect(reopened.read(accepted.operationId)).toMatchObject({
+      state: "completed",
+      executionPhase: "finished",
+      outcomes: [{ outcome: "succeeded", target: "claude" }],
+    });
+    expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
+    expect(deploymentState.read(action.key, action.target)?.applied).toMatchObject({
+      operationId: accepted.operationId,
+      renderedHash,
+    });
+  });
+
+  test("restart retries one shared Ledger-pending recovery after a real lock timeout", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-ledger-lock-recovery-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const files = [{ rel: "SKILL.md", content: "---\ndescription: alpha\n---\nalpha\n" }];
+    const renderedHash = hashSkillFiles(files);
+    const action = {
+      action: "add",
+      key: { kind: "skill", name: "alpha" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha: "a".repeat(64),
+      renderedHash,
+      artifact: { existence: "missing", hash: null },
+    } satisfies DeployPlan["actions"][number];
+    const acceptedPlan = plan({ actions: [action], mirrors: [] }, action);
+    const operations = openDeployOperationStore(operationPath(), { now: () => 20 });
+    operations.createQueued({
+      operationId: "ledger-lock-timeout",
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token-current",
+      plan: acceptedPlan,
+      staged: {
+        tasks: [
+          {
+            type: "skill",
+            action: "add",
+            key: action.key,
+            target: action.target,
+            sourceId: "source-a",
+            contentSha: "a".repeat(64),
+            renderedHash,
+            files,
+          },
+        ],
+        metadata: {},
+      },
+    });
+    const runningOperation = operations.markRunning("ledger-lock-timeout");
+    const provisional = successOutcome(runningOperation, action);
+    operations.recordProvisionalOutcomes("ledger-lock-timeout", [provisional]);
+    operations.markLedgerPending("ledger-lock-timeout");
+    const pending = operations.read("ledger-lock-timeout");
+    if (!pending) throw new Error("missing Ledger-pending operation");
+    const journal = Object.assign(
+      async (outcomes: readonly DeployOperationOutcome[]): Promise<void> => {
+        operations.recordOutcomes(pending.operationId, outcomes);
+      },
+      {
+        provisional: async (outcomes: readonly DeployOperationOutcome[]): Promise<void> => {
+          operations.recordProvisionalOutcomes(pending.operationId, outcomes);
+        },
+        markLedgerPending: (): void => {
+          operations.markLedgerPending(pending.operationId);
+        },
+        markLedgerCommitted: (): void => {
+          operations.markLedgerCommitted(pending.operationId);
+        },
+        markFinalizing: (): void => {
+          operations.markFinalizing(pending.operationId);
+        },
+      },
+    );
+
+    let lockedAttempt: Promise<void> | undefined;
+    withCooperativeFileLock(targets.ledgerPath(), 500, () => {
+      lockedAttempt = resumeStagedDeploy(
+        {
+          fx: {
+            targets,
+            exec: () => ({ status: 0, stdout: "", stderr: "" }),
+            probe: () => false,
+          },
+          deploymentState,
+          now: () => 20,
+          ledgerWriteOptions: { lockTimeoutMs: 0 },
+        },
+        pending,
+        journal,
+      );
+    });
+    if (!lockedAttempt) throw new Error("Ledger recovery was not attempted");
+    await expect(lockedAttempt).rejects.toMatchObject({ code: "ELOCKED" });
+    expect(operations.read(pending.operationId)).toMatchObject({
+      state: "running",
+      executionPhase: "ledger_pending",
+      outcomes: [],
+    });
+    expect(readLedger(targets)).toBeNull();
+    expect(deploymentState.read(action.key, action.target)?.applied).toBeUndefined();
+
+    const reopened = openDeployOperationStore(operations.path, { now: () => 30 });
+    const scheduled: Array<() => void> = [];
+    let resumeCalls = 0;
+    let releaseResume: (() => void) | undefined;
+    let markResumeStarted: (() => void) | undefined;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const resumeStarted = new Promise<void>((resolve) => {
+      markResumeStarted = resolve;
+    });
+    const nextPlan = plan({ selectionRevision: 8, actions: [], mirrors: [] });
+    const restarted = createDeployCoordinator({
+      mutationCoordinator: createDeploymentMutationCoordinator(),
+      operations: reopened,
+      capture: () => ({ snapshot: snapshot(nextPlan), plan: nextPlan }),
+      tokenForPlan: () => "token-next",
+      stage: () => staged("next"),
+      execute: async () => {},
+      resume: async (operation, record) => {
+        resumeCalls += 1;
+        markResumeStarted?.();
+        await resumeGate;
+        await resumeStagedDeploy(
+          {
+            fx: {
+              targets,
+              exec: () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: () => false,
+            },
+            deploymentState,
+            now: () => 30,
+          },
+          operation,
+          record,
+        );
+      },
+      onAccepted: () => Promise.resolve(),
+      clearRemovalIntents: () => Promise.resolve(),
+      schedule: (task) => scheduled.push(task),
+    });
+
+    expect(scheduled).toHaveLength(1);
+    scheduled[0]?.();
+    await resumeStarted;
+    const accepting = restarted.accept({ selectionRevision: 7, planToken: "token-current" });
+    await Promise.resolve();
+    expect(resumeCalls).toBe(1);
+    releaseResume?.();
+    await expect(accepting).rejects.toMatchObject({ code: "plan_stale" });
+
+    expect(resumeCalls).toBe(1);
+    expect(reopened.read(pending.operationId)).toMatchObject({
+      state: "completed",
+      executionPhase: "finished",
+      outcomes: [{ outcome: "succeeded", target: "claude" }],
+    });
+    expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
+    expect(deploymentState.read(action.key, action.target)?.applied).toMatchObject({
+      operationId: pending.operationId,
+      renderedHash,
+    });
   });
 
   test("rejects a relative setup command when no immutable checkout and cwd can be staged", () => {
@@ -645,12 +1038,14 @@ npx
     await first.coordinator.wait(accepted.operationId);
     expect(first.operations.read(accepted.operationId)).toMatchObject({
       state: "failed",
-      outcomes: [
+      executionPhase: "finalizing",
+      provisionalOutcomes: [
         { target: "claude", outcome: "succeeded" },
-        { target: "codex", outcome: "failed" },
+        { target: "codex", outcome: "succeeded" },
       ],
+      outcomes: [],
     });
-    expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
+    expect(readLedger(targets)?.skills).toEqual([]);
 
     const retryPlan = plan({ actions: [codexAction], mirrors: [] }, codexAction);
     const retry = coordinatorFixture({
@@ -687,6 +1082,76 @@ npx
     });
     await retry.coordinator.wait(retried.operationId);
     expect(retry.operations.read(retried.operationId)?.state).toBe("completed");
+    expect(readLedger(targets)?.skills).toEqual([]);
+  });
+
+  test("preserves imported Ledger ownership while only one target is removed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-imported-target-removal-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    mergeLedger(
+      targets,
+      {
+        kitVersion: "",
+        targets: ["claude", "codex"],
+        skills: ["alpha"],
+        agents: [],
+        instructions: [],
+        plugins: [],
+        bundles: [],
+      },
+      [],
+      [],
+    );
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const deployRemoval = async (target: "claude" | "codex"): Promise<void> => {
+      const action = {
+        action: "remove",
+        key: { kind: "skill", name: "alpha" },
+        target,
+        removalIntentGeneration: `intent-${target}`,
+        artifact: { existence: "present", hash: "legacy" },
+      } satisfies DeployPlan["actions"][number];
+      const deployPlan = plan({ actions: [action], mirrors: [] }, action);
+      const run = coordinatorFixture({
+        deployPlan,
+        stage: () => ({
+          tasks: [{ type: "remove", action: "remove", key: action.key, target }],
+          metadata: {},
+        }),
+        execute: (operation, journal) =>
+          executeStagedDeploy(
+            {
+              fx: {
+                targets,
+                exec: () => ({ status: 0, stdout: "", stderr: "" }),
+                probe: () => false,
+              },
+              deploymentState,
+              now: () => 20,
+            },
+            operation,
+            journal,
+          ),
+      });
+      const accepted = await run.coordinator.accept({
+        selectionRevision: 7,
+        planToken: "token-current",
+      });
+      await run.coordinator.wait(accepted.operationId);
+      expect(run.operations.read(accepted.operationId)?.state).toBe("completed");
+    };
+
+    await deployRemoval("claude");
+    expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
+    expect(deploymentState.read({ kind: "skill", name: "alpha" }, "claude")?.applied).toBe(
+      undefined,
+    );
+
+    await deployRemoval("codex");
     expect(readLedger(targets)?.skills).toEqual([]);
   });
 
@@ -762,12 +1227,131 @@ npx
     );
     expect(operations.read(operationId)).toMatchObject({
       state: "failed",
-      outcomes: [
-        { key: { name: "alpha" }, outcome: "failed", code: "io" },
-        { key: { name: "beta" }, outcome: "failed", code: "io" },
+      executionPhase: "finalizing",
+      provisionalOutcomes: [
+        { key: { name: "alpha" }, outcome: "succeeded" },
+        { key: { name: "beta" }, outcome: "succeeded" },
       ],
+      outcomes: [],
     });
-    expect(readLedger(targets)?.skills).toEqual([]);
+    expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }, { name: "beta" }]);
+  });
+
+  test("restart finalizes a Ledger-committed operation from its durable phase", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-ledger-committed-recovery-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const files = [{ rel: "SKILL.md", content: "---\ndescription: alpha\n---\nalpha\n" }];
+    const renderedHash = hashSkillFiles(files);
+    const action = {
+      action: "add",
+      key: { kind: "skill", name: "alpha" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha: "a".repeat(64),
+      renderedHash,
+      artifact: { existence: "missing", hash: null },
+    } satisfies DeployPlan["actions"][number];
+    const acceptedPlan = plan({ actions: [action], mirrors: [] }, action);
+    const unavailableState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+      rename: () => {
+        throw new Error("crash before Deployment State commit");
+      },
+    });
+    const first = coordinatorFixture({
+      deployPlan: acceptedPlan,
+      stage: () => ({
+        tasks: [
+          {
+            type: "skill",
+            action: "add",
+            key: action.key,
+            target: "claude",
+            sourceId: "source-a",
+            contentSha: "a".repeat(64),
+            renderedHash,
+            files,
+          },
+        ],
+        metadata: {},
+      }),
+      execute: (operation, journal) =>
+        executeStagedDeploy(
+          {
+            fx: {
+              targets,
+              exec: () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: () => false,
+            },
+            deploymentState: unavailableState,
+            now: () => 20,
+          },
+          operation,
+          journal,
+        ),
+    });
+    const accepted = await first.coordinator.accept({
+      selectionRevision: 7,
+      planToken: "token-current",
+    });
+    await first.coordinator.wait(accepted.operationId);
+    expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
+    expect(first.operations.read(accepted.operationId)).toMatchObject({
+      state: "failed",
+      executionPhase: "finalizing",
+      outcomes: [],
+    });
+
+    const recoveredState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 30,
+    });
+    const reopened = openDeployOperationStore(first.operations.path, { now: () => 30 });
+    const scheduled: Array<() => void> = [];
+    const nextPlan = plan({ selectionRevision: 8, actions: [], mirrors: [] });
+    const restarted = createDeployCoordinator({
+      mutationCoordinator: createDeploymentMutationCoordinator(),
+      operations: reopened,
+      capture: () => ({ snapshot: snapshot(nextPlan), plan: nextPlan }),
+      tokenForPlan: () => "token-next",
+      stage: () => {
+        throw new Error("stale request must not stage a new operation");
+      },
+      execute: async () => {
+        throw new Error("recovery must not reapply filesystem tasks");
+      },
+      resume: (operation, journal) =>
+        resumeStagedDeploy(
+          {
+            fx: {
+              targets,
+              exec: () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: () => false,
+            },
+            deploymentState: recoveredState,
+            now: () => 30,
+          },
+          operation,
+          journal,
+        ),
+      onAccepted: () => Promise.resolve(),
+      clearRemovalIntents: () => Promise.resolve(),
+      schedule: (task) => scheduled.push(task),
+    });
+
+    await expect(
+      restarted.accept({ selectionRevision: 7, planToken: "token-current" }),
+    ).rejects.toMatchObject({ code: "plan_stale" });
+    expect(reopened.read(accepted.operationId)).toMatchObject({
+      state: "completed",
+      executionPhase: "finished",
+      outcomes: [{ outcome: "succeeded", target: "claude" }],
+    });
+    expect(recoveredState.read(action.key, action.target)?.applied).toMatchObject({
+      operationId: accepted.operationId,
+      renderedHash,
+    });
   });
 
   test("fails a durably queued operation without execution when acceptance audit persistence fails", async () => {
@@ -987,11 +1571,15 @@ npx
       operationId,
       state: "queued",
       acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token-current",
     });
     expect(operations.lastSummary()).toEqual({
       operationId,
       state: "queued",
       acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token-current",
     });
 
     scheduled[0]?.();
@@ -1002,6 +1590,197 @@ npx
       state: "completed",
       completedAt: 10,
     });
+  });
+
+  test("compacts terminal summaries and staged payload files without pruning active recovery data", () => {
+    const path = operationPath();
+    const store = openDeployOperationStore(path, {
+      now: () => 10,
+      summaryRetention: 2,
+      payloadRetention: 1,
+    } as Parameters<typeof openDeployOperationStore>[1] & {
+      summaryRetention: number;
+      payloadRetention: number;
+    });
+    for (let index = 1; index <= 4; index += 1) {
+      const operationId = `terminal-${index}`;
+      store.createQueued({
+        operationId,
+        acceptedAt: index,
+        selectionRevision: index,
+        planToken: `token-${index}`,
+        plan: plan({ selectionRevision: index }),
+        staged: staged("x".repeat(64_000)),
+      });
+      const running = store.markRunning(operationId);
+      store.recordOutcomes(operationId, [successOutcome(running)]);
+      store.finish(operationId, "completed");
+    }
+    store.createQueued({
+      operationId: "active-recovery",
+      acceptedAt: 5,
+      selectionRevision: 5,
+      planToken: "token-active",
+      plan: plan({ selectionRevision: 5 }),
+      staged: staged("active".repeat(20_000)),
+    });
+
+    const index = JSON.parse(readFileSync(path, "utf8")) as { operations: unknown[] };
+    expect(index.operations).toHaveLength(3);
+    const payloadDirectory = join(path, "..", "operations.payloads");
+    expect(readdirSync(payloadDirectory)).toHaveLength(2);
+    expect(store.read("terminal-1")).toBeUndefined();
+    expect(store.read("active-recovery")?.staged.metadata.value).toContain("active");
+  });
+
+  test("compacts terminal v1 history while migrating to per-operation payloads", () => {
+    const path = operationPath();
+    const legacyPlan = plan();
+    const action = legacyPlan.actions[0];
+    if (!action) throw new Error("missing fixture action");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        revision: 4,
+        operations: Array.from({ length: 4 }, (_, index) => ({
+          operationId: `legacy-terminal-${index + 1}`,
+          state: "completed",
+          acceptedAt: index + 1,
+          completedAt: index + 2,
+          selectionRevision: index + 1,
+          planToken: `legacy-token-${index + 1}`,
+          plan: legacyPlan,
+          staged: staged("x".repeat(64_000)),
+          auditState: "recorded",
+          outcomes: [
+            {
+              action: action.action,
+              key: action.key,
+              target: action.target,
+              outcome: "succeeded",
+              attemptedAt: index + 2,
+            },
+          ],
+          recoveryPendingActions: [],
+        })),
+      }),
+    );
+
+    openDeployOperationStore(path, { summaryRetention: 2, payloadRetention: 1 });
+
+    const migrated = JSON.parse(readFileSync(path, "utf8")) as {
+      schemaVersion: number;
+      operations: Array<{ operationId: string }>;
+    };
+    expect(migrated.schemaVersion).toBe(2);
+    expect(migrated.operations.map((operation) => operation.operationId)).toEqual([
+      "legacy-terminal-3",
+      "legacy-terminal-4",
+    ]);
+    expect(readdirSync(join(path, "..", "operations.payloads"))).toHaveLength(1);
+  });
+
+  test("migrates latest recorded v1 outcomes into Ledger recovery", () => {
+    const legacyPlan = plan({
+      actions: [
+        plan().actions[0] as DeployPlan["actions"][number],
+        {
+          action: "add",
+          key: { kind: "skill", name: "beta" },
+          target: "claude",
+          sourceId: "source-a",
+          contentSha: "c".repeat(64),
+          renderedHash: "d".repeat(64),
+          artifact: { existence: "missing", hash: null },
+        },
+      ],
+    });
+    const completedAction = legacyPlan.actions[0];
+    if (!completedAction) throw new Error("missing fixture action");
+    const completedOutcome = {
+      action: completedAction.action,
+      key: completedAction.key,
+      target: completedAction.target,
+      outcome: "succeeded" as const,
+      attemptedAt: 20,
+    };
+    for (const state of ["running", "failed", "interrupted"] as const) {
+      const path = operationPath();
+      writeFileSync(
+        path,
+        JSON.stringify({
+          schemaVersion: 1,
+          revision: 1,
+          operations: [
+            {
+              operationId: `legacy-${state}`,
+              state,
+              acceptedAt: 10,
+              ...(state === "running" ? {} : { completedAt: 20 }),
+              selectionRevision: 7,
+              planToken: `legacy-token-${state}`,
+              plan: legacyPlan,
+              staged: staged(),
+              auditState: "recorded",
+              outcomes: [completedOutcome],
+              recoveryPendingActions: [],
+              ...(state === "failed" ? { errorCode: "execution_failed" } : {}),
+            },
+          ],
+        }),
+      );
+      const migrated = openDeployOperationStore(path, { now: () => 30 });
+      expect(migrated.read(`legacy-${state}`)).toMatchObject({
+        state: state === "running" ? "interrupted" : state,
+        executionPhase: "ledger_pending",
+        provisionalOutcomes: [completedOutcome],
+      });
+      expect(migrated.recoverable().map((operation) => operation.operationId)).toEqual([
+        `legacy-${state}`,
+      ]);
+    }
+  });
+
+  test("does not recover a v1 failure superseded by a newer completed operation", () => {
+    const path = operationPath();
+    const legacyPlan = plan();
+    const action = legacyPlan.actions[0];
+    if (!action) throw new Error("missing fixture action");
+    const outcome = {
+      action: action.action,
+      key: action.key,
+      target: action.target,
+      outcome: "succeeded" as const,
+      attemptedAt: 20,
+    };
+    const operation = (operationId: string, state: "failed" | "completed") => ({
+      operationId,
+      state,
+      acceptedAt: state === "failed" ? 10 : 30,
+      completedAt: state === "failed" ? 20 : 40,
+      selectionRevision: 7,
+      planToken: `legacy-token-${operationId}`,
+      plan: legacyPlan,
+      staged: staged(),
+      auditState: "recorded",
+      outcomes: [outcome],
+      recoveryPendingActions: [],
+      ...(state === "failed" ? { errorCode: "execution_failed" } : {}),
+    });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        revision: 2,
+        operations: [operation("old-failure", "failed"), operation("new-success", "completed")],
+      }),
+    );
+
+    const migrated = openDeployOperationStore(path);
+
+    expect(migrated.recoverable()).toEqual([]);
+    expect(migrated.read("old-failure")?.executionPhase).toBe("finished");
   });
 
   test("reopening queued and running operations interrupts them and reports unfinished actions", () => {
@@ -1555,6 +2334,6 @@ try {
     releaseCapture?.();
     await accepting;
     await syncing;
-    expect(order).toEqual(["accept:start", "accept:end", "sync"]);
+    expect(order).toEqual(["accept:start", "accept:end", "accept:start", "accept:end", "sync"]);
   });
 });

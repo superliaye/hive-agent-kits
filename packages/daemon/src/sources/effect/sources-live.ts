@@ -136,14 +136,18 @@ function serializeMutation<A, E>(
 ): Effect.Effect<A, E> {
   if (!coordinator) return effect;
   return Effect.callback<A, E>((resume) => {
-    void coordinator
+    coordinator
       .runExclusive(() => Effect.runPromiseExit(effect))
       .then((exit) =>
         Exit.match(exit, {
           onSuccess: (value) => resume(Effect.succeed(value)),
           onFailure: (cause) => resume(Effect.failCause(cause)),
         }),
-      );
+      )
+      .catch((err: unknown) => {
+        log().warn({ module: "sources", err: String(err) }, "Source mutation coordinator failed");
+        resume(Effect.die(err));
+      });
   });
 }
 

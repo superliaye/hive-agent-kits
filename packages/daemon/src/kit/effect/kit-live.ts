@@ -39,6 +39,7 @@ import {
   type DeploymentMutationCoordinator,
   executeStagedDeploy,
   markInterruptedDeploymentState,
+  resumeStagedDeploy,
   stageDeployPlan,
 } from "../deploy-coordinator.ts";
 import { openDeployOperationStore } from "../deploy-operations.ts";
@@ -155,6 +156,7 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
     tokenForPlan,
     stage: (snapshot, plan) => stageDeployPlan(targets, snapshot, plan),
     execute: (operation, record) => executeStagedDeploy({ fx, deploymentState }, operation, record),
+    resume: (operation, journal) => resumeStagedDeploy({ fx, deploymentState }, operation, journal),
     onAccepted: (event) => events.emit("deploy.accepted", event),
     clearRemovalIntents: (entries) =>
       mutationCoordinator.runExclusive(async () => {

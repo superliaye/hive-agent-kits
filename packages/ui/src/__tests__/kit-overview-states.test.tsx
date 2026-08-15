@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import type { DeploymentOverview, OverviewRow } from "@hive/contract";
+import { environmentManager } from "@tanstack/query-core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -61,8 +62,14 @@ async function flush(): Promise<void> {
 
 let activeRoot: Root | null = null;
 
-beforeAll(() => setupDom());
-afterAll(() => teardownDom());
+beforeAll(() => {
+  setupDom();
+  environmentManager.setIsServer(() => false);
+});
+afterAll(async () => {
+  environmentManager.setIsServer(() => true);
+  await teardownDom();
+});
 afterEach(async () => {
   window.__hive = undefined;
   if (!activeRoot) return;
@@ -203,7 +210,13 @@ describe("KitDeployPage — daemon Overview states", () => {
     const current = {
       ...overview([]),
       diff: { entries: [{ kind: "skill" as const, name: "arca-smoke", change: "added" as const }] },
-      activeOperation: { operationId: "op-active", state: "running" as const, acceptedAt: 1 },
+      activeOperation: {
+        operationId: "op-active",
+        state: "running" as const,
+        acceptedAt: 1,
+        selectionRevision: 7,
+        planToken: "7".repeat(64),
+      },
     };
     globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
       const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -231,6 +244,8 @@ describe("KitDeployPage — daemon Overview states", () => {
         state: "failed" as const,
         acceptedAt: 1,
         completedAt: 2,
+        selectionRevision: 7,
+        planToken: "7".repeat(64),
       },
     };
     globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
@@ -420,5 +435,161 @@ describe("KitDeployPage — daemon Overview states", () => {
     await act(async () => window.dispatchEvent(new Event("online")));
     await flush();
     expect(overviewCalls).toBeGreaterThan(beforeReconnect);
+  });
+
+  test("reads the mutable Shell snapshot when the exposed bridge value is frozen", async () => {
+    window.__hive = {
+      connection: { kind: "external", displayName: "Arca", status: "connected" },
+      getConnection: () => ({
+        kind: "external",
+        displayName: "Arca",
+        status: "disconnected",
+      }),
+    };
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") return json(overview([]));
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      return json({});
+    }) as typeof fetch;
+
+    const host = await renderPage();
+
+    expect(host.querySelector('[data-testid="kit-connection"]')?.textContent).toContain(
+      "Arca · disconnected",
+    );
+    expect(
+      (host.querySelector('[data-testid="add-source-input"]') as HTMLInputElement).disabled,
+    ).toBe(true);
+  });
+
+  test("polls an idle Overview while the Shell connection is healthy", async () => {
+    window.__hive = {
+      connection: { kind: "managed", displayName: "Local", status: "connected" },
+    };
+    let overviewCalls = 0;
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") {
+        overviewCalls += 1;
+        return json(overview([]));
+      }
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      return json({});
+    }) as typeof fetch;
+    await renderPage();
+    const afterInitialLoad = overviewCalls;
+
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 2_050)));
+    await flush();
+
+    expect(overviewCalls).toBeGreaterThan(afterInitialLoad);
+  });
+
+  test("uses Shell transition events to gate stale actions and reload after recovery", async () => {
+    window.__hive = {
+      connection: { kind: "external", displayName: "Remote", status: "connected" },
+    };
+    const selected = row({
+      key: { kind: "skill", name: "remote-skill" },
+      desired: "on",
+      reconciliation: "pending_add",
+      targets: [
+        {
+          target: "claude",
+          desired: "on",
+          reconciliation: "pending_add",
+          observation: "missing",
+          lastAttempt: { state: "none" },
+        },
+        {
+          target: "codex",
+          desired: "on",
+          reconciliation: "pending_add",
+          observation: "missing",
+          lastAttempt: { state: "none" },
+        },
+      ],
+    });
+    const current = {
+      ...overview([selected]),
+      sources: [
+        { id: "src", label: "Arca", kind: "git" as const, active: true, rank: 1 },
+        { id: "backup", label: "Backup", kind: "git" as const, active: true, rank: 0 },
+      ],
+      diff: {
+        entries: [{ kind: "skill" as const, name: "remote-skill", change: "added" as const }],
+      },
+    };
+    let overviewCalls = 0;
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") {
+        overviewCalls++;
+        return json(current);
+      }
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+    const deploy = host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement;
+    const toggle = host.querySelector(
+      '[data-testid="kit-row-skill-remote-skill"]',
+    ) as HTMLButtonElement;
+    const sourceToggle = host.querySelector(
+      '[data-testid="kit-source-toggle-src"]',
+    ) as HTMLInputElement;
+    const sourceRemove = host.querySelector(
+      '[data-testid="kit-source-delete-src"]',
+    ) as HTMLButtonElement;
+    const sourceReorder = host.querySelector(
+      '[data-testid="kit-source-down-src"]',
+    ) as HTMLButtonElement;
+    const addSource = host.querySelector('[data-testid="add-source-input"]') as HTMLInputElement;
+    expect(deploy.disabled).toBe(false);
+    expect(toggle.disabled).toBe(false);
+    expect(sourceToggle.disabled).toBe(false);
+    expect(sourceRemove.disabled).toBe(false);
+    expect(sourceReorder.disabled).toBe(false);
+    expect(addSource.disabled).toBe(false);
+
+    await act(async () =>
+      window.dispatchEvent(
+        new CustomEvent("hive:connection-changed", {
+          detail: { kind: "external", displayName: "Remote", status: "disconnected" },
+        }),
+      ),
+    );
+    await flush();
+    expect(host.querySelector('[data-testid="kit-connection"]')?.textContent).toContain(
+      "Remote · disconnected",
+    );
+    expect(deploy.disabled).toBe(true);
+    expect(toggle.disabled).toBe(true);
+    expect(sourceToggle.disabled).toBe(true);
+    expect(sourceRemove.disabled).toBe(true);
+    expect(sourceReorder.disabled).toBe(true);
+    expect(addSource.disabled).toBe(true);
+
+    const beforeRecovery = overviewCalls;
+    await act(async () =>
+      window.dispatchEvent(
+        new CustomEvent("hive:connection-changed", {
+          detail: { kind: "external", displayName: "Remote", status: "connected" },
+        }),
+      ),
+    );
+    await flush();
+    expect(overviewCalls).toBeGreaterThan(beforeRecovery);
+    expect(host.querySelector('[data-testid="kit-connection"]')?.textContent).toContain(
+      "Remote · connected",
+    );
+    expect(sourceToggle.disabled).toBe(false);
+    expect(sourceRemove.disabled).toBe(false);
+    expect(sourceReorder.disabled).toBe(false);
+    expect(addSource.disabled).toBe(false);
   });
 });

@@ -25,6 +25,7 @@ import { resolveShellLaunch } from "./connection";
 import {
   type ActiveDaemonConnection,
   createDaemonRequestHandler,
+  type DaemonConnectionStatus,
 } from "./daemon-request";
 import {
   canReuseReadyDaemon,
@@ -117,6 +118,15 @@ let daemon: ChildProcess | null = null;
 let spawnedByShell = false;
 let activeConnection: ActiveDaemonConnection | null = null;
 let authorizedWebContentsId: number | null = null;
+let connectionStatus: DaemonConnectionStatus = "connected";
+
+function publishConnectionStatus(status: DaemonConnectionStatus): void {
+  if (status === connectionStatus) return;
+  connectionStatus = status;
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send("hive:connectionStatus", status);
+  }
+}
 
 async function probeDaemonReady(baseUrl = DAEMON_URL): Promise<ReadyProbe> {
   try {
@@ -257,6 +267,7 @@ async function createWindow(): Promise<void> {
       additionalArguments: [
         `--hive-connection-kind=${activeConnection.kind}`,
         `--hive-display-name=${encodeURIComponent(activeConnection.displayName)}`,
+        `--hive-connection-status=${connectionStatus}`,
       ],
     },
   });
@@ -337,7 +348,10 @@ ipcMain.handle("hive:daemonRequest", async (event, path: unknown, request: unkno
   }
   const parsed = DaemonRequestPayloadSchema.safeParse({ path, request });
   if (!parsed.success) throw new Error("invalid daemon request payload");
-  return createDaemonRequestHandler(activeConnection)(parsed.data.path, parsed.data.request);
+  return createDaemonRequestHandler(activeConnection, fetch, publishConnectionStatus)(
+    parsed.data.path,
+    parsed.data.request,
+  );
 });
 
 ipcMain.handle("hive:openExternal", async (_event, url: unknown) => {

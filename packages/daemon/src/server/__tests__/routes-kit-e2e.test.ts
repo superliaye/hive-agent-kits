@@ -19,6 +19,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -386,11 +387,37 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
         removalIntents: [],
       });
 
+      const noOp = await server.app.fetch(
+        authed("/api/kit/selection", {
+          method: "PATCH",
+          body: JSON.stringify({ ...mutation, expectedRevision: 2 }),
+        }),
+      );
+      expect(noOp.status).toBe(200);
+
       const conflict = await server.app.fetch(
         authed("/api/kit/selection", { method: "PATCH", body: JSON.stringify(mutation) }),
       );
       expect(conflict.status).toBe(409);
-      expect(await conflict.json()).toEqual({ error: "selection_conflict", currentRevision: 2 });
+      expect(await conflict.json()).toEqual({ error: "selection_conflict", currentRevision: 3 });
+
+      const invalidTarget = await server.app.fetch(
+        authed("/api/kit/selection", {
+          method: "PATCH",
+          body: JSON.stringify({
+            expectedRevision: 3,
+            changes: [
+              {
+                key: { kind: "plugin", name: "claude-only" },
+                enabled: true,
+                targets: ["codex"],
+              },
+            ],
+          }),
+        }),
+      );
+      expect(invalidTarget.status).toBe(400);
+      expect(await invalidTarget.json()).toEqual({ error: "selection_target_not_applicable" });
 
       const audit = await server.app.fetch(authed("/api/audit?source=deploy"));
       const rows = (await audit.json()) as {
@@ -398,14 +425,23 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
         payload: Record<string, unknown>;
       }[];
       const changes = rows.filter((row) => row.event_type === "selection.changed");
-      expect(changes).toHaveLength(1);
-      expect(changes[0]).toMatchObject({
+      expect(changes).toHaveLength(2);
+      expect(changes.find((row) => row.payload.revision === 2)).toMatchObject({
         event_type: "selection.changed",
         payload: {
           revision: 2,
           addedPerKind: { skill: 1 },
           removedPerKind: {},
           targetClis: ["codex"],
+        },
+      });
+      expect(changes.find((row) => row.payload.revision === 3)).toMatchObject({
+        event_type: "selection.changed",
+        payload: {
+          revision: 3,
+          addedPerKind: {},
+          removedPerKind: {},
+          targetClis: [],
         },
       });
     } finally {
@@ -543,6 +579,127 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
       expect(JSON.stringify(acceptedRows)).not.toContain("planToken");
       expect(JSON.stringify(acceptedRows)).not.toContain("contentSha");
     } finally {
+      await server.dispose();
+    }
+  });
+
+  test("accepted Deploy ownership survives an HTTP socket abort before the 202 response", async () => {
+    const server = await serverWith(twoSourceFetch());
+    const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: server.app.fetch });
+    let connection: Socket | undefined;
+    let unsubscribe = (): void => {};
+    try {
+      const port = listener.port;
+      if (port === undefined) throw new Error("test HTTP listener did not bind a TCP port");
+      expect((await postOrigin(server, ORIGIN_A)).status).toBe(201);
+      const selection = (await (
+        await server.app.fetch(authed("/api/kit/selection"))
+      ).json()) as SelectionSnapshot;
+      const changed = await server.app.fetch(
+        authed("/api/kit/selection", {
+          method: "PATCH",
+          body: JSON.stringify({
+            expectedRevision: selection.revision,
+            changes: [
+              {
+                key: { kind: "skill", name: "alpha" },
+                enabled: true,
+                targets: ["claude"],
+              },
+            ],
+          }),
+        }),
+      );
+      expect(changed.status).toBe(200);
+      const reviewed = (await (
+        await server.app.fetch(authed("/api/kit/overview"))
+      ).json()) as DeploymentOverview;
+      const operationsPath = join(tmpRoot, "runtime", "kit", "deploy-operations.json");
+      let persistedAtAbort: unknown;
+      const accepted = new Promise<string>((resolve) => {
+        unsubscribe = server.kit.events.on("deploy.accepted", (event) => {
+          const index = JSON.parse(readFileSync(operationsPath, "utf8")) as {
+            operations: unknown[];
+          };
+          persistedAtAbort = index.operations.find(
+            (candidate) =>
+              typeof candidate === "object" &&
+              candidate !== null &&
+              "operationId" in candidate &&
+              candidate.operationId === event.operationId,
+          );
+          connection?.destroy();
+          resolve(event.operationId);
+        });
+      });
+      const body = JSON.stringify({
+        selectionRevision: reviewed.selectionRevision,
+        planToken: reviewed.planToken,
+      });
+      let responseBytes = "";
+      const closed = new Promise<void>((resolve) => {
+        connection = createConnection({ host: "127.0.0.1", port }, () => {
+          connection?.write(
+            [
+              "POST /api/kit/deploy HTTP/1.1",
+              `Host: 127.0.0.1:${port}`,
+              `Authorization: Bearer ${TOKEN}`,
+              "Content-Type: application/json",
+              `Content-Length: ${Buffer.byteLength(body)}`,
+              "Connection: close",
+              "",
+              body,
+            ].join("\r\n"),
+          );
+        });
+        connection.on("data", (chunk) => {
+          responseBytes += chunk.toString();
+        });
+        connection.on("error", () => undefined);
+        connection.on("close", resolve);
+      });
+
+      const operationId = await accepted;
+      await closed;
+      expect(responseBytes).toBe("");
+      expect(persistedAtAbort).toMatchObject({
+        operationId,
+        state: "queued",
+        auditState: "pending",
+      });
+
+      let completed: DeploymentOverview | undefined;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const overview = (await (
+          await server.app.fetch(authed("/api/kit/overview"))
+        ).json()) as DeploymentOverview;
+        if (!overview.activeOperation && overview.lastOperation?.operationId === operationId) {
+          completed = overview;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      expect(completed?.lastOperation).toMatchObject({ operationId, state: "completed" });
+      expect(readFileSync(join(homes.claudeHome, "skills", "alpha", "SKILL.md"), "utf8")).toContain(
+        GREETING_BODY,
+      );
+      const ledger = JSON.parse(readFileSync(homes.ledgerPath, "utf8")) as Ledger;
+      expect(ledger.skills).toContainEqual({ name: "alpha" });
+      const state = JSON.parse(
+        readFileSync(join(tmpRoot, "runtime", "kit", "deployment-state.json"), "utf8"),
+      ) as { records: unknown[] };
+      expect(state.records).toContainEqual(
+        expect.objectContaining({
+          key: { kind: "skill", name: "alpha" },
+          target: "claude",
+          applied: expect.objectContaining({ operationId }),
+        }),
+      );
+    } finally {
+      unsubscribe();
+      connection?.destroy();
+      await listener.stop(true);
       await server.dispose();
     }
   });
@@ -766,13 +923,7 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
     }
   });
 
-  test("(optional) plugin/bundle installer path is reached under SKIP hatches, no real exec", async () => {
-    // The skip-hatches let the deploy REACH the installer bookkeeping (record the
-    // applied name / pin) without spawning a real claude/git/npx — proving the
-    // installer-invocation path with zero real tool-state mutation. We assert via
-    // the deploy result's perKind applied list, and that no real process is needed
-    // (the exec adapter's not_redirected guard would fire on a real installer, but
-    // the SKIP hatch short-circuits before exec).
+  test("production Deploy cannot claim skipped plugin or bundle work through environment hatches", async () => {
     process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL = "1";
     process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL = "1";
     // Re-use a Source carrying a plugin + bundle capability.
@@ -784,15 +935,36 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
       // end-to-end — a conformance flip would otherwise slip through this e2e, which
       // previously checked only HTTP 201 + the `applied` lists.
       expect(AddSourceResult.parse(await add.json()).validation.conformant).toBe(true);
-      const dep = await acceptSelection(server, {
-        plugins: ["myplugin"],
-        bundles: ["mybundle"],
-        targets: ["claude"],
-      });
-      expect(dep.lastOperation?.state).toBe("completed");
-      const ledger = JSON.parse(readFileSync(homes.ledgerPath, "utf8")) as Ledger;
-      expect(ledger.plugins.map((entry) => entry.name)).toContain("myplugin");
-      expect(ledger.bundles.map((entry) => entry.name)).toContain("mybundle");
+      const selection = (await (
+        await server.app.fetch(authed("/api/kit/selection"))
+      ).json()) as SelectionSnapshot;
+      await server.app.fetch(
+        authed("/api/kit/selection", {
+          method: "PATCH",
+          body: JSON.stringify({
+            expectedRevision: selection.revision,
+            changes: [
+              { key: { kind: "plugin", name: "myplugin" }, enabled: true, targets: ["claude"] },
+              { key: { kind: "bundle", name: "mybundle" }, enabled: true, targets: ["claude"] },
+            ],
+          }),
+        }),
+      );
+      const overview = (await (
+        await server.app.fetch(authed("/api/kit/overview"))
+      ).json()) as DeploymentOverview;
+      const response = await server.app.fetch(
+        authed("/api/kit/deploy", {
+          method: "POST",
+          body: JSON.stringify({
+            selectionRevision: overview.selectionRevision,
+            planToken: overview.planToken,
+          }),
+        }),
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "immutable_installer_unavailable" });
+      expect(existsSync(homes.ledgerPath)).toBe(false);
     } finally {
       await server.dispose();
       delete process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL;

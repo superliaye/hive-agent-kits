@@ -34,8 +34,9 @@ export const DeploymentApplied = z.object({
   contentSha: z.string().nullable(),
   renderedHash: z.string(),
   appliedAt: z.number().int().nonnegative(),
+  operationId: z.string().min(1).default("legacy-deployment-import"),
 });
-export type DeploymentApplied = z.infer<typeof DeploymentApplied>;
+export type DeploymentApplied = z.input<typeof DeploymentApplied>;
 
 export const DeploymentAttempt = z.object({
   action: AttemptAction,
@@ -170,6 +171,17 @@ function normalizeCode(code: string): z.infer<typeof FailureCode> {
   return parsed.success ? parsed.data : "unknown";
 }
 
+function appliedOperationIdMissing(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const applied = Reflect.get(value, "applied");
+  return (
+    applied !== undefined &&
+    applied !== null &&
+    typeof applied === "object" &&
+    !Object.hasOwn(applied, "operationId")
+  );
+}
+
 function readLegacyFingerprint(
   path: string,
 ): Pick<DeploymentStateFile, "records" | "legacyInstructionFingerprints"> {
@@ -192,6 +204,7 @@ function readLegacyFingerprint(
         contentSha: null,
         renderedHash: entry.hash,
         appliedAt: entry.deployedAt,
+        operationId: "legacy-fingerprint-import",
       },
       lastAttempt: {
         action: "add",
@@ -230,7 +243,7 @@ export function openDeploymentStateStore(
       }
     });
 
-  const load = (): DeploymentStateFile | undefined => {
+  const load = (): { file: DeploymentStateFile; needsMigration: boolean } | undefined => {
     if (!existsSync(path)) return undefined;
     let raw: unknown;
     try {
@@ -239,7 +252,29 @@ export function openDeploymentStateStore(
       throw new DeploymentStateError("deployment_state_corrupt");
     }
     const parsed = DeploymentStateFile.safeParse(raw);
-    if (parsed.success) return parsed.data;
+    if (parsed.success) {
+      const rawRecords =
+        raw && typeof raw === "object" && Array.isArray(Reflect.get(raw, "records"))
+          ? Reflect.get(raw, "records")
+          : [];
+      let needsMigration = false;
+      const records = parsed.data.records.map((record, index) => {
+        if (!record.applied || !appliedOperationIdMissing(rawRecords[index])) return record;
+        needsMigration = true;
+        const successfulOperationId =
+          record.lastAttempt.outcome === "succeeded" && record.lastAttempt.action !== "remove"
+            ? record.lastAttempt.operationId
+            : "legacy-deployment-import";
+        return {
+          ...record,
+          applied: { ...record.applied, operationId: successfulOperationId },
+        };
+      });
+      return {
+        file: needsMigration ? DeploymentStateFile.parse({ ...parsed.data, records }) : parsed.data,
+        needsMigration,
+      };
+    }
     throw new DeploymentStateError("deployment_state_corrupt");
   };
 
@@ -362,10 +397,17 @@ export function openDeploymentStateStore(
     return initial;
   };
 
+  const loadLocked = (): DeploymentStateFile => {
+    const loaded = load();
+    if (!loaded) return migrate();
+    if (loaded.needsMigration) write(loaded.file);
+    return loaded.file;
+  };
+
   const current = (): DeploymentStateFile => {
     const loaded = load();
-    if (loaded) return loaded;
-    return withLock(() => load() ?? migrate());
+    if (loaded && !loaded.needsMigration) return loaded.file;
+    return withLock(loadLocked);
   };
 
   const commit = (
@@ -376,10 +418,11 @@ export function openDeploymentStateStore(
     const key = CapabilityKey.parse(keyInput);
     const target = DeployTarget.parse(targetInput);
     return withLock(() => {
-      const file = load() ?? migrate();
+      const file = loadLocked();
       const id = recordId(key, target);
       const previous = file.records.find((record) => recordId(record.key, record.target) === id);
       const nextRecord = DeploymentStateRecord.parse(change(previous));
+      if (previous && JSON.stringify(previous) === JSON.stringify(nextRecord)) return previous;
       const records = file.records.filter((record) => recordId(record.key, record.target) !== id);
       records.push(nextRecord);
       write({ ...file, revision: file.revision + 1, records });
@@ -400,7 +443,7 @@ export function openDeploymentStateStore(
       commit(key, target, (previous) => ({
         key: CapabilityKey.parse(key),
         target: DeployTarget.parse(target),
-        applied: DeploymentApplied.parse(applied),
+        applied: DeploymentApplied.parse({ ...applied, operationId }),
         lastAttempt: {
           action: previous?.applied ? "update" : "add",
           outcome: "succeeded",
@@ -439,7 +482,7 @@ export function openDeploymentStateStore(
         operationId,
       });
       return withLock(() => {
-        const file = load() ?? migrate();
+        const file = loadLocked();
         const id = recordId(parsedKey, parsedTarget);
         const previous = file.records.find((record) => recordId(record.key, record.target) === id);
         const receipts = file.interruptionReceipts ?? [];

@@ -122,7 +122,13 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
           overview(
             accepted
               ? {
-                  activeOperation: { operationId: "op-8", state: "running", acceptedAt: 1 },
+                  activeOperation: {
+                    operationId: "op-8",
+                    state: "running",
+                    acceptedAt: 1,
+                    selectionRevision: 8,
+                    planToken: "8".repeat(64),
+                  },
                 }
               : {},
           ),
@@ -169,6 +175,8 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
                 state: "completed",
                 acceptedAt: 1,
                 completedAt: 2,
+                selectionRevision: 9,
+                planToken: "9".repeat(64),
               },
             }),
           );
@@ -236,6 +244,8 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
                 state: "completed",
                 acceptedAt: 1,
                 completedAt: 2,
+                selectionRevision: 7,
+                planToken: "7".repeat(64),
               },
             }),
           );
@@ -272,6 +282,8 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
               state: "completed",
               acceptedAt: 3,
               completedAt: 4,
+              selectionRevision: 8,
+              planToken: "8".repeat(64),
             },
           }),
         ),
@@ -308,6 +320,8 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
                 state: "completed",
                 acceptedAt: 1,
                 completedAt: 2,
+                selectionRevision: 7,
+                planToken: "7".repeat(64),
               },
             }),
           );
@@ -337,12 +351,16 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
               operationId: "op-active",
               state: "running",
               acceptedAt: 3,
+              selectionRevision: 8,
+              planToken: "8".repeat(64),
             },
             lastOperation: {
               operationId: "op-before",
               state: "completed",
               acceptedAt: 1,
               completedAt: 2,
+              selectionRevision: 7,
+              planToken: "7".repeat(64),
             },
           }),
         ),
@@ -356,6 +374,54 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
     );
     expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
       true,
+    );
+  });
+
+  test("a transport failure ignores an unrelated operation accepted from another reviewed plan", async () => {
+    let overviewCalls = 0;
+    let releaseOverview: ((response: Response) => void) | undefined;
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      if (path === "/api/kit/overview") {
+        overviewCalls++;
+        if (overviewCalls === 1) return json(overview());
+        return await new Promise<Response>((resolve) => {
+          releaseOverview = resolve;
+        });
+      }
+      if (path === "/api/kit/deploy" && init?.method === "POST") {
+        return json({ error: "unavailable" }, 503);
+      }
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+
+    await click(host.querySelector('[data-testid="kit-deploy"]'));
+    await act(async () =>
+      releaseOverview?.(
+        json(
+          overview({
+            lastOperation: {
+              operationId: "other-client-operation",
+              state: "completed",
+              acceptedAt: 3,
+              completedAt: 4,
+              selectionRevision: 99,
+              planToken: "9".repeat(64),
+            },
+          }),
+        ),
+      ),
+    );
+    await flush();
+
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')?.textContent).toContain(
+      "could not be accepted",
     );
   });
 

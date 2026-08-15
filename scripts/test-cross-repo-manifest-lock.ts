@@ -1,23 +1,107 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import pin from "./fixtures/my-agent-kits/PIN.json";
 
-const agentKitRoot = process.env.MY_AGENT_KITS_ROOT;
-if (!agentKitRoot) throw new Error("MY_AGENT_KITS_ROOT is required");
+const pinnedFiles = Object.entries(pin.files).map(([path, blob]) => ({ path, blob }));
+
+function gitBlobId(bytes: Uint8Array): string {
+  const header = Buffer.from(`blob ${bytes.byteLength}\0`);
+  return createHash("sha1").update(header).update(bytes).digest("hex");
+}
+
+function verifyPinnedFile(path: string, bytes: Uint8Array, expected: string): void {
+  const actual = gitBlobId(bytes);
+  if (actual !== expected) {
+    throw new Error(
+      `pinned agent-kit blob mismatch for ${path}: expected ${expected}, got ${actual}`,
+    );
+  }
+}
+
+function fixtureFiles(root: string): string[] {
+  const files: string[] = [];
+  const walk = (directory: string): void => {
+    for (const entry of readdirSync(directory)) {
+      const path = join(directory, entry);
+      if (statSync(path).isDirectory()) walk(path);
+      else files.push(relative(root, path).replaceAll("\\", "/"));
+    }
+  };
+  walk(root);
+  return files.filter((path) => path !== "PIN.json").sort();
+}
+
+function verifyFixtureInventory(root: string): void {
+  const expected = pinnedFiles.map((file) => file.path).sort();
+  const actual = fixtureFiles(root);
+  if (JSON.stringify(actual) === JSON.stringify(expected)) return;
+  const expectedSet = new Set(expected);
+  const actualSet = new Set(actual);
+  const missing = expected.filter((path) => !actualSet.has(path));
+  const unpinned = actual.filter((path) => !expectedSet.has(path));
+  throw new Error(
+    `pinned agent-kit fixture inventory mismatch; missing=${missing.join(",") || "none"}; unpinned=${unpinned.join(",") || "none"}`,
+  );
+}
+
+function preparePinnedAgentKit(workRoot: string): { root: string; source: string } {
+  const externalRoot = process.env.MY_AGENT_KITS_ROOT;
+  if (!externalRoot) {
+    const fixtureRoot = fileURLToPath(new URL("fixtures/my-agent-kits", import.meta.url));
+    verifyFixtureInventory(fixtureRoot);
+    for (const file of pinnedFiles) {
+      verifyPinnedFile(file.path, readFileSync(join(fixtureRoot, file.path)), file.blob);
+    }
+    return { root: fixtureRoot, source: "vendored production modules" };
+  }
+
+  const checkout = resolve(externalRoot);
+  let resolvedRevision: string;
+  try {
+    resolvedRevision = execFileSync(
+      "git",
+      ["-C", checkout, "rev-parse", `${pin.revision}^{commit}`],
+      { encoding: "utf8" },
+    ).trim();
+  } catch {
+    throw new Error(`external agent-kit checkout does not contain pinned revision ${pin.revision}`);
+  }
+  if (resolvedRevision !== pin.revision) {
+    throw new Error(`external agent-kit resolved ${resolvedRevision}, expected ${pin.revision}`);
+  }
+
+  const materialized = join(workRoot, "agent-kit-pinned");
+  for (const file of pinnedFiles) {
+    const bytes = execFileSync("git", ["-C", checkout, "show", `${pin.revision}:${file.path}`], {
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    verifyPinnedFile(file.path, bytes, file.blob);
+    const destination = join(materialized, file.path);
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, bytes);
+  }
+  return { root: materialized, source: `external checkout ${checkout}` };
+}
 
 const root = mkdtempSync(join(tmpdir(), "cross-repo-manifest-lock-"));
+const agentKit = preparePinnedAgentKit(root);
 const home = join(root, "home");
 const ledgerPath = join(home, ".agent-kit", "manifest.json");
-const agentManifestModule = pathToFileURL(resolve(agentKitRoot, "lib/manifest.js")).href;
+const agentManifestModule = pathToFileURL(join(agentKit.root, "lib/manifest.js")).href;
 const hiveLedgerModule = new URL("../packages/daemon/src/kit/ledger.ts", import.meta.url).href;
 const hiveTargetsModule = new URL("../packages/daemon/src/kit/targets.ts", import.meta.url).href;
 const hiveLockModule = new URL("../packages/daemon/src/lib/durable-file.ts", import.meta.url).href;
@@ -343,6 +427,7 @@ await withManifestLock(
   );
 
   console.log(`cross-repo manifest skills: ${readSkills().join(", ")}`);
+  console.log(`cross-repo agent-kit pin: ${pin.revision} (${agentKit.source})`);
   console.log("cross-repo blocked-live-owner: waited past stale");
   console.log(`cross-repo crash recovery ms: ${recoveryMs}`);
   console.log("cross-repo validate-pause-new-owner: no overlaps in either direction");
