@@ -696,9 +696,11 @@ function commitProvisionalLedger(
         return false;
       }
       const record = options.deploymentState.read(action.key, target);
-      return record
-        ? record.applied !== undefined
-        : (importedOwnership.get(serializeCapabilityKey(action.key))?.has(target) ?? false);
+      if (record?.applied !== undefined) return true;
+      if (record?.lastAttempt.action === "remove" && record.lastAttempt.outcome === "succeeded") {
+        return false;
+      }
+      return importedOwnership.get(serializeCapabilityKey(action.key))?.has(target) ?? false;
     });
     if (remainsApplied) continue;
     if (action.key.kind === "skill") prunedSkills.add(action.key.name);
@@ -831,6 +833,8 @@ export async function resumeStagedDeploy(
     phase = "finalizing";
   }
   if (phase !== "finalizing") throw new Error("operation_not_recoverable");
-  finalizeCommittedDeployment(options, operation);
+  if (operation.finalizationState !== "already_recorded") {
+    finalizeCommittedDeployment(options, operation);
+  }
   await journal(operation.provisionalOutcomes);
 }

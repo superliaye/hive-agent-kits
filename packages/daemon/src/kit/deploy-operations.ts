@@ -179,6 +179,7 @@ const PersistedDeployOperationSummary = z.object({
   planToken: z.string().min(1),
   auditState: z.enum(["pending", "recorded"]).default("recorded"),
   executionPhase: DeployExecutionPhase.default("applying"),
+  finalizationState: z.enum(["pending", "already_recorded"]).default("pending"),
   provisionalOutcomes: z.array(DeployOperationOutcomeSchema).default([]),
   outcomes: z.array(DeployOperationOutcomeSchema).default([]),
   recoveryPendingActions: z.array(DeployPlanActionSchema).default([]),
@@ -415,13 +416,23 @@ export function openDeployOperationStore(
     legacy: z.infer<typeof LegacyDeployOperationsFile>,
   ): DeployOperationsFile => {
     const entries = legacy.operations.map((operation, index) => {
+      const laterCompletedActions = new Set(
+        legacy.operations
+          .slice(index + 1)
+          .filter((candidate) => candidate.state === "completed")
+          .flatMap((candidate) => candidate.outcomes)
+          .filter((outcome) => outcome.outcome === "succeeded")
+          .map(actionId),
+      );
+      const unsupersededOutcomes = operation.outcomes.filter(
+        (outcome) => !laterCompletedActions.has(actionId(outcome)),
+      );
       const recoverRecordedOutcomes =
-        index === legacy.operations.length - 1 &&
         (operation.state === "running" ||
           operation.state === "failed" ||
           operation.state === "interrupted") &&
         operation.auditState === "recorded" &&
-        operation.outcomes.length > 0;
+        unsupersededOutcomes.some((outcome) => outcome.outcome === "succeeded");
       return {
         payload: {
           operationId: operation.operationId,
@@ -441,8 +452,9 @@ export function openDeployOperationStore(
             : operation.state === "completed" || operation.state === "failed"
               ? "finished"
               : "applying",
-          provisionalOutcomes: recoverRecordedOutcomes ? operation.outcomes : [],
-          outcomes: operation.outcomes,
+          finalizationState: recoverRecordedOutcomes ? "already_recorded" : "pending",
+          provisionalOutcomes: recoverRecordedOutcomes ? unsupersededOutcomes : [],
+          outcomes: recoverRecordedOutcomes ? [] : operation.outcomes,
           recoveryPendingActions: operation.recoveryPendingActions,
           ...(operation.errorCode ? { errorCode: operation.errorCode } : {}),
         }),
@@ -548,7 +560,7 @@ export function openDeployOperationStore(
       );
       for (const entry of readdirSync(payloadDirectory)) {
         const candidate = join(payloadDirectory, entry);
-        if (referenced.has(candidate) || entry.includes(".tmp-")) continue;
+        if (referenced.has(candidate)) continue;
         try {
           unlinkSync(candidate);
         } catch {

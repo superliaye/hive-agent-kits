@@ -1107,6 +1107,12 @@ npx
     const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
       now: () => 20,
     });
+    deploymentState.recordFailure(
+      { kind: "skill", name: "alpha" },
+      "codex",
+      { action: "remove", code: "io", detail: "prior removal failed" },
+      "failed-codex-removal",
+    );
     const deployRemoval = async (target: "claude" | "codex"): Promise<void> => {
       const action = {
         action: "remove",
@@ -1681,6 +1687,19 @@ npx
     expect(readdirSync(join(path, "..", "operations.payloads"))).toHaveLength(1);
   });
 
+  test("sweeps crash-left payload temp files while the operation store is locked", () => {
+    const path = operationPath();
+    const payloadDirectory = join(path, "..", "operations.payloads");
+    mkdirSync(payloadDirectory, { recursive: true });
+    const crashRemnant = join(payloadDirectory, "payload.json.tmp-123-crashed");
+    writeFileSync(crashRemnant, "x".repeat(64_000));
+
+    openDeployOperationStore(path);
+
+    expect(existsSync(crashRemnant)).toBe(false);
+    expect(readdirSync(payloadDirectory)).toEqual([]);
+  });
+
   test("migrates latest recorded v1 outcomes into Ledger recovery", () => {
     const legacyPlan = plan({
       actions: [
@@ -1734,12 +1753,87 @@ npx
       expect(migrated.read(`legacy-${state}`)).toMatchObject({
         state: state === "running" ? "interrupted" : state,
         executionPhase: "ledger_pending",
+        finalizationState: "already_recorded",
         provisionalOutcomes: [completedOutcome],
+        outcomes: [],
       });
       expect(migrated.recoverable().map((operation) => operation.operationId)).toEqual([
         `legacy-${state}`,
       ]);
     }
+  });
+
+  test("migrates an older recorded v1 outcome when a newer operation is unrelated", () => {
+    const path = operationPath();
+    const alphaPlan = plan();
+    const alphaAction = alphaPlan.actions[0];
+    if (!alphaAction) throw new Error("missing alpha fixture action");
+    const betaPlan = plan({
+      selectionRevision: 8,
+      actions: [{ ...alphaAction, key: { kind: "skill", name: "beta" } }],
+    });
+    writeFileSync(
+      path,
+      JSON.stringify({
+        schemaVersion: 1,
+        revision: 2,
+        operations: [
+          {
+            operationId: "legacy-alpha-failure",
+            state: "failed",
+            acceptedAt: 10,
+            completedAt: 20,
+            selectionRevision: 7,
+            planToken: "legacy-token-alpha",
+            plan: alphaPlan,
+            staged: staged(),
+            auditState: "recorded",
+            outcomes: [
+              {
+                action: alphaAction.action,
+                key: alphaAction.key,
+                target: alphaAction.target,
+                outcome: "succeeded",
+                attemptedAt: 20,
+              },
+            ],
+            recoveryPendingActions: [],
+            errorCode: "execution_failed",
+          },
+          {
+            operationId: "newer-beta-queued",
+            state: "queued",
+            acceptedAt: 30,
+            selectionRevision: 8,
+            planToken: "legacy-token-beta",
+            plan: betaPlan,
+            staged: staged("beta"),
+            auditState: "recorded",
+            outcomes: [],
+            recoveryPendingActions: [],
+          },
+        ],
+      }),
+    );
+
+    const migrated = openDeployOperationStore(path, { now: () => 40 });
+
+    expect(migrated.read("legacy-alpha-failure")).toMatchObject({
+      state: "failed",
+      executionPhase: "ledger_pending",
+      finalizationState: "already_recorded",
+      provisionalOutcomes: [
+        {
+          key: { kind: "skill", name: "alpha" },
+          target: "claude",
+          outcome: "succeeded",
+        },
+      ],
+      outcomes: [],
+    });
+    expect(migrated.recoverable().map((operation) => operation.operationId)).toEqual([
+      "legacy-alpha-failure",
+    ]);
   });
 
   test("does not recover a v1 failure superseded by a newer completed operation", () => {
