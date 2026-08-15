@@ -143,11 +143,11 @@ git commit -m "Add Hive Arca remote daemon lifecycle"
 
 ```bash
 run_launcher
-assert_called arca et -c '$HOME/.local/bin/hive-arca-remote ensure'
+assert_called arca ssh '$HOME/.local/bin/hive-arca-remote ensure'
 assert_configured_forward 'Host arca*' 'LocalForward 127.0.0.1:33117 127.0.0.1:3117'
 assert_called open -n -W -a Hive --args "--hive-external-descriptor=${DESCRIPTOR}"
 test ! -e "$DESCRIPTOR"
-assert_called arca et -c '$HOME/.local/bin/hive-arca-remote session-revoke ...'
+assert_called arca ssh '$HOME/.local/bin/hive-arca-remote session-revoke ...'
 ```
 
 - [ ] **Step 2: Run launcher tests**
@@ -166,7 +166,7 @@ If the tunnel exits while the app pid remains alive, retry with bounded exponent
 
 - [ ] **Step 5: Implement versioned Mac bootstrap**
 
-Install the adapter payload under `~/.local/share/hive-arca/<version>/` and atomically update `~/.local/bin/hive-arca`. Use `arca et -c` by default, add the marked `Host arca*` forward to the Mac SSH config, retain explicit `--transport ssh --ssh-target <host>` fallback, and symlink only for the explicit local checkout mode.
+Install the adapter payload under `~/.local/share/hive-arca/<version>/` and atomically update `~/.local/bin/hive-arca`. Use `arca ssh` for request/response commands and `arca et` for the long-lived forward, add the marked `Host arca*` forward to the Mac SSH config, retain explicit `--transport ssh --ssh-target <host>` fallback, and symlink only for the explicit local checkout mode.
 
 - [ ] **Step 6: Run all adapter tests and commit**
 

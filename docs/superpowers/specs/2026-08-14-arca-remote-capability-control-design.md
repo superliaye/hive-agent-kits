@@ -385,9 +385,9 @@ diagnostics belong in Deployment State and Trace, not duplicate audit rows.
 process lifecycle. It:
 
 1. validates Mac prerequisites and the dedicated loopback port;
-2. invokes its remote helper through `arca et -c` with an explicitly configured
+2. invokes its remote helper through `arca ssh` with an explicitly configured
    Arca `HOME` to ensure the installed Hive Daemon runs against Arca's real CLI
-   homes even when Eternal Terminal inherits the Mac `HOME`;
+   homes and request/response output remains pipeable;
 3. authenticates locally on Arca and mints an expiring external session;
 4. reuses an existing `arca et` local forward or starts a supervised Eternal
    Terminal session using the installer's `Host arca*` forward;
