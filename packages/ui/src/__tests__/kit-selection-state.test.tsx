@@ -118,9 +118,10 @@ describe("KitDeployPage — revisioned Selection", () => {
     ).toBe(false);
   });
 
-  test("a selection_conflict refetches Overview once and never retries stale intent", async () => {
+  test("a selection_conflict disables Selection until a newer Overview arrives", async () => {
     let overviewCalls = 0;
     let patchCalls = 0;
+    let releaseOverview: ((response: Response) => void) | undefined;
     globalThis.fetch = (async (
       input: string | URL | Request,
       init?: RequestInit,
@@ -129,7 +130,10 @@ describe("KitDeployPage — revisioned Selection", () => {
       const path = new URL(raw).pathname;
       if (path === "/api/kit/overview") {
         overviewCalls++;
-        return json(overview(overviewCalls === 1 ? 7 : 8));
+        if (overviewCalls === 1) return json(overview(7));
+        return await new Promise<Response>((resolve) => {
+          releaseOverview = resolve;
+        });
       }
       if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
       if (path === "/api/kit/selection" && init?.method === "PATCH") {
@@ -143,9 +147,24 @@ describe("KitDeployPage — revisioned Selection", () => {
     await click(host.querySelector('[data-testid="kit-row-skill-beta"]'));
 
     expect(patchCalls).toBe(1);
-    expect(overviewCalls).toBeGreaterThanOrEqual(2);
+    expect(overviewCalls).toBe(2);
+    expect(
+      (host.querySelector('[data-testid="kit-row-skill-beta"]') as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(host.querySelector('[data-testid="kit-selection-error"]')?.textContent).toContain(
+      "Waiting for a newer Overview",
+    );
+    expect(host.querySelector('[data-testid="kit-selection-error"]')?.textContent).not.toContain(
       "refreshed",
     );
+
+    await act(async () => releaseOverview?.(json(overview(8))));
+    await flush();
+
+    expect(
+      (host.querySelector('[data-testid="kit-row-skill-beta"]') as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(host.querySelector('[data-testid="kit-selection-error"]')).toBeNull();
+    expect(patchCalls).toBe(1);
   });
 });

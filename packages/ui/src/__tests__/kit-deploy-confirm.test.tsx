@@ -145,9 +145,10 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
     );
   });
 
-  test("plan_stale refetches and requires another explicit Deploy", async () => {
+  test("plan_stale disables Deploy until a newer Overview arrives", async () => {
     let overviewCalls = 0;
     const bodies: unknown[] = [];
+    let releaseOverview: ((response: Response) => void) | undefined;
     globalThis.fetch = (async (
       input: string | URL | Request,
       init?: RequestInit,
@@ -157,16 +158,24 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
       if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
       if (path === "/api/kit/overview") {
         overviewCalls++;
-        return json(
-          overview(
-            overviewCalls === 1
-              ? {}
-              : {
-                  selectionRevision: 9,
-                  planToken: "9".repeat(64),
-                },
-          ),
-        );
+        if (overviewCalls === 1) return json(overview());
+        if (overviewCalls > 2) {
+          return json(
+            overview({
+              selectionRevision: 9,
+              planToken: "9".repeat(64),
+              lastOperation: {
+                operationId: "op-9",
+                state: "completed",
+                acceptedAt: 1,
+                completedAt: 2,
+              },
+            }),
+          );
+        }
+        return await new Promise<Response>((resolve) => {
+          releaseOverview = resolve;
+        });
       }
       if (path === "/api/kit/deploy" && init?.method === "POST") {
         bodies.push(JSON.parse(String(init.body)));
@@ -180,13 +189,213 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
 
     await click(host.querySelector('[data-testid="kit-deploy"]'));
     expect(bodies).toHaveLength(1);
-    expect(host.querySelector('[data-testid="kit-deploy-error"]')?.textContent).toContain("Review");
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')?.textContent).toContain(
+      "Waiting for a newer Overview",
+    );
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')?.textContent).not.toContain(
+      "refreshed",
+    );
+
+    await act(async () =>
+      releaseOverview?.(json(overview({ selectionRevision: 9, planToken: "9".repeat(64) }))),
+    );
+    await flush();
+
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')).toBeNull();
 
     await click(host.querySelector('[data-testid="kit-deploy"]'));
     expect(bodies).toEqual([
       { selectionRevision: 8, planToken: "8".repeat(64) },
       { selectionRevision: 9, planToken: "9".repeat(64) },
     ]);
+  });
+
+  test("a transport failure accepts a new lastOperation as authoritative evidence", async () => {
+    let overviewCalls = 0;
+    let releaseOverview: ((response: Response) => void) | undefined;
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      if (path === "/api/kit/overview") {
+        overviewCalls++;
+        if (overviewCalls === 1) {
+          return json(
+            overview({
+              lastOperation: {
+                operationId: "op-before",
+                state: "completed",
+                acceptedAt: 1,
+                completedAt: 2,
+              },
+            }),
+          );
+        }
+        return await new Promise<Response>((resolve) => {
+          releaseOverview = resolve;
+        });
+      }
+      if (path === "/api/kit/deploy" && init?.method === "POST") {
+        return json({ error: "unavailable" }, 503);
+      }
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+
+    await click(host.querySelector('[data-testid="kit-deploy"]'));
+
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')?.textContent).toContain(
+      "acceptance is unknown",
+    );
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')?.textContent).not.toContain(
+      "could not be accepted",
+    );
+
+    await act(async () =>
+      releaseOverview?.(
+        json(
+          overview({
+            lastOperation: {
+              operationId: "op-after",
+              state: "completed",
+              acceptedAt: 3,
+              completedAt: 4,
+            },
+          }),
+        ),
+      ),
+    );
+    await flush();
+
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')).toBeNull();
+    expect(host.querySelector('[data-testid="kit-operation-status"]')?.textContent).toContain(
+      "completed · op-after",
+    );
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  test("a transport failure accepts a new activeOperation as authoritative evidence", async () => {
+    let overviewCalls = 0;
+    let releaseOverview: ((response: Response) => void) | undefined;
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      if (path === "/api/kit/overview") {
+        overviewCalls++;
+        if (overviewCalls === 1) {
+          return json(
+            overview({
+              lastOperation: {
+                operationId: "op-before",
+                state: "completed",
+                acceptedAt: 1,
+                completedAt: 2,
+              },
+            }),
+          );
+        }
+        return await new Promise<Response>((resolve) => {
+          releaseOverview = resolve;
+        });
+      }
+      if (path === "/api/kit/deploy" && init?.method === "POST") {
+        return json({ error: "unavailable" }, 503);
+      }
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+
+    await click(host.querySelector('[data-testid="kit-deploy"]'));
+
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')?.textContent).toContain(
+      "acceptance is unknown",
+    );
+
+    await act(async () =>
+      releaseOverview?.(
+        json(
+          overview({
+            activeOperation: {
+              operationId: "op-active",
+              state: "running",
+              acceptedAt: 3,
+            },
+            lastOperation: {
+              operationId: "op-before",
+              state: "completed",
+              acceptedAt: 1,
+              completedAt: 2,
+            },
+          }),
+        ),
+      ),
+    );
+    await flush();
+
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')).toBeNull();
+    expect(host.querySelector('[data-testid="kit-operation-status"]')?.textContent).toContain(
+      "running · op-active",
+    );
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  test("a failed ambiguity reload resolves after a later successful Overview retry", async () => {
+    let overviewCalls = 0;
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      if (path === "/api/kit/overview") {
+        overviewCalls++;
+        return overviewCalls === 2 ? json({ error: "unavailable" }, 503) : json(overview());
+      }
+      if (path === "/api/kit/deploy" && init?.method === "POST") {
+        return json({ error: "unavailable" }, 503);
+      }
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+
+    await click(host.querySelector('[data-testid="kit-deploy"]'));
+
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')?.textContent).toContain(
+      "acceptance is unknown",
+    );
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+
+    await click(host.querySelector('[data-testid="kit-catalog-retry"]'));
+
+    expect(host.querySelector('[data-testid="kit-deploy-error"]')?.textContent).toContain(
+      "could not be accepted",
+    );
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   test("a removal-bearing plan requires explicit confirmation", async () => {

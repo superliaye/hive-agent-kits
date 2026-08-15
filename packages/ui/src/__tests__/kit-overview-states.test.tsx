@@ -146,6 +146,9 @@ describe("KitDeployPage — daemon Overview states", () => {
 
     expect(host.textContent).toContain("arca-smoke");
     expect(host.textContent).toContain("Waiting for source");
+    expect(host.querySelector('[data-testid="kit-instruction-blocked"]')?.textContent).toContain(
+      "Whole-file instruction reconciliation is blocked",
+    );
     expect(host.textContent).toContain("ledger-only");
     expect(host.textContent).toContain("Owned outside deployment state");
     expect(paths).not.toContain("/api/kit/catalog");
@@ -153,6 +156,141 @@ describe("KitDeployPage — daemon Overview states", () => {
     expect(paths).not.toContain("/api/kit/verify");
     expect(paths).not.toContain("/api/kit/diff");
     expect(paths).not.toContain("/api/sources");
+  });
+
+  test("blocks whole-file reconciliation for an isolated orphaned instruction", async () => {
+    const current = overview([
+      row({
+        key: { kind: "instruction", name: "orphaned-instructions" },
+        catalog: "unavailable",
+        desired: "on",
+        reconciliation: "orphaned",
+        targets: [
+          {
+            target: "claude",
+            desired: "on",
+            reconciliation: "orphaned",
+            observation: "present_unverified",
+            lastAttempt: { state: "none" },
+          },
+          {
+            target: "codex",
+            desired: "on",
+            reconciliation: "orphaned",
+            observation: "present_unverified",
+            lastAttempt: { state: "none" },
+          },
+        ],
+      }),
+    ]);
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") return json(current);
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      return json({});
+    }) as typeof fetch;
+
+    const host = await renderPage();
+
+    expect(host.querySelector('[data-testid="kit-instruction-blocked"]')?.textContent).toContain(
+      "Whole-file instruction reconciliation is blocked",
+    );
+    expect(host.textContent).toContain("Source unavailable");
+  });
+
+  test("reconstructs an initially active operation on cold mount", async () => {
+    const current = {
+      ...overview([]),
+      diff: { entries: [{ kind: "skill" as const, name: "arca-smoke", change: "added" as const }] },
+      activeOperation: { operationId: "op-active", state: "running" as const, acceptedAt: 1 },
+    };
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") return json(current);
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      return json({});
+    }) as typeof fetch;
+
+    const host = await renderPage();
+
+    expect(host.querySelector('[data-testid="kit-operation-status"]')?.textContent).toContain(
+      "running · op-active",
+    );
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  test("reconstructs the last operation on cold mount", async () => {
+    const current = {
+      ...overview([]),
+      lastOperation: {
+        operationId: "op-last",
+        state: "failed" as const,
+        acceptedAt: 1,
+        completedAt: 2,
+      },
+    };
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") return json(current);
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      return json({});
+    }) as typeof fetch;
+
+    const host = await renderPage();
+
+    expect(host.querySelector('[data-testid="kit-operation-status"]')?.textContent).toContain(
+      "failed · op-last",
+    );
+  });
+
+  test("renders verified observation independently from a failed last attempt", async () => {
+    const failedAttempt = {
+      state: "failed" as const,
+      operationId: "op-failed",
+      attemptedAt: 2,
+      code: "write_failed",
+    };
+    const current = overview([
+      row({
+        key: { kind: "skill", name: "verified-after-failure" },
+        desired: "on",
+        lastAttempt: failedAttempt,
+        targets: [
+          {
+            target: "claude",
+            desired: "on",
+            reconciliation: "in_sync",
+            observation: "verified",
+            lastAttempt: failedAttempt,
+          },
+          {
+            target: "codex",
+            desired: "on",
+            reconciliation: "in_sync",
+            observation: "verified",
+            lastAttempt: failedAttempt,
+          },
+        ],
+      }),
+    ]);
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") return json(current);
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      return json({});
+    }) as typeof fetch;
+
+    const host = await renderPage();
+    const state = host.querySelector('[data-testid="kit-state-skill-verified-after-failure"]');
+
+    expect(state?.textContent).toContain("Verified");
+    expect(state?.textContent).toContain("Failed · write_failed");
   });
 
   test("toggle PATCHes the Overview revision and exact applicable target set", async () => {

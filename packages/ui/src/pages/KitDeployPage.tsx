@@ -52,6 +52,16 @@ const OBSERVATION_LABEL: Record<TargetObservation, string> = {
 };
 
 type DiffChange = "added" | "changed" | "removed";
+type SelectionAttempt = { row: OverviewRow; expectedRevision: number };
+type DeployAttempt = {
+  selectionRevision: number;
+  planToken: string;
+  baselineOperationIds: string[];
+};
+type AmbiguousDeploy = Pick<DeployAttempt, "baselineOperationIds"> & {
+  overviewUpdatedAt: number;
+};
+
 const DIFF_BUCKETS: Array<{ change: DiffChange; label: string; glyph: string }> = [
   { change: "added", label: "Added", glyph: "+" },
   { change: "changed", label: "Changed", glyph: "~" },
@@ -60,6 +70,20 @@ const DIFF_BUCKETS: Array<{ change: DiffChange; label: string; glyph: string }> 
 
 function shortIdentity(identity: string | null): string {
   return identity ? identity.slice(0, 7) : "no identity";
+}
+
+function operationAfter(
+  overview: DeploymentOverview,
+  baselineOperationIds: string[],
+): NonNullable<DeploymentOverview["activeOperation"]> | null {
+  const baseline = new Set(baselineOperationIds);
+  if (overview.activeOperation && !baseline.has(overview.activeOperation.operationId)) {
+    return overview.activeOperation;
+  }
+  if (overview.lastOperation && !baseline.has(overview.lastOperation.operationId)) {
+    return overview.lastOperation;
+  }
+  return null;
 }
 
 export function syncToast(result: SyncRunResult): { kind: "success" | "error"; message: string } {
@@ -83,6 +107,12 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   const [acceptedOperationId, setAcceptedOperationId] = useState<string | null>(null);
   const [connection, setConnection] = useState(connectionSnapshot);
   const [armedPlanToken, setArmedPlanToken] = useState<string | null>(null);
+  const [staleSelectionRevision, setStaleSelectionRevision] = useState<number | null>(null);
+  const [stalePlanToken, setStalePlanToken] = useState<string | null>(null);
+  const [ambiguousDeploy, setAmbiguousDeploy] = useState<AmbiguousDeploy | null>(null);
+  const [selectionConflictResolved, setSelectionConflictResolved] = useState(false);
+  const [planStaleResolved, setPlanStaleResolved] = useState(false);
+  const [transportAcceptanceProven, setTransportAcceptanceProven] = useState(false);
   const addSourceInputRef = useRef<HTMLInputElement>(null);
   const { armed: realHomeArmed } = useDeveloperConfig(apiConfig);
 
@@ -91,7 +121,13 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     queryFn: () => api.getKitOverview(apiConfig),
     refetchOnReconnect: true,
     refetchInterval: (query) =>
-      acceptedOperationId !== null || query.state.data?.activeOperation ? 750 : false,
+      acceptedOperationId !== null ||
+      query.state.data?.activeOperation ||
+      staleSelectionRevision !== null ||
+      stalePlanToken !== null ||
+      ambiguousDeploy !== null
+        ? 750
+        : false,
   });
   const overview = overviewQuery.data;
 
@@ -175,10 +211,9 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
   });
 
   const selectionMutation = useMutation({
-    mutationFn: (row: OverviewRow) => {
-      if (!overview) throw new Error("Deployment Overview is unavailable");
+    mutationFn: ({ row, expectedRevision }: SelectionAttempt) => {
       return api.patchKitSelection(apiConfig, {
-        expectedRevision: overview.selectionRevision,
+        expectedRevision,
         changes: [
           {
             key: row.key,
@@ -188,46 +223,119 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
         ],
       });
     },
+    onMutate: () => setSelectionConflictResolved(false),
     onSuccess: refetchOverview,
-    onError: (error) => {
-      refetchOverview();
+    onError: async (error, attempt) => {
       if (error instanceof SelectionConflictError) {
-        pushToast("error", "Selection changed on the Daemon. Review the refreshed Overview.");
+        setStaleSelectionRevision(attempt.expectedRevision);
+        await overviewQuery.refetch();
+        return;
       }
+      refetchOverview();
     },
   });
 
   const deployMutation = useMutation({
-    mutationFn: () => {
-      if (!overview) throw new Error("Deployment Overview is unavailable");
+    mutationFn: ({ selectionRevision, planToken }: DeployAttempt) => {
       return api.acceptKitDeploy(apiConfig, {
-        selectionRevision: overview.selectionRevision,
-        planToken: overview.planToken,
+        selectionRevision,
+        planToken,
       });
+    },
+    onMutate: () => {
+      setPlanStaleResolved(false);
+      setTransportAcceptanceProven(false);
     },
     onSuccess: (accepted) => {
       setAcceptedOperationId(accepted.operationId);
       setArmedPlanToken(null);
       refetchOverview();
     },
-    onError: (error) => {
+    onError: async (error, attempt) => {
       setArmedPlanToken(null);
-      refetchOverview();
       if (error instanceof PlanStaleError) {
-        pushToast(
-          "error",
-          "Deployment plan changed. Review the refreshed Overview, then Deploy again.",
-        );
+        setStalePlanToken(attempt.planToken);
+        await overviewQuery.refetch();
+        return;
       }
+
+      const ambiguous = {
+        baselineOperationIds: attempt.baselineOperationIds,
+        overviewUpdatedAt: overviewQuery.dataUpdatedAt,
+      };
+      setAmbiguousDeploy(ambiguous);
+      const reloaded = await overviewQuery.refetch();
+      if (!reloaded.isSuccess || !reloaded.data) return;
+      const accepted = operationAfter(reloaded.data, ambiguous.baselineOperationIds);
+      if (!accepted) {
+        setAmbiguousDeploy(null);
+        return;
+      }
+      setAcceptedOperationId(accepted.operationId);
+      setTransportAcceptanceProven(true);
+      setAmbiguousDeploy(null);
     },
   });
+
+  useEffect(() => {
+    if (
+      staleSelectionRevision === null ||
+      !overview ||
+      overview.selectionRevision <= staleSelectionRevision
+    ) {
+      return;
+    }
+    setStaleSelectionRevision(null);
+    setSelectionConflictResolved(true);
+  }, [overview, staleSelectionRevision]);
+
+  useEffect(() => {
+    if (stalePlanToken === null || !overview || overview.planToken === stalePlanToken) return;
+    setStalePlanToken(null);
+    setPlanStaleResolved(true);
+  }, [overview, stalePlanToken]);
+
+  useEffect(() => {
+    if (!ambiguousDeploy || !overview) return;
+    const accepted = operationAfter(overview, ambiguousDeploy.baselineOperationIds);
+    if (accepted) {
+      setAcceptedOperationId(accepted.operationId);
+      setTransportAcceptanceProven(true);
+      setAmbiguousDeploy(null);
+      return;
+    }
+    if (overviewQuery.dataUpdatedAt === ambiguousDeploy.overviewUpdatedAt) return;
+    setAmbiguousDeploy(null);
+  }, [ambiguousDeploy, overview, overviewQuery.dataUpdatedAt]);
+
+  useEffect(() => {
+    if (!selectionConflictResolved || !selectionMutation.isError) return;
+    selectionMutation.reset();
+    setSelectionConflictResolved(false);
+  }, [selectionConflictResolved, selectionMutation.isError, selectionMutation.reset]);
+
+  useEffect(() => {
+    if ((!planStaleResolved && !transportAcceptanceProven) || !deployMutation.isError) return;
+    deployMutation.reset();
+    setPlanStaleResolved(false);
+    setTransportAcceptanceProven(false);
+  }, [deployMutation.isError, deployMutation.reset, planStaleResolved, transportAcceptanceProven]);
 
   const removedCount =
     overview?.diff.entries.filter((entry) => entry.change === "removed").length ?? 0;
   const actionable = (overview?.diff.entries.length ?? 0) > 0;
   const deployArmed = overview !== undefined && armedPlanToken === overview.planToken;
-  const deployEnabled = actionable && !operationInFlight && !deployMutation.isPending;
-  const deployLabel = operationInFlight ? "Deploying…" : actionable ? "Deploy" : "Up to date";
+  const authorityUnknown =
+    staleSelectionRevision !== null || stalePlanToken !== null || ambiguousDeploy !== null;
+  const deployEnabled =
+    actionable && !operationInFlight && !deployMutation.isPending && !authorityUnknown;
+  const deployLabel = authorityUnknown
+    ? "Waiting for Overview…"
+    : operationInFlight
+      ? "Deploying…"
+      : actionable
+        ? "Deploy"
+        : "Up to date";
   const selectedRows = overview?.rows.filter((row) => row.desired === "on") ?? [];
   const selectedTargets = [
     ...new Set(
@@ -240,7 +348,8 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     overview?.rows.filter((row) => row.reconciliation === "manual_removal_required") ?? [];
   const blockedInstructionRows =
     overview?.rows.filter(
-      (row) => row.key.kind === "instruction" && row.reconciliation === "waiting_for_source",
+      (row) =>
+        row.key.kind === "instruction" && row.desired === "on" && row.catalog === "unavailable",
     ) ?? [];
 
   function deploy(): void {
@@ -249,7 +358,14 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       setArmedPlanToken(overview.planToken);
       return;
     }
-    deployMutation.mutate();
+    deployMutation.mutate({
+      selectionRevision: overview.selectionRevision,
+      planToken: overview.planToken,
+      baselineOperationIds: [
+        overview.activeOperation?.operationId,
+        overview.lastOperation?.operationId,
+      ].filter((operationId): operationId is string => operationId !== undefined),
+    });
   }
 
   const sources = overview?.sources ?? [];
@@ -360,26 +476,34 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       )}
       {blockedInstructionRows.length > 0 && (
         <div className="banner-warn" data-testid="kit-instruction-blocked">
-          Selected instructions are waiting for their Source. Whole-file instruction reconciliation
-          is blocked.
+          Selected instructions are unavailable. Whole-file instruction reconciliation is blocked.
         </div>
       )}
       {overview?.activeOperation && <OperationStatus operation={overview.activeOperation} />}
       {!overview?.activeOperation && overview?.lastOperation && (
         <OperationStatus operation={overview.lastOperation} />
       )}
-      {selectionMutation.isError && (
+      {(staleSelectionRevision !== null ||
+        (selectionMutation.isError && !selectionConflictResolved)) && (
         <div className="banner-error" data-testid="kit-selection-error">
-          {selectionMutation.error instanceof SelectionConflictError
-            ? "Selection changed on the Daemon. The Overview was refreshed."
-            : `Could not update Selection: ${selectionMutation.error.message}`}
+          {staleSelectionRevision !== null
+            ? "Selection changed on the Daemon. Waiting for a newer Overview before changing it again."
+            : selectionMutation.error instanceof SelectionConflictError
+              ? "Selection changed on the Daemon. Reload the Overview before changing it again."
+              : `Could not update Selection: ${selectionMutation.error?.message ?? "Unknown error"}`}
         </div>
       )}
-      {deployMutation.isError && (
+      {(stalePlanToken !== null ||
+        ambiguousDeploy !== null ||
+        (deployMutation.isError && !planStaleResolved && !transportAcceptanceProven)) && (
         <div className="banner-error" data-testid="kit-deploy-error">
-          {deployMutation.error instanceof PlanStaleError
-            ? "The deployment plan changed. Review the refreshed Overview and Deploy again."
-            : `Deploy could not be accepted: ${deployMutation.error.message}`}
+          {stalePlanToken !== null
+            ? "The deployment plan changed. Waiting for a newer Overview before deploying again."
+            : ambiguousDeploy !== null
+              ? "Deploy acceptance is unknown. Waiting for Overview verification before retrying."
+              : deployMutation.error instanceof PlanStaleError
+                ? "The deployment plan changed. Reload the Overview before deploying again."
+                : `Deploy could not be accepted: ${deployMutation.error?.message ?? "Unknown error"}`}
         </div>
       )}
       {toggleSource.isError && (
@@ -445,9 +569,15 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
                 rows={rows}
                 sourceLabels={new Map(overview.sources.map((source) => [source.id, source.label]))}
                 pendingKey={
-                  selectionMutation.isPending ? selectionMutation.variables?.key : undefined
+                  selectionMutation.isPending ? selectionMutation.variables?.row.key : undefined
                 }
-                onToggle={(row) => selectionMutation.mutate(row)}
+                selectionDisabled={staleSelectionRevision !== null}
+                onToggle={(row) =>
+                  selectionMutation.mutate({
+                    row,
+                    expectedRevision: overview.selectionRevision,
+                  })
+                }
               />
             );
           })}
@@ -814,12 +944,14 @@ function KindSection({
   rows,
   sourceLabels,
   pendingKey,
+  selectionDisabled,
   onToggle,
 }: {
   kind: CapabilityKind;
   rows: OverviewRow[];
   sourceLabels: Map<string, string>;
   pendingKey: OverviewRow["key"] | undefined;
+  selectionDisabled: boolean;
   onToggle: (row: OverviewRow) => void;
 }): JSX.Element {
   type Displayed = { row: OverviewRow; variant: OverviewRow["variants"][number] | undefined };
@@ -863,7 +995,7 @@ function KindSection({
               key={`${row.key.kind}:${row.key.name}:${variant?.contentSha ?? "unavailable"}`}
               className={`kit-row ${selected ? "selected" : ""} ${blocked ? "blocked" : ""} ${shadowed ? "shadowed" : ""}`}
               onClick={() => selectable && onToggle(row)}
-              disabled={!selectable || isPending}
+              disabled={!selectable || isPending || selectionDisabled}
               data-testid={testId}
             >
               <span className={`kit-row-check ${selected ? "checked" : ""}`} aria-hidden="true" />
