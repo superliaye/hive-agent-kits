@@ -23,6 +23,7 @@ import type {
 } from "../api.ts";
 import { KitDeployPage, syncToast } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -61,6 +62,8 @@ function sources(): Source[] {
   const all: Source[] = [
     {
       id: STARTER_ID,
+      label: "Starter",
+      locator: { kind: "starter" },
       origin: STARTER_ORIGIN,
       kind: "local",
       active: !inactive.has(STARTER_ID),
@@ -69,6 +72,13 @@ function sources(): Source[] {
     },
     {
       id: GIT_ID,
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: GIT_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: GIT_ORIGIN,
       kind: "git",
       active: !inactive.has(GIT_ID),
@@ -141,6 +151,10 @@ function installStubs(): void {
     const method = (init?.method ?? "GET").toUpperCase();
     calls.push({ method, path });
 
+    if (path === "/api/kit/overview")
+      return json(
+        overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: sources() }),
+      );
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);

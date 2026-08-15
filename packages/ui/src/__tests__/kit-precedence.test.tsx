@@ -18,6 +18,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { CapabilityEntry, Catalog, KitState, Source, VerifyReport } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -54,6 +55,13 @@ function sources(): Source[] {
   return [
     {
       id: A_ID,
+      label: "owner/repo-a",
+      locator: {
+        kind: "git",
+        repoUrl: A_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: A_ORIGIN,
       kind: "git",
       active: true,
@@ -62,6 +70,13 @@ function sources(): Source[] {
     },
     {
       id: B_ID,
+      label: "owner/repo-b",
+      locator: {
+        kind: "git",
+        repoUrl: B_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: B_ORIGIN,
       kind: "git",
       active: true,
@@ -145,6 +160,10 @@ function installStubs(): void {
     const body = typeof init?.body === "string" ? init.body : undefined;
     calls.push({ method, path, body });
 
+    if (path === "/api/kit/overview")
+      return json(
+        overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: sources() }),
+      );
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);

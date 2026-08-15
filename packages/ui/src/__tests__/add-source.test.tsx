@@ -24,6 +24,7 @@ import type {
 } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -61,11 +62,27 @@ let addOutcome: "conformant" | "empty" | "nonconformant" | "bad" | "duplicate";
 
 function sources(): Source[] {
   const list: Source[] = [
-    { id: STARTER_ID, origin: STARTER_ORIGIN, kind: "local", active: true, createdAt: 1, rank: 0 },
+    {
+      id: STARTER_ID,
+      label: "Starter",
+      locator: { kind: "starter" },
+      origin: STARTER_ORIGIN,
+      kind: "local",
+      active: true,
+      createdAt: 1,
+      rank: 0,
+    },
   ];
   if (added) {
     list.push({
       id: ADDED_ID,
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: ADDED_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: ADDED_ORIGIN,
       kind: "git",
       active: true,
@@ -141,6 +158,13 @@ function addResult(): unknown {
   return {
     source: {
       id: ADDED_ID,
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: ADDED_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: ADDED_ORIGIN,
       kind: "git",
       active: true,
@@ -190,6 +214,10 @@ function installStubs(): void {
       added = true;
       return json(addResult(), 201);
     }
+    if (path === "/api/kit/overview")
+      return json(
+        overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: sources() }),
+      );
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
@@ -272,10 +300,18 @@ describe("KitDeployPage — Add-Source UI (#46)", () => {
     await typeUrl(input, ADDED_ORIGIN);
     await submitForm(host.querySelector('[data-testid="add-source-form"]') as HTMLFormElement);
 
-    // The request was POST /api/sources with body { origin }.
+    // The request uses the locator-native Source contract.
     const post = calls.find((c) => c.method === "POST" && c.path === "/api/sources");
     expect(post).not.toBeUndefined();
-    expect(post?.body).toBe(JSON.stringify({ origin: ADDED_ORIGIN }));
+    expect(JSON.parse(post?.body ?? "{}")).toEqual({
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: ADDED_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
+    });
 
     // Success banner shows the owner/repo label + the capability count.
     const success = host.querySelector('[data-testid="add-source-success"]');

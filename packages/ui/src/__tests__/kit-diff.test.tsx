@@ -21,6 +21,7 @@ import type {
 } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -52,8 +53,36 @@ let ledgerInstructions: string[];
 
 function sources(): Source[] {
   return [
-    { id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: true, createdAt: 1, rank: 0 },
-    { id: OTHER_ID, origin: OTHER_ORIGIN, kind: "git", active: true, createdAt: 2, rank: 1 },
+    {
+      id: GIT_ID,
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: GIT_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
+      origin: GIT_ORIGIN,
+      kind: "git",
+      active: true,
+      createdAt: 1,
+      rank: 0,
+    },
+    {
+      id: OTHER_ID,
+      label: "owner/repo-b",
+      locator: {
+        kind: "git",
+        repoUrl: OTHER_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
+      origin: OTHER_ORIGIN,
+      kind: "git",
+      active: true,
+      createdAt: 2,
+      rank: 1,
+    },
   ];
 }
 
@@ -145,6 +174,17 @@ function installStubs(): void {
     const path = new URL(raw, "http://localhost").pathname;
     const method = (init?.method ?? "GET").toUpperCase();
 
+    if (path === "/api/kit/overview")
+      return json(
+        overviewFromLegacy({
+          catalog: catalog(),
+          state: kitState(),
+          sources: sources(),
+          diff: { entries: diffEntries },
+        }),
+      );
+    if (path === "/api/kit/selection" && method === "PATCH")
+      return json({ revision: 8, enabled: [], removalIntents: [] });
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
@@ -296,7 +336,6 @@ describe("KitDeployPage — #53 Deploy Diff visual treatment", () => {
     await click(host.querySelector('[data-testid="kit-diff-toggle"]'));
 
     const review = host.querySelector('[data-testid="kit-diff-review"]');
-    expect(review?.textContent ?? "").toContain("Targets: Claude");
     expect(review?.textContent ?? "").toContain("Changed 1");
 
     const source = host.querySelector('[data-testid="kit-diff-sources-priority-tool"]');

@@ -1943,6 +1943,64 @@ pre.config {
   color: var(--color-text-muted);
   font-style: italic;
 }
+.kit-connection {
+  width: fit-content;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--color-fg-muted);
+}
+.kit-connection-disconnected {
+  color: var(--color-danger);
+}
+.kit-state-rail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 4px;
+  margin-top: 7px;
+  color: var(--color-fg-muted);
+}
+.kit-state-fact,
+.kit-state-target,
+.kit-state-attempt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 84px;
+  padding: 4px 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface);
+  font-size: 9px;
+  line-height: 1.25;
+}
+.kit-state-fact strong,
+.kit-state-target strong,
+.kit-state-attempt strong {
+  color: var(--color-fg-default);
+  font-size: 10px;
+  font-weight: 600;
+}
+.kit-state-arrow {
+  align-self: center;
+  color: var(--color-border-strong);
+}
+.kit-state-attempt.failed {
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border-default));
+}
+.kit-state-attempt.failed strong {
+  color: var(--color-danger);
+}
+@media (max-width: 720px) {
+  .kit-state-arrow {
+    display: none;
+  }
+  .kit-state-fact,
+  .kit-state-target,
+  .kit-state-attempt {
+    flex: 1 1 112px;
+  }
+}
 .kit-sticky-deploy {
   position: static;
   display: flex;

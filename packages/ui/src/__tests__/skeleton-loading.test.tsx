@@ -13,10 +13,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { BackendReadiness, Catalog, KitState, VerifyReport } from "../api.ts";
+import type { BackendReadiness, Catalog, KitState, Source } from "../api.ts";
 import { BackendsSettings } from "../components/BackendsSettings.tsx";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
 function deferred<T>(): Deferred<T> {
@@ -80,7 +81,21 @@ const kitState: KitState = {
     bundles: [],
   },
 };
-const emptyVerify: VerifyReport = { entries: [] };
+const source: Source = {
+  id: "src-1",
+  label: "superliaye/my-agent-kits",
+  locator: {
+    kind: "git",
+    repoUrl: "https://github.com/superliaye/my-agent-kits",
+    revision: { mode: "track", ref: "refs/heads/main" },
+    subpath: ".",
+  },
+  origin: "https://github.com/superliaye/my-agent-kits",
+  kind: "git",
+  active: true,
+  createdAt: 1,
+  rank: 0,
+};
 
 describe("KitDeployPage catalog skeleton", () => {
   test("skeleton present while catalog pending, gone after it resolves", async () => {
@@ -90,9 +105,8 @@ describe("KitDeployPage catalog skeleton", () => {
     globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
       const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const path = new URL(raw, "http://localhost").pathname;
-      if (path === "/api/kit/catalog") return catalog.promise;
+      if (path === "/api/kit/overview") return catalog.promise;
       if (path === "/api/kit/state") return json(kitState);
-      if (path === "/api/kit/verify") return json(emptyVerify);
       return json({});
     }) as typeof fetch;
 
@@ -120,7 +134,9 @@ describe("KitDeployPage catalog skeleton", () => {
 
     // Resolve the catalog (empty) → skeleton gone, empty state shown.
     await act(async () => {
-      catalog.resolve(json(emptyCatalog));
+      catalog.resolve(
+        json(overviewFromLegacy({ catalog: emptyCatalog, state: kitState, sources: [source] })),
+      );
     });
     await flush();
     expect(host.querySelector('[data-testid="kit-catalog-skeleton"]')).toBeNull();
@@ -134,9 +150,8 @@ describe("KitDeployPage catalog skeleton", () => {
     globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
       const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const path = new URL(raw, "http://localhost").pathname;
-      if (path === "/api/kit/catalog") return catalog.promise;
+      if (path === "/api/kit/overview") return catalog.promise;
       if (path === "/api/kit/state") return json(kitState);
-      if (path === "/api/kit/verify") return json(emptyVerify);
       return json({});
     }) as typeof fetch;
 
@@ -173,7 +188,9 @@ describe("KitDeployPage catalog skeleton", () => {
       problems: [],
     };
     await act(async () => {
-      catalog.resolve(json(populated));
+      catalog.resolve(
+        json(overviewFromLegacy({ catalog: populated, state: kitState, sources: [source] })),
+      );
     });
     await flush();
     expect(host.querySelector('[data-testid="kit-catalog-skeleton"]')).toBeNull();

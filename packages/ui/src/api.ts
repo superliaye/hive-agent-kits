@@ -6,6 +6,8 @@
 // kit names use the contract's canonical unprefixed form.
 
 import type {
+  AcceptedDeployRequest,
+  AcceptedDeployResponse,
   AddSourceResult,
   BackendReadiness,
   BackendStatus,
@@ -14,14 +16,23 @@ import type {
   DeployResult,
   KitState,
   Selection,
+  SelectionMutation,
+  SelectionSnapshot,
   Source,
   SyncRunResult,
   VerifyReport,
 } from "@hive/contract";
-import { AddSourceResult as AddSourceResultSchema } from "@hive/contract";
+import {
+  AcceptedDeployResponse as AcceptedDeployResponseSchema,
+  AddSourceResult as AddSourceResultSchema,
+  DeploymentOverview as DeploymentOverviewSchema,
+  SelectionSnapshot as SelectionSnapshotSchema,
+} from "@hive/contract";
 import type { Preferences } from "@hive/theming";
 
 export type {
+  AcceptedDeployRequest,
+  AcceptedDeployResponse,
   AddSourceResult,
   BackendAuthState,
   BackendReadiness,
@@ -31,14 +42,22 @@ export type {
   Catalog,
   CatalogProblem,
   DeployDiff,
+  DeploymentOverview,
   DeployResult,
   DeployTarget,
   DiffEntry,
   KindResult,
   KitState,
   Ledger,
+  OverviewLastAttempt,
+  OverviewMirror,
+  OverviewRow,
+  OverviewSource,
   PresetSummary,
+  ReconciliationState,
   Selection,
+  SelectionMutation,
+  SelectionSnapshot,
   Source,
   SourceSyncStatus,
   SourceValidationReport,
@@ -46,6 +65,7 @@ export type {
   SyncRunResult,
   SyncStatus,
   SyncStatusState,
+  TargetObservation,
   VerifyEntry,
   VerifyReport,
   VerifyStatus,
@@ -275,6 +295,20 @@ export class AddSourceError extends Error {
   }
 }
 
+export class SelectionConflictError extends Error {
+  constructor(readonly currentRevision: number) {
+    super("Selection changed on the Daemon");
+    this.name = "SelectionConflictError";
+  }
+}
+
+export class PlanStaleError extends Error {
+  constructor() {
+    super("Deployment plan changed");
+    this.name = "PlanStaleError";
+  }
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
@@ -349,6 +383,12 @@ export const api = {
     }),
 
   // ─── Kit (capability deploy-manager) ─────────────────────────────────
+  getKitOverview: (cfg: ApiConfig) =>
+    call<unknown>(cfg, "/api/kit/overview").then((body) => DeploymentOverviewSchema.parse(body)),
+  patchKitSelection: (cfg: ApiConfig, mutation: SelectionMutation) =>
+    patchKitSelection(cfg, mutation),
+  acceptKitDeploy: (cfg: ApiConfig, requestBody: AcceptedDeployRequest) =>
+    acceptKitDeploy(cfg, requestBody),
   // Full catalog from the synced Mirror (entries + presets + load problems).
   getKitCatalog: (cfg: ApiConfig) => call<Catalog>(cfg, "/api/kit/catalog"),
   // Sync status (freshness state + SHA) + the Deployment Ledger.
@@ -416,7 +456,15 @@ async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResul
     headers: {
       "content-type": "application/json",
     },
-    body: JSON.stringify({ origin }),
+    body: JSON.stringify({
+      label: sourceLabel(origin),
+      locator: {
+        kind: "git",
+        repoUrl: origin,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
+    }),
   });
   let body: unknown;
   try {
@@ -456,4 +504,63 @@ async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResul
   const message =
     (isRecord(body) ? asString(body.message) : undefined) ?? `${res.status} ${res.statusText}`;
   throw new AddSourceError({ kind: "other", status: res.status, message }, message);
+}
+
+function sourceLabel(origin: string): string {
+  try {
+    const url = new URL(origin);
+    const segments = url.pathname.split("/").filter(Boolean);
+    return segments.slice(-2).join("/") || url.hostname;
+  } catch {
+    return origin;
+  }
+}
+
+async function patchKitSelection(
+  cfg: ApiConfig,
+  mutation: SelectionMutation,
+): Promise<SelectionSnapshot> {
+  const path = "/api/kit/selection";
+  const res = await request(cfg, path, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(mutation),
+  });
+  if (res.ok) return SelectionSnapshotSchema.parse(await res.json());
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    body = undefined;
+  }
+  if (res.status === 409 && isRecord(body) && body.error === "selection_conflict") {
+    const currentRevision = body.currentRevision;
+    throw new SelectionConflictError(
+      typeof currentRevision === "number" ? currentRevision : mutation.expectedRevision,
+    );
+  }
+  throw new Error(`${res.status} ${res.statusText} on ${path}`);
+}
+
+async function acceptKitDeploy(
+  cfg: ApiConfig,
+  requestBody: AcceptedDeployRequest,
+): Promise<AcceptedDeployResponse> {
+  const path = "/api/kit/deploy";
+  const res = await request(cfg, path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(requestBody),
+  });
+  if (res.ok) return AcceptedDeployResponseSchema.parse(await res.json());
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    body = undefined;
+  }
+  if (res.status === 409 && isRecord(body) && body.error === "plan_stale") {
+    throw new PlanStaleError();
+  }
+  throw new Error(`${res.status} ${res.statusText} on ${path}`);
 }

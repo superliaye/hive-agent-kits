@@ -10,6 +10,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { CapabilityEntry, Catalog, KitState, Source, VerifyReport } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown): Response {
   return new Response(JSON.stringify(data), {
@@ -68,6 +69,13 @@ async function renderCatalog(
   // not the toggle, so an empty list when state.sync is empty is fine).
   const sources: Source[] = state.sync.map((s, i) => ({
     id: s.sourceId,
+    label: s.origin.split("/").slice(-2).join("/"),
+    locator: {
+      kind: "git",
+      repoUrl: s.origin,
+      revision: { mode: "track", ref: "refs/heads/main" },
+      subpath: ".",
+    },
     origin: s.origin,
     kind: "git",
     active: true,
@@ -77,6 +85,7 @@ async function renderCatalog(
   globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
+    if (path === "/api/kit/overview") return json(overviewFromLegacy({ catalog, state, sources }));
     if (path === "/api/kit/catalog") return json(catalog);
     if (path === "/api/kit/state") return json(state);
     if (path === "/api/kit/verify") return json(emptyVerify);

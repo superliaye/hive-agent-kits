@@ -11,6 +11,7 @@ import type { Catalog, KitState, VerifyReport } from "../api.ts";
 import { DeveloperSettings } from "../components/DeveloperSettings.tsx";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -65,6 +66,8 @@ function installStubs(): void {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     const method = (init?.method ?? "GET").toUpperCase();
+    if (path === "/api/kit/overview")
+      return json(overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: [] }));
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
