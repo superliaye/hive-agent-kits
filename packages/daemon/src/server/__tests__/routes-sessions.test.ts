@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createServer, type ServerHandles } from "../index.ts";
+import { createSessionRegistry } from "../sessions.ts";
 
 const durableToken = "durable-test-token";
 
@@ -64,5 +65,35 @@ describe("external session routes", () => {
     expect((await server.app.fetch(request("/api/kit/state", session.sessionToken))).status).toBe(
       401,
     );
+  });
+
+  test("readiness counts live sessions and observes revocation", async () => {
+    const minted = await server.app.fetch(
+      request("/api/external-sessions", durableToken, { method: "POST" }),
+    );
+    const session = (await minted.json()) as { sessionId: string };
+
+    const active = await server.app.fetch(request("/api/ready", durableToken));
+    expect(await active.json()).toMatchObject({ activeExternalSessions: 1 });
+
+    await server.app.fetch(
+      request(`/api/external-sessions/${session.sessionId}`, durableToken, { method: "DELETE" }),
+    );
+    const inactive = await server.app.fetch(request("/api/ready", durableToken));
+    expect(await inactive.json()).toMatchObject({ activeExternalSessions: 0 });
+  });
+
+  test("active session count prunes expired sessions", () => {
+    let now = 1_000;
+    const registry = createSessionRegistry({
+      now: () => now,
+      randomBytes: (size) => Buffer.alloc(size, 7),
+      randomUUID: () => "018f7f7a-1234-7abc-8def-0123456789ab",
+    });
+
+    const session = registry.mint(50);
+    expect(registry.activeCount()).toBe(1);
+    now = session.expiresAt;
+    expect(registry.activeCount()).toBe(0);
   });
 });

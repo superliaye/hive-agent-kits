@@ -100,6 +100,7 @@ export function buildRoutes(deps: RoutesDeps): Hono {
         deps.daemonMode === "packaged" || deps.config.get("developer").allowRealHomeDeploy
           ? "real"
           : "sandbox",
+      activeExternalSessions: deps.sessions.activeCount(),
     }),
   );
 

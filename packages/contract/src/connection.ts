@@ -13,6 +13,7 @@ export const ReadyResponse = z.object({
   runtimeRootId: z.string().min(16),
   daemonMode: z.enum(["dev", "packaged"]),
   deployTargetMode: z.enum(["sandbox", "real"]),
+  activeExternalSessions: z.number().int().nonnegative(),
 });
 export type ReadyResponse = z.infer<typeof ReadyResponse>;
 

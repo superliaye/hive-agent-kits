@@ -50,8 +50,25 @@ describe("external connection contract", () => {
       runtimeRootId: "runtime-root-id-1234567890",
       daemonMode: "packaged",
       deployTargetMode: "real",
+      activeExternalSessions: 2,
     });
 
     expect(ready.protocolVersion).toBe(1);
+    expect(ready.activeExternalSessions).toBe(2);
+  });
+
+  test("rejects a negative external session count", () => {
+    expect(
+      ReadyResponse.safeParse({
+        status: "ok",
+        protocolVersion: DAEMON_PROTOCOL_VERSION,
+        buildVersion: "0.0.0",
+        daemonInstanceId: instanceId,
+        runtimeRootId: "runtime-root-id-1234567890",
+        daemonMode: "packaged",
+        deployTargetMode: "real",
+        activeExternalSessions: -1,
+      }).success,
+    ).toBe(false);
   });
 });

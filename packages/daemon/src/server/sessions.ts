@@ -5,6 +5,7 @@ export type SessionRegistry = {
   mint(ttlMs?: number): ExternalSession;
   authenticate(token: string): boolean;
   revoke(sessionId: string): boolean;
+  activeCount(): number;
 };
 
 export type SessionRegistryDeps = {
@@ -31,6 +32,13 @@ export function createSessionRegistry(
 ): SessionRegistry {
   const records = new Map<string, SessionRecord>();
 
+  function pruneExpired(): void {
+    const now = deps.now();
+    for (const [sessionId, record] of records) {
+      if (record.expiresAt <= now) records.delete(sessionId);
+    }
+  }
+
   return {
     mint(ttlMs = MAX_EXTERNAL_SESSION_MS) {
       const sessionId = deps.randomUUID();
@@ -43,12 +51,8 @@ export function createSessionRegistry(
 
     authenticate(token) {
       const candidate = hashToken(token);
-      const now = deps.now();
-      for (const [sessionId, record] of records) {
-        if (record.expiresAt <= now) {
-          records.delete(sessionId);
-          continue;
-        }
+      pruneExpired();
+      for (const record of records.values()) {
         if (timingSafeEqual(candidate, record.tokenHash)) return true;
       }
       return false;
@@ -56,6 +60,11 @@ export function createSessionRegistry(
 
     revoke(sessionId) {
       return records.delete(sessionId);
+    },
+
+    activeCount() {
+      pruneExpired();
+      return records.size;
     },
   };
 }

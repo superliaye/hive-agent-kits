@@ -22,6 +22,7 @@ describe("server routes - ready", () => {
         runtimeRootId: server.runtimeRootId,
         daemonMode: "dev",
         deployTargetMode: "sandbox",
+        activeExternalSessions: 0,
       });
     } finally {
       await dispose(server);
@@ -43,6 +44,7 @@ describe("server routes - ready", () => {
         runtimeRootId: server.runtimeRootId,
         daemonMode: "packaged",
         deployTargetMode: "real",
+        activeExternalSessions: 0,
       });
     } finally {
       await dispose(server);
@@ -65,6 +67,7 @@ describe("server routes - ready", () => {
         runtimeRootId: server.runtimeRootId,
         daemonMode: "dev",
         deployTargetMode: "real",
+        activeExternalSessions: 0,
       });
     } finally {
       await dispose(server);
