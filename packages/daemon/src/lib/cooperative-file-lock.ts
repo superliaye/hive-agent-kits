@@ -366,6 +366,7 @@ function acquireIndependentFileLock(
     const keeper = spawn(process.execPath, ["-e", KEEPER_SOURCE], {
       env: {
         ...process.env,
+        BUN_BE_BUN: "1",
         AGENT_MANIFEST_LOCK_PATH: lockPath,
         AGENT_MANIFEST_LOCK_TOKEN: token,
         AGENT_MANIFEST_LOCK_PROTOCOL: LOCK_PROTOCOL,
