@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,6 +21,10 @@ const agentManifestModule = pathToFileURL(resolve(agentKitRoot, "lib/manifest.js
 const hiveLedgerModule = new URL("../packages/daemon/src/kit/ledger.ts", import.meta.url).href;
 const hiveTargetsModule = new URL("../packages/daemon/src/kit/targets.ts", import.meta.url).href;
 const hiveLockModule = new URL("../packages/daemon/src/lib/durable-file.ts", import.meta.url).href;
+const hiveIndependentLockModule = new URL(
+  "../packages/daemon/src/lib/cooperative-file-lock.ts",
+  import.meta.url,
+).href;
 
 const initial = {
   kitVersion: "",
@@ -34,6 +46,7 @@ function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
     HIVE_LEDGER_MODULE: hiveLedgerModule,
     HIVE_TARGETS_MODULE: hiveTargetsModule,
     HIVE_LOCK_MODULE: hiveLockModule,
+    HIVE_INDEPENDENT_LOCK_MODULE: hiveIndependentLockModule,
     ...extra,
   };
 }
@@ -49,6 +62,14 @@ async function waitForFile(path: string, timeoutMs = 5_000): Promise<void> {
 
 function spawnModule(source: string, env: NodeJS.ProcessEnv) {
   return Bun.spawn([process.execPath, "-e", source], {
+    env,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+}
+
+function spawnNodeModule(source: string, env: NodeJS.ProcessEnv) {
+  return Bun.spawn(["node", "--input-type=module", "-e", source], {
     env,
     stdout: "inherit",
     stderr: "inherit",
@@ -81,6 +102,106 @@ function readSkills(): string[] {
       return name;
     })
     .sort();
+}
+
+const criticalSection = `
+function enterCritical(role, enteredPath) {
+  writeFileSync(enteredPath, "entered");
+  try {
+    writeFileSync(process.env.CRITICAL_PATH, role, { flag: "wx" });
+  } catch (error) {
+    if (!error || error.code !== "EEXIST") throw error;
+    writeFileSync(process.env.OVERLAP_PATH, role);
+    return;
+  }
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(wait, 0, 0, 1000);
+  rmSync(process.env.CRITICAL_PATH, { force: true });
+}`;
+
+function seedAbandonedLock(lockPath: string): void {
+  mkdirSync(lockPath);
+  writeFileSync(
+    join(lockPath, "owner.json"),
+    `${JSON.stringify({
+      protocol: "agent-manifest-lock-v3",
+      token: "abandoned-owner",
+      owner: { pid: 2_147_483_647, start: null },
+      keeper: { pid: 2_147_483_647, start: null },
+      staleMs: 0,
+      updateMs: 500,
+    })}\n`,
+  );
+  utimesSync(lockPath, new Date(0), new Date(0));
+}
+
+async function assertValidatePauseRace(
+  label: string,
+  pausedWork: string,
+  contenderWork: string,
+): Promise<void> {
+  const lockPath = `${ledgerPath}.lock`;
+  seedAbandonedLock(lockPath);
+  const recoveryPaused = join(root, `${label}-recovery.paused`);
+  const resumeRecovery = join(root, `${label}-recovery.resume`);
+  const critical = join(root, `${label}-critical`);
+  const overlap = join(root, `${label}-overlap`);
+  const pausedEntered = join(root, `${label}-paused.entered`);
+  const contenderEntered = join(root, `${label}-contender.entered`);
+
+  const pausedRecovery = spawnNodeModule(
+    `import fs, { existsSync, rmSync, writeFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const originalRename = fs.renameSync;
+let paused = false;
+fs.renameSync = (from, to) => {
+  if (!paused && from === process.env.LOCK_PATH && String(to).includes(".abandoned-")) {
+    paused = true;
+    writeFileSync(process.env.PAUSED_PATH, "paused");
+    const wait = new Int32Array(new SharedArrayBuffer(4));
+    while (!existsSync(process.env.RESUME_PATH)) Atomics.wait(wait, 0, 0, 5);
+  }
+  return originalRename(from, to);
+};
+syncBuiltinESMExports();
+${criticalSection}
+${pausedWork}`,
+    childEnv({
+      LOCK_PATH: lockPath,
+      PAUSED_PATH: recoveryPaused,
+      RESUME_PATH: resumeRecovery,
+      CRITICAL_PATH: critical,
+      OVERLAP_PATH: overlap,
+      ENTERED_PATH: pausedEntered,
+    }),
+  );
+  await waitForFile(recoveryPaused);
+
+  const newerOwner = spawnNodeModule(
+    `import { rmSync, writeFileSync } from "node:fs";
+${criticalSection}
+${contenderWork}`,
+    childEnv({
+      CRITICAL_PATH: critical,
+      OVERLAP_PATH: overlap,
+      ENTERED_PATH: contenderEntered,
+    }),
+  );
+  try {
+    await waitForFile(contenderEntered, 500);
+  } catch {
+    // The ABA-safe protocol keeps this contender out until recovery resumes.
+  }
+  writeFileSync(resumeRecovery, "resume");
+  if ((await pausedRecovery.exited) !== 0 || (await newerOwner.exited) !== 0) {
+    throw new Error(`${label} validate-pause-new-owner production contenders failed`);
+  }
+  if (!existsSync(pausedEntered) || !existsSync(contenderEntered)) {
+    throw new Error(`${label} production contenders did not both enter`);
+  }
+  if (existsSync(overlap)) {
+    throw new Error(`${label} paused stale recovery renamed a newer owner's live lock`);
+  }
 }
 
 mkdirSync(dirname(ledgerPath), { recursive: true });
@@ -184,13 +305,47 @@ const base = readManifest();
 await commitManifest(base, { ...base, skills: [...base.skills, { name: "recovered" }] });`,
     childEnv(),
   );
-  if ((await recovered.exited) !== 0 || Date.now() - recoveredAt >= 5_000) {
+  const recoveredExit = await recovered.exited;
+  const recoveryMs = Date.now() - recoveredAt;
+  if (recoveredExit !== 0 || recoveryMs >= 5_000) {
     throw new Error("production-default crash recovery exceeded the acquisition timeout");
   }
 
+  // Moving retirement-fence publication below owner validation, or removing
+  // the acquisition fence wait, makes the two production critical sections overlap.
+  await assertValidatePauseRace(
+    "agent-recovers-hive-acquires",
+    `const { withManifestLock } = await import(process.env.AGENT_MANIFEST_MODULE);
+await withManifestLock(
+  () => enterCritical("agent-kit", process.env.ENTERED_PATH),
+  { timeoutMs: 5000, staleMs: 0, updateMs: 500 },
+);`,
+    `const { withIndependentFileLock } = await import(process.env.HIVE_INDEPENDENT_LOCK_MODULE);
+withIndependentFileLock(
+  process.env.HIVE_LEDGER_PATH,
+  () => enterCritical("hive", process.env.ENTERED_PATH),
+  { timeoutMs: 5000, staleMs: 0, updateMs: 500 },
+);`,
+  );
+  await assertValidatePauseRace(
+    "hive-recovers-agent-acquires",
+    `const { withIndependentFileLock } = await import(process.env.HIVE_INDEPENDENT_LOCK_MODULE);
+withIndependentFileLock(
+  process.env.HIVE_LEDGER_PATH,
+  () => enterCritical("hive", process.env.ENTERED_PATH),
+  { timeoutMs: 5000, staleMs: 0, updateMs: 500 },
+);`,
+    `const { withManifestLock } = await import(process.env.AGENT_MANIFEST_MODULE);
+await withManifestLock(
+  () => enterCritical("agent-kit", process.env.ENTERED_PATH),
+  { timeoutMs: 5000, staleMs: 0, updateMs: 500 },
+);`,
+  );
+
   console.log(`cross-repo manifest skills: ${readSkills().join(", ")}`);
   console.log("cross-repo blocked-live-owner: waited past stale");
-  console.log(`cross-repo crash recovery ms: ${Date.now() - recoveredAt}`);
+  console.log(`cross-repo crash recovery ms: ${recoveryMs}`);
+  console.log("cross-repo validate-pause-new-owner: no overlaps in either direction");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
