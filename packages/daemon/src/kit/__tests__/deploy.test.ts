@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Cause, Effect, Exit } from "effect";
 import type { DeployFsExec, ExecPort, ExecRequest } from "../deploy/adapter.ts";
 import { runDeploy } from "../deploy/engine.ts";
+import { openDeploymentStateStore } from "../deployment-state.ts";
 import { DeployError } from "../effect/errors.ts";
 import { readLedger } from "../ledger.ts";
 import type { ResolvedSelection } from "../selection.ts";
@@ -146,6 +147,50 @@ function activeCatalogNames(over: { skills?: string[]; agents?: string[] } = {})
 }
 
 describe("runDeploy", () => {
+  test("records independent target outcomes after the Ledger commit and retains prior applied state on failure", async () => {
+    seedSkill("stateful");
+    const spy = makeSpy();
+    await Effect.runPromise(
+      runDeploy(fx(spy.port), {
+        selection: resolved({ skills: ["stateful"], targets: ["claude", "codex"] }),
+        kitSha: "sha1",
+        kitVersion: "1.0.0",
+        activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
+        operationId: "op-success",
+      }),
+    );
+    const state = openDeploymentStateStore(targets.deploymentStatePath());
+    const originalClaude = state.read({ kind: "skill", name: "stateful" }, "claude")?.applied;
+    expect(originalClaude).toBeDefined();
+
+    // Claude's path is intentionally non-directory, while Codex remains writable.
+    // The engine must retain Codex's successful fact rather than allowing the
+    // sibling failure to overwrite it.
+    const isolated: DeployTargets = { ...targets, claudeHome: () => "/dev/null" };
+    await Effect.runPromise(
+      runDeploy(
+        { targets: isolated, exec: spy.port, probe: () => true },
+        {
+          selection: resolved({ skills: ["stateful"], targets: ["claude", "codex"] }),
+          kitSha: "sha1",
+          kitVersion: "1.0.0",
+          activeMirrorRoots: [mirror],
+          activeCatalogNames: activeCatalogNames(),
+          operationId: "op-partial",
+        },
+      ),
+    );
+    const after = openDeploymentStateStore(targets.deploymentStatePath());
+    expect(after.read({ kind: "skill", name: "stateful" }, "claude")).toMatchObject({
+      applied: originalClaude,
+      lastAttempt: { outcome: "failed" },
+    });
+    expect(after.read({ kind: "skill", name: "stateful" }, "codex")?.lastAttempt.outcome).toBe(
+      "succeeded",
+    );
+  });
+
   test("(a) skill lands in both homes; no SOURCE.md / _unshipped", async () => {
     seedSkill("alpha");
     const spy = makeSpy();

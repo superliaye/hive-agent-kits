@@ -25,6 +25,7 @@ function fakeTargets(redirected: boolean): DeployTargets {
     ledgerPath: () => "/tmp/l",
     mirrorRoot: (sourceId: string) => `/tmp/m/${sourceId}`,
     fingerprintPath: () => "/tmp/f",
+    deploymentStatePath: () => "/tmp/deployment-state.json",
     kitTmpRoot: () => "/tmp/t",
     starterRoot: () => "/tmp/starter",
     childEnv: (base) => ({ ...base }),

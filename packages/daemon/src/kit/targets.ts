@@ -36,6 +36,9 @@ export type DeployTargets = {
   // Distinct from the ledger — the ledger is the fixed agent-kit interop schema
   // and cannot carry Hive deploy-time hashes; this is where they live instead.
   fingerprintPath(): string;
+  // Hive-private durable applied/attempt state. This is intentionally separate
+  // from the byte-compatible agent-kit ledger.
+  deploymentStatePath(): string;
   // Working temp dir for sync extraction (under the Hive home, swept on start).
   kitTmpRoot(): string;
   // Content root of the bundled Starter Source — the in-repo package dir whose
@@ -118,6 +121,7 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
 
   const mirrorRoot = (sourceId: string) => join(hiveHome(), "kit", "mirrors", sourceId);
   const fingerprintPath = () => join(hiveHome(), "kit", "fingerprints.json");
+  const deploymentStatePath = () => join(hiveHome(), "kit", "deployment-state.json");
   const kitTmpRoot = () => join(hiveHome(), "kit", "tmp");
   // Dev default: this file lives at packages/daemon/src/kit/targets.ts; the
   // Starter package is packages/agent-kit-starter-template. Walk up to packages/
@@ -145,6 +149,7 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
     ledgerPath,
     mirrorRoot,
     fingerprintPath,
+    deploymentStatePath,
     kitTmpRoot,
     starterRoot,
     isChildEnvRedirected,
