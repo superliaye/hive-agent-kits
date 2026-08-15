@@ -58,7 +58,7 @@ Mac                                                  Arca
 
 ~/.local/bin/hive-arca
   ├─ ensures remote Daemon ------------------------> Hive Daemon
-  ├─ creates 127.0.0.1:<random> SSH forward ------> 127.0.0.1:3117
+  ├─ arca et 127.0.0.1:33117 ---------------------> 127.0.0.1:3117
   ├─ writes short-lived 0600 connection file         ├─ ~/.hive/
   └─ launches Hive Shell in external mode             ├─ Sources + Mirrors
        └─ Hive UI ───── HTTP over the forward ────────├─ Selection + Deployment State
@@ -72,9 +72,11 @@ probe, spawn, signal, or stop it. Managed and external mode are a discriminated
 launch choice, not runtime fallback states. A separately launched local Hive
 instance may coexist, but it uses a different port and state authority.
 
-The Arca Daemon and SSH forward remain bound to loopback. The Mac's forwarded
-port is selected specifically for this launch, so external mode cannot attach to
-or stop a local Hive Daemon on the default port.
+The Arca Daemon and Eternal Terminal forward remain bound to loopback. The Mac
+uses a dedicated non-default port, so external mode cannot attach to or stop a
+local Hive Daemon on the default port. A live interactive `arca et` session may
+already own the dedicated forward; the launcher reuses it without assuming
+ownership and creates a supervised session only when no forward exists.
 
 Arca is the Daemon host, not a new Deploy target. From the Deploy context's point
 of view, Arca's CLI homes are local filesystem targets exactly as required by
@@ -85,7 +87,7 @@ ADR-0023; only the Shell-to-Daemon control connection crosses machines.
 | Location | New or changed artifacts | Responsibility |
 |---|---|---|
 | `hive-agent-kits` | Shell connection mode, connection descriptor contract, Source Locator transports, durable Selection, Deployment State/Overview, UI | Generic product behavior; contains no Arca command, hostname, or lifecycle assumption |
-| `universe/experimental/leon-ye_data/hive-arca/` | Mac launcher, remote lifecycle helper, installer, tests, README | Arca-specific SSH, Daemon bootstrap, tunnel supervision, and Hive app launch |
+| `universe/experimental/leon-ye_data/hive-arca/` | Mac launcher, remote lifecycle helper, installer, tests, README | Arca CLI integration, Daemon bootstrap, tunnel supervision, and Hive app launch |
 | `universe/experimental/leon-ye_data/agent-kits/` | `capabilities/`, `presets/`, authoring docs | Databricks/repository-specific Capabilities in Hive's normal kit format |
 | `my-agent-kits` | No topology-specific changes | Repo-agnostic Capabilities, maintained and released as today |
 | Mac installed state | `/Applications/Hive.app`, `~/.local/share/hive-arca/`, `~/.local/bin/hive-arca`, one temporary connection directory per launch | UI, launcher, and ephemeral transport only |
@@ -94,7 +96,7 @@ ADR-0023; only the Shell-to-Daemon control connection crosses machines.
 Canonical adapter source lives in Universe. A one-time bootstrap installs a
 versioned copy under `~/.local/share/hive-arca/<version>/` and updates
 `~/.local/bin/hive-arca`. The bootstrap may copy from an explicitly supplied Mac
-checkout or fetch the payload over the configured SSH connection. It may symlink
+checkout or fetch the payload through `arca et`. It may symlink
 only when the canonical source itself exists on the Mac; no Mac Universe checkout
 is assumed. Installed files are not a second source of truth.
 
@@ -379,20 +381,21 @@ diagnostics belong in Deployment State and Trace, not duplicate audit rows.
 
 ## `hive-arca` adapter
 
-`hive-arca` is one Mac command and the only component that knows Arca's SSH and
+`hive-arca` is one Mac command and the only component that knows the Arca CLI and
 process lifecycle. It:
 
-1. validates Mac prerequisites and resolves an unused loopback port;
-2. invokes its remote helper through SSH to ensure the explicitly installed Hive
+1. validates Mac prerequisites and the dedicated loopback port;
+2. invokes its remote helper through `arca et -c` to ensure the explicitly installed Hive
    Daemon is running against Arca's real CLI homes;
 3. authenticates locally on Arca and mints an expiring external session;
-4. starts an SSH local forward with forward-failure checks and keepalives;
+4. reuses an existing `arca et` local forward or starts a supervised Eternal
+   Terminal session using the installer's `Host arca*` forward;
 5. writes a per-launch owner-only connection descriptor;
 6. launches a new Hive Shell instance in external mode and waits for it; and
 7. supervises/restarts the tunnel while the app is open, then removes temporary
    Mac files and the tunnel and revokes the session on exit.
 
-Session JSON is streamed from SSH directly into the owner-only descriptor; token
+Session JSON is streamed from the remote command directly into the owner-only descriptor; token
 bytes are never stored in a shell argument or environment variable. Cleanup traps
 cover bootstrap, tunnel, app-launch, signal, and normal-exit paths.
 
@@ -415,15 +418,15 @@ The Daemon remains running when the Mac app exits and is re-used on the next
 launch. Arca stop/restart may end it; the next `hive-arca` invocation restores it.
 The launcher never stops an unrelated process and verifies compatibility before
 reuse. Install and upgrade are explicit subcommands; the daily launch never pulls
-a repository or silently replaces the Daemon. Configuration may persist SSH
-target, remote Hive installation, ports, and Mac app location, but never the
+a repository or silently replaces the Daemon. Configuration may persist the
+transport, remote Hive installation, ports, and Mac app location, but never the
 durable or session credential.
 
 ## Failure behavior
 
 - Invalid or incompatible external descriptor: stop before opening the UI; do not
   spawn a local Daemon.
-- SSH authentication or bootstrap failure: `hive-arca` exits with the failed
+- Arca CLI authentication or bootstrap failure: `hive-arca` exits with the failed
   stage and remediation, without leaving a descriptor or tunnel.
 - Tunnel loss: keep the Arca Daemon and any accepted Deploy alive; show
   disconnected on Mac, retry the tunnel, then reload Overview.
@@ -467,7 +470,8 @@ Hive automated coverage must include:
   reconstruction; and
 - existing full typecheck, tests, lint, ship, and deploy-contract regression.
 
-Universe coverage must exercise `hive-arca` against fake SSH/app commands, cleanup
+Universe coverage must exercise `hive-arca` against fake Arca CLI, SSH fallback,
+and app commands, cleanup
 on every failure stage, tunnel restart, session revocation, no-secret output,
 immutable artifact/digest selection, fresh-app waiting, and idempotent concurrent
 remote ensure. Before asking for Mac input, run the Hive suites and an Arca-local

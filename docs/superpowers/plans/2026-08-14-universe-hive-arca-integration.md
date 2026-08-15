@@ -4,9 +4,9 @@
 
 **Goal:** Add a conformant personal Universe kit plus a one-command Mac adapter that connects Hive to the persistent Arca Daemon through the generic external seam.
 
-**Architecture:** Universe owns all SSH, artifact, systemd, tunnel, and Mac bootstrap behavior. A versioned POSIX launcher delegates Arca lifecycle to a remote helper; the new personal kit uses Hive's existing capabilities/presets format and remains independent from `my-devloop` and Appa.
+**Architecture:** Universe owns all Arca CLI, artifact, systemd, tunnel, and Mac bootstrap behavior. A versioned POSIX launcher delegates Arca lifecycle to a remote helper; the new personal kit uses Hive's existing capabilities/presets format and remains independent from `my-devloop` and Appa.
 
-**Tech Stack:** Bash, systemd user units, SSH, shasum, Universe shell tests, Hive capability schema
+**Tech Stack:** Bash, systemd user units, Arca Eternal Terminal, SSH fallback, shasum, Universe shell tests, Hive capability schema
 
 **Spec:** `/home/leon.ye/hive-agent-kits/docs/superpowers/specs/2026-08-14-arca-remote-capability-control-design.md`
 
@@ -15,7 +15,7 @@
 - Hive contains no Arca hostname, SSH command, systemd lifecycle, or Arca filesystem assumption.
 - Daily launch never pulls source or replaces the Daemon; install/upgrade are explicit.
 - Linux Daemon artifacts are immutable and digest-verified for the remote architecture.
-- Session JSON streams directly from SSH into a `0600` descriptor; no token is placed in argv, environment, URL, config, or logs.
+- Session JSON streams directly from the remote command into a `0600` descriptor; no token is placed in argv, environment, URL, config, or logs.
 - Canonical adapter source is `experimental/leon-ye_data/hive-arca/`; canonical repo-specific kit source is `experimental/leon-ye_data/agent-kits/`.
 
 ---
@@ -139,15 +139,15 @@ git commit -m "Add Hive Arca remote daemon lifecycle"
 - Produces one daily command `hive-arca` plus explicit `hive-arca install` and `hive-arca upgrade`.
 - Uses only descriptor path argument `--hive-external-descriptor=<path>` when starting Hive.
 
-- [ ] **Step 1: Write failing fake SSH/app tests**
+- [ ] **Step 1: Write failing fake Arca CLI/app tests**
 
 ```bash
 run_launcher
-assert_called ssh arca hive-arca-remote ensure
-assert_called ssh -N -L "127.0.0.1:${LOCAL_PORT}:127.0.0.1:3117" -o ExitOnForwardFailure=yes
+assert_called arca et -c '$HOME/.local/bin/hive-arca-remote ensure'
+assert_configured_forward 'Host arca*' 'LocalForward 127.0.0.1:33117 127.0.0.1:3117'
 assert_called open -n -W -a Hive --args "--hive-external-descriptor=${DESCRIPTOR}"
 test ! -e "$DESCRIPTOR"
-assert_called ssh arca hive-arca-remote session-revoke "$SESSION_ID"
+assert_called arca et -c '$HOME/.local/bin/hive-arca-remote session-revoke ...'
 ```
 
 - [ ] **Step 2: Run launcher tests**
@@ -158,7 +158,7 @@ Expected: FAIL because the Mac scripts are missing.
 
 - [ ] **Step 3: Implement safe launch and cleanup traps**
 
-Create a `mktemp -d` directory, `chmod 700` it, allocate an unused loopback port, run remote ensure, start the checked SSH forward with keepalives, stream session JSON through stdin to a `0600` descriptor, launch a fresh app with `open -n -W`, and wait. A single idempotent trap kills only the recorded tunnel pid, removes the temp directory, and best-effort revokes the recorded session id.
+Create a `mktemp -d` directory, `chmod 700` it, run remote ensure, reuse an existing dedicated Eternal Terminal forward or start an owned one, stream session JSON through stdin to a `0600` descriptor, launch a fresh app with `open -n -W`, and wait. A single idempotent trap kills only an owned tunnel process, removes the temp directory, and best-effort revokes the recorded session id.
 
 - [ ] **Step 4: Supervise tunnel while the app remains open**
 
@@ -166,7 +166,7 @@ If the tunnel exits while the app pid remains alive, retry with bounded exponent
 
 - [ ] **Step 5: Implement versioned Mac bootstrap**
 
-Install the adapter payload under `~/.local/share/hive-arca/<version>/` and atomically update `~/.local/bin/hive-arca`. Support `--source-dir <local checkout>` and `--ssh-target <host>` payload acquisition; symlink only for the explicit local checkout mode.
+Install the adapter payload under `~/.local/share/hive-arca/<version>/` and atomically update `~/.local/bin/hive-arca`. Use `arca et -c` by default, add the marked `Host arca*` forward to the Mac SSH config, retain explicit `--transport ssh --ssh-target <host>` fallback, and symlink only for the explicit local checkout mode.
 
 - [ ] **Step 6: Run all adapter tests and commit**
 
@@ -205,4 +205,3 @@ git commit -m "Validate Hive Arca end to end"
 ```
 
 Ask the user to run `hive-arca` on the Mac and verify the seven approved smoke-test steps. Do not deploy into the real Arca CLI home before this explicit human action.
-
