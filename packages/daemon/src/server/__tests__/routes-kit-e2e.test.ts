@@ -21,7 +21,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AddSourceResult, type CapabilityEntry, type DiffEntry, type Ledger } from "@hive/contract";
+import {
+  AddSourceResult,
+  type CapabilityEntry,
+  type DeploymentOverview,
+  type DiffEntry,
+  type Ledger,
+} from "@hive/contract";
 import {
   buildGzipTar,
   clearHomeEnv,
@@ -274,6 +280,56 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
           targetClis: ["codex"],
         },
       });
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("GET /api/kit/overview is the authoritative sanitized deployment snapshot", async () => {
+    const server = await serverWith(twoSourceFetch());
+    try {
+      const added = AddSourceResult.parse(await (await postOrigin(server, ORIGIN_A)).json());
+      const initialResponse = await server.app.fetch(authed("/api/kit/overview"));
+      expect(initialResponse.status).toBe(200);
+      const initial = (await initialResponse.json()) as DeploymentOverview;
+      expect(initial.sourceRegistryRevision).toBe(1);
+      expect(initial.sources).toContainEqual({
+        id: added.source.id,
+        label: ORIGIN_A,
+        kind: "git",
+        active: true,
+        rank: 0,
+      });
+      expect(JSON.stringify(initial.sources)).not.toContain("repoUrl");
+      expect(
+        initial.variants.some((entry) => entry.kind === "skill" && entry.name === "alpha"),
+      ).toBe(true);
+
+      const changed = await server.app.fetch(
+        authed("/api/kit/selection", {
+          method: "PATCH",
+          body: JSON.stringify({
+            expectedRevision: initial.selectionRevision,
+            changes: [
+              {
+                key: { kind: "skill", name: "alpha" },
+                enabled: true,
+                targets: ["claude"],
+              },
+            ],
+          }),
+        }),
+      );
+      expect(changed.status).toBe(200);
+
+      const updated = (await (
+        await server.app.fetch(authed("/api/kit/overview"))
+      ).json()) as DeploymentOverview;
+      expect(updated.selectionRevision).toBe(initial.selectionRevision + 1);
+      expect(updated.planToken).not.toBe(initial.planToken);
+      expect(
+        updated.rows.find((entry) => entry.key.kind === "skill" && entry.key.name === "alpha"),
+      ).toMatchObject({ desired: "on", reconciliation: "pending_add" });
     } finally {
       await server.dispose();
     }

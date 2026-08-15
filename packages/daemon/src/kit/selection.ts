@@ -196,7 +196,7 @@ export function resolveSelection(catalog: Catalog, selection: Selection): Resolv
 // so a same-name new-body change is detectable. Mirrors what the engine writes per
 // target (incl. the Codex sidecar) so the hash is comparable to `deployedHash`.
 // Returns null when the source isn't in the winner's Mirror.
-function renderedNamedHash(
+export function renderedNamedHash(
   mirrorRoot: string,
   snippets: Map<string, string>,
   kind: "skill" | "agent",
@@ -230,16 +230,13 @@ function renderedNamedHash(
 // selection may be won by different Sources, so a single shared mirrorRoot would
 // hash the wrong bytes. Concatenation order is the resolved-array order
 // (deterministic, identical to the deploy path).
-function renderedInstructionHash(
+export function renderedInstructionHash(
   items: readonly ResolvedItem[],
   targets: DeployTargets,
 ): string | null {
-  const bodies = items
-    .map((item) => instructionBody(targets.mirrorRoot(item.sourceId), item.name))
-    .filter((b): b is string => b !== null);
-  // No surviving body (every winner Mirror lost its files post-sync) → null, so the
-  // caller skips a spurious "changed" verdict (mirrors the skill/agent guard).
-  if (bodies.length === 0) return null;
+  const bodies = items.map((item) => instructionBody(targets.mirrorRoot(item.sourceId), item.name));
+  // A selected unavailable contribution blocks this whole-file render.
+  if (!bodies.every((body): body is string => body !== null)) return null;
   return sha256(transformInstructions(bodies));
 }
 

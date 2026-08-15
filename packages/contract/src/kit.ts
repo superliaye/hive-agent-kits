@@ -267,3 +267,137 @@ export const VerifyReport = z.object({
   entries: z.array(VerifyEntry),
 });
 export type VerifyReport = z.infer<typeof VerifyReport>;
+
+// ---- Authoritative Deployment Overview ----
+
+export const OverviewCatalogState = z.enum([
+  "deployable",
+  "shadowed",
+  "blocked",
+  "unavailable",
+]);
+export type OverviewCatalogState = z.infer<typeof OverviewCatalogState>;
+
+export const OverviewDesiredState = z.enum(["on", "off"]);
+export type OverviewDesiredState = z.infer<typeof OverviewDesiredState>;
+
+export const ReconciliationState = z.enum([
+  "in_sync",
+  "pending_add",
+  "pending_update",
+  "pending_remove",
+  "waiting_for_source",
+  "orphaned",
+  "unmanaged_owned",
+  "manual_removal_required",
+]);
+export type ReconciliationState = z.infer<typeof ReconciliationState>;
+
+export const TargetObservation = z.enum([
+  "verified",
+  "present_unverified",
+  "missing",
+  "drifted",
+  "recorded_unverified",
+  "verification_error",
+]);
+export type TargetObservation = z.infer<typeof TargetObservation>;
+
+export const OverviewLastAttempt = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("none") }),
+  z.object({
+    state: z.literal("succeeded"),
+    operationId: z.string(),
+    attemptedAt: z.number().int().nonnegative(),
+  }),
+  z.object({
+    state: z.literal("failed"),
+    operationId: z.string(),
+    attemptedAt: z.number().int().nonnegative(),
+    code: z.string().max(80),
+    detail: z.string().max(512).optional(),
+  }),
+]);
+export type OverviewLastAttempt = z.infer<typeof OverviewLastAttempt>;
+
+export const OverviewTargetState = z.object({
+  target: DeployTarget,
+  desired: OverviewDesiredState,
+  reconciliation: ReconciliationState,
+  observation: TargetObservation,
+  lastAttempt: OverviewLastAttempt,
+});
+export type OverviewTargetState = z.infer<typeof OverviewTargetState>;
+
+export const OverviewVariant = CapabilityEntry.extend({
+  catalog: z.enum(["deployable", "shadowed", "blocked"]),
+});
+export type OverviewVariant = z.infer<typeof OverviewVariant>;
+
+export const OverviewRow = z.object({
+  key: CapabilityKey,
+  catalog: OverviewCatalogState,
+  desired: OverviewDesiredState,
+  reconciliation: ReconciliationState,
+  lastAttempt: OverviewLastAttempt,
+  applicableTargets: z.array(DeployTarget),
+  targets: z.array(OverviewTargetState),
+  variants: z.array(OverviewVariant),
+});
+export type OverviewRow = z.infer<typeof OverviewRow>;
+
+// Deliberately omits Source locators/origins: working-tree locators contain raw
+// Daemon paths, which never belong in the Overview or plan diagnostics.
+export const OverviewSource = z.object({
+  id: z.string(),
+  label: z.string(),
+  kind: z.enum(["git", "local"]),
+  active: z.boolean(),
+  rank: z.number().int(),
+});
+export type OverviewSource = z.infer<typeof OverviewSource>;
+
+export const OverviewMirror = z.object({
+  sourceId: z.string(),
+  precedence: z.number().int(),
+  identity: z.string().nullable(),
+  error: z.enum(["unavailable"]).optional(),
+});
+export type OverviewMirror = z.infer<typeof OverviewMirror>;
+
+export const DeployOperationState = z.enum([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "interrupted",
+]);
+export type DeployOperationState = z.infer<typeof DeployOperationState>;
+
+export const DeployOperationSummary = z.object({
+  operationId: z.string(),
+  state: DeployOperationState,
+  acceptedAt: z.number().int().nonnegative(),
+  completedAt: z.number().int().nonnegative().optional(),
+});
+export type DeployOperationSummary = z.infer<typeof DeployOperationSummary>;
+
+export const DeploymentOverview = z.object({
+  sources: z.array(OverviewSource),
+  sourceRegistryRevision: z.number().int().nonnegative(),
+  mirrors: z.array(OverviewMirror),
+  selectionRevision: z.number().int().nonnegative(),
+  variants: z.array(CapabilityEntry),
+  rows: z.array(OverviewRow),
+  diff: DeployDiff,
+  planToken: z.string().regex(/^[0-9a-f]{64}$/),
+  activeOperation: DeployOperationSummary.nullable(),
+  lastOperation: DeployOperationSummary.nullable(),
+});
+export type DeploymentOverview = z.infer<typeof DeploymentOverview>;
+
+export const AcceptedDeployRequest = z.object({
+  selectionRevision: z.number().int().nonnegative(),
+  planToken: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type AcceptedDeployRequest = z.infer<typeof AcceptedDeployRequest>;

@@ -303,4 +303,85 @@ describe("Kit ↔ SourceRegistry shared store (#30 wiring invariant)", () => {
     expect(kit.state().sync[0]?.origin).toBe("https://github.com/owner/added-at-runtime");
     rt.dispose();
   });
+
+  test("overview captures registry, Mirror, Selection, catalog, and plan from one safe snapshot", async () => {
+    const { kit, registry, rt } = kitOver(["https://github.com/owner/a"], okFetch(SHA));
+    await Effect.runPromise(kit.sync());
+
+    const before = kit.overview();
+    expect(before.sourceRegistryRevision).toBe(0);
+    expect(before.selectionRevision).toBe(1);
+    expect(before.sources).toEqual([
+      { id: "src-0", label: "src-0", kind: "git", active: true, rank: 0 },
+    ]);
+    expect(JSON.stringify(before.sources)).not.toContain("repoUrl");
+    expect(before.mirrors).toHaveLength(1);
+    expect(before.mirrors[0]?.identity).toMatch(/^[0-9a-f]{64}$/);
+    expect(before.variants.some((entry) => entry.kind === "skill" && entry.name === "foo")).toBe(
+      true,
+    );
+    expect(
+      before.rows.some((entry) => entry.key.kind === "skill" && entry.key.name === "foo"),
+    ).toBe(true);
+    expect(before.planToken).toMatch(/^[0-9a-f]{64}$/);
+
+    await Effect.runPromise(
+      registry.add({
+        label: "second",
+        locator: {
+          kind: "git",
+          repoUrl: "https://github.com/owner/second",
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+      }),
+    );
+    const after = kit.overview();
+    expect(after.sourceRegistryRevision).toBe(1);
+    expect(after.sources).toHaveLength(2);
+    expect(after.planToken).not.toBe(before.planToken);
+    rt.dispose();
+  });
+
+  test("overview never exposes a working-tree locator path", () => {
+    const rawPath = "/private/arca/credential-bearing-worktree";
+    const sourcesLayer = SourceRegistryLive({
+      mode: "memory",
+      initial: [
+        {
+          id: "working-source",
+          label: "Working Source",
+          locator: { kind: "working-tree", repoRoot: rawPath, subpath: "." },
+          origin: rawPath,
+          kind: "local",
+          active: true,
+          createdAt: 1,
+          rank: 1,
+        },
+      ],
+    });
+    const rt = ManagedRuntime.make(
+      Layer.merge(KitLive().pipe(Layer.provide(sourcesLayer)), sourcesLayer),
+    );
+    const overview = rt.runSync(Kit).overview();
+    expect(overview.sources).toEqual([
+      {
+        id: "working-source",
+        label: "Working Source",
+        kind: "local",
+        active: true,
+        rank: 1,
+      },
+    ]);
+    expect(JSON.stringify(overview)).not.toContain(rawPath);
+    expect(overview.mirrors).toEqual([
+      {
+        sourceId: "working-source",
+        precedence: 1,
+        identity: null,
+        error: "unavailable",
+      },
+    ]);
+    rt.dispose();
+  });
 });

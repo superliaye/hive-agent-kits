@@ -20,7 +20,7 @@ import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { SourcesPersistence } from "../persistence.ts";
 import { createSourcesStore, type ReorderDirection, type SourcesStore } from "../store.ts";
-import { SOURCES_FILE_VERSION, type SourcesAuditEvents } from "../types.ts";
+import { SOURCES_FILE_VERSION, type SourcesAuditEvents, type SourcesFile } from "../types.ts";
 import { DuplicateOrigin, SourceIoError, SourceNotFound } from "./errors.ts";
 
 export type CreateSourceRegistryOptions =
@@ -29,12 +29,10 @@ export type CreateSourceRegistryOptions =
 
 export type SourceRegistrySvc = {
   list(): Effect.Effect<readonly Source[], SourceIoError>;
-  // Synchronous getter of the in-memory state, no I/O. The Effect `list()` stays
-  // the audited/route read; `currentSources()` feeds the deliberately-sync Kit
-  // read model (catalog()/state()/sync()) which has no I/O and thus no
-  // SourceIoError to channel. NOT named `snapshot` — the store already has a
-  // `snapshot(): SourcesFile` of a different type.
+  // Synchronous getters over one in-memory registry. Consumers that join the
+  // revision with Sources use currentSnapshot() so both come from one clone.
   currentSources(): readonly Source[];
+  currentSnapshot(): SourcesFile;
   add(input: AddSourceInput): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
   activate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   deactivate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
@@ -139,6 +137,8 @@ function buildSvc(store: SourcesStore): SourceRegistrySvc {
     list: () => ioGuard(() => store.list()),
 
     currentSources: () => store.list(),
+
+    currentSnapshot: () => store.snapshot(),
 
     add: (input) =>
       Effect.flatMap(

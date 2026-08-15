@@ -3,9 +3,11 @@
 // deploy audit emitter. Discharges its own dependencies at the module boundary —
 // the composition root provides nothing but the mode-driven options.
 
+import { join } from "node:path";
 import type {
   Catalog,
   DeployDiff,
+  DeploymentOverview,
   DeployResult,
   KitState,
   Selection,
@@ -15,6 +17,7 @@ import type {
 } from "@hive/contract";
 import { Context, Effect, Layer } from "effect";
 import { log } from "../../lib/log.ts";
+import { runtimeRoot } from "../../lib/paths.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { SourceRegistry, type SourceRegistrySvc } from "../../sources/effect/sources-live.ts";
 import type { GitProcess } from "../acquisition/git-process.ts";
@@ -27,9 +30,12 @@ import {
   type ExecPort,
 } from "../deploy/adapter.ts";
 import { type DeployInput, runDeploy } from "../deploy/engine.ts";
+import { openDeploymentStateStore } from "../deployment-state.ts";
 import { readLedger } from "../ledger.ts";
 import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
+import { buildOverview, captureDeploymentSnapshot } from "../overview.ts";
 import { catalogNameSets, computeDiff, resolveSelection } from "../selection.ts";
+import { openSelectionStore } from "../selection-store.ts";
 import { type HttpFetch, syncLocatorSource } from "../sync.ts";
 import { buildSourceSyncStatus, type LastSyncError } from "../sync-status.ts";
 import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
@@ -42,6 +48,8 @@ export type KitSvc = {
   catalog(): Catalog;
   // Current sync + ledger state (per-Source freshness array).
   state(): KitState;
+  // One authoritative point-in-time projection for the deployment UI.
+  overview(): DeploymentOverview;
   // Run a per-Source sync over the active Sources; one Source's failure never
   // fails the whole run. Returns the per-Source outcomes.
   sync(): Effect.Effect<SyncRunResult>;
@@ -82,6 +90,10 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
     probe: opts.probe ?? bunBinaryProbe,
   };
   const events = new TypedEmitter<DeployAuditEvents>();
+  const selectionStore = openSelectionStore(join(runtimeRoot(), "kit", "selection.json"));
+  const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+    legacyFingerprintPath: targets.fingerprintPath(),
+  });
 
   // Per-Source last sync error, keyed by Source id. A Map so a lookup miss is a
   // clean `undefined` under noUncheckedIndexedAccess — never an `as`.
@@ -104,6 +116,19 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
       ),
       ledger: readLedger(targets),
     }),
+    overview: () => {
+      const sourceRegistry = registry.currentSnapshot();
+      const active = sourceRegistry.sources.filter((source) => source.active);
+      const ledger = readLedger(targets);
+      const snapshot = captureDeploymentSnapshot(targets, {
+        sourceRegistry,
+        catalog: readCatalog(targets, active),
+        selection: selectionStore.seedOnce(ledger),
+        ledger,
+        deploymentState: deploymentState.readAll(),
+      });
+      return buildOverview(snapshot);
+    },
     verify: () => runVerify(targets),
     sync: () =>
       Effect.gen(function* () {

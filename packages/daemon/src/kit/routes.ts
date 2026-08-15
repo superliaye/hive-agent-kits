@@ -48,6 +48,8 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
 
   app.get("/api/kit/state", (c) => c.json(kit.state()));
 
+  app.get("/api/kit/overview", (c) => c.json(kit.overview()));
+
   app.get("/api/kit/selection", (c) => {
     try {
       return c.json(SelectionSnapshot.parse(seedSelection()));
