@@ -211,7 +211,7 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
     .sort((left, right) =>
       serializeCapabilityKey(left).localeCompare(serializeCapabilityKey(right)),
     )
-    .map((key) => {
+    .map((key): OverviewRow => {
       const id = serializeCapabilityKey(key);
       const variants = snapshot.catalog.entries
         .filter((entry) => serializeCapabilityKey(entry) === id)
