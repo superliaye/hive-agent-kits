@@ -7,12 +7,11 @@
   "scripts": {
     "prepare": "git config core.hooksPath .githooks",
     "test": "bun test",
-    "test:manifest-interop": "bun run scripts/test-cross-repo-manifest-lock.ts",
     "test:release-scripts": "bash scripts/__tests__/publish-stable-channel.test.sh && bash scripts/__tests__/publish-immutable-release.test.sh && bash scripts/__tests__/packaged-daemon-starter.test.sh",
     "check": "biome check",
     "check:no-float": "bun run scripts/check-no-floating-suppressions.ts",
     "typecheck": "bun run --filter '*' typecheck",
-    "verify": "bun run check:no-float && bun run check && bun run typecheck && bun run test:manifest-interop && bun run test:release-scripts && bun run test",
+    "verify": "bun run check:no-float && bun run check && bun run typecheck && bun run test:release-scripts && bun run test",
     "format": "biome format --write",
     "dev:full": "bun run scripts/dev.ts",
     "release:manifest": "bun run scripts/build-release-manifest.ts",

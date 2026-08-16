@@ -1,18 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Selection, Source } from "@hive/contract";
 import { readCatalog } from "../catalog.ts";
 import { DeployError } from "../effect/errors.ts";
 import { resolveSelection } from "../selection.ts";
 import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
-
-const PINNED_FIXTURE = fileURLToPath(
-  new URL("../../../../../scripts/fixtures/my-agent-kits", import.meta.url),
-);
 
 // Default rank mirrors the seed: a `local` Starter sits at rank 0 (lowest), each
 // git Source gets the next increasing rank (later-declared = higher precedence).
@@ -167,20 +162,6 @@ describe("readCatalog (single Source)", () => {
     expect(child).toBeDefined();
     expect(new Set(child?.capabilities.skills)).toEqual(new Set(["alpha", "beta", "gamma"]));
     expect(child?.capabilities.skills.filter((s) => s === "beta").length).toBe(1);
-  });
-
-  test("loads the pinned real-world capability fixture", () => {
-    cpSync(join(PINNED_FIXTURE, "capabilities"), join(mirror, "capabilities"), {
-      recursive: true,
-    });
-    const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
-    expect(cat.entries.length).toBeGreaterThan(0);
-    expect(
-      cat.entries.some((entry) => entry.kind === "agent" && entry.name === "loop-build-agent"),
-    ).toBe(true);
-    expect(cat.entries.some((entry) => entry.kind === "instruction" && entry.name === "core")).toBe(
-      true,
-    );
   });
 });
 

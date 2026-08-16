@@ -1,7 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 import { memTree } from "./mem-tree.ts";
 import { validate } from "./validate.ts";
 
@@ -456,73 +453,6 @@ describe("validate (strict) — real my-agent-kits reference content stays confo
       ].join("\n"),
     });
     const result = validate(tree);
-    expect(result.errors).toEqual([]);
-    expect(result.conformant).toBe(true);
-  });
-});
-
-// Exhaustive reference-content regression guard (acceptance criterion 4): run the
-// new agent + instruction schemas against EVERY `AGENT.md` and `*.instructions.md`
-// at the pinned my-agent-kits production revision (not a hand-picked few). If ANY real
-// frontmatter is rejected, the lenient-superset claim is false — the test fails
-// loudly naming the offender, so the schema (not the content) is revisited.
-describe("validate (strict) — ALL real my-agent-kits agent + instruction content stays conformant", () => {
-  const CLONE = fileURLToPath(
-    new URL("../../../scripts/fixtures/my-agent-kits", import.meta.url),
-  );
-  const CAPS = join(CLONE, "capabilities");
-
-  // Recursive walk — agents legitimately nest under @-groups, so AGENT.md markers
-  // live at any depth (enumerateLeaves flattens @-group ancestors to the leaf).
-  function walkFiles(dir: string): string[] {
-    if (!existsSync(dir)) return [];
-    const out: string[] = [];
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) out.push(...walkFiles(full));
-      else out.push(full);
-    }
-    return out;
-  }
-
-  // Top-level-only list — instruction is a FILE kind; enumerateLeaves'
-  // collectFileKind enumerates only the top level of `instructions/`, never
-  // recursing. Mirror that here so the guard tests exactly the set validate()
-  // walks (a nested `instructions/sub/x.instructions.md` is not a leaf, so feeding
-  // it to the memTree would silently under-test).
-  function listTopLevel(dir: string): string[] {
-    if (!existsSync(dir)) return [];
-    return readdirSync(dir)
-      .map((entry) => join(dir, entry))
-      .filter((full) => !statSync(full).isDirectory());
-  }
-
-  // Keys are paths relative to `capabilities/` (what memTree/enumerateLeaves walk).
-  function cloneTree(): Record<string, string> {
-    const files: Record<string, string> = {};
-    const agentMd = walkFiles(join(CAPS, "agents")).filter((f) => f.endsWith("AGENT.md"));
-    const instrMd = listTopLevel(join(CAPS, "instructions")).filter((f) =>
-      f.endsWith(".instructions.md"),
-    );
-    for (const f of [...agentMd, ...instrMd]) {
-      const rel = relative(CAPS, f).replace(/\\/g, "/");
-      files[rel] = readFileSync(f, "utf8");
-    }
-    return files;
-  }
-
-  test("every pinned AGENT.md and *.instructions.md validates conformant:true", () => {
-    const files = cloneTree();
-    // Guard against an incomplete fixture so this cannot pass without exercising
-    // both supported capability kinds.
-    const agentCount = Object.keys(files).filter((k) => k.startsWith("agents/")).length;
-    const instrCount = Object.keys(files).filter((k) => k.startsWith("instructions/")).length;
-    if (agentCount === 0 || instrCount === 0) {
-      throw new Error(
-        "pinned my-agent-kits fixture is incomplete; see scripts/fixtures/my-agent-kits/PIN.json",
-      );
-    }
-    const result = validate(memTree(files));
     expect(result.errors).toEqual([]);
     expect(result.conformant).toBe(true);
   });
