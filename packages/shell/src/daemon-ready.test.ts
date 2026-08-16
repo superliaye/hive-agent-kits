@@ -3,6 +3,7 @@ import {
   canReuseReadyDaemon,
   incompatibleDaemonMessage,
   parseReadyProbe,
+  probeExternalReadyWithRetries,
   validateExternalReady,
 } from "./daemon-ready.ts";
 
@@ -39,6 +40,30 @@ const shellRelease = {
 };
 
 describe("daemon ready compatibility", () => {
+  test("retries a transiently unavailable external forward", async () => {
+    let attempts = 0;
+
+    const probe = await probeExternalReadyWithRetries(async () => {
+      attempts += 1;
+      return attempts === 1 ? { ready: false } : parseReadyProbe(200, metadata);
+    }, [0]);
+
+    expect(probe).toEqual({ ready: true, metadata });
+    expect(attempts).toBe(2);
+  });
+
+  test("does not retry a rejected external session", async () => {
+    let attempts = 0;
+
+    const probe = await probeExternalReadyWithRetries(async () => {
+      attempts += 1;
+      return parseReadyProbe(401, { error: "unauthorized" });
+    }, [0, 0]);
+
+    expect(probe).toEqual({ ready: false, reason: "unauthorized" });
+    expect(attempts).toBe(1);
+  });
+
   test("packaged shell accepts a packaged real-home daemon", () => {
     const probe = parseReadyProbe(200, {
       ...metadata,

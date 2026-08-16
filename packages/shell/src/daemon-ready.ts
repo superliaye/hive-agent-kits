@@ -31,6 +31,19 @@ export function parseReadyProbe(responseStatus: number, body: unknown): ReadyPro
   return { ready: true, metadata: parsed.success ? parsed.data : null };
 }
 
+export async function probeExternalReadyWithRetries(
+  probe: () => Promise<ReadyProbe>,
+  retryDelaysMs: readonly number[],
+): Promise<ReadyProbe> {
+  let result = await probe();
+  for (const delayMs of retryDelaysMs) {
+    if (result.ready || result.reason === "unauthorized") return result;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    result = await probe();
+  }
+  return result;
+}
+
 export type ExternalReadyValidation = { ok: true } | { ok: false; message: string };
 
 export function validateExternalReady(

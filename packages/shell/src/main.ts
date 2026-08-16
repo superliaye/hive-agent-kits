@@ -26,6 +26,7 @@ import {
   canReuseReadyDaemon,
   incompatibleDaemonMessage,
   parseReadyProbe,
+  probeExternalReadyWithRetries,
   type ReadyProbe,
   type ShellMode,
   validateExternalReady,
@@ -185,7 +186,11 @@ async function connectDaemon(): Promise<ActiveDaemonConnection> {
     };
   }
 
-  const probe = await probeDaemonReady(shellLaunch.baseUrl, shellLaunch.session.sessionToken);
+  const externalLaunch = shellLaunch;
+  const probe = await probeExternalReadyWithRetries(
+    () => probeDaemonReady(externalLaunch.baseUrl, externalLaunch.session.sessionToken),
+    [100, 250, 500, 1_000, 2_000],
+  );
   if (!probe.ready && probe.reason === "unauthorized") {
     throw new Error(
       "The external Hive session expired or was revoked. Relaunch the external connection to continue.",
@@ -200,13 +205,13 @@ async function connectDaemon(): Promise<ActiveDaemonConnection> {
   const shellRelease = ShellReleaseIdentitySchema.parse(
     JSON.parse(readFileSync(join(process.resourcesPath, "hive-release.json"), "utf8")) as unknown,
   );
-  const validation = validateExternalReady(shellLaunch, probe.metadata, shellRelease);
+  const validation = validateExternalReady(externalLaunch, probe.metadata, shellRelease);
   if (!validation.ok) throw new Error(validation.message);
   return {
     kind: "external",
-    baseUrl: shellLaunch.baseUrl,
-    token: shellLaunch.session.sessionToken,
-    displayName: shellLaunch.displayName,
+    baseUrl: externalLaunch.baseUrl,
+    token: externalLaunch.session.sessionToken,
+    displayName: externalLaunch.displayName,
   };
 }
 
