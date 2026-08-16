@@ -100,6 +100,54 @@ function applied(capabilityKey: CapabilityKey, renderedHash: string, targetName 
 }
 
 describe("authoritative Overview union and state matrix", () => {
+  test("omits fully reconciled unavailable history without hiding failed removals", () => {
+    const removed = key("skill", "removed");
+    const inertIntent = key("skill", "inert-intent");
+    const failed = key("skill", "failed-remove");
+    const overview = buildOverview(
+      fixture({
+        selection: {
+          revision: 2,
+          enabled: [],
+          removalIntents: [{ key: inertIntent, targets: ["codex"] }],
+        },
+        deploymentState: {
+          schemaVersion: 1,
+          revision: 2,
+          legacyInstructionFingerprints: [],
+          records: [
+            {
+              key: removed,
+              target: "claude",
+              lastAttempt: {
+                action: "remove",
+                outcome: "succeeded",
+                attemptedAt: 2,
+                operationId: "op-removed",
+              },
+            },
+            {
+              key: failed,
+              target: "claude",
+              lastAttempt: {
+                action: "remove",
+                outcome: "failed",
+                attemptedAt: 3,
+                operationId: "op-failed-remove",
+                code: "io",
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(overview.rows.map((value) => `${value.key.kind}:${value.key.name}`)).toEqual([
+      "skill:failed-remove",
+    ]);
+    expect(row(overview, failed).lastAttempt).toMatchObject({ state: "failed", code: "io" });
+  });
+
   test("unions every authority and keeps shadows/catalog/desired orthogonal", () => {
     const catalogKey = key("skill", "catalog");
     const selectedKey = key("agent", "selected");
@@ -161,7 +209,6 @@ describe("authoritative Overview union and state matrix", () => {
       "agent:blocked",
       "agent:selected",
       "bundle:state",
-      "instruction:intent",
       "plugin:ledger",
       "skill:catalog",
       "skill:shadow-only",

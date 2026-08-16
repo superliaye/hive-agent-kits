@@ -293,7 +293,17 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
           catalog: entry.deployable ? "deployable" : entry.shadowed ? "shadowed" : "blocked",
         })),
       };
-    });
+    })
+    .filter(
+      (row) =>
+        !(
+          row.catalog === "unavailable" &&
+          row.desired === "off" &&
+          row.reconciliation === "in_sync" &&
+          row.lastAttempt.state !== "failed" &&
+          row.targets.every((target) => target.observation === "missing")
+        ),
+    );
 
   return DeploymentOverview.parse({
     sources: [...snapshot.sources].sort(
