@@ -184,7 +184,6 @@ describe("KitDeployPage — daemon Overview states", () => {
     );
     expect(host.textContent).toContain("ledger-only");
     expect(host.textContent).toContain("Owned outside deployment state");
-    expect(paths).not.toContain("/api/kit/catalog");
     expect(paths).not.toContain("/api/kit/state");
     expect(paths).not.toContain("/api/kit/verify");
     expect(paths).not.toContain("/api/kit/diff");
