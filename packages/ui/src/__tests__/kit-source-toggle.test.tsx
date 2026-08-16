@@ -374,13 +374,15 @@ describe("KitDeployPage — Source on/off toggle", () => {
     expect(sha?.className).not.toContain("kit-sha-empty");
   });
 
-  test("per-capability target observations replace global target toggles", async () => {
+  test("per-capability target observations coexist with global target controls", async () => {
     installStubs();
     const host = await render();
     const rail = host.querySelector('[data-testid="kit-state-skill-alpha"]');
     expect(rail?.textContent).toContain("Claude");
     expect(rail?.textContent).toContain("Codex");
-    expect(host.querySelector('[data-testid="kit-target-claude"]')).toBeNull();
+    const target = host.querySelector('[data-testid="kit-target-claude"]');
+    expect(target).not.toBeNull();
+    expect(target?.className).toContain("kit-target-check");
   });
 
   test("a failed toggle surfaces an error banner and leaves the capabilities in place", async () => {

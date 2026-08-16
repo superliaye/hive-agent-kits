@@ -13,8 +13,10 @@ import {
   type OverviewRow,
   type OverviewSource,
   PlanStaleError,
+  type PresetSummary,
   type ReconciliationState,
   SelectionConflictError,
+  type SelectionMutation,
   type SyncRunResult,
   type TargetObservation,
 } from "../api.ts";
@@ -31,7 +33,15 @@ const KIND_LABEL: Record<CapabilityKind, string> = {
   plugin: "Plugins",
   bundle: "Bundles",
 };
+const KIND_TO_PRESET_CAPABILITIES = {
+  instruction: "instructions",
+  skill: "skills",
+  agent: "agents",
+  plugin: "plugins",
+  bundle: "bundles",
+} as const satisfies Record<CapabilityKind, keyof PresetSummary["capabilities"]>;
 const TARGET_LABEL: Record<DeployTarget, string> = { claude: "Claude", codex: "Codex" };
+const DEPLOY_TARGETS: DeployTarget[] = ["claude", "codex"];
 const RECONCILIATION_LABEL: Record<ReconciliationState, string> = {
   in_sync: "In sync",
   pending_add: "Pending add",
@@ -53,7 +63,10 @@ const OBSERVATION_LABEL: Record<TargetObservation, string> = {
 };
 
 type DiffChange = "added" | "changed" | "removed";
-type SelectionAttempt = { row: OverviewRow; expectedRevision: number };
+type SelectionAttempt = {
+  expectedRevision: number;
+  changes: SelectionMutation["changes"];
+};
 type DeployAttempt = {
   selectionRevision: number;
   planToken: string;
@@ -71,6 +84,25 @@ const DIFF_BUCKETS: Array<{ change: DiffChange; label: string; glyph: string }> 
 
 function shortIdentity(identity: string | null): string {
   return identity ? identity.slice(0, 7) : "no identity";
+}
+
+function keyId(key: OverviewRow["key"]): string {
+  return `${key.kind}:${key.name}`;
+}
+
+function desiredTargets(row: OverviewRow): DeployTarget[] {
+  return row.targets.filter((target) => target.desired === "on").map((target) => target.target);
+}
+
+function presetKeys(preset: PresetSummary): OverviewRow["key"][] {
+  return KINDS.flatMap((kind) =>
+    preset.capabilities[KIND_TO_PRESET_CAPABILITIES[kind]].map((name) => ({ kind, name })),
+  );
+}
+
+function presetActive(preset: PresetSummary, rowsByKey: Map<string, OverviewRow>): boolean {
+  const keys = presetKeys(preset);
+  return keys.length > 0 && keys.every((key) => rowsByKey.get(keyId(key))?.desired === "on");
 }
 
 function operationAfter(
@@ -119,6 +151,7 @@ export function KitDeployPage({
   const [selectionConflictResolved, setSelectionConflictResolved] = useState(false);
   const [planStaleResolved, setPlanStaleResolved] = useState(false);
   const [transportAcceptanceProven, setTransportAcceptanceProven] = useState(false);
+  const [targetPreference, setTargetPreference] = useState<DeployTarget[]>(["claude"]);
   const addSourceInputRef = useRef<HTMLInputElement>(null);
   const { armed: realHomeArmed } = useDeveloperConfig(apiConfig);
 
@@ -142,6 +175,22 @@ export function KitDeployPage({
     },
   });
   const overview = overviewQuery.data;
+  const catalogQuery = useQuery({
+    queryKey: ["kit", "catalog"],
+    queryFn: () => api.getKitCatalog(apiConfig),
+  });
+  const presets = catalogQuery.data?.presets ?? [];
+  const selectedRows = overview?.rows.filter((row) => row.desired === "on") ?? [];
+  const selectedTargets = [...new Set(selectedRows.flatMap((row) => desiredTargets(row)))];
+  const activeTargets = selectedTargets.length > 0 ? selectedTargets : targetPreference;
+  const rowsByKey = new Map((overview?.rows ?? []).map((row) => [keyId(row.key), row]));
+  const activePresets = presets.filter((preset) => presetActive(preset, rowsByKey));
+  const activePresetKeys = new Set(
+    activePresets.flatMap((preset) => presetKeys(preset).map(keyId)),
+  );
+  const manualSelectionCount = selectedRows.filter(
+    (row) => !activePresetKeys.has(keyId(row.key)),
+  ).length;
 
   useEffect(() => {
     if (!acceptedOperationId || !overview) return;
@@ -168,6 +217,11 @@ export function KitDeployPage({
     void queryClient.invalidateQueries({ queryKey: ["kit", "overview"] });
   };
 
+  const refetchKit = (): void => {
+    refetchOverview();
+    void queryClient.invalidateQueries({ queryKey: ["kit", "catalog"] });
+  };
+
   const syncMutation = useMutation({
     mutationFn: () => api.syncKit(apiConfig),
     onSuccess: (result: SyncRunResult) => {
@@ -175,7 +229,7 @@ export function KitDeployPage({
       pushToast(toast.kind, toast.message);
     },
     onError: () => pushToast("error", "Sync failed"),
-    onSettled: refetchOverview,
+    onSettled: refetchKit,
   });
 
   const toggleSource = useMutation({
@@ -185,7 +239,7 @@ export function KitDeployPage({
         : api.activateSource(apiConfig, source.id),
     onSuccess: (_result, source) => {
       pushToast("success", `${source.active ? "Deactivated" : "Activated"} ${source.label}`);
-      refetchOverview();
+      refetchKit();
     },
     onError: () => pushToast("error", "Could not change the Source"),
   });
@@ -194,7 +248,7 @@ export function KitDeployPage({
     mutationFn: (source: OverviewSource) => api.deleteSource(apiConfig, source.id),
     onSuccess: (_result, source) => {
       pushToast("success", `Removed ${source.label}`);
-      refetchOverview();
+      refetchKit();
     },
     onError: () => pushToast("error", "Could not remove the Source"),
   });
@@ -204,22 +258,16 @@ export function KitDeployPage({
       api.reorderSource(apiConfig, input.source.id, input.direction),
     onSuccess: (_result, input) => {
       pushToast("success", `Moved ${input.source.label} ${input.direction}`);
-      refetchOverview();
+      refetchKit();
     },
     onError: () => pushToast("error", "Could not reorder the Source"),
   });
 
   const selectionMutation = useMutation({
-    mutationFn: ({ row, expectedRevision }: SelectionAttempt) => {
+    mutationFn: ({ changes, expectedRevision }: SelectionAttempt) => {
       return api.patchKitSelection(apiConfig, {
         expectedRevision,
-        changes: [
-          {
-            key: row.key,
-            enabled: row.desired === "off",
-            targets: row.applicableTargets,
-          },
-        ],
+        changes,
       });
     },
     onMutate: () => setSelectionConflictResolved(false),
@@ -348,14 +396,6 @@ export function KitDeployPage({
         : unmanagedInstructionRows.length > 0
           ? "Instructions paused"
           : "Up to date";
-  const selectedRows = overview?.rows.filter((row) => row.desired === "on") ?? [];
-  const selectedTargets = [
-    ...new Set(
-      selectedRows.flatMap((row) =>
-        row.targets.filter((target) => target.desired === "on").map((target) => target.target),
-      ),
-    ),
-  ];
   const manualInstallRows =
     overview?.rows.filter((row) => row.reconciliation === "manual_install_required") ?? [];
   const manualRemovalRows =
@@ -365,6 +405,53 @@ export function KitDeployPage({
       (row) =>
         row.key.kind === "instruction" && row.desired === "on" && row.catalog === "unavailable",
     ) ?? [];
+
+  function targetsForRow(row: OverviewRow): DeployTarget[] {
+    const matching = row.applicableTargets.filter((target) => activeTargets.includes(target));
+    return matching.length > 0 ? matching : row.applicableTargets;
+  }
+
+  function toggleTarget(target: DeployTarget): void {
+    if (!overview || authorityUnknown || selectionMutation.isPending) return;
+    const nextTargets = activeTargets.includes(target)
+      ? activeTargets.filter((candidate) => candidate !== target)
+      : DEPLOY_TARGETS.filter(
+          (candidate) => activeTargets.includes(candidate) || candidate === target,
+        );
+    if (nextTargets.length === 0) return;
+    setTargetPreference(nextTargets);
+    const enabled = nextTargets.includes(target);
+    const changes = selectedRows.flatMap((row) => {
+      if (!row.applicableTargets.includes(target)) return [];
+      const currentlyEnabled = desiredTargets(row).includes(target);
+      if (currentlyEnabled === enabled) return [];
+      return [{ key: row.key, enabled, targets: [target] }];
+    });
+    if (changes.length === 0) return;
+    selectionMutation.mutate({ expectedRevision: overview.selectionRevision, changes });
+  }
+
+  function togglePreset(preset: PresetSummary): void {
+    if (!overview || authorityUnknown || selectionMutation.isPending) return;
+    const active = presetActive(preset, rowsByKey);
+    const keptByOtherPreset = new Set(
+      activePresets
+        .filter((candidate) => candidate.name !== preset.name)
+        .flatMap((candidate) => presetKeys(candidate).map(keyId)),
+    );
+    const changes = presetKeys(preset).flatMap((key) => {
+      const row = rowsByKey.get(keyId(key));
+      if (!row) return [];
+      if (active) {
+        if (keptByOtherPreset.has(keyId(key))) return [];
+        const targets = desiredTargets(row);
+        return targets.length > 0 ? [{ key, enabled: false, targets }] : [];
+      }
+      return row.desired === "off" ? [{ key, enabled: true, targets: targetsForRow(row) }] : [];
+    });
+    if (changes.length === 0) return;
+    selectionMutation.mutate({ expectedRevision: overview.selectionRevision, changes });
+  }
 
   function deploy(): void {
     if (!deployEnabled || !overview) return;
@@ -433,7 +520,7 @@ export function KitDeployPage({
               <AddSourceForm
                 apiConfig={apiConfig}
                 inputRef={addSourceInputRef}
-                onChanged={refetchOverview}
+                onChanged={refetchKit}
                 disabled={authorityUnknown}
               />
             </div>
@@ -547,6 +634,56 @@ export function KitDeployPage({
         </div>
       )}
 
+      {overview && hasRows && (
+        <div className="kit-controls">
+          <div className="kit-presets" data-testid="kit-presets">
+            <span className="kit-control-label">Preset</span>
+            {catalogQuery.isLoading ? (
+              <span className="kit-presets-none">loading…</span>
+            ) : catalogQuery.isError ? (
+              <span className="kit-presets-none">unavailable</span>
+            ) : presets.length === 0 ? (
+              <span className="kit-presets-none">none</span>
+            ) : (
+              presets.map((preset) => (
+                <button
+                  type="button"
+                  key={preset.name}
+                  className={`badge kit-preset ${presetActive(preset, rowsByKey) ? "active" : ""}`}
+                  onClick={() => togglePreset(preset)}
+                  title={preset.description}
+                  disabled={authorityUnknown || selectionMutation.isPending}
+                >
+                  {preset.name}
+                </button>
+              ))
+            )}
+            {presets.length > 0 && (
+              <span className="kit-preset-note" data-testid="kit-preset-note">
+                Presets add to the current Selection; {manualSelectionCount} selected outside active
+                Presets.
+              </span>
+            )}
+          </div>
+          <div className="kit-targets" data-testid="kit-targets">
+            <span className="kit-control-label">Targets</span>
+            {DEPLOY_TARGETS.map((target) => (
+              <label key={target} className="kit-target-toggle">
+                <input
+                  type="checkbox"
+                  className="kit-target-check"
+                  checked={activeTargets.includes(target)}
+                  onChange={() => toggleTarget(target)}
+                  disabled={authorityUnknown || selectionMutation.isPending}
+                  data-testid={`kit-target-${target}`}
+                />
+                {TARGET_LABEL[target]}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
       {overview && overview.diff.entries.length > 0 && <DeployDiffPanel overview={overview} />}
 
       <div className="kit-catalog" data-testid="kit-catalog">
@@ -599,14 +736,22 @@ export function KitDeployPage({
                 kind={kind}
                 rows={rows}
                 sourceLabels={new Map(overview.sources.map((source) => [source.id, source.label]))}
-                pendingKey={
-                  selectionMutation.isPending ? selectionMutation.variables?.row.key : undefined
+                pendingKeys={
+                  selectionMutation.isPending
+                    ? selectionMutation.variables?.changes.map((change) => change.key)
+                    : undefined
                 }
                 selectionDisabled={authorityUnknown}
                 onToggle={(row) =>
                   selectionMutation.mutate({
-                    row,
                     expectedRevision: overview.selectionRevision,
+                    changes: [
+                      {
+                        key: row.key,
+                        enabled: row.desired === "off",
+                        targets: row.desired === "off" ? targetsForRow(row) : desiredTargets(row),
+                      },
+                    ],
                   })
                 }
               />
@@ -983,14 +1128,14 @@ function KindSection({
   kind,
   rows,
   sourceLabels,
-  pendingKey,
+  pendingKeys,
   selectionDisabled,
   onToggle,
 }: {
   kind: CapabilityKind;
   rows: OverviewRow[];
   sourceLabels: Map<string, string>;
-  pendingKey: OverviewRow["key"] | undefined;
+  pendingKeys: OverviewRow["key"][] | undefined;
   selectionDisabled: boolean;
   onToggle: (row: OverviewRow) => void;
 }): JSX.Element {
@@ -1022,10 +1167,9 @@ function KindSection({
               ? `kit-row-${kind}-${row.key.name}-${suffix}`
               : `kit-row-${kind}-${row.key.name}`;
           const selected = row.desired === "on" && !shadowed;
-          const isPending =
-            pendingKey !== undefined &&
-            pendingKey.kind === row.key.kind &&
-            pendingKey.name === row.key.name;
+          const isPending = pendingKeys?.some(
+            (key) => key.kind === row.key.kind && key.name === row.key.name,
+          );
           return (
             <button
               type="button"
