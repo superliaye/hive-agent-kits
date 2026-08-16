@@ -40,6 +40,7 @@ import {
   deploymentActiveFromOverview,
   shouldConfirmShellClose,
   shouldDrainShellDaemon,
+  shouldQuitAfterAllWindowsClosed,
 } from "./lifecycle";
 
 // Renderer→main IPC contracts. AGENTS.md requires Zod at external
@@ -455,7 +456,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (shouldQuitAfterAllWindowsClosed(shellLaunch.kind, process.platform)) app.quit();
 });
 
 // Block Electron's exit until the daemon child has actually exited. Without

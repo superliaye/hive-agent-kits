@@ -23,6 +23,13 @@ export function shouldManageDaemon(kind: ShellLaunchKind): boolean {
   return kind === "managed";
 }
 
+export function shouldQuitAfterAllWindowsClosed(
+  kind: ShellLaunchKind,
+  platform: NodeJS.Platform,
+): boolean {
+  return platform !== "darwin" || kind === "external";
+}
+
 export function shouldConfirmShellClose(
   kind: ShellLaunchKind,
   deployActive: boolean,
