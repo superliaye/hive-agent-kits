@@ -8,6 +8,7 @@ import type { DeploymentSnapshot } from "../deploy-plan.ts";
 import {
   buildOverview,
   captureCoherentDeploymentSnapshot,
+  captureDeploymentSnapshot,
   DeploymentSnapshotChangedError,
 } from "../overview.ts";
 import type { DeployTargets } from "../targets.ts";
@@ -547,6 +548,90 @@ const coherentSource: Source = {
   createdAt: 1,
   rank: 1,
 };
+
+describe("managed npx bundle snapshot capture", () => {
+  test("observes declared paths and emits target-scoped metadata hashes", () => {
+    const root = mkdtempSync(join(tmpdir(), "overview-managed-bundle-"));
+    try {
+      const targets = testTargets(root);
+      const bundlePath = join(
+        targets.mirrorRoot("source-win"),
+        "capabilities",
+        "bundles",
+        "archify.bundle.md",
+      );
+      mkdirSync(join(bundlePath, ".."), { recursive: true });
+      writeFileSync(
+        bundlePath,
+        `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: https://github.com/tt-a1i/archify/tree/${"a".repeat(40)}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.agents/skills/archify\n---\n`,
+      );
+      mkdirSync(join(targets.claudeHome(), "skills", "archify"), { recursive: true });
+      const archify = key("bundle", "archify");
+      const captured = captureDeploymentSnapshot(
+        targets,
+        {
+          sourceRegistry: {
+            revision: 1,
+            sources: [{ ...coherentSource, id: "source-win" }],
+          },
+          catalog: {
+            entries: [variant(archify)],
+            presets: [],
+            problems: [],
+          },
+          selection: {
+            revision: 1,
+            enabled: [{ key: archify, targets: ["claude", "codex"] }],
+            removalIntents: [],
+          },
+          ledger: null,
+          deploymentState: {
+            schemaVersion: 1,
+            revision: 0,
+            records: [],
+            legacyInstructionFingerprints: [],
+          },
+        },
+        [],
+      );
+      const claude = captured.wouldDeploy.find((item) => item.target === "claude");
+      const codex = captured.wouldDeploy.find((item) => item.target === "codex");
+
+      expect(claude?.renderedHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(codex?.renderedHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(claude?.renderedHash).not.toBe(codex?.renderedHash);
+      expect(captured.artifacts).toContainEqual({
+        key: archify,
+        target: "claude",
+        existence: "present",
+        hash: claude?.renderedHash,
+      });
+      expect(captured.artifacts).toContainEqual({
+        key: archify,
+        target: "codex",
+        existence: "missing",
+        hash: null,
+      });
+      expect(target(row(buildOverview(captured), archify), "claude").reconciliation).toBe(
+        "pending_add",
+      );
+
+      const inSync = buildOverview({
+        ...captured,
+        deploymentState: {
+          ...captured.deploymentState,
+          records: [applied(archify, claude?.renderedHash ?? "", "claude")],
+        },
+      });
+      expect(target(row(inSync, archify), "claude")).toMatchObject({
+        reconciliation: "in_sync",
+        observation: "verified",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 function coherentReaders(onCatalog: () => void) {
   return {

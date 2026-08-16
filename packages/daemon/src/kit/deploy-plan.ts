@@ -358,7 +358,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
 
   const actions: DeployPlanAction[] = [];
   for (const selected of snapshot.selection.enabled) {
-    if (selected.key.kind === "plugin" || selected.key.kind === "bundle") continue;
+    if (selected.key.kind === "plugin") continue;
     const selectedWinner = winner.get(serializeCapabilityKey(selected.key));
     if (!selectedWinner) continue;
     for (const target of selected.targets) {
@@ -369,6 +369,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       const legacyInstruction =
         selected.key.kind === "instruction" ? legacyInstructions.get(target) : undefined;
       if (
+        selected.key.kind !== "bundle" &&
         !deployment &&
         !legacyInstruction &&
         owned.get(serializeCapabilityKey(selected.key))?.has(target)
@@ -376,7 +377,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
         continue;
       }
       const rendered = wouldDeploy.get(id);
-      if (!rendered || rendered.error) continue;
+      if (!rendered || rendered.error || rendered.renderedHash === null) continue;
       const artifact = artifactFor(snapshot.artifacts, selected.key, target);
       let action: "add" | "update" | undefined;
       const applied =
@@ -415,10 +416,16 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
   }
 
   for (const intent of snapshot.selection.removalIntents) {
-    if (intent.key.kind === "plugin" || intent.key.kind === "bundle") continue;
+    if (intent.key.kind === "plugin") continue;
     for (const target of intent.targets) {
       if (!applicableTargets(intent.key).includes(target)) continue;
       if (intent.key.kind === "instruction" && blockedByTarget.has(target)) continue;
+      if (
+        intent.key.kind === "bundle" &&
+        wouldDeploy.get(pairId(intent.key, target))?.renderedHash == null
+      ) {
+        continue;
+      }
       const privatelyApplied = records.get(pairId(intent.key, target))?.applied;
       const ledgerOwned = owned.get(serializeCapabilityKey(intent.key))?.has(target) ?? false;
       const legacyInstructionOwned =

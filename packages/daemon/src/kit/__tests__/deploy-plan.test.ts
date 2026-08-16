@@ -4,6 +4,7 @@ import type { DeploymentSnapshot, DeployPlan } from "../deploy-plan.ts";
 import { buildDeployPlan, identityForLedger, tokenForPlan } from "../deploy-plan.ts";
 
 const skill = (name: string): CapabilityKey => ({ kind: "skill", name });
+const bundle = (name: string): CapabilityKey => ({ kind: "bundle", name });
 
 function snapshot(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapshot {
   const key = skill("alpha");
@@ -214,6 +215,154 @@ describe("buildDeployPlan", () => {
         artifact: { existence: "present", hash: "disk" },
       },
     ]);
+  });
+
+  test("plans managed bundle add, repair, metadata update, and target removal", () => {
+    const archify = bundle("archify");
+    const rendered = "a".repeat(64);
+    const base = snapshot({
+      catalog: {
+        entries: [
+          {
+            ...archify,
+            description: "Archify",
+            group: "",
+            deployable: true,
+            shadowed: false,
+            sourceIds: ["source-a"],
+            contentSha: "archify-content",
+          },
+        ],
+        presets: [],
+        problems: [],
+      },
+      selection: {
+        revision: 9,
+        enabled: [{ key: archify, targets: ["claude"] }],
+        removalIntents: [],
+      },
+      wouldDeploy: [
+        {
+          key: archify,
+          target: "claude",
+          sourceId: "source-a",
+          contentSha: "archify-content",
+          renderedHash: rendered,
+        },
+      ],
+      artifacts: [{ key: archify, target: "claude", existence: "missing", hash: null }],
+    });
+
+    expect(buildDeployPlan(base).actions).toEqual([
+      {
+        action: "add",
+        key: archify,
+        target: "claude",
+        sourceId: "source-a",
+        contentSha: "archify-content",
+        renderedHash: rendered,
+        artifact: { existence: "missing", hash: null },
+      },
+    ]);
+
+    const applied = {
+      key: archify,
+      target: "claude" as const,
+      applied: {
+        sourceId: "source-a",
+        contentSha: "archify-content",
+        renderedHash: rendered,
+        appliedAt: 1,
+        operationId: "op-archify",
+      },
+      lastAttempt: {
+        action: "add" as const,
+        outcome: "succeeded" as const,
+        attemptedAt: 1,
+        operationId: "op-archify",
+      },
+    };
+    expect(
+      buildDeployPlan({
+        ...base,
+        deploymentState: { ...base.deploymentState, records: [applied] },
+        artifacts: [{ key: archify, target: "claude", existence: "present", hash: rendered }],
+      }).actions,
+    ).toEqual([]);
+    expect(
+      buildDeployPlan({
+        ...base,
+        deploymentState: { ...base.deploymentState, records: [applied] },
+      }).actions[0]?.action,
+    ).toBe("update");
+    const desired = base.wouldDeploy[0];
+    if (!desired) throw new Error("missing managed bundle fixture");
+    expect(
+      buildDeployPlan({
+        ...base,
+        deploymentState: { ...base.deploymentState, records: [applied] },
+        wouldDeploy: [{ ...desired, renderedHash: "b".repeat(64) }],
+        artifacts: [{ key: archify, target: "claude", existence: "present", hash: "b".repeat(64) }],
+      }).actions[0]?.action,
+    ).toBe("update");
+
+    const removal = buildDeployPlan({
+      ...base,
+      selection: {
+        revision: 10,
+        enabled: [],
+        removalIntents: [{ key: archify, targets: ["claude"], generation: "remove-archify" }],
+      },
+      deploymentState: { ...base.deploymentState, records: [applied] },
+    });
+    expect(removal.actions).toEqual([
+      {
+        action: "remove",
+        key: archify,
+        target: "claude",
+        removalIntentGeneration: "remove-archify",
+        artifact: { existence: "missing", hash: null },
+      },
+    ]);
+  });
+
+  test("keeps incomplete or unsupported bundles out of the durable plan", () => {
+    const legacy = bundle("legacy");
+    const plan = buildDeployPlan(
+      snapshot({
+        catalog: {
+          entries: [
+            {
+              ...legacy,
+              description: "Legacy",
+              group: "",
+              deployable: true,
+              shadowed: false,
+              sourceIds: ["source-a"],
+              contentSha: "legacy-content",
+            },
+          ],
+          presets: [],
+          problems: [],
+        },
+        selection: {
+          revision: 10,
+          enabled: [{ key: legacy, targets: ["claude"] }],
+          removalIntents: [],
+        },
+        wouldDeploy: [
+          {
+            key: legacy,
+            target: "claude",
+            sourceId: "source-a",
+            contentSha: "legacy-content",
+            renderedHash: null,
+          },
+        ],
+        artifacts: [{ key: legacy, target: "claude", existence: "missing", hash: null }],
+      }),
+    );
+    expect(plan.actions).toEqual([]);
   });
 
   test("uses imported whole-instruction provenance to plan a changed whole-file rewrite", () => {

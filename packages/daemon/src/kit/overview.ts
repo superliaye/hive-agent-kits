@@ -32,7 +32,12 @@ import {
   hashDeployedSkill,
   sha256,
 } from "./deploy/artifact-hash.ts";
-import { loadSnippets } from "./deploy/sources.ts";
+import {
+  managedNpxBundleHash,
+  managedNpxBundleMeta,
+  probeManagedNpxBundle,
+} from "./deploy/npx-bundle.ts";
+import { bundleMeta, loadSnippets } from "./deploy/sources.ts";
 import {
   type ArtifactObservation,
   applicableTargets,
@@ -109,7 +114,12 @@ function targetObservation(
   record: DeploymentStateRecord | undefined,
   ledgerOwned: boolean,
 ): TargetObservation {
-  if (key.kind === "plugin" || key.kind === "bundle") {
+  const managedBundle =
+    key.kind === "bundle" &&
+    snapshot.wouldDeploy.some(
+      (item) => pairId(item.key, item.target) === pairId(key, target) && item.renderedHash !== null,
+    );
+  if (key.kind === "plugin" || (key.kind === "bundle" && !managedBundle)) {
     return ledgerOwned || record?.applied ? "recorded_unverified" : "missing";
   }
   const artifact = snapshot.artifacts.find(
@@ -488,63 +498,79 @@ function wouldDeployArtifacts(
     snippetError = true;
   }
   const artifacts: WouldDeployArtifact[] = [];
-  for (const selected of input.selection.enabled.filter(
-    (entry) => entry.key.kind !== "instruction",
-  )) {
+  const requested = new Map<string, { key: CapabilityKey; target: DeployTarget }>();
+  for (const selection of [...input.selection.enabled, ...input.selection.removalIntents]) {
+    if (selection.key.kind === "instruction") continue;
+    for (const target of selection.targets) {
+      if (!applicableTargets(selection.key).includes(target)) continue;
+      requested.set(pairId(selection.key, target), { key: selection.key, target });
+    }
+  }
+  for (const selected of requested.values()) {
     const entry = winner.get(serializeCapabilityKey(selected.key));
     if (!entry) continue;
     const sourceId = entry.sourceIds[0];
     if (!sourceId) continue;
-    for (const target of selected.targets) {
-      if (!applicableTargets(selected.key).includes(target)) continue;
-      if (selected.key.kind === "plugin" || selected.key.kind === "bundle") {
-        artifacts.push({
-          key: selected.key,
-          target,
-          sourceId,
-          contentSha: entry.contentSha,
-          renderedHash: null,
-        });
-        continue;
-      }
-      if (snippetError || !snippets) {
-        artifacts.push({
-          key: selected.key,
-          target,
-          sourceId,
-          contentSha: entry.contentSha,
-          renderedHash: null,
-          error: "render_error",
-        });
-        continue;
-      }
-      if (selected.key.kind !== "skill" && selected.key.kind !== "agent") continue;
-      try {
-        const renderedHash = renderedNamedHash(
-          targets.mirrorRoot(sourceId),
-          snippets,
-          selected.key.kind,
-          selected.key.name,
-          target,
-        );
-        artifacts.push({
-          key: selected.key,
-          target,
-          sourceId,
-          contentSha: entry.contentSha,
-          renderedHash,
-          ...(renderedHash === null ? { error: "source_missing" as const } : {}),
-        });
-      } catch {
-        artifacts.push({
-          key: selected.key,
-          target,
-          sourceId,
-          contentSha: entry.contentSha,
-          renderedHash: null,
-          error: "render_error",
-        });
-      }
+    const { target } = selected;
+    if (selected.key.kind === "plugin") {
+      artifacts.push({
+        key: selected.key,
+        target,
+        sourceId,
+        contentSha: entry.contentSha,
+        renderedHash: null,
+      });
+      continue;
+    }
+    if (selected.key.kind === "bundle") {
+      const parsed = bundleMeta(targets.mirrorRoot(sourceId), selected.key.name);
+      const managed = parsed ? managedNpxBundleMeta(parsed, target, targets) : null;
+      artifacts.push({
+        key: selected.key,
+        target,
+        sourceId,
+        contentSha: entry.contentSha,
+        renderedHash: managed ? managedNpxBundleHash(managed, target) : null,
+      });
+      continue;
+    }
+    if (snippetError || !snippets) {
+      artifacts.push({
+        key: selected.key,
+        target,
+        sourceId,
+        contentSha: entry.contentSha,
+        renderedHash: null,
+        error: "render_error",
+      });
+      continue;
+    }
+    if (selected.key.kind !== "skill" && selected.key.kind !== "agent") continue;
+    try {
+      const renderedHash = renderedNamedHash(
+        targets.mirrorRoot(sourceId),
+        snippets,
+        selected.key.kind,
+        selected.key.name,
+        target,
+      );
+      artifacts.push({
+        key: selected.key,
+        target,
+        sourceId,
+        contentSha: entry.contentSha,
+        renderedHash,
+        ...(renderedHash === null ? { error: "source_missing" as const } : {}),
+      });
+    } catch {
+      artifacts.push({
+        key: selected.key,
+        target,
+        sourceId,
+        contentSha: entry.contentSha,
+        renderedHash: null,
+        error: "render_error",
+      });
     }
   }
 
@@ -617,10 +643,36 @@ export function captureDeploymentSnapshot(
       .filter((record) => record.applied)
       .map((record) => pairId(record.key, record.target)),
   );
+  const wouldDeploy = wouldDeployArtifacts(targets, input, activeSources);
+  const wouldByPair = new Map(
+    wouldDeploy.map((item) => [pairId(item.key, item.target), item] as const),
+  );
+  const winner = new Map(
+    input.catalog.entries
+      .filter((entry) => entry.deployable)
+      .map((entry) => [serializeCapabilityKey(entry), entry] as const),
+  );
   const artifacts = snapshotKeys(input).flatMap((key) =>
     applicableTargets(key).map((target) => {
       if (key.kind !== "plugin" && key.kind !== "bundle") {
         return probeArtifact(targets, key, target);
+      }
+      if (key.kind === "bundle") {
+        const rendered = wouldByPair.get(pairId(key, target));
+        const entry = winner.get(serializeCapabilityKey(key));
+        const sourceId = entry?.sourceIds[0];
+        const parsed = sourceId ? bundleMeta(targets.mirrorRoot(sourceId), key.name) : null;
+        const managed = parsed ? managedNpxBundleMeta(parsed, target, targets) : null;
+        if (rendered?.renderedHash && managed) {
+          return probeManagedNpxBundle(managed) === "all-present"
+            ? {
+                key,
+                target,
+                existence: "present" as const,
+                hash: rendered.renderedHash,
+              }
+            : { key, target, existence: "missing" as const, hash: null };
+        }
       }
       const recorded =
         (ledgerOwned.has(serializeCapabilityKey(key)) && ledgerTargets.has(target)) ||
@@ -645,7 +697,7 @@ export function captureDeploymentSnapshot(
       value: input.ledger,
     },
     deploymentState: input.deploymentState,
-    wouldDeploy: wouldDeployArtifacts(targets, input, activeSources),
+    wouldDeploy,
     artifacts,
     activeOperation: input.activeOperation ?? null,
     lastOperation: input.lastOperation ?? null,
