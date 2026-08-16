@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CapabilityKey } from "@hive/capability-schema";
@@ -519,6 +519,17 @@ function coherentReaders(onCatalog: () => void) {
   };
 }
 
+function swapMirrorGeneration(root: string, content: string, generation: number): void {
+  const stage = `${root}.stage-${generation}`;
+  const previous = `${root}.previous-${generation}`;
+  const marker = join(stage, "capabilities", "skills", "alpha", "SKILL.md");
+  mkdirSync(join(marker, ".."), { recursive: true });
+  writeFileSync(marker, content);
+  renameSync(root, previous);
+  renameSync(stage, root);
+  rmSync(previous, { recursive: true });
+}
+
 describe("coherent runtime snapshot capture", () => {
   test("retries when the Source revision changes during capture", () => {
     const root = mkdtempSync(join(tmpdir(), "overview-snapshot-"));
@@ -569,7 +580,9 @@ describe("coherent runtime snapshot capture", () => {
         targets,
         coherentReaders(() => {
           catalogReads += 1;
-          if (catalogReads === 1) writeFileSync(marker, "new");
+          if (catalogReads === 1) {
+            swapMirrorGeneration(targets.mirrorRoot("source-a"), "new", catalogReads);
+          }
         }),
         2,
       );
@@ -601,7 +614,11 @@ describe("coherent runtime snapshot capture", () => {
           targets,
           coherentReaders(() => {
             generation += 1;
-            writeFileSync(marker, `generation-${generation}`);
+            swapMirrorGeneration(
+              targets.mirrorRoot("source-a"),
+              `generation-${generation}`,
+              generation,
+            );
           }),
           2,
         );
