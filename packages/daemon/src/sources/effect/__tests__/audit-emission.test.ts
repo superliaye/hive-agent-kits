@@ -60,8 +60,27 @@ describe("sources audit emission", () => {
     expect(rows[0]?.agent_id).toBeNull();
     expect(rows[0]?.payload).toEqual({
       id: source.id,
+      kind: "git",
       origin: "https://github.com/superliaye/my-agent-kits",
     });
+  });
+
+  test("working-tree add audit keeps the locator path private", async () => {
+    const audit = makeAudit();
+    const registry = makeRegistry();
+    wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
+    const repoRoot = "/private/daemon/worktree";
+
+    const source = await Effect.runPromise(
+      registry.add({
+        label: "Working tree",
+        locator: { kind: "working-tree", repoRoot, subpath: "." },
+      }),
+    );
+
+    const rows = await audit.query({ source: "sources" });
+    expect(rows[0]?.payload).toEqual({ id: source.id, kind: "working-tree" });
+    expect(JSON.stringify(rows)).not.toContain(repoRoot);
   });
 
   test("activate/deactivate/delete each emit one refs-only row carrying only the id", async () => {

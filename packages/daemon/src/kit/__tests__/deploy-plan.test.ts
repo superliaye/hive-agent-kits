@@ -342,9 +342,100 @@ describe("buildDeployPlan", () => {
       }),
     );
     expect(plan.blocked).toEqual([
-      { kind: "instruction", target: "claude", keys: [missingInstruction] },
+      {
+        kind: "instruction",
+        target: "claude",
+        reason: "source_unavailable",
+        keys: [missingInstruction],
+      },
     ]);
     expect(plan.actions.map((action) => action.key)).toEqual([availableSkill]);
+  });
+
+  test("pauses an instruction target with unmanaged Ledger ownership while skills continue", () => {
+    const selectedInstruction = { kind: "instruction" as const, name: "selected-rules" };
+    const unmanagedInstruction = { kind: "instruction" as const, name: "agent-kit-rules" };
+    const availableSkill = skill("alpha");
+    const planned = buildDeployPlan(
+      snapshot({
+        catalog: {
+          entries: [
+            {
+              ...selectedInstruction,
+              description: "Rules",
+              group: "",
+              deployable: true,
+              shadowed: false,
+              sourceIds: ["source-a"],
+              contentSha: "rules-content",
+            },
+            {
+              ...availableSkill,
+              description: "Alpha",
+              group: "",
+              deployable: true,
+              shadowed: false,
+              sourceIds: ["source-a"],
+              contentSha: "skill-content",
+            },
+          ],
+          presets: [],
+          problems: [],
+        },
+        selection: {
+          revision: 12,
+          enabled: [
+            { key: selectedInstruction, targets: ["claude"] },
+            { key: availableSkill, targets: ["claude"] },
+          ],
+          removalIntents: [],
+        },
+        ledger: {
+          revision: null,
+          identity: "agent-kit-instructions",
+          value: {
+            kitVersion: "",
+            agents: ["claude"],
+            skills: [],
+            agentDefs: [],
+            instructions: [{ name: unmanagedInstruction.name }],
+            plugins: [],
+            bundles: [],
+          },
+        },
+        wouldDeploy: [
+          {
+            key: selectedInstruction,
+            target: "claude",
+            sourceId: "source-a",
+            contentSha: "rules-content",
+            renderedHash: "whole-instruction-hash",
+          },
+          {
+            key: availableSkill,
+            target: "claude",
+            sourceId: "source-a",
+            contentSha: "skill-content",
+            renderedHash: "skill-hash",
+          },
+        ],
+        artifacts: [
+          { key: selectedInstruction, target: "claude", existence: "present", hash: "old" },
+          { key: availableSkill, target: "claude", existence: "missing", hash: null },
+        ],
+      }),
+    );
+
+    expect(planned.blocked).toEqual([
+      {
+        kind: "instruction",
+        target: "claude",
+        reason: "unmanaged_owned",
+        keys: [unmanagedInstruction],
+      },
+    ]);
+    expect(planned.instructionWrites).toEqual([]);
+    expect(planned.actions.map((action) => action.key)).toEqual([availableSkill]);
   });
 
   test("captures the complete ordered instruction write when only one contribution needs action", () => {
@@ -642,6 +733,7 @@ describe("canonical plan token", () => {
           {
             kind: "instruction",
             target: "claude",
+            reason: "source_unavailable",
             keys: [{ kind: "instruction", name: "missing" }],
           },
         ],

@@ -126,6 +126,7 @@ function aggregateReconciliation(targets: readonly OverviewTargetState[]): Recon
     "pending_remove",
     "pending_update",
     "pending_add",
+    "manual_install_required",
     "manual_removal_required",
     "orphaned",
     "waiting_for_source",
@@ -187,6 +188,9 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
   const actionByPair = new Map(
     plan.actions.map((action) => [pairId(action.key, action.target), action] as const),
   );
+  const unmanagedInstructionTargets = new Set(
+    plan.blocked.filter((block) => block.reason === "unmanaged_owned").map((block) => block.target),
+  );
   const wouldByPair = new Map(
     snapshot.wouldDeploy.map((item) => [pairId(item.key, item.target), item] as const),
   );
@@ -239,8 +243,22 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
               : action.action === "update"
                 ? "pending_update"
                 : "pending_remove";
+        } else if (
+          key.kind === "instruction" &&
+          unmanagedInstructionTargets.has(target) &&
+          (selectedOnTarget || ledgerOwned)
+        ) {
+          reconciliation = "unmanaged_owned";
         } else if (intentOnTarget && (key.kind === "plugin" || key.kind === "bundle")) {
           reconciliation = "manual_removal_required";
+        } else if (
+          selectedOnTarget &&
+          winner &&
+          (key.kind === "plugin" || key.kind === "bundle") &&
+          ((!record?.applied && !ledgerOwned) ||
+            (record?.applied && record.applied.contentSha !== winner.contentSha))
+        ) {
+          reconciliation = "manual_install_required";
         } else if (selectedOnTarget && !winner) {
           reconciliation = record?.applied || ledgerOwned ? "orphaned" : "waiting_for_source";
         } else if (ledgerOwned && !record) {
@@ -306,7 +324,22 @@ export type CaptureDeploymentSnapshotInput = {
   lastOperation?: DeployOperationSummary | null;
 };
 
+const mirrorTreeIdentityCache = new Map<
+  string,
+  { dev: number; ino: number; mtimeMs: number; ctimeMs: number; identity: string }
+>();
+
 function mirrorTreeIdentity(root: string): string {
+  const stat = lstatSync(root);
+  const cached = mirrorTreeIdentityCache.get(root);
+  if (
+    cached?.dev === stat.dev &&
+    cached.ino === stat.ino &&
+    cached.mtimeMs === stat.mtimeMs &&
+    cached.ctimeMs === stat.ctimeMs
+  ) {
+    return cached.identity;
+  }
   const hash = createHash("sha256");
   const walk = (directory: string, relative: string): void => {
     const entries = readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
@@ -327,7 +360,19 @@ function mirrorTreeIdentity(root: string): string {
     }
   };
   walk(root, "");
-  return hash.digest("hex");
+  const identity = hash.digest("hex");
+  if (!mirrorTreeIdentityCache.has(root) && mirrorTreeIdentityCache.size >= 256) {
+    const oldest = mirrorTreeIdentityCache.keys().next().value;
+    if (oldest !== undefined) mirrorTreeIdentityCache.delete(oldest);
+  }
+  mirrorTreeIdentityCache.set(root, {
+    dev: stat.dev,
+    ino: stat.ino,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+    identity,
+  });
+  return identity;
 }
 
 export function readMirrorIdentity(root: string): string {

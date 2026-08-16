@@ -1,5 +1,5 @@
 /**
- * #38 hermetic e2e — the durable regression guard for the multi-Source pivot.
+ * Hermetic e2e — the durable regression guard for the multi-Source pivot.
  *
  * Drives the daemon at its HTTP I/O edge (plain-async, grandfathered suite) over
  * the FULL add → sync → catalog → diff → deploy → verify-bytes → idempotent →
@@ -85,6 +85,10 @@ function sourceAEntries(): TarFixtureEntry[] {
   return [
     { path: `${top}/` },
     {
+      path: `${top}/capabilities/skills/regular/SKILL.md`,
+      content: "---\nname: regular\ndescription: regular\n---\nregular\n",
+    },
+    {
       path: `${top}/capabilities/skills/alpha/SKILL.md`,
       content: `---\nname: alpha\ndescription: alpha skill\n---\nintro\n<!-- include: greeting -->\noutro\n`,
     },
@@ -137,6 +141,10 @@ function installerEntries(): TarFixtureEntry[] {
   const top = tarTop(SHA_INSTALLERS);
   return [
     { path: `${top}/` },
+    {
+      path: `${top}/capabilities/skills/regular/SKILL.md`,
+      content: "---\nname: regular\ndescription: regular\n---\nregular\n",
+    },
     {
       path: `${top}/capabilities/plugins/myplugin.plugin.md`,
       content:
@@ -347,7 +355,7 @@ function entriesNamed(entries: CapabilityEntry[], kind: string, name: string): C
   return entries.filter((e) => e.kind === kind && e.name === name);
 }
 
-describe("server routes — #38 multi-Source e2e (add → deploy → merge/shadow → hide)", () => {
+describe("server routes — multi-Source e2e (add → deploy → merge/shadow → hide)", () => {
   let tmpRoot: string;
   let homes: RedirectedHome;
 
@@ -445,6 +453,42 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
         },
       });
     } finally {
+      await server.dispose();
+    }
+  });
+
+  test("audit failure leaves the durable Selection unchanged", async () => {
+    const server = await serverWith(twoSourceFetch());
+    const disposeListener = server.kit.events.on("selection.changed", () => {
+      throw new Error("audit unavailable");
+    });
+    try {
+      const before = await server.app.fetch(authed("/api/kit/selection"));
+      expect(before.status).toBe(200);
+      const snapshot = await before.json();
+
+      const changed = await server.app.fetch(
+        authed("/api/kit/selection", {
+          method: "PATCH",
+          body: JSON.stringify({
+            expectedRevision: 1,
+            changes: [
+              {
+                key: { kind: "skill", name: "alpha" },
+                enabled: true,
+                targets: ["codex"],
+              },
+            ],
+          }),
+        }),
+      );
+      expect(changed.status).toBe(500);
+
+      const after = await server.app.fetch(authed("/api/kit/selection"));
+      expect(after.status).toBe(200);
+      expect(await after.json()).toEqual(snapshot);
+    } finally {
+      disposeListener();
       await server.dispose();
     }
   });
@@ -871,59 +915,34 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
     }
   });
 
-  test("unstaged installers return the stable 409 without accepting an operation", async () => {
+  test("installer selections stay manual without blocking staged capability Deploys", async () => {
     delete process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL;
     delete process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL;
     const server = await serverWith(installerFetch());
     try {
       const add = await postOrigin(server, ORIGIN_INSTALLERS);
       expect(add.status).toBe(201);
-      const selection = (await (
-        await server.app.fetch(authed("/api/kit/selection"))
-      ).json()) as SelectionSnapshot;
-      const changed = await server.app.fetch(
-        authed("/api/kit/selection", {
-          method: "PATCH",
-          body: JSON.stringify({
-            expectedRevision: selection.revision,
-            changes: [
-              {
-                key: { kind: "plugin", name: "myplugin" },
-                enabled: true,
-                targets: ["claude"],
-              },
-            ],
-          }),
-        }),
-      );
-      expect(changed.status).toBe(200);
-      const overview = (await (
-        await server.app.fetch(authed("/api/kit/overview"))
-      ).json()) as DeploymentOverview;
-
-      const response = await server.app.fetch(
-        authed("/api/kit/deploy", {
-          method: "POST",
-          body: JSON.stringify({
-            selectionRevision: overview.selectionRevision,
-            planToken: overview.planToken,
-          }),
-        }),
-      );
-
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({ error: "immutable_installer_unavailable" });
-      expect(existsSync(join(tmpRoot, "runtime", "kit", "deploy-operations.json"))).toBe(false);
-      const audit = (await (await server.app.fetch(authed("/api/audit?source=deploy"))).json()) as {
-        event_type: string;
-      }[];
-      expect(audit.some((row) => row.event_type === "deploy.accepted")).toBe(false);
+      const overview = await acceptSelection(server, {
+        skills: ["regular"],
+        plugins: ["myplugin"],
+        targets: ["claude"],
+      });
+      expect(overview.lastOperation?.state).toBe("completed");
+      expect(
+        overview.rows.find((row) => row.key.kind === "plugin" && row.key.name === "myplugin")
+          ?.reconciliation,
+      ).toBe("manual_install_required");
+      expect(
+        overview.rows.find((row) => row.key.kind === "skill" && row.key.name === "regular")
+          ?.reconciliation,
+      ).toBe("in_sync");
+      expect(existsSync(join(homes.claudeHome, "skills", "regular", "SKILL.md"))).toBe(true);
     } finally {
       await server.dispose();
     }
   });
 
-  test("production Deploy cannot claim skipped plugin or bundle work through environment hatches", async () => {
+  test("environment hatches cannot turn installer selections into durable Deploy actions", async () => {
     process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL = "1";
     process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL = "1";
     // Re-use a Source carrying a plugin + bundle capability.
@@ -931,7 +950,7 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
     try {
       const add = await postOrigin(server, ORIGIN_INSTALLERS);
       expect(add.status).toBe(201);
-      // (#45) The well-formed plugin + bundle pass the now-stricter validate() gate
+      // The well-formed plugin + bundle pass the now-stricter validate() gate
       // end-to-end — a conformance flip would otherwise slip through this e2e, which
       // previously checked only HTTP 201 + the `applied` lists.
       expect(AddSourceResult.parse(await add.json()).validation.conformant).toBe(true);
@@ -953,17 +972,12 @@ describe("server routes — #38 multi-Source e2e (add → deploy → merge/shado
       const overview = (await (
         await server.app.fetch(authed("/api/kit/overview"))
       ).json()) as DeploymentOverview;
-      const response = await server.app.fetch(
-        authed("/api/kit/deploy", {
-          method: "POST",
-          body: JSON.stringify({
-            selectionRevision: overview.selectionRevision,
-            planToken: overview.planToken,
-          }),
-        }),
-      );
-      expect(response.status).toBe(409);
-      expect(await response.json()).toEqual({ error: "immutable_installer_unavailable" });
+      expect(overview.diff.entries).toEqual([]);
+      expect(
+        overview.rows
+          .filter((row) => row.key.kind === "plugin" || row.key.kind === "bundle")
+          .map((row) => row.reconciliation),
+      ).toEqual(["manual_install_required", "manual_install_required"]);
       expect(existsSync(homes.ledgerPath)).toBe(false);
     } finally {
       await server.dispose();

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -125,18 +125,21 @@ export function readReleaseMetadata(
   environment: Record<string, string | undefined>,
   fallbackCommit: string,
 ): ReleaseMetadata {
+  const sourceCommit = FullCommit.parse(fallbackCommit);
   const supplied = releaseEnvironmentKeys.filter((key) => environment[key] !== undefined);
   if (supplied.length === 0) {
-    FullCommit.parse(fallbackCommit);
     return ReleaseMetadataSchema.parse({
-      releaseId: `g${fallbackCommit}`,
-      buildVersion: `0.0.0-g${fallbackCommit.slice(0, 12)}-local`,
-      sourceCommit: fallbackCommit,
+      releaseId: `g${sourceCommit}`,
+      buildVersion: `0.0.0-g${sourceCommit.slice(0, 12)}-local`,
+      sourceCommit,
       protocolRange: "1",
     });
   }
   if (supplied.length !== releaseEnvironmentKeys.length) {
     throw new Error("release metadata environment must be complete");
+  }
+  if (environment.HIVE_RELEASE_SOURCE_COMMIT !== sourceCommit) {
+    throw new Error("release metadata source commit does not match the build tree");
   }
   return ReleaseMetadataSchema.parse({
     releaseId: environment.HIVE_RELEASE_ID,
@@ -179,13 +182,81 @@ const artifactDefinitions: ArtifactDefinition[] = [
 ];
 
 async function fileIdentity(path: string): Promise<{ sha256: string; sizeBytes: number }> {
-  const fileStat = await stat(path);
+  const fileStat = await lstat(path);
   if (!fileStat.isFile() || fileStat.size <= 0) {
     throw new Error(`release artifact is not a non-empty regular file: ${path}`);
   }
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return { sha256: hash.digest("hex"), sizeBytes: fileStat.size };
+}
+
+function releaseLocation(
+  assetBaseUrl: string,
+  expectedCommit: string,
+): {
+  baseUrl: string;
+  repository: string;
+} {
+  const parsed = new URL(CredentialFreeHttpsUrl.parse(assetBaseUrl));
+  const match = parsed.pathname.match(
+    /^\/([^/]+)\/([^/]+)\/releases\/download\/hive-g([0-9a-f]{40})\/$/,
+  );
+  if (
+    parsed.origin !== "https://github.com" ||
+    parsed.search !== "" ||
+    parsed.hash !== "" ||
+    !match ||
+    match[3] !== expectedCommit
+  ) {
+    throw new Error("asset base URL must name the expected commit's GitHub release");
+  }
+  return {
+    baseUrl: parsed.href,
+    repository: `https://github.com/${match[1]}/${match[2]}.git`,
+  };
+}
+
+export async function validateStableReleaseManifestAssets(
+  input: unknown,
+  options: {
+    assetsDirectory: string;
+    expectedCommit: string;
+    assetBaseUrl: string;
+  },
+): Promise<StableReleaseManifest> {
+  const expectedCommit = FullCommit.parse(options.expectedCommit);
+  const manifest = StableReleaseManifestSchema.parse(input);
+  const location = releaseLocation(options.assetBaseUrl, expectedCommit);
+  if (manifest.release.source.commit !== expectedCommit) {
+    throw new Error("release manifest source commit does not match the verified commit");
+  }
+  if (manifest.release.source.repository !== location.repository) {
+    throw new Error("release manifest repository does not match the publication repository");
+  }
+  if (manifest.release.buildVersion !== `0.0.0-g${expectedCommit.slice(0, 12)}`) {
+    throw new Error("release manifest build version does not match the verified commit");
+  }
+  await Promise.all(
+    artifactDefinitions.map(async (definition) => {
+      const artifact = manifest.release.artifacts.find(
+        (candidate) =>
+          candidate.kind === definition.kind &&
+          candidate.platform === definition.platform &&
+          candidate.architecture === definition.architecture,
+      );
+      if (!artifact) throw new Error(`release manifest is missing ${definition.fileName}`);
+      const expectedUrl = new URL(definition.fileName, location.baseUrl).href;
+      if (artifact.url !== expectedUrl) {
+        throw new Error(`release manifest URL does not match ${definition.fileName}`);
+      }
+      const identity = await fileIdentity(join(options.assetsDirectory, definition.fileName));
+      if (artifact.sizeBytes !== identity.sizeBytes || artifact.sha256 !== identity.sha256) {
+        throw new Error(`release manifest identity does not match ${definition.fileName}`);
+      }
+    }),
+  );
+  return manifest;
 }
 
 export type CreateStableReleaseManifestInput = {

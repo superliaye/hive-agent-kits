@@ -1,4 +1,4 @@
-// Deploy fs/exec adapter (Plan A4) — the single narrow I/O boundary for the
+// Deploy fs/exec adapter — the single narrow I/O boundary for the
 // deploy engine. All writes + external execs go through here, against the
 // redirected child env from the DeployTargets port. Injectable so a test can
 // assert the exec adapter is NOT called under AGENT_KIT_SKIP_*.

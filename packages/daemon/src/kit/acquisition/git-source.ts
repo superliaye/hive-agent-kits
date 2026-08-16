@@ -212,8 +212,38 @@ function safeLinkTarget(path: string, target: string, stage: string): boolean {
 type RawEntry = {
   path: string;
   mode: "100644" | "100755" | "120000";
-  data: Uint8Array;
+  objectId: string;
 };
+
+function parseBatchObjects(output: Uint8Array, expectedIds: readonly string[]): Uint8Array[] {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const objects: Uint8Array[] = [];
+  let offset = 0;
+  for (const expectedId of expectedIds) {
+    const newline = output.indexOf(10, offset);
+    if (newline < 0) throw new GitAcquireError("io", "git blob batch response is incomplete");
+    const header = decoder.decode(output.subarray(offset, newline));
+    const parsed = /^([0-9a-f]{40}) blob ([0-9]+)$/.exec(header);
+    if (!parsed || parsed[1] !== expectedId) {
+      throw new GitAcquireError("io", "git blob batch response is invalid");
+    }
+    const size = Number(parsed[2]);
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new GitAcquireError("io", "git blob batch response has an invalid size");
+    }
+    const dataStart = newline + 1;
+    const dataEnd = dataStart + size;
+    if (dataEnd >= output.length || output[dataEnd] !== 10) {
+      throw new GitAcquireError("io", "git blob batch response is truncated");
+    }
+    objects.push(output.slice(dataStart, dataEnd));
+    offset = dataEnd + 1;
+  }
+  if (offset !== output.length) {
+    throw new GitAcquireError("io", "git blob batch response has trailing data");
+  }
+  return objects;
+}
 
 async function materializeRawTree(
   git: GitProcess,
@@ -275,23 +305,7 @@ async function materializeRawTree(
     const mode = match[1] as RawEntry["mode"];
     const objectId = match[2];
     if (!objectId) throw new GitAcquireError("io", "git tree entry is incomplete");
-    let data: Uint8Array;
-    try {
-      data = (
-        await git.run(httpsOnly(["-C", cache, "cat-file", "blob", objectId]), {
-          env: networkSafeEnv,
-          timeoutMs: remainingMs(),
-          maxStdoutBytes: Math.max(1, limits.maxBytes - bytes),
-        })
-      ).stdout;
-    } catch (error) {
-      throw mapGitFailure(error, "other");
-    }
-    bytes += data.byteLength;
-    if (bytes > limits.maxBytes) {
-      throw new GitAcquireError("budget_exceeded", "selected tree exceeds byte limit");
-    }
-    entries.push({ path, mode, data });
+    entries.push({ path, mode, objectId });
   }
 
   const sortedPaths = [...paths].sort();
@@ -302,24 +316,51 @@ async function materializeRawTree(
       throw new GitAcquireError("unsafe_tree", "git tree contains conflicting paths");
     }
   }
-  for (const entry of entries) {
+  const BATCH_SIZE = 128;
+  for (let start = 0; start < entries.length; start += BATCH_SIZE) {
     remainingMs();
-    const destination = safeTreePath(stage, entry.path);
-    mkdirSync(dirname(destination), { recursive: true });
-    if (entry.mode === "120000") {
-      let target: string;
-      try {
-        target = new TextDecoder("utf-8", { fatal: true }).decode(entry.data);
-      } catch {
-        throw new GitAcquireError("unsafe_tree", "git tree link target is invalid");
+    const group = entries.slice(start, start + BATCH_SIZE);
+    const objectIds = group.map((entry) => entry.objectId);
+    let batch: Uint8Array;
+    try {
+      batch = (
+        await git.run(httpsOnly(["-C", cache, "cat-file", "--batch"]), {
+          env: networkSafeEnv,
+          timeoutMs: remainingMs(),
+          maxStdoutBytes: Math.max(1, limits.maxBytes - bytes + group.length * 96),
+          stdin: new TextEncoder().encode(`${objectIds.join("\n")}\n`),
+        })
+      ).stdout;
+    } catch (error) {
+      throw mapGitFailure(error, "other");
+    }
+    const data = parseBatchObjects(batch, objectIds);
+    for (let index = 0; index < group.length; index++) {
+      remainingMs();
+      const entry = group[index];
+      const content = data[index];
+      if (!entry || !content) throw new GitAcquireError("io", "git blob batch is incomplete");
+      bytes += content.byteLength;
+      if (bytes > limits.maxBytes) {
+        throw new GitAcquireError("budget_exceeded", "selected tree exceeds byte limit");
       }
-      if (!safeLinkTarget(entry.path, target, stage)) {
-        throw new GitAcquireError("unsafe_tree", "git tree link escapes the selected tree");
+      const destination = safeTreePath(stage, entry.path);
+      mkdirSync(dirname(destination), { recursive: true });
+      if (entry.mode === "120000") {
+        let target: string;
+        try {
+          target = new TextDecoder("utf-8", { fatal: true }).decode(content);
+        } catch {
+          throw new GitAcquireError("unsafe_tree", "git tree link target is invalid");
+        }
+        if (!safeLinkTarget(entry.path, target, stage)) {
+          throw new GitAcquireError("unsafe_tree", "git tree link escapes the selected tree");
+        }
+        symlinkSync(target, destination);
+      } else {
+        writeFileSync(destination, content);
+        chmodSync(destination, entry.mode === "100755" ? 0o755 : 0o644);
       }
-      symlinkSync(target, destination);
-    } else {
-      writeFileSync(destination, entry.data);
-      chmodSync(destination, entry.mode === "100755" ? 0o755 : 0o644);
     }
   }
 }

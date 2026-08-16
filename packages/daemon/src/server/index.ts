@@ -154,7 +154,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // Memory mode (tests/fast-iter) reports every backend as not installed so
   // booting a server never spawns `claude`/`codex`. File mode uses the real
   // Bun.spawn runner (the module default). The probe and the sibling updater
-  // (OQ-5) share the SAME runner option so a memory-mode probe and updater agree.
+  // Probe and update share the same runner option so memory-mode behavior agrees.
   const backendRunnerOpts = opts.mode === "memory" ? ({ runner: notInstalledRunner } as const) : {};
   const backendProbeLayer = BackendProbeLive(backendRunnerOpts);
   // One shared Sources registry layer. Kit depends on SourceRegistry and must
@@ -164,7 +164,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const sourcesLayer = SourceRegistryLive(sourcesOpts);
   // The deploy-target port needs the live `developer.allowRealHomeDeploy` toggle,
   // which is only known after Config resolves off the root runtime below. The
-  // port's methods are call-time (deploy happens post-boot), so a closure-held
+  // port's methods are call-time (deploy happens after boot), so a closure-held
   // reader over the resolved Config — wired immediately after `runtime.runSync`
   // sets it — is the clean seam: no second runtime (which would acquire a duplicate
   // Config store + watcher), no `R` leak, no mutable config box.
@@ -184,7 +184,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     ConfigLive(configOpts),
     AuditLive(auditOpts),
     backendProbeLayer,
-    // The delegated-update verb lives on this sibling service (OQ-5), depending
+    // The delegated-update verb lives on this sibling service, depending
     // on `BackendProbe` for the re-probe. Provide the probe layer so the
     // dependency is discharged at the module boundary, not leaked to the root.
     BackendUpdaterLive(backendRunnerOpts).pipe(Layer.provide(backendProbeLayer)),
@@ -308,7 +308,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     config,
     secrets,
     // Same `backend` source — the user-triggered delegated CLI-update action
-    // (the sibling BackendUpdater service, OQ-5).
+    // (the sibling BackendUpdater service, ).
     backendUpdate: { events: backendUpdater.events },
     // Dedicated `deploy` source — a Kit deploy is a user action (refs-only).
     deploy: { events: kit.events },

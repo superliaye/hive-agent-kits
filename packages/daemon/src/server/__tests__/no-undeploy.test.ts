@@ -1,4 +1,4 @@
-// #36 (Q8) — toggling off or deleting a Source does NOT undeploy already-deployed
+// Toggling off or deleting a Source does NOT undeploy already-deployed
 // artifacts and triggers NO Deploy: it is not an audited Deploy. Asserted at the
 // HTTP boundary, where the kit deploy emitter IS wired (createServer) — NOT in
 // audit-emission.test.ts, which never wires that emitter (vacuous there).
@@ -64,7 +64,7 @@ function snapshotTree(root: string): string[] {
   return out.sort();
 }
 
-describe("server — toggle/delete never undeploys (#36 Q8)", () => {
+describe("server — toggle/delete never undeploys", () => {
   let tmpRoot: string;
   let server: ServerHandles;
 

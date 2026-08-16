@@ -197,7 +197,7 @@ describe("ledger", () => {
     expect(orphan.skills).toEqual(["B"]);
   });
 
-  test("(d3) #47: reconcilePrune does NOT prune an owned-but-deselected name absent from the active catalog", () => {
+  test("(d3) : reconcilePrune does NOT prune an owned-but-deselected name absent from the active catalog", () => {
     const targets = failSafeDeployTargets();
     // Hive owns {A, B} at request start.
     mergeLedger(
@@ -383,7 +383,7 @@ writeFileSync(process.env.HIVE_DONE_PATH, "done");`,
         "-e",
         `import { writeFileSync } from "node:fs";
 const { withCooperativeFileLock } = await import(process.env.LOCK_MODULE);
-withCooperativeFileLock(process.env.LEDGER_PATH, 0, () => {
+withCooperativeFileLock(process.env.LEDGER_PATH, 5000, () => {
   writeFileSync(process.env.READY_PATH, "ready");
   process.kill(process.pid, "SIGKILL");
 });`,

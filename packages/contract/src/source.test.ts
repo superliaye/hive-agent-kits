@@ -115,8 +115,14 @@ describe("Source — kind discriminator", () => {
 
   test("rejects an unknown kind and a missing kind", () => {
     expect(
-      Source.safeParse({ id: "x", origin: "y", kind: "remote", active: true, createdAt: 1, rank: 0 })
-        .success,
+      Source.safeParse({
+        id: "x",
+        origin: "y",
+        kind: "remote",
+        active: true,
+        createdAt: 1,
+        rank: 0,
+      }).success,
     ).toBe(false);
     expect(
       Source.safeParse({ id: "x", origin: "y", active: true, createdAt: 1, rank: 0 }).success,
@@ -177,10 +183,7 @@ describe("AddSourceBody", () => {
   });
 
   test("rejects a URL carrying embedded credentials", () => {
-    for (const repoUrl of [
-      "https://user:token@github.com/a/b",
-      "https://user@github.com/a/b",
-    ]) {
+    for (const repoUrl of ["https://user:token@github.com/a/b", "https://user@github.com/a/b"]) {
       expect(
         AddSourceBody.safeParse({
           label: "Invalid",

@@ -29,29 +29,33 @@ export type AuditSources<S extends Record<string, unknown> = Record<string, unkn
   deploy?: { events: TypedEmitter<DeployAuditEvents> };
   // Dedicated `sources` source: a Source registry mutation is a user action.
   // Consumer-owned port — only the event stream is read here. Payload is
-  // refs-only (SourceId, plus the credential-free origin on add); a registry
+  // refs-only (SourceId/kind, plus a credential-free git origin on add); a registry
   // mutation has neither run_id nor agent_id (both null). Satisfied by
   // SourceRegistrySvc's `events`.
   sourceRegistry?: { events: TypedEmitter<SourcesAuditEvents> };
 };
 
 // Generic over S so callers with a typed Config<AppConfig> don't need a cast.
-// The `appearance` subtree carries user color choices; those aren't useful in
-// audit and could leak personal taste in a future shared-deployment scenario.
-// Strip the payload to just the mode picker, matching the privacy posture of
-// the pre-fold appearanceNormalizer.
+// Appearance colors and working-tree allowlists are not useful audit values.
+// Retain only non-sensitive references for those configuration slices.
 function configNormalizer<S extends Record<string, unknown>>(): Normalizer<ConfigEvents<S>> {
   return {
     change: (event) => ({
       event_type: "config.change",
       payload: {
         key: event.key,
-        previous: event.key === "appearance" ? redactAppearance(event.previous) : event.previous,
-        current: event.key === "appearance" ? redactAppearance(event.current) : event.current,
+        previous: redactConfigValue(event.key, event.previous),
+        current: redactConfigValue(event.key, event.current),
         source: event.source,
       },
     }),
   };
+}
+
+function redactConfigValue(key: PropertyKey, value: unknown): unknown {
+  if (key === "appearance") return redactAppearance(value);
+  if (key === "sources") return { workingTreeRoots: "[redacted]" };
+  return value;
 }
 
 function redactAppearance(value: unknown): unknown {
@@ -118,7 +122,7 @@ export function wireSubscriptions<S extends Record<string, unknown> = Record<str
 
 // Deploy: a Kit deploy is a user action. run_id/agent_id are NULL (a deploy has
 // neither). Each event has an explicit refs-only allow-list; neither accepted
-// plans nor legacy applied results expose file contents, tokens, or secrets.
+// plans expose file contents, tokens, or secrets.
 const deployNormalizer: Normalizer<DeployAuditEvents> = {
   "deploy.accepted": (event) => ({
     event_type: "deploy.accepted",
@@ -128,16 +132,6 @@ const deployNormalizer: Normalizer<DeployAuditEvents> = {
       operationId: event.operationId,
       selectionRevision: event.selectionRevision,
       perKindActionCounts: event.perKindActionCounts,
-      targetClis: event.targetClis,
-    },
-  }),
-  "deploy.applied": (event) => ({
-    event_type: "deploy.applied",
-    run_id: null,
-    agent_id: null,
-    payload: {
-      kitSha: event.kitSha,
-      perKindCounts: event.perKindCounts,
       targetClis: event.targetClis,
     },
   }),
@@ -166,15 +160,18 @@ const backendUpdateNormalizer: Normalizer<BackendUpdateEvents> = {
 
 // Sources (registry mutation): add/activate/deactivate/delete/reorder are user
 // actions. run_id/agent_id are NULL (a registry mutation has neither). Payload is
-// REFS only — the opaque SourceId, plus the normalized credential-free origin on
-// add (the wire schema already rejects `user:token@` origins), plus the new rank
-// on reorder (an integer precedence ref, never file contents/secrets).
+// REFS only — the opaque SourceId and locator kind, a normalized credential-free
+// git origin on add, and the new rank on reorder. Working-tree paths stay local.
 const sourcesNormalizer: Normalizer<SourcesAuditEvents> = {
   "source.added": (event) => ({
     event_type: "source.added",
     run_id: null,
     agent_id: null,
-    payload: { id: event.id, origin: event.origin },
+    payload: {
+      id: event.id,
+      kind: event.kind,
+      ...(event.kind === "git" ? { origin: event.origin } : {}),
+    },
   }),
   "source.activated": (event) => ({
     event_type: "source.activated",

@@ -68,7 +68,6 @@ const kitState: KitState = {
       sha: null,
       fetchedAt: null,
       sourceId: "src-1",
-      origin: "https://github.com/superliaye/my-agent-kits",
     },
   ],
   ledger: {

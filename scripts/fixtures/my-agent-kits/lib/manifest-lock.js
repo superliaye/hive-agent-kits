@@ -380,7 +380,10 @@ function acquireManifestLock(resourcePath, options) {
     renameSync(temporaryOwner, join(lockPath, OWNER_FILE));
     const readyPath = join(lockPath, `ready-${token}`);
 
-    const initializationDeadline = Date.now() + Math.max(2_000, updateMs * 4);
+    const initializationDeadline = Math.min(
+      deadline,
+      Date.now() + Math.max(2_000, updateMs * 4),
+    );
     while (Date.now() < initializationDeadline) {
       try {
         if (readFileSync(readyPath, "utf8") === token) {
@@ -422,7 +425,8 @@ function acquireManifestLock(resourcePath, options) {
       wait(10);
     }
 
-    if (!sameProcess(keeperIdentity)) retireOwnedLock(lockPath, token, "retired");
+    if (sameProcess(keeperIdentity)) keeper.kill("SIGKILL");
+    retireOwnedLock(lockPath, token, "retired");
     if (Date.now() >= deadline) throw lockTimeoutError(resourcePath);
   }
 }

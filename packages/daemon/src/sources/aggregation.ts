@@ -29,7 +29,7 @@ export type AggInput = {
   group: string;
 };
 
-// One aggregated catalog entry (one Variant). Carries the #0 wire fields; the kit
+// One aggregated catalog entry (one Variant). Carries the core wire fields; the kit
 // read path translates this 1:1 to a wire `CapabilityEntry`.
 export type AggEntry = {
   kind: CapabilityKind;

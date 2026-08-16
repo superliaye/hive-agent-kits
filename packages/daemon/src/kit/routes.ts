@@ -1,10 +1,8 @@
-// Kit HTTP routes (Plan A6). Mounted additively behind the surviving server.
+// Kit HTTP routes. Mounted additively behind the surviving server.
 // Zod at the boundary; typed errors mapped to wire codes.
 
-import { serializeCapabilityKey } from "@hive/capability-schema";
 import {
   AcceptedDeployRequest,
-  type DeployTarget,
   SelectionMutation,
   SelectionSchema,
   SelectionSnapshot,
@@ -74,7 +72,7 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
         { module: "kit/routes", route: "selection.read", err: String(error) },
         "selection read failed",
       );
-      return c.json({ error: "selection unavailable", message: String(error) }, 500);
+      return c.json({ error: "selection_unavailable" }, 500);
     }
   });
 
@@ -86,41 +84,7 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
       return c.json({ error: "invalid selection mutation", issues: zodIssues(parsed.error) }, 400);
     }
     try {
-      const before = SelectionSnapshot.parse(kit.selection());
       const committed = SelectionSnapshot.parse(await kit.mutateSelection(parsed.data));
-      const addedPerKind: Record<string, number> = {};
-      const removedPerKind: Record<string, number> = {};
-      const targetClis = new Set<DeployTarget>();
-      const pairs = (selection: typeof committed) =>
-        new Map(
-          selection.enabled.flatMap((entry) =>
-            entry.targets.map(
-              (target) =>
-                [
-                  `${serializeCapabilityKey(entry.key)}\u0000${target}`,
-                  { key: entry.key, target },
-                ] as const,
-            ),
-          ),
-        );
-      const beforePairs = pairs(before);
-      const afterPairs = pairs(committed);
-      for (const [id, pair] of afterPairs) {
-        if (beforePairs.has(id)) continue;
-        addedPerKind[pair.key.kind] = (addedPerKind[pair.key.kind] ?? 0) + 1;
-        targetClis.add(pair.target);
-      }
-      for (const [id, pair] of beforePairs) {
-        if (afterPairs.has(id)) continue;
-        removedPerKind[pair.key.kind] = (removedPerKind[pair.key.kind] ?? 0) + 1;
-        targetClis.add(pair.target);
-      }
-      await kit.events.emit("selection.changed", {
-        revision: committed.revision,
-        addedPerKind,
-        removedPerKind,
-        targetClis: [...targetClis].sort(),
-      });
       return c.json(committed);
     } catch (error) {
       if (error instanceof SelectionConflictError) {
@@ -133,21 +97,21 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
         { module: "kit/routes", route: "selection.mutate", err: String(error) },
         "selection mutation failed",
       );
-      return c.json({ error: "selection mutation failed", message: String(error) }, 500);
+      return c.json({ error: "selection_mutation_failed" }, 500);
     }
   });
 
-  // On-disk self-check (Feature 1/2). Read-only — no audit row, no body.
+  // On-disk self-check. Read-only — no audit row, no body.
   app.get("/api/kit/verify", (c) => c.json(kit.verify()));
 
-  // Per-Source sync (#30): one Source's failure never fails the whole run, so the
+  // Per-Source sync: one Source's failure never fails the whole run, so the
   // verb itself does not fail — the response is the per-Source SyncRunResult.
   app.post("/api/kit/sync", async (c) => {
     const res = await runKit(kit.sync());
     if (res.ok) return c.json(res.value);
     // sync() has no typed failure channel; a defect here is a 500.
     log().error({ module: "kit/routes", route: "sync", err: String(res.error) }, "sync defect");
-    return c.json({ error: "sync failed", message: String(res.error) }, 500);
+    return c.json({ error: "sync_failed" }, 500);
   });
 
   app.post("/api/kit/diff", async (c) => {
@@ -160,9 +124,12 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
     const res = await runKit(kit.diff(parsed.data));
     if (res.ok) return c.json(res.value);
     const err = res.error as DeployError;
+    const status = deployErrorCode(err);
     return c.json(
-      { error: "diff failed", reason: err.reason, message: err.message },
-      deployErrorCode(err),
+      status === 500
+        ? { error: "diff_failed", reason: err.reason }
+        : { error: "diff_failed", reason: err.reason, message: err.message },
+      status,
     );
   });
 

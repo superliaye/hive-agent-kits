@@ -1,4 +1,4 @@
-// Deployment Ledger (Plan A3) — the shared interop record at ~/.agent-kit/
+// Deployment Ledger — the shared interop record at ~/.agent-kit/
 // manifest.json (the EXACT agent-kit schema). Two-writer file (Hive + the
 // agent-kit CLI), so writes are read-modify-merge and prune decisions re-read
 // the on-disk ledger immediately before deciding — never from a stale snapshot.
@@ -129,6 +129,31 @@ export function mergeLedger(
   prunedInstructions: string[] = [],
   options: LedgerWriteOptions = {},
 ): Ledger {
+  const path = targets.ledgerPath();
+  return withCooperativeFileLock(
+    path,
+    options.lockTimeoutMs ?? 5_000,
+    () =>
+      mergeLedgerWithinLock(
+        targets,
+        input,
+        prunedSkills,
+        prunedAgents,
+        prunedInstructions,
+        options,
+      ),
+    { staleMs: options.lockStaleMs, updateMs: options.lockUpdateMs },
+  );
+}
+
+export function mergeLedgerWithinLock(
+  targets: DeployTargets,
+  input: LedgerMergeInput,
+  prunedSkills: string[],
+  prunedAgents: string[],
+  prunedInstructions: string[] = [],
+  options: LedgerWriteOptions = {},
+): Ledger {
   const dropSkill = new Set(prunedSkills);
   const dropAgent = new Set(prunedAgents);
   const dropInstruction = new Set(prunedInstructions);
@@ -151,34 +176,24 @@ export function mergeLedger(
   };
 
   const path = targets.ledgerPath();
-  return withCooperativeFileLock(
-    path,
-    options.lockTimeoutMs ?? 5_000,
-    () => {
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const before = readLedgerBytes(path);
-        const current = parseLedgerBytes(before);
-        const next: Ledger = {
-          kitVersion: input.kitVersion || current.kitVersion,
-          agents: Array.from(new Set([...current.agents, ...input.targets])),
-          skills: mergeNames(current.skills, input.skills, dropSkill),
-          agentDefs: mergeNames(current.agentDefs, input.agents, dropAgent),
-          // Instructions remain the byte-compatible agent-kit name list. The accepted
-          // plan may explicitly remove a contribution after its whole-file rewrite
-          // succeeds, so only those factual removals are dropped.
-          instructions: mergeNames(current.instructions, input.instructions, dropInstruction),
-          plugins: mergeNames(current.plugins, input.plugins, new Set()),
-          bundles: mergeBundles(current.bundles, input.bundles),
-        };
-        options.beforeCommit?.(attempt);
-        if (readLedgerBytes(path) !== before) continue;
-        atomicWriteFile(path, Buffer.from(`${JSON.stringify(next, null, 2)}\n`), options);
-        return next;
-      }
-      throw new Error("ledger_concurrent_update");
-    },
-    { staleMs: options.lockStaleMs, updateMs: options.lockUpdateMs },
-  );
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const before = readLedgerBytes(path);
+    const current = parseLedgerBytes(before);
+    const next: Ledger = {
+      kitVersion: input.kitVersion || current.kitVersion,
+      agents: Array.from(new Set([...current.agents, ...input.targets])),
+      skills: mergeNames(current.skills, input.skills, dropSkill),
+      agentDefs: mergeNames(current.agentDefs, input.agents, dropAgent),
+      instructions: mergeNames(current.instructions, input.instructions, dropInstruction),
+      plugins: mergeNames(current.plugins, input.plugins, new Set()),
+      bundles: mergeBundles(current.bundles, input.bundles),
+    };
+    options.beforeCommit?.(attempt);
+    if (readLedgerBytes(path) !== before) continue;
+    atomicWriteFile(path, Buffer.from(`${JSON.stringify(next, null, 2)}\n`), options);
+    return next;
+  }
+  throw new Error("ledger_concurrent_update");
 }
 
 // Compute owned-but-deselected names by RE-READING the on-disk ledger NOW (A3:
@@ -193,7 +208,7 @@ export function mergeLedger(
 // name an external writer already removed.
 //
 // `activeNames` is the per-kind set of names the ACTIVE catalog currently provides
-// (#47 data-loss guard): an owned-but-deselected name is prunable ONLY if it is
+// ( data-loss guard): an owned-but-deselected name is prunable ONLY if it is
 // still in the active catalog. An owned name absent from it is an ORPHAN — its
 // Source isn't active — and is KEPT (never auto-unlinked), honoring ADR-0023's
 // "disabling only hides" without putting Source attribution in the Ledger.

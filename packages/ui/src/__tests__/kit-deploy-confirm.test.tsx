@@ -515,4 +515,34 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
       true,
     );
   });
+
+  test("plugin selection says manual install required and never blocks other Deploy actions", async () => {
+    const plugin = row("plugin", "manual_install_required");
+    const deployable = row("skill", "pending_add");
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      if (path === "/api/kit/overview") {
+        return json(
+          overview({
+            rows: [plugin, deployable],
+            diff: { entries: [{ kind: "skill", name: "regular", change: "added" }] },
+          }),
+        );
+      }
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+
+    expect(host.querySelector('[data-testid="kit-manual-install"]')?.textContent).toContain(
+      "Manual install required",
+    );
+    expect(host.querySelector('[data-testid="kit-manual-install"]')?.textContent).toContain(
+      "does not run",
+    );
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
 });

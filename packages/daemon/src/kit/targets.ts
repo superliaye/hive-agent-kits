@@ -1,4 +1,4 @@
-// Deploy-target port (Plan A0) — the safety boundary for the deploy engine.
+// Deploy-target port — the safety boundary for the deploy engine.
 //
 // The Kit module never reads `~/.claude` from a bare global; it resolves every
 // CLI-home path through this consumer-owned port. Each home is env-overridable

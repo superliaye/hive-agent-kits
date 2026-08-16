@@ -1,4 +1,4 @@
-// Regression: mirror crash-recovery + .prev backup sweep (review finding).
+// Regression: mirror crash-recovery + .prev backup sweep (regression).
 //
 // writeMirror swaps in two renames (mirror -> .prev, stage -> mirror). A crash
 // between them leaves the only copy under a `.prev-*` name and mirrorRoot gone.

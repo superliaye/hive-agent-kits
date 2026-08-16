@@ -92,7 +92,7 @@ const fx = (): DeployFsExec => ({
 });
 
 // The per-kind active-catalog name arrays a deploy threads into reconcilePrune
-// (#47), derived from a catalog the same way kit-live does.
+//, derived from a catalog the same way kit-live does.
 function deployActiveNames(cat: Catalog): { skills: readonly string[]; agents: readonly string[] } {
   const sets = catalogNameSets(cat);
   return { skills: [...sets.skills], agents: [...sets.agents] };
@@ -139,7 +139,7 @@ describe("resolveSelection — winner resolution", () => {
 });
 
 describe("computeDiff — orphan keep + split-winner instruction", () => {
-  test("#47: a ledger-owned orphan (no active-catalog entry) is KEPT, not removed", async () => {
+  test(": a ledger-owned orphan (no active-catalog entry) is KEPT, not removed", async () => {
     // Deploy `keep` + `gone` while both are provided by an active Source so the
     // ledger owns both.
     writeSkillIn(SRC_A.id, "keep", "k");

@@ -1,4 +1,4 @@
-// Deploy engine orchestrator (Plan A4) — ordered best-effort apply.
+// Deploy engine orchestrator — ordered best-effort apply.
 //
 // Pre-flight binaries for SELECTED kinds only, abort BEFORE any write on a
 // missing tool (typed DeployError naming it). Apply kinds in order, collect a
@@ -509,13 +509,13 @@ export type DeployInput = {
   // (snippets aren't Capabilities, so they have no winner). Each Capability's
   // winner Mirror travels in `selection` (the resolved item's sourceId).
   activeMirrorRoots: readonly string[];
-  // Per-kind names the ACTIVE catalog currently provides (#47 data-loss guard).
+  // Per-kind names the ACTIVE catalog currently provides ( data-loss guard).
   // reconcilePrune unlinks an owned-but-deselected name ONLY if it is in this set;
   // an owned name absent from it is an ORPHAN (its Source isn't active) and is KEPT
   // — never auto-deleted. Built at the deploy seam from the same active catalog.
   activeCatalogNames: { skills: readonly string[]; agents: readonly string[] };
-  // Task 4 supplies the durable operation id. Keep the direct engine seam usable
-  // while orchestration is still synchronous.
+  // Accepted Deploy orchestration supplies the durable id; direct synchronous
+  // callers may let the engine create one.
   operationId?: string;
 };
 
@@ -584,7 +584,7 @@ export function runDeploy(
 
     // Reconcile: re-read the ledger NOW, prune only names that were Hive-owned at
     // request start AND are now deselected AND still in the active catalog — never a
-    // concurrently-CLI-added name, never an owned-but-absent orphan (#47).
+    // concurrently-CLI-added name, never an owned-but-absent orphan.
     const orphan = reconcilePrune(
       fx.targets,
       sel.skills.map((i) => i.name),

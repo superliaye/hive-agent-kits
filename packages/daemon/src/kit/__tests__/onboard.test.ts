@@ -1,4 +1,4 @@
-// onboardSource (#33) — the stateless add → sync → validate helper. Unit-level:
+// onboardSource — the stateless add → sync → validate helper. Unit-level:
 // the timeout path (a never-resolving fetch must fold to a check_failed/timeout
 // sync within the budget, never hang) plus the well-formed-report invariants.
 // mode-pure: redirected temp homes, stubbed fetch, no fs.watch, no clone paths.

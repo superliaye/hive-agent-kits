@@ -113,7 +113,7 @@ export function recoverMirror(mirrorRoot: string): void {
   }
 }
 
-// Remove a Source's whole Mirror dir on delete (#36, Q7), best-effort. An fs
+// Remove a Source's whole Mirror dir on delete, best-effort. An fs
 // fault must NOT fail the delete — the registry row is already gone; a lingering
 // Mirror is harmless (deactivated/deleted Sources never aggregate). Models the
 // sweepStaleTmp best-effort pattern: rmSync recursive+force in try/catch, trace on
@@ -223,7 +223,7 @@ export class MissingStarterRoot extends Error {
   override readonly name = "MissingStarterRoot";
 }
 
-// Local Sync (#32): copy the bundled Starter's `capabilities/` + `presets/` from
+// Local Sync: copy the bundled Starter's `capabilities/` + `presets/` from
 // `starterRoot` into a staged dir, then atomically swap it into the mirror —
 // producing a NORMAL Mirror the catalog/deploy already read, with no network and
 // no tar. Writes NO provenance file: MirrorProvenance mandates a 40-hex sha, and

@@ -1,4 +1,4 @@
-// Transient action feedback (#50): the Capabilities tab pushes a toast when a
+// Transient action feedback: the Capabilities tab pushes a toast when a
 // previously-silent mutation resolves — sync (POST /api/kit/sync), Source
 // activate/deactivate (…/activate, …/deactivate), and a confirmed delete
 // (DELETE /api/sources/:id). Toasts complement, not replace, the persistent
@@ -138,8 +138,8 @@ function installStubs(): void {
   failSync = false;
   syncResult = {
     sources: [
-      { sourceId: STARTER_ID, origin: STARTER_ORIGIN, status: "unchanged" },
-      { sourceId: GIT_ID, origin: GIT_ORIGIN, status: "unchanged" },
+      { sourceId: STARTER_ID, status: "unchanged" },
+      { sourceId: GIT_ID, status: "unchanged" },
     ],
   };
   globalThis.fetch = (async (
@@ -275,7 +275,7 @@ describe("syncToast — failure-dominates aggregation (q3a)", () => {
   });
 });
 
-describe("KitDeployPage — action feedback toasts (#50)", () => {
+describe("KitDeployPage — action feedback toasts", () => {
   test("the toast host renders with an aria-live region and is non-blocking", async () => {
     installStubs();
     const host = await render();
@@ -303,8 +303,8 @@ describe("KitDeployPage — action feedback toasts (#50)", () => {
     // Mixed: one synced, one failed → the failed must dominate (q3a).
     syncResult = {
       sources: [
-        { sourceId: STARTER_ID, origin: STARTER_ORIGIN, status: "synced" },
-        { sourceId: GIT_ID, origin: GIT_ORIGIN, status: "failed", errorReason: "boom" },
+        { sourceId: STARTER_ID, status: "synced" },
+        { sourceId: GIT_ID, status: "failed", errorReason: "boom" },
       ],
     };
     const host = await render();

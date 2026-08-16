@@ -11,9 +11,8 @@
 import { Source, type SourceLocator } from "@hive/contract";
 import { z } from "zod";
 
-// Bumped to 3 when `Source` gained `rank` (#51, the stored precedence signal).
-// Greenfield (no users): a file at any other version is discarded and re-seeded
-// (see persistence.read), not migrated — no rank back-fill code.
+// Version 4 adds revisioned Source registry writes. Persistence migrates the
+// supported version-3 shape and rejects same-version corruption.
 export const SOURCES_FILE_VERSION = 4;
 
 export const SourcesFileSchema = z.object({
@@ -34,12 +33,14 @@ export const SourcesFileVersionProbe = z.object({ version: z.number() });
 // ---- Audit events (source: 'sources') ----
 //
 // Source add/activate/deactivate/delete/reorder are user actions, so each emits
-// one audit event. Payloads are refs-only — the opaque SourceId, plus the (already
-// normalized, credential-free) origin on add, plus the new rank on reorder. A
+// one audit event. Payloads are refs-only — the opaque SourceId and locator kind,
+// plus a credential-free git origin on add, plus the new rank on reorder. A
 // registry mutation has neither a Run nor an Agent, so run_id/agent_id are null at
 // the normalizer.
 export type SourcesAuditEvents = {
-  "source.added": { id: string; origin: string };
+  "source.added":
+    | { id: string; kind: "git"; origin: string }
+    | { id: string; kind: "working-tree" };
   "source.activated": { id: string };
   "source.deactivated": { id: string };
   "source.removed": { id: string };

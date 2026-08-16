@@ -16,9 +16,13 @@ function readArg(prefix: string): string {
 
 const connectionKind = readArg("--hive-connection-kind=") === "external" ? "external" : "managed";
 const displayName = decodeURIComponent(readArg("--hive-display-name="));
-type ConnectionStatus = "connected" | "disconnected";
+type ConnectionStatus = "connected" | "disconnected" | "reauthentication_required";
+const carriedConnectionStatus = readArg("--hive-connection-status=");
 const initialConnectionStatus: ConnectionStatus =
-  readArg("--hive-connection-status=") === "disconnected" ? "disconnected" : "connected";
+  carriedConnectionStatus === "disconnected" ||
+  carriedConnectionStatus === "reauthentication_required"
+    ? carriedConnectionStatus
+    : "connected";
 const connection: {
   kind: "managed" | "external";
   displayName: string;
@@ -30,7 +34,8 @@ const connection: {
 };
 
 ipcRenderer.on("hive:connectionStatus", (_event, status: unknown) => {
-  if (status !== "connected" && status !== "disconnected") return;
+  if (status !== "connected" && status !== "disconnected" && status !== "reauthentication_required")
+    return;
   connection.status = status;
   window.dispatchEvent(
     new CustomEvent("hive:connection-changed", {

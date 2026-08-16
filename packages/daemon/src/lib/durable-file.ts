@@ -10,7 +10,7 @@ import {
   writeSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import { withIndependentFileLock } from "./cooperative-file-lock.ts";
+import { withIndependentFileLock, withIndependentFileLockAsync } from "./cooperative-file-lock.ts";
 
 export type AtomicWriteOptions = {
   rename?: (oldPath: string, newPath: string) => void;
@@ -30,6 +30,15 @@ export function withCooperativeFileLock<A>(
   options: CooperativeFileLockOptions = {},
 ): A {
   return withIndependentFileLock(resourcePath, work, { timeoutMs, ...options });
+}
+
+export function withCooperativeFileLockAsync<A>(
+  resourcePath: string,
+  timeoutMs: number,
+  work: () => Promise<A>,
+  options: CooperativeFileLockOptions = {},
+): Promise<A> {
+  return withIndependentFileLockAsync(resourcePath, work, { timeoutMs, ...options });
 }
 
 export function withAdvisoryFileLock<A>(resourcePath: string, timeoutMs: number, work: () => A): A {
@@ -58,6 +67,19 @@ export function withAdvisoryFileLock<A>(resourcePath: string, timeoutMs: number,
   }
 }
 
+export function syncDirectoryForDurability(
+  directory: string,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform === "win32") return;
+  const fd = openSync(directory, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function atomicWriteFile(
   path: string,
   bytes: Uint8Array,
@@ -69,16 +91,7 @@ export function atomicWriteFile(
     options.write ??
     ((fd: number, value: Uint8Array, offset: number, length: number) =>
       writeSync(fd, value, offset, length));
-  const fsyncDirectory =
-    options.fsyncDirectory ??
-    ((target: string) => {
-      const fd = openSync(target, "r");
-      try {
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-    });
+  const fsyncDirectory = options.fsyncDirectory ?? syncDirectoryForDurability;
   mkdirSync(directory, { recursive: true });
   const temporary = `${path}.tmp-${process.pid}-${crypto.randomUUID()}`;
   let renamed = false;

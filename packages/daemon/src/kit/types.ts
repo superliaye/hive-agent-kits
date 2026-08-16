@@ -39,11 +39,6 @@ export type DeployAuditEvents = {
     perKindActionCounts: Record<string, number>;
     targetClis: DeployTarget[];
   };
-  "deploy.applied": {
-    kitSha: string | null;
-    perKindCounts: Record<string, number>;
-    targetClis: DeployTarget[];
-  };
   "selection.changed": {
     revision: number;
     addedPerKind: Record<string, number>;

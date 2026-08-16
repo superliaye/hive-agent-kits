@@ -1,4 +1,4 @@
-// Per-Source freshness builder (#33) — a PLAIN (non-Effect) kit module, so both
+// Per-Source freshness builder — a PLAIN (non-Effect) kit module, so both
 // the Kit service's `state()` and the stateless `onboardSource` helper build the
 // same `SourceSyncStatus` shape from one definition. Kept OFF the Context.Service
 // module (kit-live.ts) so the onboard edge does not import the Kit service.
@@ -17,14 +17,13 @@ export type LastSyncError = {
 };
 
 // Build one Source's freshness status. A failed/rate-limited check is surfaced
-// distinctly and never reports "up to date". `origin` is read live from the
-// passed Source entry, not a cached value.
+// distinctly and never reports "up to date".
 export function buildSourceSyncStatus(
   source: Source,
   mirrorRoot: string,
   lastError: LastSyncError | undefined,
 ): SourceSyncStatus {
-  const base = { sourceId: source.id, origin: source.origin };
+  const base = { sourceId: source.id };
   // A local (bundled) Source short-circuits BEFORE readProvenance: a local mirror
   // writes no provenance file, so falling through would mis-report a CLEAN local
   // sync as `check_failed`. But a local sync can still FAIL (a bad

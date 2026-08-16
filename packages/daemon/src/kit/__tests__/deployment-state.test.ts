@@ -91,6 +91,18 @@ describe("DeploymentStateStore", () => {
     expect(replay.lastAttempt.attemptedAt).toBe(100);
   });
 
+  test("bounds interruption replay receipts", () => {
+    const state = openDeploymentStateStore(path, { interruptionReceiptRetention: 2 });
+    state.markInterrupted(key, "claude", "add", "operation-1");
+    state.markInterrupted(key, "claude", "add", "operation-2");
+    state.markInterrupted(key, "claude", "add", "operation-3");
+
+    expect(state.readAll().interruptionReceipts?.map((receipt) => receipt.operationId)).toEqual([
+      "operation-2",
+      "operation-3",
+    ]);
+  });
+
   test("retains the previous file when a partial temporary write cannot complete", () => {
     const stable = openDeploymentStateStore(path, { now: () => 100 });
     stable.recordSuccess(key, "claude", appliedV1, "op-1");

@@ -24,21 +24,26 @@ export const ExternalSession = z.object({
 });
 export type ExternalSession = z.infer<typeof ExternalSession>;
 
-const LoopbackHttpUrl = z.string().url().refine(
-  (value) => {
-    const url = new URL(value);
-    return (
-      url.protocol === "http:" &&
-      (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]") &&
-      url.username === "" &&
-      url.password === "" &&
-      url.pathname === "/" &&
-      url.search === "" &&
-      url.hash === ""
-    );
-  },
-  { message: "baseUrl must be a credential-free loopback HTTP origin" },
-);
+const LoopbackHttpUrl = z
+  .string()
+  .url()
+  .refine(
+    (value) => {
+      const url = new URL(value);
+      return (
+        url.protocol === "http:" &&
+        (url.hostname === "127.0.0.1" ||
+          url.hostname === "localhost" ||
+          url.hostname === "[::1]") &&
+        url.username === "" &&
+        url.password === "" &&
+        url.pathname === "/" &&
+        url.search === "" &&
+        url.hash === ""
+      );
+    },
+    { message: "baseUrl must be a credential-free loopback HTTP origin" },
+  );
 
 export const ExternalConnectionDescriptor = z.object({
   version: z.literal(EXTERNAL_DESCRIPTOR_VERSION),
@@ -57,6 +62,6 @@ export type ExternalConnectionDescriptor = z.infer<typeof ExternalConnectionDesc
 export const ShellConnectionMetadata = z.object({
   kind: z.enum(["managed", "external"]),
   displayName: z.string().min(1).max(80),
-  status: z.enum(["connected", "disconnected"]),
+  status: z.enum(["connected", "disconnected", "reauthentication_required"]),
 });
 export type ShellConnectionMetadata = z.infer<typeof ShellConnectionMetadata>;

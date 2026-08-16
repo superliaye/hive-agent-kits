@@ -40,6 +40,7 @@ const RECONCILIATION_LABEL: Record<ReconciliationState, string> = {
   waiting_for_source: "Waiting for source",
   orphaned: "Source unavailable",
   unmanaged_owned: "Owned outside deployment state",
+  manual_install_required: "Manual install required",
   manual_removal_required: "Manual removal required",
 };
 const OBSERVATION_LABEL: Record<TargetObservation, string> = {
@@ -101,16 +102,16 @@ export function syncToast(result: SyncRunResult): { kind: "success" | "error"; m
     : { kind: "success", message: "Up to date" };
 }
 
-function connectionSnapshot(): NonNullable<Window["__hive"]>["connection"] {
-  if (typeof window === "undefined") return undefined;
-  return window.__hive?.getConnection?.() ?? window.__hive?.connection;
-}
-
-export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
+export function KitDeployPage({
+  apiConfig,
+  connection,
+}: {
+  apiConfig: ApiConfig;
+  connection?: NonNullable<Window["__hive"]>["connection"];
+}): JSX.Element {
   const queryClient = useQueryClient();
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
   const [acceptedOperationId, setAcceptedOperationId] = useState<string | null>(null);
-  const [connection, setConnection] = useState(connectionSnapshot);
   const [armedPlanToken, setArmedPlanToken] = useState<string | null>(null);
   const [staleSelectionRevision, setStaleSelectionRevision] = useState<number | null>(null);
   const [stalePlanToken, setStalePlanToken] = useState<string | null>(null);
@@ -125,45 +126,22 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     queryKey: ["kit", "overview"],
     queryFn: () => api.getKitOverview(apiConfig),
     refetchOnReconnect: true,
-    refetchIntervalInBackground: true,
-    refetchInterval: (query) =>
-      acceptedOperationId !== null ||
-      query.state.data?.activeOperation ||
-      staleSelectionRevision !== null ||
-      stalePlanToken !== null ||
-      ambiguousDeploy !== null
-        ? 750
-        : connection
-          ? 2_000
-          : false,
+    refetchIntervalInBackground: false,
+    refetchInterval: (query) => {
+      if (connection?.status === "reauthentication_required") return false;
+      if (
+        acceptedOperationId !== null ||
+        query.state.data?.activeOperation ||
+        staleSelectionRevision !== null ||
+        stalePlanToken !== null ||
+        ambiguousDeploy !== null
+      ) {
+        return 750;
+      }
+      return connection?.status === "disconnected" ? 15_000 : 10_000;
+    },
   });
   const overview = overviewQuery.data;
-
-  useEffect(() => {
-    const reconnect = (event: Event): void => {
-      if (event.type === "online") {
-        void overviewQuery.refetch();
-        return;
-      }
-      const detail = event instanceof CustomEvent ? event.detail : undefined;
-      const next =
-        detail &&
-        (detail.status === "connected" || detail.status === "disconnected") &&
-        (detail.kind === "managed" || detail.kind === "external")
-          ? detail
-          : connectionSnapshot();
-      setConnection(next);
-      if (!next || next.status === "connected") {
-        void overviewQuery.refetch();
-      }
-    };
-    window.addEventListener("online", reconnect);
-    window.addEventListener("hive:connection-changed", reconnect);
-    return () => {
-      window.removeEventListener("online", reconnect);
-      window.removeEventListener("hive:connection-changed", reconnect);
-    };
-  }, [overviewQuery.refetch]);
 
   useEffect(() => {
     if (!acceptedOperationId || !overview) return;
@@ -352,18 +330,24 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
     staleSelectionRevision !== null ||
     stalePlanToken !== null ||
     ambiguousDeploy !== null ||
-    connection?.status === "disconnected" ||
+    (connection !== undefined && connection.status !== "connected") ||
     overview === undefined ||
     overviewQuery.isError;
   const deployEnabled =
     actionable && !operationInFlight && !deployMutation.isPending && !authorityUnknown;
+  const unmanagedInstructionRows =
+    overview?.rows.filter(
+      (row) => row.key.kind === "instruction" && row.reconciliation === "unmanaged_owned",
+    ) ?? [];
   const deployLabel = authorityUnknown
     ? "Waiting for Overview…"
     : operationInFlight
       ? "Deploying…"
       : actionable
         ? "Deploy"
-        : "Up to date";
+        : unmanagedInstructionRows.length > 0
+          ? "Instructions paused"
+          : "Up to date";
   const selectedRows = overview?.rows.filter((row) => row.desired === "on") ?? [];
   const selectedTargets = [
     ...new Set(
@@ -372,7 +356,9 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       ),
     ),
   ];
-  const manualRows =
+  const manualInstallRows =
+    overview?.rows.filter((row) => row.reconciliation === "manual_install_required") ?? [];
+  const manualRemovalRows =
     overview?.rows.filter((row) => row.reconciliation === "manual_removal_required") ?? [];
   const blockedInstructionRows =
     overview?.rows.filter(
@@ -498,15 +484,29 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           {removedCount === 1 ? "capability" : "capabilities"}. Review and confirm before deploying.
         </div>
       )}
-      {manualRows.length > 0 && (
+      {manualInstallRows.length > 0 && (
+        <div className="banner-warn" data-testid="kit-manual-install">
+          Manual install required for {manualInstallRows.map((row) => row.key.name).join(", ")}.
+          Hive does not run plugin or bundle installers from a durable Deploy.
+        </div>
+      )}
+      {manualRemovalRows.length > 0 && (
         <div className="banner-error" data-testid="kit-manual-removal">
-          Manual removal required for {manualRows.map((row) => row.key.name).join(", ")}. Deploy
-          does not uninstall plugins or bundles.
+          Manual removal required for {manualRemovalRows.map((row) => row.key.name).join(", ")}.
+          Deploy does not uninstall plugins or bundles.
         </div>
       )}
       {blockedInstructionRows.length > 0 && (
         <div className="banner-warn" data-testid="kit-instruction-blocked">
           Selected instructions are unavailable. Whole-file instruction reconciliation is blocked.
+        </div>
+      )}
+      {unmanagedInstructionRows.length > 0 && (
+        <div className="banner-warn" data-testid="kit-instruction-unmanaged">
+          Whole-file instruction reconciliation is paused because the Deployment Ledger contains
+          instruction contributions Hive does not manage:{" "}
+          {unmanagedInstructionRows.map((row) => row.key.name).join(", ")}. Other capability changes
+          can still Deploy.
         </div>
       )}
       {overview?.activeOperation && <OperationStatus operation={overview.activeOperation} />}

@@ -7,7 +7,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -24,9 +23,7 @@ import {
   GitAcquireError,
   repositoryLockCountForTest,
 } from "../acquisition/git-source.ts";
-import { extractBoundedTree, TreeGuardError } from "../acquisition/tree-guard.ts";
 import { readProvenance } from "../mirror.ts";
-import { buildTar } from "./helpers.ts";
 
 const roots: string[] = [];
 const TEST_COMMIT = "a".repeat(40);
@@ -34,6 +31,28 @@ const FIXTURE_REPOSITORY_URL = "https://fixture.invalid/acme/kits.git";
 
 function gitResult(stdout = ""): { exitCode: number; stdout: Uint8Array; stderr: string } {
   return { exitCode: 0, stdout: new TextEncoder().encode(stdout), stderr: "" };
+}
+
+function gitBatchResult(
+  stdin: Uint8Array | undefined,
+  contentFor: (objectId: string) => Uint8Array,
+): { exitCode: number; stdout: Uint8Array; stderr: string } {
+  const objectIds = new TextDecoder().decode(stdin).trim().split("\n").filter(Boolean);
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  for (const objectId of objectIds) {
+    const content = contentFor(objectId);
+    const header = new TextEncoder().encode(`${objectId} blob ${content.byteLength}\n`);
+    chunks.push(header, content, new Uint8Array([10]));
+    length += header.byteLength + content.byteLength + 1;
+  }
+  const stdout = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    stdout.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { exitCode: 0, stdout, stderr: "" };
 }
 
 function emptyTreeResult(args: readonly string[]) {
@@ -67,6 +86,7 @@ function localGitProcess(remote: string): GitProcess {
     const result = Bun.spawnSync(["git", ...localArgs], {
       cwd: options?.cwd,
       env,
+      stdin: options?.stdin ?? "ignore",
       stderr: "pipe",
       stdout: "pipe",
     });
@@ -83,42 +103,7 @@ function localGitProcess(remote: string): GitProcess {
 }
 
 function testGitProcess(run: GitProcess["run"]): GitProcess {
-  return { run, runArchive: (args, options) => run(args, options) };
-}
-
-function tarSpecialEntry(path: string): Uint8Array {
-  const header = new Uint8Array(512);
-  const encoder = new TextEncoder();
-  header.set(encoder.encode(path), 0);
-  header.set(encoder.encode("0000000\0"), 100);
-  header.set(encoder.encode("00000000000\0"), 124);
-  header[156] = "3".charCodeAt(0);
-  return new Uint8Array([...header, ...new Uint8Array(1024)]);
-}
-
-function tarFileEntry(path: string, content = "x"): Uint8Array {
-  const header = new Uint8Array(512);
-  const data = new TextEncoder().encode(content);
-  const encoder = new TextEncoder();
-  header.set(encoder.encode(path), 0);
-  header.set(encoder.encode("0000644\0"), 100);
-  header.set(encoder.encode(`${data.byteLength.toString(8).padStart(11, "0")}\0`), 124);
-  const padded = Math.ceil(data.byteLength / 512) * 512;
-  const result = new Uint8Array(512 + padded + 1024);
-  result.set(header, 0);
-  result.set(data, 512);
-  return result;
-}
-
-function tarSymlinkEntry(path: string, target: string): Uint8Array {
-  const header = new Uint8Array(512);
-  const encoder = new TextEncoder();
-  header.set(encoder.encode(path), 0);
-  header.set(encoder.encode("0000777\0"), 100);
-  header.set(encoder.encode("00000000000\0"), 124);
-  header[156] = "2".charCodeAt(0);
-  header.set(encoder.encode(target), 157);
-  return new Uint8Array([...header, ...new Uint8Array(1024)]);
+  return { run };
 }
 
 function runGit(cwd: string, ...args: string[]): string {
@@ -177,61 +162,6 @@ describe("git Source acquisition", () => {
     );
 
     expect(existsSync(join(work, "mirror", "nested", "personal-kit", "capabilities"))).toBe(true);
-  });
-
-  test("preserves links that resolve exactly to the staged root", () => {
-    const stage = mkdtempSync(join(tmpdir(), "hive-tree-guard-"));
-    roots.push(stage);
-
-    extractBoundedTree(tarSymlinkEntry("self", "."), stage, {
-      maxFiles: 20_000,
-      maxBytes: 256 * 1024 * 1024,
-    });
-    extractBoundedTree(tarSymlinkEntry("dir/up", ".."), stage, {
-      maxFiles: 20_000,
-      maxBytes: 256 * 1024 * 1024,
-    });
-
-    expect(readlinkSync(join(stage, "self"))).toBe(".");
-    expect(readlinkSync(join(stage, "dir", "up"))).toBe("..");
-  });
-
-  test("exposes a bounded streaming archive runner", () => {
-    expect((productionGitProcess() as { runArchive?: unknown }).runArchive).toBeTypeOf("function");
-  });
-
-  test("stops an archive stream at its byte budget and kills it at its deadline", async () => {
-    const repo = fixtureRepository();
-    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
-    roots.push(work);
-    writeFileSync(join(repo.root, "large"), "x".repeat(2 * 1024 * 1024));
-    runGit(repo.root, "add", ".");
-    runGit(repo.root, "commit", "-m", "large archive");
-    const git = productionGitProcess();
-
-    await expect(
-      git.runArchive?.(["-C", repo.root, "archive", "--format=tar", "HEAD"], {
-        maxBytes: 1,
-        timeoutMs: 5_000,
-      }),
-    ).rejects.toMatchObject({ budgetExceeded: true, result: { stdout: expect.any(Uint8Array) } });
-
-    const bin = join(work, "bin");
-    const marker = join(work, "killed");
-    mkdirSync(bin);
-    writeFileSync(
-      join(bin, "git"),
-      `#!/bin/sh\ntrap 'echo killed > "${marker}"; exit 0' TERM\nwhile :; do :; done\n`,
-    );
-    chmodSync(join(bin, "git"), 0o755);
-    await expect(
-      git.runArchive?.(["archive"], {
-        env: { PATH: bin },
-        maxBytes: 1,
-        timeoutMs: 20,
-      }),
-    ).rejects.toMatchObject({ timedOut: true });
-    expect(readFileSync(marker, "utf8").trim()).toBe("killed");
   });
 
   test("kills a TERM-resistant Git process group and its descendant after a bounded grace", async () => {
@@ -334,41 +264,6 @@ while :; do sleep 1; done
     }
     expect(failure).toBeInstanceOf(GitProcessFailure);
     expect((failure as GitProcessFailure).result.stderr.length).toBe(64 * 1024);
-  });
-
-  test("keeps the archive deadline after Git closes stdout", async () => {
-    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
-    roots.push(work);
-    const bin = join(work, "bin");
-    const started = join(work, "started");
-    const release = join(work, "release");
-    const marker = join(work, "killed");
-    mkdirSync(bin);
-    writeFileSync(
-      join(bin, "git"),
-      `#!/bin/sh\necho started > "${started}"\nexec 1>&-\ntrap 'echo killed > "${marker}"; exit 0' TERM\nwhile [ ! -f "${release}" ]; do :; done\n`,
-    );
-    chmodSync(join(bin, "git"), 0o755);
-    const archive = productionGitProcess().runArchive(["archive"], {
-      env: { PATH: bin },
-      maxBytes: 1,
-      timeoutMs: 20,
-    });
-
-    try {
-      const outcome = await Promise.race([
-        archive.then(
-          () => "resolved",
-          () => "rejected",
-        ),
-        Bun.sleep(100).then(() => "pending"),
-      ]);
-      expect(outcome).toBe("rejected");
-      expect(readFileSync(marker, "utf8").trim()).toBe("killed");
-    } finally {
-      writeFileSync(release, "release");
-      await archive.catch(() => undefined);
-    }
   });
 
   test("maps cache and temporary-root filesystem failures to io", async () => {
@@ -593,18 +488,6 @@ while :; do sleep 1; done
     }
   });
 
-  test("rejects special archive entries before materialization", () => {
-    const stage = mkdtempSync(join(tmpdir(), "hive-tree-guard-"));
-    roots.push(stage);
-
-    expect(() =>
-      extractBoundedTree(tarSpecialEntry("device"), stage, {
-        maxFiles: 20_000,
-        maxBytes: 256 * 1024 * 1024,
-      }),
-    ).toThrow(TreeGuardError);
-  });
-
   test("rejects unsupported entries from the raw Git tree", async () => {
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
@@ -630,41 +513,6 @@ while :; do sleep 1; done
     expect(existsSync(join(work, "mirror"))).toBe(false);
   });
 
-  test("counts archive directories against the entry budget", () => {
-    const stage = mkdtempSync(join(tmpdir(), "hive-tree-guard-"));
-    roots.push(stage);
-    expect(() =>
-      extractBoundedTree(buildTar([{ path: "one/" }, { path: "two/" }]), stage, {
-        maxFiles: 1,
-        maxBytes: 1024,
-      }),
-    ).toThrow(TreeGuardError);
-  });
-
-  test("rejects backslash archive paths instead of normalizing them", () => {
-    const stage = mkdtempSync(join(tmpdir(), "hive-tree-guard-"));
-    roots.push(stage);
-
-    expect(() =>
-      extractBoundedTree(tarFileEntry("capabilities\\unsafe"), stage, {
-        maxFiles: 20_000,
-        maxBytes: 256 * 1024 * 1024,
-      }),
-    ).toThrow(TreeGuardError);
-  });
-
-  test("rejects traversal components even when they resolve within the staging root", () => {
-    const stage = mkdtempSync(join(tmpdir(), "hive-tree-guard-"));
-    roots.push(stage);
-
-    expect(() =>
-      extractBoundedTree(tarFileEntry("capabilities/../unsafe"), stage, {
-        maxFiles: 20_000,
-        maxBytes: 256 * 1024 * 1024,
-      }),
-    ).toThrow(TreeGuardError);
-  });
-
   test("uses bounded partial fetch argv without changing the Daemon HOME", async () => {
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
@@ -677,7 +525,9 @@ while :; do sleep 1; done
       if (args.includes("ls-tree")) {
         return gitResult(`100644 blob ${blob}\tREADME.md\0`);
       }
-      if (args.includes("cat-file") && args.includes("blob")) return gitResult("raw bytes\n");
+      if (args.includes("cat-file") && args.includes("--batch")) {
+        return gitBatchResult(options?.stdin, () => new TextEncoder().encode("raw bytes\n"));
+      }
       return emptyTreeResult(args);
     });
 
@@ -723,7 +573,7 @@ while :; do sleep 1; done
       ),
     ).toBe(true);
     const blobRead = calls.find(
-      (call) => call.args.includes("cat-file") && call.args.includes("blob"),
+      (call) => call.args.includes("cat-file") && call.args.includes("--batch"),
     );
     expect(blobRead?.args).toContain("protocol.allow=never");
     expect(blobRead?.args).toContain("protocol.https.allow=always");

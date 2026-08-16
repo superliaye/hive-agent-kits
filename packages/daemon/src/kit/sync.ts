@@ -1,4 +1,4 @@
-// Sync — fetch the latest Kit tree into the Mirror (Plan A1).
+// Sync — fetch the latest Kit tree into the Mirror.
 //
 // Resolve the latest SHA via the commits API, download the tarball BY FULL SHA
 // (codeload .../tar.gz/<full-sha>, never /main — keeps recorded SHA and tree
@@ -28,7 +28,7 @@ import type { DeployTargets } from "./targets.ts";
 import type { MirrorProvenance } from "./types.ts";
 
 // Parse a normalized https GitHub origin into owner/repo. The Source registry
-// (#26) already strips a trailing `/` / `.git` and lowercases scheme+host, so we
+// already strips a trailing `/` / `.git` and lowercases scheme+host, so we
 // only validate host + extract the two path segments. Any non-GitHub host, or a
 // path that isn't exactly `<owner>/<repo>`, yields `null` (the caller maps that
 // to a typed parse SyncError — this slice is GitHub-only).

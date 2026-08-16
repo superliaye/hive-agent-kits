@@ -11,7 +11,7 @@ import {
   writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { DeployTarget } from "@hive/contract";
 import { withCooperativeFileLock } from "../../lib/durable-file.ts";
 import { mirrorContentSha } from "../content-sha.ts";
@@ -235,6 +235,31 @@ describe("persisted asynchronous Deploy coordinator", () => {
     ).rejects.toBeInstanceOf(DeployInProgressError);
   });
 
+  test("round-trips the reason for a blocked instruction plan", () => {
+    const operations = openDeployOperationStore(operationPath(), { now: () => 10 });
+    const blockedPlan = plan({
+      actions: [],
+      blocked: [
+        {
+          kind: "instruction",
+          target: "claude",
+          reason: "unmanaged_owned",
+          keys: [{ kind: "instruction", name: "rules" }],
+        },
+      ],
+    });
+    operations.createQueued({
+      operationId: "blocked-plan",
+      acceptedAt: 10,
+      selectionRevision: blockedPlan.selectionRevision,
+      planToken: "token",
+      plan: blockedPlan,
+      staged: { tasks: [], metadata: {} },
+    });
+
+    expect(operations.read("blocked-plan")?.plan.blocked).toEqual(blockedPlan.blocked);
+  });
+
   test("background ownership survives request abandonment and executes the persisted staged payload", async () => {
     let release: (() => void) | undefined;
     const gate = new Promise<void>((resolve) => {
@@ -367,7 +392,7 @@ describe("persisted asynchronous Deploy coordinator", () => {
     expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
   });
 
-  test("keeps filesystem success provisional when the real Ledger commit fails", async () => {
+  test("does not touch deployment artifacts when the shared Ledger transaction cannot start", async () => {
     const root = mkdtempSync(join(tmpdir(), "deploy-ledger-failure-"));
     roots.push(root);
     const homes = redirectHomeEnv(root);
@@ -428,11 +453,199 @@ describe("persisted asynchronous Deploy coordinator", () => {
       ),
     ).rejects.toThrow();
 
-    expect(readFileSync(join(homes.claudeHome, "skills", "alpha", "SKILL.md"), "utf8")).toBe(
-      files[0]?.content ?? "",
-    );
+    expect(existsSync(join(homes.claudeHome, "skills", "alpha", "SKILL.md"))).toBe(false);
     expect(deploymentState.read(action.key, action.target)?.applied).toBeUndefined();
     expect(operations.read(operation.operationId)?.outcomes).toEqual([]);
+  });
+
+  test("backs up a whole instruction file before removing the last contribution", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-instruction-removal-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const instructionPath = join(homes.claudeHome, "CLAUDE.md");
+    mkdirSync(dirname(instructionPath), { recursive: true });
+    writeFileSync(instructionPath, "current instruction file\n");
+    const action = {
+      action: "remove",
+      key: { kind: "instruction", name: "rules" },
+      target: "claude",
+      artifact: { existence: "present", hash: "a".repeat(64) },
+    } satisfies DeployPlan["actions"][number];
+    const acceptedPlan = plan({ actions: [action], mirrors: [] }, action);
+    const operations = openDeployOperationStore(operationPath(), { now: () => 20 });
+    operations.createQueued({
+      operationId: "instruction-removal",
+      acceptedAt: 10,
+      selectionRevision: acceptedPlan.selectionRevision,
+      planToken: "token",
+      plan: acceptedPlan,
+      staged: {
+        tasks: [
+          {
+            type: "instruction",
+            target: "claude",
+            actions: [{ action: "remove", key: action.key, target: "claude" }],
+            contributions: [],
+            renderedHash: null,
+            content: null,
+          },
+        ],
+        metadata: {},
+      },
+    });
+    const operation = operations.markRunning("instruction-removal");
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          exec: () => ({ status: 0, stdout: "", stderr: "" }),
+          probe: () => false,
+        },
+        deploymentState,
+        now: () => 20,
+      },
+      operation,
+      async (outcomes) => {
+        operations.recordOutcomes(operation.operationId, outcomes);
+      },
+    );
+
+    expect(existsSync(instructionPath)).toBe(false);
+    expect(readFileSync(`${instructionPath}.hive-bak`, "utf8")).toBe("current instruction file\n");
+  });
+
+  test("serializes artifact and Ledger changes with a real agent-kit transaction", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-agent-kit-transaction-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const artifact = join(homes.claudeHome, "skills", "shared", "SKILL.md");
+    mkdirSync(dirname(artifact), { recursive: true });
+    writeFileSync(artifact, "before\n");
+    mergeLedger(
+      targets,
+      {
+        kitVersion: "",
+        targets: ["claude"],
+        skills: ["shared"],
+        agents: [],
+        instructions: [],
+        plugins: [],
+        bundles: [],
+      },
+      [],
+      [],
+    );
+
+    const action = {
+      action: "remove",
+      key: { kind: "skill", name: "shared" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha: "a".repeat(64),
+      renderedHash: "b".repeat(64),
+      artifact: { existence: "present", hash: "b".repeat(64) },
+    } satisfies DeployPlan["actions"][number];
+    const operations = openDeployOperationStore(operationPath(), { now: () => 20 });
+    operations.createQueued({
+      operationId: "shared-transaction",
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token",
+      plan: plan({ actions: [action], mirrors: [] }, action),
+      staged: {
+        tasks: [{ type: "remove", action: "remove", key: action.key, target: "claude" }],
+        metadata: {},
+      },
+    });
+    const operation = operations.markRunning("shared-transaction");
+    let releaseProvisional: (() => void) | undefined;
+    let markProvisionalStarted: (() => void) | undefined;
+    const provisionalGate = new Promise<void>((resolve) => {
+      releaseProvisional = resolve;
+    });
+    const provisionalStarted = new Promise<void>((resolve) => {
+      markProvisionalStarted = resolve;
+    });
+    const journal = Object.assign(async (): Promise<void> => {}, {
+      provisional: async (): Promise<void> => {
+        markProvisionalStarted?.();
+        await provisionalGate;
+      },
+      markLedgerPending: (): void => {},
+      markLedgerCommitted: (): void => {},
+      markFinalizing: (): void => {},
+    });
+    const hive = executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          exec: () => ({ status: 0, stdout: "", stderr: "" }),
+          probe: () => false,
+        },
+        deploymentState,
+        now: () => 20,
+      },
+      operation,
+      journal,
+    );
+    await provisionalStarted;
+    expect(existsSync(artifact)).toBe(false);
+
+    const entered = join(root, "agent-kit-entered");
+    const manifestModule = new URL(
+      "../../../../../scripts/fixtures/my-agent-kits/lib/manifest.js",
+      import.meta.url,
+    ).href;
+    const agentKit = Bun.spawn(
+      [
+        "node",
+        "--input-type=module",
+        "-e",
+        `import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+const { buildManifest, withManifestTransaction } = await import(process.env.MANIFEST_MODULE);
+await withManifestTransaction(({ commit }) => {
+  writeFileSync(process.env.ENTERED_PATH, "entered");
+  mkdirSync(dirname(process.env.ARTIFACT_PATH), { recursive: true });
+  writeFileSync(process.env.ARTIFACT_PATH, "agent-kit\\n");
+  commit(buildManifest({
+    kitVersion: "",
+    agents: ["claude"],
+    capabilities: { skills: ["shared"] },
+  }));
+});`,
+      ],
+      {
+        env: {
+          ...process.env,
+          HOME: join(root, "homes"),
+          USERPROFILE: join(root, "homes"),
+          MANIFEST_MODULE: manifestModule,
+          ENTERED_PATH: entered,
+          ARTIFACT_PATH: artifact,
+        },
+        stderr: "pipe",
+      },
+    );
+    await Bun.sleep(100);
+    expect(existsSync(entered)).toBe(false);
+
+    releaseProvisional?.();
+    await hive;
+    const agentKitExit = await agentKit.exited;
+    const agentKitStderr = await new Response(agentKit.stderr).text();
+    if (agentKitExit !== 0) throw new Error(agentKitStderr);
+    expect(readFileSync(artifact, "utf8")).toBe("agent-kit\n");
+    expect(readLedger(targets)?.skills).toContainEqual({ name: "shared" });
   });
 
   test("recovers filesystem-only success when the Ledger-pending checkpoint write fails", async () => {
@@ -574,10 +787,107 @@ describe("persisted asynchronous Deploy coordinator", () => {
     });
   });
 
+  test("does not commit a stale removal after another writer restores the artifact", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-ledger-removal-recovery-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 30,
+    });
+    const artifact = join(homes.claudeHome, "skills", "shared", "SKILL.md");
+    mkdirSync(dirname(artifact), { recursive: true });
+    writeFileSync(artifact, "before\n");
+    mergeLedger(
+      targets,
+      {
+        kitVersion: "",
+        targets: ["claude"],
+        skills: ["shared"],
+        agents: [],
+        instructions: [],
+        plugins: [],
+        bundles: [],
+      },
+      [],
+      [],
+    );
+    const action = {
+      action: "remove",
+      key: { kind: "skill", name: "shared" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha: "a".repeat(64),
+      renderedHash: "b".repeat(64),
+      artifact: { existence: "present", hash: "b".repeat(64) },
+    } satisfies DeployPlan["actions"][number];
+    const operations = openDeployOperationStore(operationPath(), { now: () => 20 });
+    operations.createQueued({
+      operationId: "stale-removal",
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token",
+      plan: plan({ actions: [action], mirrors: [] }, action),
+      staged: {
+        tasks: [{ type: "remove", action: "remove", key: action.key, target: "claude" }],
+        metadata: {},
+      },
+    });
+    const running = operations.markRunning("stale-removal");
+    rmSync(dirname(artifact), { recursive: true, force: true });
+    operations.recordProvisionalOutcomes("stale-removal", [successOutcome(running, action)]);
+    operations.markLedgerPending("stale-removal");
+
+    mkdirSync(dirname(artifact), { recursive: true });
+    writeFileSync(artifact, "restored by agent-kit\n");
+    const pending = operations.read("stale-removal");
+    if (!pending) throw new Error("missing Ledger-pending operation");
+    const journal = Object.assign(
+      async (outcomes: readonly DeployOperationOutcome[]): Promise<void> => {
+        operations.recordOutcomes(pending.operationId, outcomes);
+      },
+      {
+        provisional: async (): Promise<void> => {},
+        markLedgerPending: (): void => {},
+        markLedgerCommitted: (): void => {
+          operations.markLedgerCommitted(pending.operationId);
+        },
+        markFinalizing: (): void => {
+          operations.markFinalizing(pending.operationId);
+        },
+      },
+    );
+
+    await resumeStagedDeploy(
+      {
+        fx: {
+          targets,
+          exec: () => ({ status: 0, stdout: "", stderr: "" }),
+          probe: () => false,
+        },
+        deploymentState,
+        now: () => 30,
+      },
+      pending,
+      journal,
+    );
+
+    expect(readFileSync(artifact, "utf8")).toBe("restored by agent-kit\n");
+    expect(readLedger(targets)?.skills).toContainEqual({ name: "shared" });
+    expect(operations.read(pending.operationId)?.outcomes).toEqual([
+      expect.objectContaining({ outcome: "failed", code: "recovery_state_changed" }),
+    ]);
+    expect(deploymentState.read(action.key, action.target)?.lastAttempt).toMatchObject({
+      action: "remove",
+      outcome: "failed",
+      code: "recovery_state_changed",
+    });
+  });
+
   test("restart retries one shared Ledger-pending recovery after a real lock timeout", async () => {
     const root = mkdtempSync(join(tmpdir(), "deploy-ledger-lock-recovery-"));
     roots.push(root);
-    redirectHomeEnv(root);
+    const homes = redirectHomeEnv(root);
     const targets = failSafeDeployTargets();
     const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
       now: () => 20,
@@ -621,6 +931,9 @@ describe("persisted asynchronous Deploy coordinator", () => {
     const provisional = successOutcome(runningOperation, action);
     operations.recordProvisionalOutcomes("ledger-lock-timeout", [provisional]);
     operations.markLedgerPending("ledger-lock-timeout");
+    const artifact = join(homes.claudeHome, "skills", "alpha", "SKILL.md");
+    mkdirSync(dirname(artifact), { recursive: true });
+    writeFileSync(artifact, files[0]?.content ?? "");
     const pending = operations.read("ledger-lock-timeout");
     if (!pending) throw new Error("missing Ledger-pending operation");
     const journal = Object.assign(

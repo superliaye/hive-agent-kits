@@ -1,4 +1,4 @@
-// Source precedence / re-rank UI + shadow explanation (#51).
+// Source precedence / re-rank UI + shadow explanation.
 //
 // The Capabilities header renders its Sources in precedence order (highest rank
 // first) and exposes per-Source move-up / move-down buttons. Clicking one POSTs
@@ -6,7 +6,7 @@
 // precedence — the winner flips live (the previously-shadowed variant deploys,
 // the previously-winning one becomes shadowed). A shadowed row explains itself:
 // "Hidden — also provided by <Source>" derived from `shadowedBy`. A merged entry
-// shows all contributing Source labels (unchanged from #34).
+// shows all contributing Source labels (unchanged from ).
 //
 // The stub is STATEFUL: it holds the two Sources' ranks and recomputes the
 // catalog from them on every GET, so a reorder POST → refetch flips the winner.
@@ -89,8 +89,8 @@ function sources(): Source[] {
 function kitState(): KitState {
   return {
     sync: [
-      { state: "up_to_date", sha: "aaa1111", fetchedAt: 1, sourceId: A_ID, origin: A_ORIGIN },
-      { state: "up_to_date", sha: "bbb2222", fetchedAt: 1, sourceId: B_ID, origin: B_ORIGIN },
+      { state: "up_to_date", sha: "aaa1111", fetchedAt: 1, sourceId: A_ID },
+      { state: "up_to_date", sha: "bbb2222", fetchedAt: 1, sourceId: B_ID },
     ],
     ledger: null,
   };
@@ -228,7 +228,7 @@ async function click(el: Element | null): Promise<void> {
   await flush();
 }
 
-describe("KitDeployPage — precedence re-rank + shadow explanation (#51)", () => {
+describe("KitDeployPage — precedence re-rank + shadow explanation", () => {
   test("each Source row exposes move-up / move-down buttons, disabled at the ends", async () => {
     installStubs();
     const host = await render();

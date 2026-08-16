@@ -3,6 +3,7 @@ import {
   DAEMON_PROTOCOL_VERSION,
   ExternalConnectionDescriptor,
   ReadyResponse,
+  ShellConnectionMetadata,
 } from "../connection.ts";
 
 const instanceId = "018f7f7a-1234-7abc-8def-0123456789ab";
@@ -70,5 +71,15 @@ describe("external connection contract", () => {
         activeExternalSessions: -1,
       }).success,
     ).toBe(false);
+  });
+
+  test("represents external sessions that require relaunch authentication", () => {
+    expect(
+      ShellConnectionMetadata.parse({
+        kind: "external",
+        displayName: "Arca",
+        status: "reauthentication_required",
+      }).status,
+    ).toBe("reauthentication_required");
   });
 });

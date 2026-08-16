@@ -1,4 +1,4 @@
-// AggregatedCatalog rendering (#34): the Kit Deploy page renders merge labels and
+// AggregatedCatalog rendering: the Kit Deploy page renders merge labels and
 // the Shadowed badge as a third visible state distinct from blocked. Single-variant
 // rows keep the stable `kit-row-${kind}-${name}` testid; a key with ≥2 variants
 // keys each row uniformly by a short contentSha suffix.
@@ -62,21 +62,22 @@ afterEach(async () => {
 async function renderCatalog(
   entries: CapabilityEntry[],
   state: KitState = emptyState,
+  sourceLabels: Readonly<Record<string, string>> = {},
 ): Promise<HTMLElement> {
   const catalog: Catalog = { entries, presets: [], problems: [] };
   // The header sources query must resolve so the joined rows render; derive an
-  // active git Source per state.sync entry (these tests assert AC1-3 row content,
+  // active git Source per state.sync entry (these tests assert row content,
   // not the toggle, so an empty list when state.sync is empty is fine).
   const sources: Source[] = state.sync.map((s, i) => ({
     id: s.sourceId,
-    label: s.origin.split("/").slice(-2).join("/"),
+    label: sourceLabels[s.sourceId] ?? s.sourceId,
     locator: {
       kind: "git",
-      repoUrl: s.origin,
+      repoUrl: `https://example.invalid/${s.sourceId}`,
       revision: { mode: "track", ref: "refs/heads/main" },
       subpath: ".",
     },
-    origin: s.origin,
+    origin: `https://example.invalid/${s.sourceId}`,
     kind: "git",
     active: true,
     createdAt: i,
@@ -157,18 +158,17 @@ describe("KitDeployPage — AggregatedCatalog variants", () => {
             sha: "abc",
             fetchedAt: 1,
             sourceId: "src-a",
-            origin: "https://github.com/owner/repo-a",
           },
           {
             state: "up_to_date",
             sha: "def",
             fetchedAt: 1,
             sourceId: "src-b",
-            origin: "https://github.com/owner/repo-b",
           },
         ],
         ledger: null,
       },
+      { "src-a": "owner/repo-a", "src-b": "owner/repo-b" },
     );
     const labels = [
       ...host.querySelectorAll('[data-testid="kit-row-sources-merged"] .kit-source-label'),

@@ -8,6 +8,7 @@ import {
   ReleaseMetadataSchema,
   readReleaseMetadata,
   StableReleaseManifestSchema,
+  validateStableReleaseManifestAssets,
 } from "../release-manifest";
 
 const commit = "0123456789abcdef0123456789abcdef01234567";
@@ -77,6 +78,17 @@ describe("release metadata", () => {
     expect(() => readReleaseMetadata({ HIVE_RELEASE_ID: `g${commit}` }, commit)).toThrow(
       "release metadata environment must be complete",
     );
+    expect(() =>
+      readReleaseMetadata(
+        {
+          HIVE_RELEASE_ID: `g${commit}`,
+          HIVE_RELEASE_BUILD_VERSION: "0.0.0-g0123456789ab",
+          HIVE_RELEASE_SOURCE_COMMIT: commit,
+          HIVE_RELEASE_PROTOCOL_RANGE: "1",
+        },
+        "f".repeat(40),
+      ),
+    ).toThrow("release metadata source commit does not match the build tree");
   });
 
   test("local packaging uses an explicit non-stable build version", () => {
@@ -150,5 +162,45 @@ describe("stable release manifest", () => {
         release: { ...manifest.release, artifacts: manifest.release.artifacts.slice(1) },
       }).success,
     ).toBe(false);
+  });
+
+  test("binds published metadata to the expected release URLs and local asset bytes", async () => {
+    const directory = assets();
+    const manifest = await createStableReleaseManifest({
+      assetsDirectory: directory,
+      repository,
+      commit,
+      buildVersion: "0.0.0-g0123456789ab",
+      publishedAt: "2026-08-15T12:00:00Z",
+      assetBaseUrl,
+    });
+    await expect(
+      validateStableReleaseManifestAssets(manifest, {
+        assetsDirectory: directory,
+        expectedCommit: commit,
+        assetBaseUrl,
+      }),
+    ).resolves.toEqual(manifest);
+
+    const first = manifest.release.artifacts[0];
+    if (!first) throw new Error("test manifest is missing its first artifact");
+    for (const artifact of [
+      { ...first, sha256: "0".repeat(64) },
+      { ...first, sizeBytes: first.sizeBytes + 1 },
+      { ...first, url: `${assetBaseUrl}wrong-name` },
+    ]) {
+      await expect(
+        validateStableReleaseManifestAssets(
+          {
+            ...manifest,
+            release: {
+              ...manifest.release,
+              artifacts: [artifact, ...manifest.release.artifacts.slice(1)],
+            },
+          },
+          { assetsDirectory: directory, expectedCommit: commit, assetBaseUrl },
+        ),
+      ).rejects.toThrow();
+    }
   });
 });

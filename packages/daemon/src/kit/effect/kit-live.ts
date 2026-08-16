@@ -1,15 +1,16 @@
-// Effect-native Kit module (Plan A6/A7/A8). The Context.Service tag + Layer that
+// Effect-native Kit module. The Context.Service tag + Layer that
 // owns the deploy-target port, the HTTP fetch, the exec/probe adapter, and the
 // deploy audit emitter. Discharges its own dependencies at the module boundary —
 // the composition root provides nothing but the mode-driven options.
 
 import { join } from "node:path";
+import { serializeCapabilityKey } from "@hive/capability-schema";
 import type {
   AcceptedDeployRequest,
   Catalog,
   DeployDiff,
   DeploymentOverview,
-  DeployResult,
+  DeployTarget,
   KitState,
   Selection,
   SelectionMutation as SelectionMutationType,
@@ -32,7 +33,6 @@ import {
   type DeployFsExec,
   type ExecPort,
 } from "../deploy/adapter.ts";
-import { type DeployInput, runDeploy } from "../deploy/engine.ts";
 import {
   createDeployCoordinator,
   createDeploymentMutationCoordinator,
@@ -75,9 +75,6 @@ export type KitSvc = {
   // On-disk self-check: per-capability per-target status (present/missing/drifted/
   // recorded). Read-only — emits no audit row.
   verify(): VerifyReport;
-  // Legacy synchronous engine seam retained for internal compatibility tests.
-  // HTTP acceptance uses acceptDeploy and emits `deploy.accepted` instead.
-  deploy(selection: Selection): Effect.Effect<DeployResult, DeployError>;
   // Audit source emitter (source: 'deploy').
   events: TypedEmitter<DeployAuditEvents>;
 };
@@ -99,6 +96,45 @@ export type CreateKitOptions = {
 
 function activeSources(registry: SourceRegistrySvc): readonly Source[] {
   return registry.currentSources().filter((s) => s.active);
+}
+
+function selectionAuditEvent(
+  before: SelectionSnapshot,
+  after: SelectionSnapshot,
+): DeployAuditEvents["selection.changed"] {
+  const pairs = (selection: SelectionSnapshot) =>
+    new Map(
+      selection.enabled.flatMap((entry) =>
+        entry.targets.map(
+          (target) =>
+            [
+              `${serializeCapabilityKey(entry.key)}\0${target}`,
+              { key: entry.key, target },
+            ] as const,
+        ),
+      ),
+    );
+  const beforePairs = pairs(before);
+  const afterPairs = pairs(after);
+  const addedPerKind: Record<string, number> = {};
+  const removedPerKind: Record<string, number> = {};
+  const targetClis = new Set<DeployTarget>();
+  for (const [id, pair] of afterPairs) {
+    if (beforePairs.has(id)) continue;
+    addedPerKind[pair.key.kind] = (addedPerKind[pair.key.kind] ?? 0) + 1;
+    targetClis.add(pair.target);
+  }
+  for (const [id, pair] of beforePairs) {
+    if (afterPairs.has(id)) continue;
+    removedPerKind[pair.key.kind] = (removedPerKind[pair.key.kind] ?? 0) + 1;
+    targetClis.add(pair.target);
+  }
+  return {
+    revision: after.revision,
+    addedPerKind,
+    removedPerKind,
+    targetClis: [...targetClis].sort(),
+  };
 }
 
 function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
@@ -169,9 +205,14 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
     catalog: () => readCatalog(targets, activeSources(registry)),
     selection: () => selectionStore.read(),
     mutateSelection: (mutation) =>
-      mutationCoordinator.runExclusive(async () =>
-        selectionStore.mutate(mutation, readLedger(targets)),
-      ),
+      mutationCoordinator.runExclusive(async () => {
+        const prepared = selectionStore.prepareMutation(mutation, readLedger(targets));
+        await events.emit(
+          "selection.changed",
+          selectionAuditEvent(prepared.before, prepared.after),
+        );
+        return prepared.commit();
+      }),
     acceptDeploy: (request) => deployCoordinator.accept(request),
     state: () => ({
       sync: activeSources(registry).map((s) =>
@@ -204,7 +245,6 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
                 lastSyncError.delete(source.id);
                 return {
                   sourceId: source.id,
-                  origin: source.origin,
                   status: result.success.status,
                 } satisfies SyncRunResult["sources"][number];
               }
@@ -216,7 +256,6 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
               });
               return {
                 sourceId: source.id,
-                origin: source.origin,
                 status: "failed",
                 errorReason: err.reason,
                 ...(err.detail ? { errorDetail: err.detail } : {}),
@@ -235,54 +274,13 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
           const active = activeSources(registry);
           const catalog = readCatalog(targets, active);
           const resolved = resolveSelection(catalog, selection);
-          // #47: only an owned name still in the active catalog can be "removed".
+          // Only an owned name still in the active catalog can be removed.
           return computeDiff(targets, mirrorRootsOf(active), resolved, catalogNameSets(catalog));
         },
         catch: (err) =>
           err instanceof DeployError
             ? err
             : new DeployError({ reason: "io", message: `diff failed: ${String(err)}` }),
-      }),
-    deploy: (selection) =>
-      Effect.gen(function* () {
-        const active = activeSources(registry);
-        const catalog = readCatalog(targets, active);
-        const resolved = yield* Effect.try({
-          try: () => resolveSelection(catalog, selection),
-          catch: (err) =>
-            err instanceof DeployError
-              ? err
-              : new DeployError({ reason: "io", message: String(err) }),
-        });
-        // The multi-Source world has no single kit SHA: the deploy audit kitSha
-        // and the interop Ledger kitVersion are retired unconditionally (both
-        // N==1 and N>1). The resolved selection carries each name's winner Source,
-        // so the only mirror roots threaded are the active set for snippet loading.
-        // The active-catalog name-set lets reconcilePrune keep owned-but-absent
-        // orphans instead of unlinking them (#47).
-        const activeNames = catalogNameSets(catalog);
-        const input: DeployInput = {
-          selection: resolved,
-          kitSha: null,
-          kitVersion: "",
-          activeMirrorRoots: mirrorRootsOf(active),
-          activeCatalogNames: {
-            skills: [...activeNames.skills],
-            agents: [...activeNames.agents],
-          },
-        };
-        const result = yield* runDeploy(fx, input);
-        // Exactly one audit event, refs-only allow-list payload.
-        const perKindCounts: Record<string, number> = {};
-        for (const k of result.perKind) perKindCounts[k.kind] = k.applied.length;
-        yield* Effect.promise(() =>
-          events.emit("deploy.applied", {
-            kitSha: result.kitSha,
-            perKindCounts,
-            targetClis: result.targets,
-          }),
-        );
-        return result;
       }),
   };
 }

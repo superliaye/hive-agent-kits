@@ -1,7 +1,8 @@
 {
   "repository": "https://github.com/superliaye/my-agent-kits.git",
-  "revision": "80593b395e0faf78e3156387bafc98689c991eec",
+  "revision": "dbbb7c4f9ed08d8048f1efb4c405848a5a690532",
   "version": "0.46.0",
+  "purpose": "scripts/test-cross-repo-manifest-lock.ts imports the pinned manifest modules; packages/capability-schema-tools/src/validate.test.ts validates every pinned agent and instruction file.",
   "files": {
     "capabilities/agents/@loop/loop-build-acceptance/AGENT.md": "8ea3f05bca8b2c1d22e6b5b8e8c2c9678d5710f4",
     "capabilities/agents/@loop/loop-build-agent/AGENT.md": "8721e1e970b60027bdb653291e257160fed753da",
@@ -17,8 +18,8 @@
     "capabilities/instructions/core.instructions.md": "15534acc5949625568c3ea66411edefd228bae9f",
     "capabilities/instructions/karpathy.instructions.md": "970a4567eadb31268efec653237f9f11118b2908",
     "capabilities/instructions/typescript.instructions.md": "31c73fb02b444421982a33fadf5f0a9e2d9f7703",
-    "lib/manifest.js": "0af6ab6b70691b0c37bcb44c6a05b4e55f81b2a6",
-    "lib/manifest-lock.js": "6df2f06518f0e629fac9a0f694828a073cd3a6e9",
+    "lib/manifest.js": "a915bfd92b55f73a95fbd96ba6fd7a4fe662d682",
+    "lib/manifest-lock.js": "606a5ca70972ac418c9722452dc8966202203f65",
     "package.json": "ff24ca726df34ce9e82694c06de72fe39c3bb53d"
   }
 }

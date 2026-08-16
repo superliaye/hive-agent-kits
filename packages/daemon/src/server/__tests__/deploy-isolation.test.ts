@@ -1,5 +1,5 @@
 /**
- * Deploy-isolation integration test (Plan B2 — the real safety boundary).
+ * Deploy-isolation integration test ( — the real safety boundary).
  *
  * A dev daemon (devMode, allowRealHomeDeploy:false — the fail-safe default)
  * performs a Deploy. It must:

@@ -1,11 +1,11 @@
-// Stateless add → sync → validate helper (#33). The app/server EDGE sequences a
+// Stateless add → sync → validate helper. The app/server edge sequences a
 // Source add: the route keeps `registry.add`, then calls THIS helper, which only
 // syncs + validates the Source's Mirror and NEVER touches the registry — the
-// Kit→Sources arrow stays intact (ADR-0023; grill Q1=A).
+// Kit→Sources arrow stays intact (ADR-0023).
 //
 // Never rejects (error channel `never`): a sync failure folds into the report's
-// `sync` field (Q2 keep-the-Source) and a validation failure into `validation`
-// (Q3 keep + report). The 201 body carries the full outcome.
+// `sync` field and a validation failure into `validation`; the Source remains
+// registered and the 201 body carries the full outcome.
 //
 // Snapshot divergence (intentional): the `sync` here is a POINT-IN-TIME snapshot
 // from this helper's own sync. A later GET /api/kit/state re-derives freshness
@@ -17,12 +17,23 @@
 import type { ConformanceError } from "@hive/capability-schema";
 import { enumerateLeaves, validate } from "@hive/capability-schema-tools";
 import { capabilitiesRoot } from "@hive/capability-schema-tools/node";
-import type { AddSourceResult, Source, SourceSyncStatus } from "@hive/contract";
+import type { AddSourceResult, Source, SourceSummary, SourceSyncStatus } from "@hive/contract";
 import { Effect } from "effect";
 import { SyncError } from "./effect/errors.ts";
 import { type LocatorSyncOptions, syncLocatorSource } from "./sync.ts";
 import { buildSourceSyncStatus, type LastSyncError } from "./sync-status.ts";
 import type { DeployTargets } from "./targets.ts";
+
+function sourceSummary(source: Source): SourceSummary {
+  return {
+    id: source.id,
+    label: source.label,
+    kind: source.kind,
+    active: source.active,
+    createdAt: source.createdAt,
+    rank: source.rank,
+  };
+}
 
 // Onboard a freshly-added Source: bounded-sync its Mirror, then validate that
 // Mirror. `syncTimeoutMs` is REQUIRED (the server passes a production constant;
@@ -82,7 +93,7 @@ export function onboardSource(
     const capabilityCount = walk.leaves.length + walk.problems.length;
 
     return {
-      source,
+      source: sourceSummary(source),
       sync,
       validation: { conformant, errors: conformanceErrors, capabilityCount },
     };
@@ -100,14 +111,13 @@ export function onboardSource(
 export function degradedOnboardResult(source: Source): AddSourceResult {
   const sync: SourceSyncStatus = {
     sourceId: source.id,
-    origin: source.origin,
     state: "check_failed",
     sha: null,
     fetchedAt: null,
     errorReason: "io",
   };
   return {
-    source,
+    source: sourceSummary(source),
     sync,
     validation: {
       conformant: false,

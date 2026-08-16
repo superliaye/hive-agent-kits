@@ -89,6 +89,23 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
     rt.dispose();
   });
 
+  test("audit failure prevents a Source add from committing in memory or on disk", async () => {
+    const first = svc();
+    first.svc.events.on("source.added", () => {
+      throw new Error("audit unavailable");
+    });
+
+    await expect(
+      Effect.runPromise(first.svc.add(gitInput("https://github.com/a/b"))),
+    ).rejects.toThrow("audit unavailable");
+    expect(await Effect.runPromise(first.svc.list())).toEqual([]);
+    await first.rt.dispose();
+
+    const reopened = svc();
+    expect(await Effect.runPromise(reopened.svc.list())).toEqual([]);
+    await reopened.rt.dispose();
+  });
+
   test("deactivate → active:false; activate → active:true", async () => {
     const { svc: s, rt } = svc();
     const created = await Effect.runPromise(s.add(gitInput("https://github.com/a/b")));
@@ -146,7 +163,7 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
   });
 });
 
-describe("SourceRegistryLive — first-run Starter seeding (#32)", () => {
+describe("SourceRegistryLive — first-run Starter seeding", () => {
   let root: string;
   let path: string;
 
@@ -182,7 +199,9 @@ describe("SourceRegistryLive — first-run Starter seeding (#32)", () => {
   });
 
   test("first-run seed emits NO source.added audit event; a real user add still does", async () => {
-    const seen: Array<{ id: string; origin: string }> = [];
+    const seen: Array<
+      { id: string; kind: "git"; origin: string } | { id: string; kind: "working-tree" }
+    > = [];
     const { svc: s, rt } = svc();
     s.events.on("source.added", (e) => {
       seen.push(e);
@@ -197,7 +216,11 @@ describe("SourceRegistryLive — first-run Starter seeding (#32)", () => {
     // meaningful, not a dead listener.
     await Effect.runPromise(s.add(gitInput("https://github.com/owner/added")));
     expect(seen).toHaveLength(1);
-    expect(seen[0]?.origin).toBe("https://github.com/owner/added");
+    expect(seen[0]).toEqual({
+      id: expect.any(String),
+      kind: "git",
+      origin: "https://github.com/owner/added",
+    });
     rt.dispose();
   });
 

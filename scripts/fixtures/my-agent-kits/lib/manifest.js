@@ -81,22 +81,34 @@ function mergeSection(base = [], next = [], current = [], keyOf) {
   });
 }
 
+function commitManifestWithinLock(base, next) {
+  const prior = base ?? emptyManifest();
+  const current = readManifest() ?? prior;
+  const merged = {
+    kitVersion: next.kitVersion !== prior.kitVersion ? next.kitVersion : current.kitVersion,
+    agents: mergeSection(prior.agents, next.agents, current.agents, (entry) => entry),
+    skills: mergeSection(prior.skills, next.skills, current.skills, (entry) => entry.name),
+    agentDefs: mergeSection(prior.agentDefs, next.agentDefs, current.agentDefs, (entry) => entry.name),
+    instructions: mergeSection(prior.instructions, next.instructions, current.instructions, (entry) => entry.name),
+    plugins: mergeSection(prior.plugins, next.plugins, current.plugins, (entry) => entry.name),
+    bundles: mergeSection(prior.bundles, next.bundles, current.bundles, (entry) => entry.name),
+  };
+  writeManifest(merged);
+  return merged;
+}
+
 export async function commitManifest(base, next) {
+  return withManifestLock(() => commitManifestWithinLock(base, next));
+}
+
+export async function withManifestTransaction(work, options = {}) {
   return withManifestLock(() => {
-    const prior = base ?? emptyManifest();
-    const current = readManifest() ?? prior;
-    const merged = {
-      kitVersion: next.kitVersion !== prior.kitVersion ? next.kitVersion : current.kitVersion,
-      agents: mergeSection(prior.agents, next.agents, current.agents, (entry) => entry),
-      skills: mergeSection(prior.skills, next.skills, current.skills, (entry) => entry.name),
-      agentDefs: mergeSection(prior.agentDefs, next.agentDefs, current.agentDefs, (entry) => entry.name),
-      instructions: mergeSection(prior.instructions, next.instructions, current.instructions, (entry) => entry.name),
-      plugins: mergeSection(prior.plugins, next.plugins, current.plugins, (entry) => entry.name),
-      bundles: mergeSection(prior.bundles, next.bundles, current.bundles, (entry) => entry.name),
-    };
-    writeManifest(merged);
-    return merged;
-  });
+    const manifest = readManifest();
+    return work({
+      manifest,
+      commit: (next) => commitManifestWithinLock(manifest, next),
+    });
+  }, options);
 }
 
 // Construct the manifest object from a deploy's selection. Per-type shape:

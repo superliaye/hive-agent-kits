@@ -1,4 +1,4 @@
-// Close-during-deploy guard predicate (Feature 3).
+// Close-during-deploy guard predicate.
 //
 // On quit the shell SIGKILLs the daemon to drain it (main.ts before-quit),
 // truncating an in-flight deploy mid-write. This pure predicate decides whether

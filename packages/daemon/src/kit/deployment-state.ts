@@ -13,12 +13,18 @@ import { dirname } from "node:path";
 import { CapabilityKey, serializeCapabilityKey } from "@hive/capability-schema";
 import { DeployTarget } from "@hive/contract";
 import { z } from "zod";
-import { withAdvisoryFileLock } from "../lib/durable-file.ts";
+import { syncDirectoryForDurability, withAdvisoryFileLock } from "../lib/durable-file.ts";
 import { readFingerprintSidecar } from "./fingerprint.ts";
 
 const AttemptAction = z.enum(["add", "update", "remove"]);
 const AttemptOutcome = z.enum(["succeeded", "failed", "interrupted"]);
-const FailureCode = z.enum(["io", "source_missing", "installer_failed", "unknown"]);
+const FailureCode = z.enum([
+  "io",
+  "source_missing",
+  "installer_failed",
+  "recovery_state_changed",
+  "unknown",
+]);
 
 export class DeploymentStateError extends Error {
   readonly code: string;
@@ -91,6 +97,7 @@ export type DeploymentStateStoreOptions = {
   fsyncDirectory?: (directory: string) => void;
   write?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
   lockTimeoutMs?: number;
+  interruptionReceiptRetention?: number;
 };
 
 export type DeploymentStateStore = {
@@ -224,20 +231,15 @@ export function openDeploymentStateStore(
   const now = options.now ?? Date.now;
   const rename = options.rename ?? renameSync;
   const lockTimeoutMs = options.lockTimeoutMs ?? 5_000;
+  const interruptionReceiptRetention = Math.max(
+    1,
+    Math.floor(options.interruptionReceiptRetention ?? 512),
+  );
   const writeBytes =
     options.write ??
     ((fd: number, bytes: Uint8Array, offset: number, length: number) =>
       writeSync(fd, bytes, offset, length));
-  const fsyncDirectory =
-    options.fsyncDirectory ??
-    ((directory: string) => {
-      const fd = openSync(directory, "r");
-      try {
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-    });
+  const fsyncDirectory = options.fsyncDirectory ?? syncDirectoryForDurability;
 
   const load = (): { file: DeploymentStateFile; needsMigration: boolean } | undefined => {
     if (!existsSync(path)) return undefined;
@@ -470,7 +472,7 @@ export function openDeploymentStateStore(
           ...file,
           revision: file.revision + 1,
           records,
-          interruptionReceipts: [...receipts, receipt],
+          interruptionReceipts: [...receipts, receipt].slice(-interruptionReceiptRetention),
         });
         return nextRecord;
       });

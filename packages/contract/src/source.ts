@@ -1,5 +1,5 @@
 // Source wire contract — the daemon↔UI types for the Sources bounded context
-// (ADR-0023). A Source is a git repository of Capabilities the user has added.
+// (ADR-0023). A Source is a located collection of Capabilities the user has added.
 // Zod only — daemon-independent, so the UI bundles it without dragging Effect/
 // Hono in. The Source DTO uses no capability-schema types.
 
@@ -40,15 +40,18 @@ const GitHttpsUrl = z
         parsed.hash === ""
       );
     },
-  {
-    message:
-      "repository URL must be https with a host and no embedded credentials, query, or fragment",
-  },
+    {
+      message:
+        "repository URL must be https with a host and no embedded credentials, query, or fragment",
+    },
   );
 
 const TrackedGitRef = z
   .string()
-  .regex(/^refs\/(heads|tags)\/[A-Za-z0-9._\/-]+$/, "tracked ref must be a safe fully-qualified branch or tag ref");
+  .regex(
+    /^refs\/(heads|tags)\/[A-Za-z0-9._/-]+$/,
+    "tracked ref must be a safe fully-qualified branch or tag ref",
+  );
 
 export const SourceLocator = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("starter") }).strict(),
@@ -96,6 +99,18 @@ export const Source = z.object({
 });
 export type Source = z.infer<typeof Source>;
 
+// Session-facing Source projection. Locators and compatibility origins stay on
+// the Daemon because working-tree locators contain absolute machine paths.
+export const SourceSummary = Source.pick({
+  id: true,
+  label: true,
+  kind: true,
+  active: true,
+  createdAt: true,
+  rank: true,
+});
+export type SourceSummary = z.infer<typeof SourceSummary>;
+
 export const AddSourceBody = z
   .object({
     label: z.string().min(1).max(160),
@@ -105,7 +120,10 @@ export const AddSourceBody = z
   })
   .strict();
 export type AddSourceBody = z.infer<typeof AddSourceBody>;
-export type AddSourceInput = { label: string; locator: Exclude<SourceLocator, { kind: "starter" }> };
+export type AddSourceInput = {
+  label: string;
+  locator: Exclude<SourceLocator, { kind: "starter" }>;
+};
 
 // POST /api/sources/:id/reorder body: raise ("up") or lower ("down") a Source one
 // precedence step. The only re-rank control (decision: move-up/down buttons, not
@@ -115,8 +133,8 @@ export const ReorderSourceBody = z.object({
 });
 export type ReorderSourceBody = z.infer<typeof ReorderSourceBody>;
 
-// The conformance report produced when a Source is synced + validated on add
-// (#33). `conformant` is the strict-validate verdict; `errors` are the located
+// The conformance report produced when a Source is synced + validated on add.
+// `conformant` is the strict-validate verdict; `errors` are the located
 // violations (the hoisted SSOT shape — @hive/capability-schema). `capabilityCount`
 // counts EVERY enumerated capability leaf (resolvable AND non-resolvable), so 0
 // honestly means "no capability-shaped content found" — the soft "empty repo"
@@ -128,14 +146,14 @@ export const SourceValidationReport = z.object({
 });
 export type SourceValidationReport = z.infer<typeof SourceValidationReport>;
 
-// POST /api/sources 201 body (#33): the kept Source plus a point-in-time snapshot
+// POST /api/sources 201 body: the kept Source plus a point-in-time snapshot
 // of the add-time sync (reusing the per-Source freshness wire shape) and the
 // conformance report. A sync or validation failure is FOLDED HERE — the add is
-// never rejected for it (Q2/Q3). `sync` is the same `SourceSyncStatus` GET
+// never rejected for it. `sync` is the same `SourceSyncStatus` GET
 // /api/kit/state re-derives from disk; a later read may report a different
 // errorReason (e.g. `no_mirror`) for the same failed add — both mean failure.
 export const AddSourceResult = z.object({
-  source: Source,
+  source: SourceSummary,
   sync: SourceSyncStatus,
   validation: SourceValidationReport,
 });

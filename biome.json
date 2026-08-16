@@ -4,6 +4,8 @@
   "files": {
     "includes": [
       "packages/daemon/src/**",
+      "packages/contract/src/**",
+      "packages/shell/src/**",
       "scripts/**",
       "packages/ui/src/**",
       "!scripts/fixtures/my-agent-kits",

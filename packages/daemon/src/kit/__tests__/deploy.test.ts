@@ -136,7 +136,7 @@ function fx(exec: ExecPort, probe: (n: string) => boolean = () => true): DeployF
   return { targets, exec, probe: (n) => probe(n) };
 }
 
-// The active-catalog name-sets a deploy threads into reconcilePrune (#47): an
+// The active-catalog name-sets a deploy threads into reconcilePrune: an
 // owned-but-deselected name is prunable ONLY if it is currently in the active
 // catalog. Defaults to "everything seeded is active" for the single-Source tests.
 function activeCatalogNames(over: { skills?: string[]; agents?: string[] } = {}): {
@@ -480,7 +480,7 @@ describe("runDeploy", () => {
     expect(existsSync(join(targets.claudeHome(), "skills", "s1", "SKILL.md"))).toBe(true);
   });
 
-  test("(i) #47: an owned skill absent from the active catalog is NOT pruned on deploy (file kept on disk)", async () => {
+  test("(i) an owned skill absent from the active catalog is NOT pruned on deploy (file kept on disk)", async () => {
     seedSkill("active-one");
     seedSkill("orphan-one");
     // First deploy with BOTH active → both land on disk + in the ledger.
@@ -516,7 +516,7 @@ describe("runDeploy", () => {
   });
 });
 
-describe("runDeploy — cross-Source (#30)", () => {
+describe("runDeploy — cross-Source", () => {
   test("winner-per-name: a skill won by Source A + an agent won by Source B each deploy from their own Mirror", async () => {
     const mirrorA = targets.mirrorRoot("src-a");
     const mirrorB = targets.mirrorRoot("src-b");

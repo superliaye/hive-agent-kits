@@ -511,18 +511,18 @@ describe("validate (strict) — ALL real my-agent-kits agent + instruction conte
     return files;
   }
 
-  test("every clone AGENT.md and *.instructions.md validates conformant:true", () => {
+  test("every pinned AGENT.md and *.instructions.md validates conformant:true", () => {
     const files = cloneTree();
-    // Guard against a silently-empty run (wrong path / absent clone): there are
-    // real agents and instructions under the clone, so the map must be non-empty.
+    // Guard against an incomplete fixture so this cannot pass without exercising
+    // both supported capability kinds.
     const agentCount = Object.keys(files).filter((k) => k.startsWith("agents/")).length;
     const instrCount = Object.keys(files).filter((k) => k.startsWith("instructions/")).length;
-    expect(agentCount).toBeGreaterThan(0);
-    expect(instrCount).toBeGreaterThan(0);
-
+    if (agentCount === 0 || instrCount === 0) {
+      throw new Error(
+        "pinned my-agent-kits fixture is incomplete; see scripts/fixtures/my-agent-kits/PIN.json",
+      );
+    }
     const result = validate(memTree(files));
-    // Name the offenders on failure so a too-strict schema is obvious, not a bare
-    // boolean.
     expect(result.errors).toEqual([]);
     expect(result.conformant).toBe(true);
   });

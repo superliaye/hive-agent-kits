@@ -31,7 +31,7 @@ describe("Shell launch lifecycle", () => {
     ).toBe(false);
   });
 
-  test("uses durable Overview activity and fails closed on an unreadable response", () => {
+  test("prompts only when durable Overview confirms an active Deploy", () => {
     expect(deploymentActiveFromOverview(200, '{"activeOperation":null}')).toBe(false);
     expect(
       deploymentActiveFromOverview(
@@ -39,7 +39,7 @@ describe("Shell launch lifecycle", () => {
         '{"activeOperation":{"operationId":"operation-1","state":"running"}}',
       ),
     ).toBe(true);
-    expect(deploymentActiveFromOverview(500, "unavailable")).toBe(true);
-    expect(deploymentActiveFromOverview(200, "not-json")).toBe(true);
+    expect(deploymentActiveFromOverview(500, "unavailable")).toBe(false);
+    expect(deploymentActiveFromOverview(200, "not-json")).toBe(false);
   });
 });

@@ -286,6 +286,7 @@ function readSourceEntry(
   selectedRoot: string,
   repoRelative: string,
   pinnedParents: Map<string, DirectoryIdentity>,
+  maxFileBytes: number,
 ): SourceEntry {
   const { source, selectedRelative, parentIdentity } = validateSourcePath(
     repoRoot,
@@ -347,6 +348,9 @@ function readSourceEntry(
     ) {
       throw new WorkingTreeRaceError("working tree file changed while it was opened");
     }
+    if (!Number.isSafeInteger(opened.size) || opened.size < 0 || opened.size > maxFileBytes) {
+      throw new WorkingTreeAcquireError("budget_exceeded", "selected tree exceeds byte limit");
+    }
     data = readFileSync(fd);
     const after = lstatSync(source);
     if (
@@ -358,7 +362,9 @@ function readSourceEntry(
       throw new WorkingTreeRaceError("working tree file changed while it was read");
     }
   } catch (error) {
-    if (error instanceof WorkingTreeRaceError) throw error;
+    if (error instanceof WorkingTreeRaceError || error instanceof WorkingTreeAcquireError) {
+      throw error;
+    }
     throw new WorkingTreeRaceError("working tree file changed while it was read");
   } finally {
     closeSync(fd);
@@ -380,6 +386,38 @@ function fingerprintsMatch(
     before.size === after.size &&
     [...before].every(([path, fingerprint]) => after.get(path) === fingerprint)
   );
+}
+
+async function listedWorkingTreePaths(
+  git: GitProcess,
+  repoRoot: string,
+  subpath: string,
+  deadlineMs: number,
+): Promise<string[]> {
+  const listed = await gitOutput(
+    git,
+    ["-C", repoRoot, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", subpath],
+    deadlineMs,
+  );
+  const deleted = new Set(
+    (
+      await gitOutput(
+        git,
+        ["-C", repoRoot, "ls-files", "-z", "--deleted", "--", subpath],
+        deadlineMs,
+      )
+    )
+      .split("\0")
+      .filter((path) => path.length > 0),
+  );
+  return listed
+    .split("\0")
+    .filter((path) => path.length > 0 && !deleted.has(path))
+    .sort();
+}
+
+function pathsMatch(before: readonly string[], after: readonly string[]): boolean {
+  return before.length === after.length && before.every((path, index) => path === after[index]);
 }
 
 type VerifiedWorkingTree = {
@@ -474,7 +512,7 @@ export async function canonicalizeWorkingTreeLocator(
   locator: WorkingTreeLocator,
   options: Pick<WorkingTreeAcquireOptions, "allowedRoots" | "process" | "limits">,
 ): Promise<WorkingTreeLocator> {
-  return (await verifyWorkingTree(locator, options, false)).locator;
+  return (await verifyWorkingTree(locator, options, true)).locator;
 }
 
 export async function acquireWorkingTree(
@@ -488,27 +526,11 @@ export async function acquireWorkingTree(
   const verified = await verifyWorkingTree(locator, options, true);
   const { topLevel, selectedRoot } = verified;
   const pinnedParents = new Map<string, DirectoryIdentity>();
-
   for (let attempt = 0; attempt < 2; attempt++) {
     let stage: string | undefined;
     try {
       const before = await snapshotMarker(git, topLevel, locator.subpath, deadlineMs);
-      const listed = await gitOutput(
-        git,
-        [
-          "-C",
-          topLevel,
-          "ls-files",
-          "-z",
-          "--cached",
-          "--others",
-          "--exclude-standard",
-          "--",
-          locator.subpath,
-        ],
-        deadlineMs,
-      );
-      const paths = listed.split("\0").filter((path) => path.length > 0);
+      const paths = await listedWorkingTreePaths(git, topLevel, locator.subpath, deadlineMs);
       checkDeadline(deadlineMs);
       stage = createOwnedMirrorStage(options.tmpRoot);
       const identity = createHash("sha256");
@@ -518,7 +540,13 @@ export async function acquireWorkingTree(
       let bytes = 0;
       for (const repoRelative of paths) {
         checkDeadline(deadlineMs);
-        const entry = readSourceEntry(topLevel, selectedRoot, repoRelative, pinnedParents);
+        const entry = readSourceEntry(
+          topLevel,
+          selectedRoot,
+          repoRelative,
+          pinnedParents,
+          limits.maxBytes - bytes,
+        );
         if (seen.has(entry.selectedRelative)) {
           throw new WorkingTreeAcquireError(
             "unsafe_tree",
@@ -548,15 +576,25 @@ export async function acquireWorkingTree(
         chmodSync(output, entry.mode);
       }
       const after = await snapshotMarker(git, topLevel, locator.subpath, deadlineMs);
+      const afterPaths = await listedWorkingTreePaths(git, topLevel, locator.subpath, deadlineMs);
       const afterFingerprints = new Map<string, string>();
       let afterFiles = 0;
       let afterBytes = 0;
-      for (const repoRelative of paths) {
+      for (const repoRelative of afterPaths) {
         checkDeadline(deadlineMs);
         let entry: SourceEntry;
         try {
-          entry = readSourceEntry(topLevel, selectedRoot, repoRelative, pinnedParents);
-        } catch {
+          entry = readSourceEntry(
+            topLevel,
+            selectedRoot,
+            repoRelative,
+            pinnedParents,
+            limits.maxBytes - afterBytes,
+          );
+        } catch (error) {
+          if (error instanceof WorkingTreeAcquireError && error.code === "budget_exceeded") {
+            throw error;
+          }
           throw new WorkingTreeRaceError("working tree entry changed during verification");
         }
         afterFiles++;
@@ -577,6 +615,7 @@ export async function acquireWorkingTree(
       if (
         before.head !== after.head ||
         before.status !== after.status ||
+        !pathsMatch(paths, afterPaths) ||
         !fingerprintsMatch(capturedFingerprints, afterFingerprints)
       ) {
         if (attempt === 0) {

@@ -1,5 +1,5 @@
-import { hasDaemonToDrain, shouldConfirmClose } from "./close-guard";
 import { z } from "zod";
+import { hasDaemonToDrain, shouldConfirmClose } from "./close-guard";
 
 type DaemonDrainState = Parameters<typeof hasDaemonToDrain>[0];
 
@@ -10,12 +10,12 @@ const DeploymentActivityResponseSchema = z.object({
 });
 
 export function deploymentActiveFromOverview(status: number, body: string): boolean {
-  if (status !== 200) return true;
+  if (status !== 200) return false;
   try {
     const parsed = DeploymentActivityResponseSchema.safeParse(JSON.parse(body));
-    return parsed.success ? parsed.data.activeOperation !== null : true;
+    return parsed.success ? parsed.data.activeOperation !== null : false;
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -31,9 +31,6 @@ export function shouldConfirmShellClose(
   return shouldManageDaemon(kind) && shouldConfirmClose(deployActive, alreadyConfirmed);
 }
 
-export function shouldDrainShellDaemon(
-  kind: ShellLaunchKind,
-  state: DaemonDrainState,
-): boolean {
+export function shouldDrainShellDaemon(kind: ShellLaunchKind, state: DaemonDrainState): boolean {
   return shouldManageDaemon(kind) && hasDaemonToDrain(state);
 }

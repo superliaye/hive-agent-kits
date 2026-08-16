@@ -1,4 +1,4 @@
-// Add-Source UI (#46): the Capabilities header exposes a git-URL input that POSTs
+// Add-Source UI: the Capabilities header exposes a git-URL input that POSTs
 // /api/sources. The daemon onboards (sync + validate) and keeps the Source even
 // when non-conformant/empty — so the inline status classifies the 201 by its
 // `validation` body (success / empty / conformance-warning) and never drops the
@@ -7,7 +7,7 @@
 // The fetch stub is STATEFUL (mirrors kit-source-toggle.test.tsx): a mutable
 // `added` flag flips when POST /api/sources is observed, and only THEN do
 // GET /api/sources and GET /api/kit/catalog return the new Source + its
-// capability — so the add→appears assertions depend on the post-add
+// capability — so the add→appears assertions depend on the after add
 // ["sources"]/["kit"] invalidation refetch, not the initial load.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
@@ -122,7 +122,6 @@ function kitState(): KitState {
       sha: null,
       fetchedAt: 1,
       sourceId: STARTER_ID,
-      origin: STARTER_ORIGIN,
     },
   ];
   if (added) {
@@ -131,7 +130,6 @@ function kitState(): KitState {
       sha: "abc1234def",
       fetchedAt: 1,
       sourceId: ADDED_ID,
-      origin: ADDED_ORIGIN,
     });
   }
   return { sync, ledger: null };
@@ -210,7 +208,7 @@ function installStubs(): void {
         return json({ error: "duplicate origin", origin: ADDED_ORIGIN }, 409);
       }
       // The daemon keeps the Source on a 201 regardless of conformance — flip the
-      // flag so the post-add refetch surfaces the new row + (conformant) caps.
+      // flag so the after add refetch surfaces the new row + (conformant) caps.
       added = true;
       return json(addResult(), 201);
     }
@@ -274,7 +272,7 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
   await flush();
 }
 
-describe("KitDeployPage — Add-Source UI (#46)", () => {
+describe("KitDeployPage — Add-Source UI", () => {
   test("(a) the Add-Source form renders an input + submit in the header", async () => {
     installStubs();
     const host = await render();

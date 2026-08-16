@@ -6,6 +6,8 @@ PROGRAM="${0##*/}"
 REPOSITORY=''
 MANIFEST=''
 EXPECTED_MAIN=''
+ASSETS=''
+ASSET_BASE_URL=''
 WORK_DIR=''
 
 die() {
@@ -26,7 +28,7 @@ trap 'cleanup 130' INT
 trap 'cleanup 143' TERM
 
 usage() {
-  printf 'usage: %s --repository <git-remote-or-url> --manifest <stable.json> --expected-main <commit>\n' "$PROGRAM" >&2
+  printf 'usage: %s --repository <git-remote-or-url> --manifest <stable.json> --expected-main <commit> --assets <directory> --asset-base-url <url>\n' "$PROGRAM" >&2
   exit 2
 }
 
@@ -47,15 +49,26 @@ while [[ "$#" -gt 0 ]]; do
       EXPECTED_MAIN="$2"
       shift 2
       ;;
+    --assets)
+      [[ "$#" -ge 2 && -z "$ASSETS" ]] || usage
+      ASSETS="$2"
+      shift 2
+      ;;
+    --asset-base-url)
+      [[ "$#" -ge 2 && -z "$ASSET_BASE_URL" ]] || usage
+      ASSET_BASE_URL="$2"
+      shift 2
+      ;;
     *) usage ;;
   esac
 done
 
-[[ -n "$REPOSITORY" && -n "$MANIFEST" && -n "$EXPECTED_MAIN" ]] || usage
+[[ -n "$REPOSITORY" && -n "$MANIFEST" && -n "$EXPECTED_MAIN" && -n "$ASSETS" && -n "$ASSET_BASE_URL" ]] || usage
 [[ "$EXPECTED_MAIN" =~ ^[0-9a-f]{40}$ ]] || die 'expected main must be a full commit ID'
 [[ -f "$MANIFEST" && ! -L "$MANIFEST" ]] || die 'manifest must be a regular file'
-jq -e '.schemaVersion == 1 and .channel == "stable" and (.release | type == "object")' \
-  "$MANIFEST" >/dev/null || die 'manifest is not a stable release manifest'
+[[ -d "$ASSETS" ]] || die 'assets directory is unavailable'
+bun run "${BASH_SOURCE[0]%/*}/validate-release-manifest.ts" \
+  "$MANIFEST" "$EXPECTED_MAIN" "$ASSETS" "$ASSET_BASE_URL" >/dev/null
 
 if resolved_repository="$(git remote get-url "$REPOSITORY" 2>/dev/null)"; then
   REPOSITORY="$resolved_repository"

@@ -18,7 +18,7 @@ import type {
   Selection,
   SelectionMutation,
   SelectionSnapshot,
-  Source,
+  SourceSummary,
   SyncRunResult,
   VerifyReport,
 } from "@hive/contract";
@@ -59,6 +59,7 @@ export type {
   SelectionMutation,
   SelectionSnapshot,
   Source,
+  SourceSummary,
   SourceSyncStatus,
   SourceValidationReport,
   StoredSecretMeta,
@@ -78,12 +79,12 @@ declare global {
       connection?: {
         kind: "managed" | "external";
         displayName: string;
-        status: "connected" | "disconnected";
+        status: "connected" | "disconnected" | "reauthentication_required";
       };
       getConnection?: () => {
         kind: "managed" | "external";
         displayName: string;
-        status: "connected" | "disconnected";
+        status: "connected" | "disconnected" | "reauthentication_required";
       };
       daemon?: {
         request: (
@@ -208,70 +209,6 @@ async function callVoid(cfg: ApiConfig, path: string, init: RequestInit = {}): P
       // ignore
     }
     throw new Error(`${res.status} ${res.statusText} on ${path}${detail ? `: ${detail}` : ""}`);
-  }
-}
-
-/**
- * Consume an SSE response body line-by-line via the Fetch streams API.
- *
- * `onEvent(name, data)` fires once per SSE message. `data` is JSON-parsed
- * if it looks like JSON, otherwise passed as a string. Returns when the
- * stream ends naturally or when `signal` aborts (rejects with AbortError
- * in that case).
- */
-export async function consumeSSE(
-  cfg: ApiConfig,
-  path: string,
-  init: RequestInit,
-  onEvent: (name: string, data: unknown) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const res = await request(cfg, path, {
-    ...init,
-    headers: {
-      ...(init.headers ?? {}),
-      ...(init.body ? { "content-type": "application/json" } : {}),
-      accept: "text/event-stream",
-    },
-    signal,
-  });
-  if (!res.ok || !res.body) {
-    let detail = "";
-    try {
-      detail = await res.text();
-    } catch {
-      // ignore
-    }
-    throw new Error(`${res.status} ${res.statusText} on ${path}${detail ? `: ${detail}` : ""}`);
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    // SSE messages are separated by a blank line.
-    let separatorIdx: number;
-    // biome-ignore lint/suspicious/noAssignInExpressions: standard SSE-parse pattern
-    while ((separatorIdx = buffer.indexOf("\n\n")) >= 0) {
-      const block = buffer.slice(0, separatorIdx);
-      buffer = buffer.slice(separatorIdx + 2);
-      let eventName = "message";
-      let dataStr = "";
-      for (const line of block.split("\n")) {
-        if (line.startsWith("event:")) eventName = line.slice(6).trim();
-        else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
-      }
-      if (!dataStr) continue;
-      let parsed: unknown = dataStr;
-      try {
-        parsed = JSON.parse(dataStr);
-      } catch {
-        // leave as string
-      }
-      onEvent(eventName, parsed);
-    }
   }
 }
 
@@ -423,7 +360,7 @@ export const api = {
   // ─── Sources ─────────────────────────────────────────────────────────
   // The authoritative Source list, INCLUDING inactive sources (state.sync is
   // active-only). Drives the per-Source toggle rows in the Capabilities header.
-  listSources: (cfg: ApiConfig) => call<Source[]>(cfg, "/api/sources"),
+  listSources: (cfg: ApiConfig) => call<SourceSummary[]>(cfg, "/api/sources"),
   // Register a Source by git URL. The daemon onboards it (sync + validate the
   // mirror) and returns a 201 AddSourceResult even for a non-conformant or empty
   // repo — the add is never rejected for that. Unlike `call<T>`, this reads the
@@ -434,14 +371,16 @@ export const api = {
   // emit the source.activated/deactivated audit event server-side; the catalog is
   // built from active sources only, so the page re-fetches ["kit"] to reflect it.
   activateSource: (cfg: ApiConfig, id: string) =>
-    call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/activate`, { method: "POST" }),
+    call<SourceSummary>(cfg, `/api/sources/${encodeURIComponent(id)}/activate`, { method: "POST" }),
   deactivateSource: (cfg: ApiConfig, id: string) =>
-    call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/deactivate`, { method: "POST" }),
+    call<SourceSummary>(cfg, `/api/sources/${encodeURIComponent(id)}/deactivate`, {
+      method: "POST",
+    }),
   // Raise ("up") or lower ("down") a Source one precedence step. Returns the
   // updated Source. The page re-fetches ["sources"] (row order) + ["kit"] (the
   // catalog recomputes with the new precedence → shadows flip live).
   reorderSource: (cfg: ApiConfig, id: string, direction: "up" | "down") =>
-    call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/reorder`, {
+    call<SourceSummary>(cfg, `/api/sources/${encodeURIComponent(id)}/reorder`, {
       method: "POST",
       body: JSON.stringify({ direction }),
     }),

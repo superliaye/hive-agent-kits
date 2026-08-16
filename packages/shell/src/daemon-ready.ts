@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ExternalConnection } from "./connection.ts";
 
 const ReadyResponseSchema = z.object({
   status: z.literal("ok"),
@@ -12,23 +13,20 @@ const ReadyResponseSchema = z.object({
 
 export type ReadyResponse = z.infer<typeof ReadyResponseSchema>;
 
-export type ExternalConnectionDescriptor = {
-  expected: {
-    protocolRange: "1";
-    daemonInstanceId: string;
-    runtimeRootId: string;
-    buildVersion: string;
-  };
+export type ShellReleaseIdentity = {
+  protocolRange: "1";
+  buildVersion: string;
 };
 
 export type ReadyProbe =
-  | { ready: false }
+  | { ready: false; reason?: "unauthorized" }
   | { ready: true; metadata: ReadyResponse | null };
 
 export type ShellMode = "dev" | "packaged";
 
-export function parseReadyProbe(responseOk: boolean, body: unknown): ReadyProbe {
-  if (!responseOk) return { ready: false };
+export function parseReadyProbe(responseStatus: number, body: unknown): ReadyProbe {
+  if (responseStatus === 401) return { ready: false, reason: "unauthorized" };
+  if (responseStatus < 200 || responseStatus >= 300) return { ready: false };
   const parsed = ReadyResponseSchema.safeParse(body);
   return { ready: true, metadata: parsed.success ? parsed.data : null };
 }
@@ -36,10 +34,14 @@ export function parseReadyProbe(responseOk: boolean, body: unknown): ReadyProbe 
 export type ExternalReadyValidation = { ok: true } | { ok: false; message: string };
 
 export function validateExternalReady(
-  descriptor: ExternalConnectionDescriptor,
+  descriptor: Pick<ExternalConnection, "expected">,
   ready: ReadyResponse,
+  shellRelease: ShellReleaseIdentity,
 ): ExternalReadyValidation {
-  if (descriptor.expected.protocolRange !== String(ready.protocolVersion)) {
+  if (
+    descriptor.expected.protocolRange !== shellRelease.protocolRange ||
+    shellRelease.protocolRange !== String(ready.protocolVersion)
+  ) {
     return { ok: false, message: "external daemon protocol is incompatible with this shell" };
   }
   if (descriptor.expected.daemonInstanceId !== ready.daemonInstanceId) {
@@ -54,8 +56,14 @@ export function validateExternalReady(
       message: "external daemon runtime root does not match the connection descriptor",
     };
   }
-  if (descriptor.expected.buildVersion !== ready.buildVersion) {
-    return { ok: false, message: "external daemon build does not match the connection descriptor" };
+  if (descriptor.expected.buildVersion !== shellRelease.buildVersion) {
+    return { ok: false, message: "connection descriptor build does not match this shell" };
+  }
+  if (shellRelease.buildVersion !== ready.buildVersion) {
+    return { ok: false, message: "external daemon build does not match this shell" };
+  }
+  if (ready.daemonMode !== "packaged") {
+    return { ok: false, message: "external daemon is not a packaged release" };
   }
   if (ready.deployTargetMode !== "real") {
     return { ok: false, message: "external daemon is not configured for real deployment targets" };

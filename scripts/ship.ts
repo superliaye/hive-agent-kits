@@ -66,17 +66,18 @@ const stagingDir = join(REPO_ROOT, "packages", "shell", "staging");
 rmSync(stagingDir, { recursive: true, force: true });
 mkdirSync(stagingDir, { recursive: true });
 const releaseMetadataPath = join(stagingDir, "hive-release.json");
-writeFileSync(
-  releaseMetadataPath,
-  `${JSON.stringify(readReleaseMetadata(process.env, sourceCommit()), null, 2)}\n`,
-  { mode: 0o644 },
-);
+const releaseMetadata = readReleaseMetadata(process.env, sourceCommit());
+writeFileSync(releaseMetadataPath, `${JSON.stringify(releaseMetadata, null, 2)}\n`, {
+  mode: 0o644,
+});
 run(
   "bun",
   [
     "build",
     "--compile",
     `--target=${compileTarget}`,
+    "--define",
+    `process.env.HIVE_BUILD_VERSION=${JSON.stringify(releaseMetadata.buildVersion)}`,
     "packages/daemon/src/server/start.ts",
     "--outfile",
     join("packages", "shell", "staging", `hive-daemon${EXE}`),

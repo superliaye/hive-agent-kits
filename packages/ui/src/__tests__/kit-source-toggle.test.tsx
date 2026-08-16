@@ -1,4 +1,4 @@
-// Source on/off toggle (#37 / AC4): the Capabilities header renders one toggle per
+// Source on/off toggle: the Capabilities header renders one toggle per
 // Source (incl. the bundled Starter, kind:"local") from GET /api/sources joined
 // with state.sync. Deactivating a Source POSTs …/deactivate and — because the
 // catalog is server-side active-only — its capabilities disappear live (the page
@@ -169,8 +169,8 @@ function installStubs(): void {
     if (path === "/api/kit/verify") return json(emptyVerify);
     // Selecting a capability triggers the Deploy Diff fetch. This mock returns a
     // "removed" entry for the still-selected capability once its Source is inactive,
-    // to exercise the general removal warning + confirm gate (#47/q3a). (The live
-    // server, post-#47, keeps an owned-but-absent orphan OUT of the removed set.)
+    // to exercise the general removal warning + confirm gate. (The live server
+    // keeps an owned-but-absent orphan OUT of the removed set.)
     if (path === "/api/kit/diff" && method === "POST") {
       const entries = inactive.has(GIT_ID)
         ? [{ kind: "skill", name: "alpha", change: "removed", replacesUserFile: false }]
@@ -235,7 +235,7 @@ async function click(el: Element | null): Promise<void> {
   await flush();
 }
 
-describe("KitDeployPage — Source on/off toggle (AC4)", () => {
+describe("KitDeployPage — Source on/off toggle", () => {
   test("both the git Source and the bundled Starter render an enabled toggle", async () => {
     installStubs();
     const host = await render();
@@ -247,7 +247,7 @@ describe("KitDeployPage — Source on/off toggle (AC4)", () => {
     ) as HTMLInputElement | null;
     expect(gitToggle).not.toBeNull();
     expect(starterToggle).not.toBeNull();
-    // The Starter is toggleable, not locked (decision #3).
+    // The Starter is toggleable, not locked.
     expect(starterToggle?.disabled).toBe(false);
     expect(gitToggle?.checked).toBe(true);
     expect(starterToggle?.checked).toBe(true);
@@ -333,11 +333,11 @@ describe("KitDeployPage — Source on/off toggle (AC4)", () => {
     expect(host.querySelector(`[data-testid="kit-source-toggle-${GIT_ID}"]`)).not.toBeNull();
   });
 
-  test("with a selected capability now in the removed diff, the general removal warning shows (replaces the old disabled-Source banner, #47/q3a)", async () => {
+  test("a selected capability in the removed diff shows the general removal warning", async () => {
     installStubs();
     const host = await render();
     // Select the git capability, then disable its Source — it survives selection
-    // (not pruned). NB: post-#47 the server keeps an owned-but-absent orphan out of
+    // (not pruned). The server keeps an owned-but-absent orphan out of
     // the removed set; this mock still returns a removed entry to exercise the
     // general removal warning + confirm gate the disabled-Source banner became.
     await click(host.querySelector('[data-testid="kit-row-skill-alpha"]'));
@@ -355,7 +355,7 @@ describe("KitDeployPage — Source on/off toggle (AC4)", () => {
     expect(host.querySelector('[data-testid="kit-deploy-remove-warn"]')).toBeNull();
   });
 
-  test("a SHA-less Source (the bundled Starter) renders a labeled 'no SHA', not a bare dash (#54)", async () => {
+  test("a SHA-less Source (the bundled Starter) renders a labeled 'no SHA', not a bare dash", async () => {
     installStubs();
     const host = await render();
     // Rows render in precedence order (highest rank first). The git Source (rank 1)

@@ -1,4 +1,4 @@
-// Kit module orchestration (#30): per-Source sync over the injected
+// Kit module orchestration: per-Source sync over the injected
 // SourceRegistry, per-Source freshness in state(), the retired single-kit
 // identity in the deploy audit, and the launch-sync ordering invariant.
 
@@ -13,7 +13,6 @@ import { createDeploymentMutationCoordinator, PlanStaleError } from "../../deplo
 import { mirrorExists } from "../../mirror.ts";
 import type { HttpFetch } from "../../sync.ts";
 import { failSafeDeployTargets } from "../../targets.ts";
-import type { DeployAuditEvents } from "../../types.ts";
 import { Kit, KitLive } from "../kit-live.ts";
 
 const SHA = "a".repeat(40);
@@ -53,19 +52,6 @@ function okFetch(sha: string): HttpFetch {
       : tarball(sha, "foo");
 }
 
-// Each Source ships a distinct skill named after its owner-path segment, so a
-// multi-Source deploy has no cross-Source CapabilityKey collision.
-function distinctFetch(sha: string): HttpFetch {
-  return async (url) => {
-    if (url.includes("api.github.com")) {
-      return new Response(JSON.stringify({ sha }), { status: 200 });
-    }
-    // codeload URL: .../owner/<repo>/tar.gz/<sha>
-    const m = /codeload\.github\.com\/owner\/([^/]+)\//.exec(url);
-    return tarball(sha, `skill-${m?.[1] ?? "x"}`);
-  };
-}
-
 // A KitLive over a memory SourceRegistry seeded with `origins` (all active).
 function kitOver(origins: string[], fetchImpl: HttpFetch) {
   const sourcesLayer = SourceRegistryLive({
@@ -98,7 +84,7 @@ function kitOver(origins: string[], fetchImpl: HttpFetch) {
   return { kit, registry, rt };
 }
 
-describe("Kit.sync — per-Source (#30)", () => {
+describe("Kit.sync — per-Source", () => {
   test("Source sync holds the shared mutation gate across its Mirror swap and acceptance revalidates after", async () => {
     const mutationCoordinator = createDeploymentMutationCoordinator();
     let releaseDownload = (): void => {};
@@ -213,67 +199,9 @@ describe("Kit.sync — per-Source (#30)", () => {
     expect(bState?.state).toBe("up_to_date");
     rt.dispose();
   });
-
-  test("deploy audit payload is refs-only with kitSha:null for N==1 and N>1", async () => {
-    // N==1
-    const single = kitOver(["https://github.com/owner/a"], okFetch(SHA));
-    await Effect.runPromise(single.kit.sync());
-    const events1: DeployAuditEvents["deploy.applied"][] = [];
-    single.kit.events.on("deploy.applied", (e) => {
-      events1.push(e);
-    });
-    await Effect.runPromise(
-      single.kit.deploy({
-        presets: [],
-        add: { instructions: [], skills: ["foo"], agents: [], plugins: [], bundles: [] },
-        remove: { instructions: [], skills: [], agents: [], plugins: [], bundles: [] },
-        targets: ["claude"],
-      }),
-    );
-    expect(events1).toHaveLength(1);
-    expect(events1[0]?.kitSha).toBeNull();
-    single.rt.dispose();
-
-    // N>1 (fresh home so mirrors don't clash). Distinct skills per Source so the
-    // union-resolver deploys both with no cross-Source collision.
-    clearHomeEnv();
-    rmSync(tmpRoot, { recursive: true, force: true });
-    tmpRoot = mkdtempSync(join(tmpdir(), "kit-live-"));
-    redirectHomeEnv(tmpRoot);
-    const multi = kitOver(
-      ["https://github.com/owner/a", "https://github.com/owner/b"],
-      distinctFetch(SHA),
-    );
-    await Effect.runPromise(multi.kit.sync());
-    const events2: DeployAuditEvents["deploy.applied"][] = [];
-    multi.kit.events.on("deploy.applied", (e) => {
-      events2.push(e);
-    });
-    const result = await Effect.runPromise(
-      multi.kit.deploy({
-        presets: [],
-        add: {
-          instructions: [],
-          skills: ["skill-a", "skill-b"],
-          agents: [],
-          plugins: [],
-          bundles: [],
-        },
-        remove: { instructions: [], skills: [], agents: [], plugins: [], bundles: [] },
-        targets: ["claude"],
-      }),
-    );
-    expect(result.perKind.find((k) => k.kind === "skill")?.applied.sort()).toEqual([
-      "skill-a",
-      "skill-b",
-    ]);
-    expect(events2).toHaveLength(1);
-    expect(events2[0]?.kitSha).toBeNull();
-    multi.rt.dispose();
-  });
 });
 
-describe("Kit launch-sync ordering (#32, file mode — local Starter seed)", () => {
+describe("Kit launch-sync ordering with a file-mode local Starter seed", () => {
   // Point the Starter content root at the real in-repo package (hermetic, no env
   // leak between tests).
   const STARTER_PKG = join(
@@ -342,7 +270,7 @@ describe("Kit launch-sync ordering (#32, file mode — local Starter seed)", () 
   });
 });
 
-describe("Kit ↔ SourceRegistry shared store (#30 wiring invariant)", () => {
+describe("Kit ↔ SourceRegistry shared store ( wiring invariant)", () => {
   test("a registry mutation is visible to Kit's read model (one shared store)", async () => {
     // The server wires KitLive.pipe(Layer.provide(sourcesLayer)) + merges the same
     // sourcesLayer, so Kit and the Sources routes resolve ONE store (Effect
@@ -356,7 +284,7 @@ describe("Kit ↔ SourceRegistry shared store (#30 wiring invariant)", () => {
     const kit = rt.runSync(Kit);
 
     expect(kit.state().sync).toHaveLength(0);
-    await Effect.runPromise(
+    const source = await Effect.runPromise(
       registry.add({
         label: "added-at-runtime",
         locator: {
@@ -369,7 +297,7 @@ describe("Kit ↔ SourceRegistry shared store (#30 wiring invariant)", () => {
     );
     // Visible to Kit without any re-wiring — proves the single shared store.
     expect(kit.state().sync).toHaveLength(1);
-    expect(kit.state().sync[0]?.origin).toBe("https://github.com/owner/added-at-runtime");
+    expect(kit.state().sync[0]?.sourceId).toBe(source.id);
     rt.dispose();
   });
 

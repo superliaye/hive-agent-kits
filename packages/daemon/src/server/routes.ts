@@ -88,8 +88,9 @@ export function buildRoutes(deps: RoutesDeps): Hono {
   );
   app.use("/api/*", bearerAuth(deps.token, deps.sessions));
 
-  app.get("/api/ready", (c) =>
-    c.json({
+  app.get("/api/ready", (c) => {
+    if (c.get("authKind") === undefined) return c.json({ status: "ok" });
+    return c.json({
       status: "ok",
       protocolVersion: deps.protocolVersion,
       buildVersion: deps.buildVersion,
@@ -101,8 +102,8 @@ export function buildRoutes(deps: RoutesDeps): Hono {
           ? "real"
           : "sandbox",
       activeExternalSessions: deps.sessions.activeCount(),
-    }),
-  );
+    });
+  });
 
   app.post("/api/external-sessions", (c) => {
     if (c.get("authKind") !== "durable") {

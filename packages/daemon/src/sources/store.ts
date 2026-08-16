@@ -33,21 +33,30 @@ export type ReorderDirection = "up" | "down";
 // Seeding a local Source is idempotent: a duplicate fixed id no-ops (the Starter
 // is the sole minter of its well-known id).
 export type SeedLocalResult = { ok: true; source: Source } | { ok: false; reason: "duplicate-id" };
+export type PreparedSourceMutation<Result> = {
+  result: Result;
+  commit(): Result;
+};
 
 export type SourcesStore = {
   list(): readonly Source[];
+  prepareAdd(input: AddSourceInput): PreparedSourceMutation<AddResult>;
   add(input: AddSourceInput): AddResult;
   // Register a bundled `local` Source with a caller-supplied fixed id. A SYSTEM
   // action (not the audited user `add`). Idempotent on the id, so a re-seed
   // after the file already carries it is a clean no-op, never a duplicate row.
   seedLocal(id: string, origin: string): SeedLocalResult;
+  prepareActivate(id: string): PreparedSourceMutation<MutateResult>;
   activate(id: string): MutateResult;
+  prepareDeactivate(id: string): PreparedSourceMutation<MutateResult>;
   deactivate(id: string): MutateResult;
+  prepareDelete(id: string): PreparedSourceMutation<DeleteResult>;
   delete(id: string): DeleteResult;
   // Raise ("up") or lower ("down") a Source one precedence step by swapping its
   // stored rank with its adjacent neighbor in rank order. A free total order — the
   // swap may cross kinds (the local Starter above a git Source). A swap at the end
   // in the requested direction is a no-op (returns the unchanged Source).
+  prepareReorder(id: string, direction: ReorderDirection): PreparedSourceMutation<ReorderResult>;
   reorder(id: string, direction: ReorderDirection): ReorderResult;
   snapshot(): SourcesFile;
 };
@@ -102,15 +111,35 @@ export function createSourcesStore(
     revision = nextRevision;
   }
 
-  function setActive(id: string, active: boolean): MutateResult {
+  function unchanged<Result>(result: Result): PreparedSourceMutation<Result> {
+    return { result, commit: () => result };
+  }
+
+  function prepared<Result>(next: Source[], result: Result): PreparedSourceMutation<Result> {
+    const expectedRevision = revision;
+    let committed = false;
+    return {
+      result,
+      commit: () => {
+        if (committed) return result;
+        if (revision !== expectedRevision) {
+          throw new Error("source registry changed before prepared mutation committed");
+        }
+        commit(next);
+        committed = true;
+        return result;
+      },
+    };
+  }
+
+  function prepareSetActive(id: string, active: boolean): PreparedSourceMutation<MutateResult> {
     const idx = sources.findIndex((s) => s.id === id);
-    if (idx === -1) return { ok: false, reason: "not-found" };
+    if (idx === -1) return unchanged({ ok: false, reason: "not-found" });
     const next = cloneSources(sources);
     const target = next[idx];
-    if (!target) return { ok: false, reason: "not-found" };
+    if (!target) return unchanged({ ok: false, reason: "not-found" });
     target.active = active;
-    commit(next);
-    return { ok: true, source: cloneSource(target) };
+    return prepared(next, { ok: true, source: cloneSource(target) });
   }
 
   // The next rank for a new Source: max(existing ranks)+1, so each add becomes the
@@ -120,32 +149,71 @@ export function createSourcesStore(
     return Math.max(...sources.map((s) => s.rank)) + 1;
   }
 
+  function prepareAdd(input: AddSourceInput): PreparedSourceMutation<AddResult> {
+    const locator = cloneLocator(normalizeLocator(input.locator)) as Exclude<
+      SourceLocator,
+      { kind: "starter" }
+    >;
+    const exists = sources.some((s) => locatorIdentity(s.locator) === locatorIdentity(locator));
+    if (exists) return unchanged({ ok: false, reason: "duplicate" });
+    const origin = locator.kind === "git" ? locator.repoUrl : locator.repoRoot;
+    const source: Source = {
+      id: mintId(),
+      label: input.label,
+      locator,
+      origin,
+      kind: locator.kind === "git" ? "git" : "local",
+      active: true,
+      createdAt: now(),
+      rank: nextRank(),
+    };
+    return prepared([...sources, source], { ok: true, source: cloneSource(source) });
+  }
+
+  function prepareReorder(
+    id: string,
+    direction: ReorderDirection,
+  ): PreparedSourceMutation<ReorderResult> {
+    if (!sources.some((s) => s.id === id)) {
+      return unchanged({ ok: false, reason: "not-found" });
+    }
+    const ordered = [...sources].sort((a, b) =>
+      a.rank !== b.rank ? a.rank - b.rank : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+    );
+    const pos = ordered.findIndex((s) => s.id === id);
+    const neighborPos = direction === "up" ? pos + 1 : pos - 1;
+    const self = ordered[pos];
+    const neighbor = ordered[neighborPos];
+    if (!self) return unchanged({ ok: false, reason: "not-found" });
+    if (!neighbor) {
+      return unchanged({ ok: true, changed: false, source: cloneSource(self) });
+    }
+    const next = cloneSources(sources).map((s) => {
+      if (s.id === self.id) return { ...s, rank: neighbor.rank };
+      if (s.id === neighbor.id) return { ...s, rank: self.rank };
+      return { ...s };
+    });
+    const updated = next.find((s) => s.id === id);
+    if (!updated) return unchanged({ ok: false, reason: "not-found" });
+    return prepared(next, { ok: true, changed: true, source: cloneSource(updated) });
+  }
+
+  function prepareDelete(id: string): PreparedSourceMutation<DeleteResult> {
+    const idx = sources.findIndex((s) => s.id === id);
+    if (idx === -1) return unchanged({ ok: false, reason: "not-found" });
+    return prepared(
+      sources.filter((s) => s.id !== id),
+      { ok: true },
+    );
+  }
+
   return {
     list() {
       return cloneSources(sources);
     },
 
-    add(input) {
-      const locator = cloneLocator(normalizeLocator(input.locator)) as Exclude<
-        SourceLocator,
-        { kind: "starter" }
-      >;
-      const exists = sources.some((s) => locatorIdentity(s.locator) === locatorIdentity(locator));
-      if (exists) return { ok: false, reason: "duplicate" };
-      const origin = locator.kind === "git" ? locator.repoUrl : locator.repoRoot;
-      const source: Source = {
-        id: mintId(),
-        label: input.label,
-        locator,
-        origin,
-        kind: locator.kind === "git" ? "git" : "local",
-        active: true,
-        createdAt: now(),
-        rank: nextRank(),
-      };
-      commit([...sources, source]);
-      return { ok: true, source: cloneSource(source) };
-    },
+    prepareAdd,
+    add: (input) => prepareAdd(input).commit(),
 
     seedLocal(id, origin) {
       // Idempotent on the fixed id — never normalize/dedupe by origin (a local
@@ -165,43 +233,16 @@ export function createSourcesStore(
       return { ok: true, source: cloneSource(source) };
     },
 
-    activate: (id) => setActive(id, true),
-    deactivate: (id) => setActive(id, false),
+    prepareActivate: (id) => prepareSetActive(id, true),
+    activate: (id) => prepareSetActive(id, true).commit(),
+    prepareDeactivate: (id) => prepareSetActive(id, false),
+    deactivate: (id) => prepareSetActive(id, false).commit(),
 
-    reorder(id, direction) {
-      if (!sources.some((s) => s.id === id)) return { ok: false, reason: "not-found" };
-      // Order by stored rank ascending, id-tiebroken so adjacency is defined
-      // identically to the UI's rank-desc+id sort (robust to any duplicate-rank
-      // input, which normal max+1 minting never produces). The neighbor to swap
-      // with is the next one up ("up" = toward higher precedence) or down. At the
-      // end in that direction there is no neighbor → a clean no-op.
-      const ordered = [...sources].sort((a, b) =>
-        a.rank !== b.rank ? a.rank - b.rank : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-      );
-      const pos = ordered.findIndex((s) => s.id === id);
-      const neighborPos = direction === "up" ? pos + 1 : pos - 1;
-      const self = ordered[pos];
-      const neighbor = ordered[neighborPos];
-      if (!self) return { ok: false, reason: "not-found" };
-      if (!neighbor) return { ok: true, changed: false, source: cloneSource(self) };
-      const next = cloneSources(sources).map((s) => {
-        if (s.id === self.id) return { ...s, rank: neighbor.rank };
-        if (s.id === neighbor.id) return { ...s, rank: self.rank };
-        return { ...s };
-      });
-      commit(next);
-      const updated = next.find((s) => s.id === id);
-      // `updated` is always present (id was found above); guard for the typechecker.
-      if (!updated) return { ok: false, reason: "not-found" };
-      return { ok: true, changed: true, source: cloneSource(updated) };
-    },
+    prepareReorder,
+    reorder: (id, direction) => prepareReorder(id, direction).commit(),
 
-    delete(id) {
-      const idx = sources.findIndex((s) => s.id === id);
-      if (idx === -1) return { ok: false, reason: "not-found" };
-      commit(sources.filter((s) => s.id !== id));
-      return { ok: true };
-    },
+    prepareDelete,
+    delete: (id) => prepareDelete(id).commit(),
 
     snapshot,
   };

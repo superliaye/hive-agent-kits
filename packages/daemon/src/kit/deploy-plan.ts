@@ -65,6 +65,7 @@ export type DeployPlanAction = {
 export type DeployPlanBlock = {
   kind: "instruction";
   target: DeployTarget;
+  reason: "source_unavailable" | "unmanaged_owned";
   keys: CapabilityKey[];
 };
 
@@ -264,7 +265,10 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     snapshot.deploymentState.legacyInstructionFingerprints.map((entry) => [entry.target, entry]),
   );
 
-  const blockedByTarget = new Map<DeployTarget, CapabilityKey[]>();
+  const blockedByTarget = new Map<
+    DeployTarget,
+    { reason: DeployPlanBlock["reason"]; keys: CapabilityKey[] }
+  >();
   const instructionIntents = new Map<
     DeployTarget,
     { contributions: InstructionContribution[]; renderedHash: string }
@@ -285,6 +289,33 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       selectedInstructions.set(target, entries);
     }
   }
+  const removalInstructions = new Map<DeployTarget, Set<string>>();
+  for (const intent of snapshot.selection.removalIntents) {
+    if (intent.key.kind !== "instruction") continue;
+    for (const target of intent.targets) {
+      if (!applicableTargets(intent.key).includes(target)) continue;
+      const names = removalInstructions.get(target) ?? new Set<string>();
+      names.add(intent.key.name);
+      removalInstructions.set(target, names);
+    }
+  }
+  const ledgerTargets = new Set(
+    snapshot.ledger.value?.agents.filter(
+      (target): target is DeployTarget => target === "claude" || target === "codex",
+    ) ?? [],
+  );
+  for (const target of ledgerTargets) {
+    const selectedNames = new Set(
+      (selectedInstructions.get(target) ?? []).map(({ key }) => key.name),
+    );
+    const removedNames = removalInstructions.get(target) ?? new Set<string>();
+    const unmanaged = (snapshot.ledger.value?.instructions ?? [])
+      .filter(({ name }) => !selectedNames.has(name) && !removedNames.has(name))
+      .map(({ name }) => ({ kind: "instruction" as const, name }));
+    if (unmanaged.length > 0) {
+      blockedByTarget.set(target, { reason: "unmanaged_owned", keys: unmanaged });
+    }
+  }
   for (const [target, selected] of selectedInstructions) {
     const unavailable = selected.filter(({ key, rendered }) => {
       const available = winner.has(serializeCapabilityKey(key));
@@ -296,10 +327,15 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       ),
     );
     if (unavailable.length > 0 || hashes.size !== 1) {
-      blockedByTarget.set(
-        target,
-        unavailable.length > 0 ? unavailable.map(({ key }) => key) : selected.map(({ key }) => key),
-      );
+      if (!blockedByTarget.has(target)) {
+        blockedByTarget.set(target, {
+          reason: "source_unavailable",
+          keys:
+            unavailable.length > 0
+              ? unavailable.map(({ key }) => key)
+              : selected.map(({ key }) => key),
+        });
+      }
       continue;
     }
     const renderedHash = [...hashes][0];
@@ -322,6 +358,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
 
   const actions: DeployPlanAction[] = [];
   for (const selected of snapshot.selection.enabled) {
+    if (selected.key.kind === "plugin" || selected.key.kind === "bundle") continue;
     const selectedWinner = winner.get(serializeCapabilityKey(selected.key));
     if (!selectedWinner) continue;
     for (const target of selected.targets) {
@@ -355,8 +392,6 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
           : undefined);
       if (!applied) {
         action = "add";
-      } else if (selected.key.kind === "plugin" || selected.key.kind === "bundle") {
-        if (applied.contentSha !== rendered.contentSha) action = "update";
       } else if (
         applied.renderedHash !== rendered.renderedHash ||
         artifact.existence === "missing" ||
@@ -423,10 +458,11 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     deploymentStateRevision: snapshot.deploymentState.revision,
     actions,
     instructionWrites,
-    blocked: [...blockedByTarget].map(([target, keys]) => ({
+    blocked: [...blockedByTarget].map(([target, block]) => ({
       kind: "instruction",
       target,
-      keys,
+      reason: block.reason,
+      keys: block.keys,
     })),
   });
 }

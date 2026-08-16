@@ -22,6 +22,7 @@ import {
   type SelectionSnapshot as SelectionSnapshotType,
 } from "@hive/contract";
 import { z } from "zod";
+import { syncDirectoryForDurability } from "../lib/durable-file.ts";
 import { applicableTargetSet } from "./capability-targets.ts";
 
 const SelectionEntry = z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) });
@@ -94,9 +95,19 @@ export type SelectionStoreOptions = {
   generation?: () => string;
 };
 
+export type PreparedSelectionMutation = {
+  before: SelectionSnapshotType;
+  after: SelectionSnapshotType;
+  commit(): SelectionSnapshotType;
+};
+
 export type SelectionStore = {
   read(): SelectionSnapshotType;
   seedOnce(ledger: Ledger | null): SelectionSnapshotType;
+  prepareMutation(
+    body: z.input<typeof SelectionMutation>,
+    ledger?: Ledger | null,
+  ): PreparedSelectionMutation;
   mutate(body: z.input<typeof SelectionMutation>, ledger?: Ledger | null): SelectionSnapshotType;
   // Internal seam for a later successful Deploy removal outcome. It changes only
   // matching intents and never lets Deployment State author Selection.
@@ -241,16 +252,7 @@ export function openSelectionStore(
     options.write ??
     ((fd: number, bytes: Uint8Array, offset: number, length: number) =>
       writeSync(fd, bytes, offset, length));
-  const fsyncDirectory =
-    options.fsyncDirectory ??
-    ((directory: string) => {
-      const fd = openSync(directory, "r");
-      try {
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-    });
+  const fsyncDirectory = options.fsyncDirectory ?? syncDirectoryForDurability;
   const generation = options.generation ?? (() => crypto.randomUUID());
 
   const load = (): SelectionFile | undefined => {
@@ -336,6 +338,73 @@ export function openSelectionStore(
     return initial;
   };
 
+  const prepareMutation = (
+    body: z.input<typeof SelectionMutation>,
+    ledger?: Ledger | null,
+  ): PreparedSelectionMutation => {
+    const mutation = SelectionMutation.parse(body);
+    const current = initialized();
+    if (mutation.expectedRevision !== current.revision) {
+      throw new SelectionConflictError(current.revision);
+    }
+    const enabled = entryMap(current.enabled);
+    const removalIntents = intentMap(current.removalIntents);
+    for (const change of mutation.changes) {
+      const id = serializeCapabilityKey(change.key);
+      const targets = uniqueTargets(change.targets);
+      const applicable = applicableTargetSet(change.key);
+      if (targets.some((target) => !applicable.has(target))) {
+        throw new SelectionTargetNotApplicableError();
+      }
+      if (change.enabled) {
+        const old = enabled.get(id);
+        enabled.set(id, {
+          key: change.key,
+          targets: uniqueTargets([...(old?.targets ?? []), ...targets]),
+        });
+        for (const target of targets) removalIntents.delete(intentId(change.key, target));
+        continue;
+      }
+      const old = enabled.get(id);
+      const previouslyEnabled = new Set(old?.targets ?? []);
+      const remainingEnabled = removeTargets(old, targets);
+      if (remainingEnabled) enabled.set(id, remainingEnabled);
+      else enabled.delete(id);
+      for (const target of targets) {
+        if (!previouslyEnabled.has(target) && !ledgerOwns(ledger, change.key, target)) continue;
+        const targetId = intentId(change.key, target);
+        if (removalIntents.has(targetId)) continue;
+        removalIntents.set(targetId, {
+          key: change.key,
+          targets: [target],
+          generation: generation(),
+        });
+      }
+    }
+    const next: SelectionFile = {
+      schemaVersion: 3,
+      initialized: true,
+      revision: current.revision + 1,
+      enabled: canonical(enabled.values()),
+      removalIntents: canonicalIntents(removalIntents.values()),
+    };
+    let committed = false;
+    return {
+      before: snapshot(current),
+      after: snapshot(next),
+      commit: () => {
+        if (committed) return snapshot(next);
+        const latest = initialized();
+        if (latest.revision !== current.revision) {
+          throw new SelectionConflictError(latest.revision);
+        }
+        write(next);
+        committed = true;
+        return snapshot(next);
+      },
+    };
+  };
+
   return {
     read: () => {
       const current = load();
@@ -348,56 +417,8 @@ export function openSelectionStore(
       write(initial);
       return snapshot(initial);
     },
-    mutate: (body, ledger) => {
-      const mutation = SelectionMutation.parse(body);
-      const current = initialized();
-      if (mutation.expectedRevision !== current.revision) {
-        throw new SelectionConflictError(current.revision);
-      }
-      const enabled = entryMap(current.enabled);
-      const removalIntents = intentMap(current.removalIntents);
-      for (const change of mutation.changes) {
-        const id = serializeCapabilityKey(change.key);
-        const targets = uniqueTargets(change.targets);
-        const applicable = applicableTargetSet(change.key);
-        if (targets.some((target) => !applicable.has(target))) {
-          throw new SelectionTargetNotApplicableError();
-        }
-        if (change.enabled) {
-          const old = enabled.get(id);
-          enabled.set(id, {
-            key: change.key,
-            targets: uniqueTargets([...(old?.targets ?? []), ...targets]),
-          });
-          for (const target of targets) removalIntents.delete(intentId(change.key, target));
-          continue;
-        }
-        const old = enabled.get(id);
-        const previouslyEnabled = new Set(old?.targets ?? []);
-        const remainingEnabled = removeTargets(old, targets);
-        if (remainingEnabled) enabled.set(id, remainingEnabled);
-        else enabled.delete(id);
-        for (const target of targets) {
-          if (!previouslyEnabled.has(target) && !ledgerOwns(ledger, change.key, target)) continue;
-          const targetId = intentId(change.key, target);
-          if (removalIntents.has(targetId)) continue;
-          removalIntents.set(targetId, {
-            key: change.key,
-            targets: [target],
-            generation: generation(),
-          });
-        }
-      }
-      const next: SelectionFile = {
-        schemaVersion: 3,
-        initialized: true,
-        revision: current.revision + 1,
-        enabled: canonical(enabled.values()),
-        removalIntents: canonicalIntents(removalIntents.values()),
-      };
-      write(next);
-      return snapshot(next);
-    },
+    prepareMutation,
+    mutate: (body, ledger) => prepareMutation(body, ledger).commit(),
     clearRemovalIntents: (entries) => {
       const current = initialized();
       const removalIntents = intentMap(current.removalIntents);

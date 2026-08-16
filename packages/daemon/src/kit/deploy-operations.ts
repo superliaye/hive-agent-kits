@@ -56,6 +56,7 @@ const DeployPlanSchema = z.object({
     z.object({
       kind: z.literal("instruction"),
       target: DeployTarget,
+      reason: z.enum(["source_unavailable", "unmanaged_owned"]),
       keys: z.array(CapabilityKey),
     }),
   ),

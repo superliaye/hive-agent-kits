@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Selection, Source } from "@hive/contract";
 import { readCatalog } from "../catalog.ts";
 import { DeployError } from "../effect/errors.ts";
@@ -9,7 +10,9 @@ import { resolveSelection } from "../selection.ts";
 import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
-const CLONE = process.env.MY_AGENT_KITS_ROOT;
+const PINNED_FIXTURE = fileURLToPath(
+  new URL("../../../../../scripts/fixtures/my-agent-kits", import.meta.url),
+);
 
 // Default rank mirrors the seed: a `local` Starter sits at rank 0 (lowest), each
 // git Source gets the next increasing rank (later-declared = higher precedence).
@@ -166,28 +169,19 @@ describe("readCatalog (single Source)", () => {
     expect(child?.capabilities.skills.filter((s) => s === "beta").length).toBe(1);
   });
 
-  test.skipIf(CLONE === undefined)(
-    "loads the real clone catalog without throwing (realistic content)",
-    () => {
-      if (
-        !CLONE ||
-        !existsSync(join(CLONE, "capabilities")) ||
-        !existsSync(join(CLONE, "presets"))
-      ) {
-        throw new Error(`MY_AGENT_KITS_ROOT is not a capability-kit clone: ${CLONE ?? "<unset>"}`);
-      }
-      cpSync(join(CLONE, "capabilities"), join(mirror, "capabilities"), { recursive: true });
-      cpSync(join(CLONE, "presets"), join(mirror, "presets"), { recursive: true });
-      const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
-      expect(cat.entries.length).toBeGreaterThan(0);
-      expect(cat.presets.some((p) => p.name === "engineering")).toBe(true);
-      // my-commit ships under @my/ but flattens to the leaf name.
-      expect(cat.entries.some((e) => e.kind === "skill" && e.name === "my-commit")).toBe(true);
-      // Copies the full external clone off disk before reading — the default 5s
-      // timeout is too tight on a cold/slow filesystem, so give it generous room.
-    },
-    30000,
-  );
+  test("loads the pinned real-world capability fixture", () => {
+    cpSync(join(PINNED_FIXTURE, "capabilities"), join(mirror, "capabilities"), {
+      recursive: true,
+    });
+    const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
+    expect(cat.entries.length).toBeGreaterThan(0);
+    expect(
+      cat.entries.some((entry) => entry.kind === "agent" && entry.name === "loop-build-agent"),
+    ).toBe(true);
+    expect(cat.entries.some((entry) => entry.kind === "instruction" && entry.name === "core")).toBe(
+      true,
+    );
+  });
 });
 
 describe("readCatalog (cross-Source aggregation — merge / collision / shadow)", () => {
@@ -301,7 +295,7 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
     expect(winner?.sourceIds[0]).toBe("src-a");
   });
 
-  test("(g) preset cross-Source name clash still drops both (unchanged from #30)", () => {
+  test("(g) preset cross-Source name clash drops both", () => {
     writeSkillIn(mirrorA, "alpha", "description: a");
     writeSkillIn(mirrorB, "beta", "description: b");
     writePresetIn(

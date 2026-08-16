@@ -107,7 +107,6 @@ export type SyncStatus = z.infer<typeof SyncStatus>;
 // another's freshness (each active Source syncs into its own Mirror).
 export const SourceSyncStatus = SyncStatus.extend({
   sourceId: z.string(),
-  origin: z.string(),
 });
 export type SourceSyncStatus = z.infer<typeof SourceSyncStatus>;
 
@@ -116,7 +115,6 @@ export const SyncRunResult = z.object({
   sources: z.array(
     z.object({
       sourceId: z.string(),
-      origin: z.string(),
       status: z.enum(["synced", "unchanged", "failed"]),
       errorReason: z.string().optional(),
       errorDetail: z.string().max(160).optional(),
@@ -274,12 +272,7 @@ export type VerifyReport = z.infer<typeof VerifyReport>;
 
 // ---- Authoritative Deployment Overview ----
 
-export const OverviewCatalogState = z.enum([
-  "deployable",
-  "shadowed",
-  "blocked",
-  "unavailable",
-]);
+export const OverviewCatalogState = z.enum(["deployable", "shadowed", "blocked", "unavailable"]);
 export type OverviewCatalogState = z.infer<typeof OverviewCatalogState>;
 
 export const OverviewDesiredState = z.enum(["on", "off"]);
@@ -293,6 +286,7 @@ export const ReconciliationState = z.enum([
   "waiting_for_source",
   "orphaned",
   "unmanaged_owned",
+  "manual_install_required",
   "manual_removal_required",
 ]);
 export type ReconciliationState = z.infer<typeof ReconciliationState>;
@@ -383,7 +377,7 @@ export const DeployOperationSummary = z.object({
   state: DeployOperationState,
   acceptedAt: z.number().int().nonnegative(),
   selectionRevision: z.number().int().nonnegative(),
-  planToken: z.string().regex(/^[0-9a-f]{64}$/).or(z.string().min(1)),
+  planToken: z.string().min(1),
   completedAt: z.number().int().nonnegative().optional(),
 });
 export type DeployOperationSummary = z.infer<typeof DeployOperationSummary>;
@@ -402,10 +396,12 @@ export const DeploymentOverview = z.object({
 });
 export type DeploymentOverview = z.infer<typeof DeploymentOverview>;
 
-export const AcceptedDeployRequest = z.object({
-  selectionRevision: z.number().int().nonnegative(),
-  planToken: z.string().regex(/^[0-9a-f]{64}$/),
-}).strict();
+export const AcceptedDeployRequest = z
+  .object({
+    selectionRevision: z.number().int().nonnegative(),
+    planToken: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
 export type AcceptedDeployRequest = z.infer<typeof AcceptedDeployRequest>;
 
 export const AcceptedDeployResponse = z.object({ operationId: z.string().min(1) }).strict();

@@ -9,13 +9,11 @@ export type GitProcessOptions = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   maxStdoutBytes?: number;
+  stdin?: Uint8Array;
 };
-
-export type GitArchiveOptions = GitProcessOptions & { maxBytes: number };
 
 export type GitProcess = {
   run(args: readonly string[], options?: GitProcessOptions): Promise<GitProcessResult>;
-  runArchive(args: readonly string[], options: GitArchiveOptions): Promise<GitProcessResult>;
 };
 
 export class GitProcessFailure extends Error {
@@ -41,7 +39,7 @@ export function productionGitProcess(): GitProcess {
       // Keep the Daemon's HOME and configured credential helpers available,
       // while making an interactive credential prompt impossible.
       env: { ...process.env, ...options.env, GIT_TERMINAL_PROMPT: "0" },
-      stdin: "ignore",
+      stdin: options.stdin ?? "ignore",
       stdout: "pipe",
       stderr: "pipe",
       ...(ownsProcessGroup ? { detached: true } : {}),
@@ -150,9 +148,6 @@ export function productionGitProcess(): GitProcess {
   return {
     async run(args, options = {}) {
       return collect(args, options, options.maxStdoutBytes ?? DEFAULT_STDOUT_LIMIT);
-    },
-    async runArchive(args, options) {
-      return collect(args, options, options.maxBytes);
     },
   };
 }

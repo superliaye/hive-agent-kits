@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { serializeCapabilityKey } from "@hive/capability-schema";
 import type { AcceptedDeployRequest, DeployTarget } from "@hive/contract";
+import { withCooperativeFileLockAsync } from "../lib/durable-file.ts";
 import { log } from "../lib/log.ts";
 import { mirrorContentSha } from "./content-sha.ts";
 import {
@@ -17,6 +18,9 @@ import {
   deployedAgentPath,
   deployedInstructionPath,
   deployedSkillDir,
+  hashDeployedAgent,
+  hashDeployedInstruction,
+  hashDeployedSkill,
   hashSkillFiles,
   sha256,
 } from "./deploy/artifact-hash.ts";
@@ -40,7 +44,12 @@ import {
 } from "./deploy-operations.ts";
 import { type DeploymentSnapshot, type DeployPlan, ledgerOwnershipByKey } from "./deploy-plan.ts";
 import type { DeploymentStateStore } from "./deployment-state.ts";
-import { type LedgerWriteOptions, mergeLedger, readLedger } from "./ledger.ts";
+import {
+  type LedgerWriteOptions,
+  mergeLedger,
+  mergeLedgerWithinLock,
+  readLedger,
+} from "./ledger.ts";
 import { readMirrorIdentity } from "./overview.ts";
 import type { DeployTargets } from "./targets.ts";
 
@@ -584,6 +593,7 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
     case "instruction": {
       const path = deployedInstructionPath(fx.targets, task.target);
       if (task.content === null) {
+        backupIfExists(path);
         removeFile(path);
       } else {
         backupIfExists(path);
@@ -628,28 +638,37 @@ export async function executeStagedDeploy(
 ): Promise<void> {
   const now = options.now ?? Date.now;
   const provisional: DeployOperationOutcome[] = [];
-  for (const task of operation.staged.tasks) {
-    const actions = taskActions(task);
-    let failureCode: string | undefined;
-    try {
-      applyStagedTask(options.fx, task);
-    } catch (error) {
-      failureCode = errorCode(error);
-    }
-    const outcomes = actions.map((action) => ({
-      ...action,
-      outcome: failureCode ? ("failed" as const) : ("succeeded" as const),
-      attemptedAt: now(),
-      ...(failureCode ? { code: failureCode } : {}),
-    }));
-    provisional.push(...outcomes);
-    if ("provisional" in journal) await journal.provisional(outcomes);
-  }
+  const lockOptions = options.ledgerWriteOptions ?? {};
+  await withCooperativeFileLockAsync(
+    options.fx.targets.ledgerPath(),
+    lockOptions.lockTimeoutMs ?? 5_000,
+    async () => {
+      for (const task of operation.staged.tasks) {
+        const actions = taskActions(task);
+        let failureCode: string | undefined;
+        try {
+          applyStagedTask(options.fx, task);
+        } catch (error) {
+          failureCode = errorCode(error);
+        }
+        const outcomes = actions.map((action) => ({
+          ...action,
+          outcome: failureCode ? ("failed" as const) : ("succeeded" as const),
+          attemptedAt: now(),
+          ...(failureCode ? { code: failureCode } : {}),
+        }));
+        provisional.push(...outcomes);
+        if ("provisional" in journal) await journal.provisional(outcomes);
+      }
 
+      const checkpointed = { ...operation, provisionalOutcomes: provisional };
+      if ("markLedgerPending" in journal) journal.markLedgerPending();
+      commitProvisionalLedger(options, checkpointed, true);
+      if ("markLedgerCommitted" in journal) journal.markLedgerCommitted();
+    },
+    { staleMs: lockOptions.lockStaleMs, updateMs: lockOptions.lockUpdateMs },
+  );
   const checkpointed = { ...operation, provisionalOutcomes: provisional };
-  if ("markLedgerPending" in journal) journal.markLedgerPending();
-  commitProvisionalLedger(options, checkpointed);
-  if ("markLedgerCommitted" in journal) journal.markLedgerCommitted();
   if ("markFinalizing" in journal) journal.markFinalizing();
   finalizeCommittedDeployment(options, checkpointed);
   await journal(provisional);
@@ -666,9 +685,53 @@ function successfulTasks(operation: DeployOperation): StagedDeployTask[] {
   );
 }
 
+function stagedTaskStillApplied(fx: DeployFsExec, task: StagedDeployTask): boolean {
+  try {
+    switch (task.type) {
+      case "instruction":
+        return hashDeployedInstruction(fx.targets, task.target) === task.renderedHash;
+      case "skill":
+        return hashDeployedSkill(fx.targets, task.key.name, task.target) === task.renderedHash;
+      case "agent":
+        return hashDeployedAgent(fx.targets, task.key.name, task.target) === task.renderedHash;
+      case "remove":
+        return task.key.kind === "skill"
+          ? hashDeployedSkill(fx.targets, task.key.name, task.target) === null
+          : hashDeployedAgent(fx.targets, task.key.name, task.target) === null;
+      case "plugin":
+      case "bundle":
+        return false;
+    }
+  } catch {
+    return false;
+  }
+}
+
+function revalidateRecoveryOutcomes(
+  fx: DeployFsExec,
+  operation: DeployOperation,
+): DeployOperationOutcome[] {
+  const changed = new Set<string>();
+  for (const task of operation.staged.tasks) {
+    if (stagedTaskStillApplied(fx, task)) continue;
+    for (const action of taskActions(task)) changed.add(outcomeId(action));
+  }
+  return operation.provisionalOutcomes.map((outcome) =>
+    outcome.outcome === "succeeded" && changed.has(outcomeId(outcome))
+      ? {
+          ...outcome,
+          outcome: "failed" as const,
+          code: "recovery_state_changed",
+          detail: "deployed artifact changed before Ledger recovery",
+        }
+      : outcome,
+  );
+}
+
 function commitProvisionalLedger(
   options: ExecuteStagedDeployOptions,
   operation: DeployOperation,
+  ledgerLocked = false,
 ): void {
   const succeededTasks = successfulTasks(operation);
   const importedOwnership = ledgerOwnershipByKey(readLedger(options.fx.targets));
@@ -727,7 +790,8 @@ function commitProvisionalLedger(
       bundles.set(task.key.name, task.pin);
     }
   }
-  mergeLedger(
+  const commit = ledgerLocked ? mergeLedgerWithinLock : mergeLedger;
+  commit(
     options.fx.targets,
     {
       kitVersion: "",
@@ -823,9 +887,22 @@ export async function resumeStagedDeploy(
   journal: DeployExecutionJournal,
 ): Promise<void> {
   let phase = operation.executionPhase;
+  let recovered = operation;
   if (phase === "ledger_pending") {
-    commitProvisionalLedger(options, operation);
-    journal.markLedgerCommitted();
+    const lockOptions = options.ledgerWriteOptions ?? {};
+    await withCooperativeFileLockAsync(
+      options.fx.targets.ledgerPath(),
+      lockOptions.lockTimeoutMs ?? 5_000,
+      async () => {
+        recovered = {
+          ...operation,
+          provisionalOutcomes: revalidateRecoveryOutcomes(options.fx, operation),
+        };
+        commitProvisionalLedger(options, recovered, true);
+        journal.markLedgerCommitted();
+      },
+      { staleMs: lockOptions.lockStaleMs, updateMs: lockOptions.lockUpdateMs },
+    );
     phase = "ledger_committed";
   }
   if (phase === "ledger_committed") {
@@ -834,7 +911,7 @@ export async function resumeStagedDeploy(
   }
   if (phase !== "finalizing") throw new Error("operation_not_recoverable");
   if (operation.finalizationState !== "already_recorded") {
-    finalizeCommittedDeployment(options, operation);
+    finalizeCommittedDeployment(options, recovered);
   }
-  await journal(operation.provisionalOutcomes);
+  await journal(recovered.provisionalOutcomes);
 }

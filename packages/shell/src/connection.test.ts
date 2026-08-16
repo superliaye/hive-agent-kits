@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadExternalDescriptor, resolveShellLaunch } from "./connection.ts";
@@ -65,6 +73,55 @@ describe("external connection descriptor", () => {
 
     expect(() => loadExternalDescriptor(path, { now: () => now })).toThrow("expired");
     expect(existsSync(path)).toBe(false);
+  });
+
+  test("rejects launch when the one-shot descriptor cannot be consumed", () => {
+    const path = writeDescriptor(validDescriptor());
+
+    expect(() =>
+      loadExternalDescriptor(path, {
+        now: () => now,
+        unlink: () => {
+          const error = new Error("read-only parent") as Error & { code: string };
+          error.code = "EACCES";
+          throw error;
+        },
+      }),
+    ).toThrow("could not be consumed");
+    expect(existsSync(path)).toBe(false);
+    expect(readdirSync(join(path, "..")).some((name) => name.startsWith(".hive-descriptor-"))).toBe(
+      true,
+    );
+  });
+
+  test("fails closed before reading a descriptor on Windows", () => {
+    const path = writeDescriptor(validDescriptor());
+
+    expect(() => loadExternalDescriptor(path, { now: () => now, platform: "win32" })).toThrow(
+      "unsupported on Windows",
+    );
+    expect(existsSync(path)).toBe(true);
+  });
+
+  test("rejects a descriptor symlink without consuming its target", () => {
+    const target = writeDescriptor(validDescriptor());
+    const link = join(target, "..", "connection-link.json");
+    symlinkSync(target, link);
+
+    expect(() => loadExternalDescriptor(link, { now: () => now })).toThrow("owner-only");
+    expect(existsSync(link)).toBe(false);
+    expect(existsSync(target)).toBe(true);
+  });
+
+  test("rejects malformed or repeated reserved launch flags", () => {
+    for (const argv of [
+      ["--hive-external-descriptor"],
+      ["--hive-external-descriptor="],
+      ["--hive-external-descriptor-other=value"],
+      ["--hive-external-descriptor=one", "--hive-external-descriptor=two"],
+    ]) {
+      expect(() => resolveShellLaunch(argv, { now: () => now })).toThrow();
+    }
   });
 
   test("resolves managed and external launch modes without fallback", () => {

@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Source } from "@hive/contract";
+import { AddSourceResult, type Source } from "@hive/contract";
 import { Cause, Effect, Exit } from "effect";
 import { createServer, legacyGithubFixtureFetchForMode } from "../../server/index.ts";
 import { type GitProcess, GitProcessFailure } from "../acquisition/git-process.ts";
@@ -18,7 +18,7 @@ import { SyncError } from "../effect/errors.ts";
 import { readProvenance } from "../mirror.ts";
 import { syncLocatorSource } from "../sync.ts";
 import { failSafeDeployTargets } from "../targets.ts";
-import { buildTar, clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
+import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const SHA = "a".repeat(40);
 let root: string;
@@ -56,7 +56,7 @@ function result(stdout = "") {
 function gitFixture(shouldFail = false): GitProcess {
   const blob = "c".repeat(40);
   return {
-    async run(args) {
+    async run(args, options) {
       if (shouldFail && args.includes("fetch")) {
         throw new GitProcessFailure(
           args,
@@ -71,8 +71,17 @@ function gitFixture(shouldFail = false): GitProcess {
       }
       if (args.includes("--is-bare-repository")) return result("true\n");
       if (args.includes("cat-file") && args.includes("-t")) return result("tree\n");
-      if (args.includes("cat-file") && args.includes("blob")) {
-        return result("---\nname: fixture\ndescription: fixture\n---\nbody\n");
+      if (args.includes("cat-file") && args.includes("--batch")) {
+        const content = new TextEncoder().encode(
+          "---\nname: fixture\ndescription: fixture\n---\nbody\n",
+        );
+        const header = new TextEncoder().encode(`${blob} blob ${content.byteLength}\n`);
+        const stdout = new Uint8Array(header.byteLength + content.byteLength + 1);
+        stdout.set(header, 0);
+        stdout.set(content, header.byteLength);
+        stdout[stdout.length - 1] = 10;
+        expect(new TextDecoder().decode(options?.stdin)).toBe(`${blob}\n`);
+        return { exitCode: 0, stdout, stderr: "" };
       }
       if (args.includes("ls-tree")) {
         return result(`100644 blob ${blob}\tcapabilities/skills/fixture/SKILL.md\0`);
@@ -82,21 +91,6 @@ function gitFixture(shouldFail = false): GitProcess {
       }
       if (args.includes("rev-parse")) return result("b".repeat(40));
       return result();
-    },
-    async runArchive() {
-      return {
-        exitCode: 0,
-        stdout: buildTar([
-          { path: "capabilities/" },
-          { path: "capabilities/skills/" },
-          { path: "capabilities/skills/fixture/" },
-          {
-            path: "capabilities/skills/fixture/SKILL.md",
-            content: "---\nname: fixture\ndescription: fixture\n---\nbody\n",
-          },
-        ]),
-        stderr: "",
-      };
     },
   };
 }
@@ -241,11 +235,9 @@ describe("locator-native Source sync", () => {
         }),
       );
       expect(response.status).toBe(201);
-      const added = (await response.json()) as {
-        source: Source;
-        sync: { state: string };
-        validation: { capabilityCount: number; conformant: boolean };
-      };
+      const responseText = await response.text();
+      expect(responseText).not.toContain(repo);
+      const added = AddSourceResult.parse(JSON.parse(responseText));
       expect(added.sync.state).toBe("up_to_date");
       expect(added.validation.capabilityCount).toBe(0);
       expect(added.validation.conformant).toBe(true);
@@ -254,9 +246,7 @@ describe("locator-native Source sync", () => {
       ).toBe(false);
 
       const rerun = await Effect.runPromise(server.kit.sync());
-      expect(rerun.sources).toEqual([
-        { sourceId: added.source.id, origin: repo, status: "synced" },
-      ]);
+      expect(rerun.sources).toEqual([{ sourceId: added.source.id, status: "synced" }]);
     } finally {
       await server.dispose();
     }
@@ -285,15 +275,39 @@ describe("locator-native Source sync", () => {
       await server.config.set("sources", { workingTreeRoots: [repo] });
       const first = await post(`${alias}/.`);
       expect(first.status).toBe(201);
-      const added = (await first.json()) as { source: Source };
-      expect(added.source.locator).toMatchObject({ kind: "working-tree", repoRoot: repo });
-      expect((await post(repo)).status).toBe(409);
+      const firstText = await first.text();
+      expect(firstText).not.toContain(repo);
+      const added = AddSourceResult.parse(JSON.parse(firstText));
+      const duplicate = await post(repo);
+      expect(duplicate.status).toBe(409);
+      expect(await duplicate.text()).not.toContain(repo);
       const listed = await server.app.fetch(
         new Request("http://localhost/api/sources", {
           headers: { authorization: "Bearer locator-sync" },
         }),
       );
-      expect(await listed.json()).toHaveLength(1);
+      const listedText = await listed.text();
+      expect(listedText).not.toContain(repo);
+      expect(JSON.parse(listedText)).toHaveLength(1);
+      for (const [path, method, body] of [
+        [`/api/sources/${added.source.id}/deactivate`, "POST", undefined],
+        [`/api/sources/${added.source.id}/activate`, "POST", undefined],
+        [`/api/sources/${added.source.id}/reorder`, "POST", JSON.stringify({ direction: "up" })],
+        ["/api/kit/sync", "POST", undefined],
+        ["/api/kit/state", "GET", undefined],
+      ] as const) {
+        const response = await server.app.fetch(
+          new Request(`http://localhost${path}`, {
+            method,
+            headers: {
+              authorization: "Bearer locator-sync",
+              ...(body ? { "content-type": "application/json" } : {}),
+            },
+            ...(body ? { body } : {}),
+          }),
+        );
+        expect(await response.text()).not.toContain(repo);
+      }
     } finally {
       await server.dispose();
     }

@@ -41,22 +41,31 @@ jobs:
       - name: Build native Shell
         env:
           HIVE_RELEASE_ID: g${{ github.event.workflow_run.head_sha }}
-          HIVE_RELEASE_BUILD_VERSION: 0.0.0-g${{ github.event.workflow_run.head_sha }}
           HIVE_RELEASE_SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
           HIVE_RELEASE_PROTOCOL_RANGE: "1"
         run: |
-          export HIVE_RELEASE_BUILD_VERSION="${HIVE_RELEASE_BUILD_VERSION:0:20}"
+          export HIVE_RELEASE_BUILD_VERSION="0.0.0-g${HIVE_RELEASE_SOURCE_COMMIT:0:12}"
           bun run ship
       - name: Smoke-test and archive Shell
         env:
           ARCHITECTURE: ${{ matrix.architecture }}
           SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
         run: |
+          set -euo pipefail
           app="packages/shell/release/Hive-darwin-$ARCHITECTURE/Hive.app"
           test -x "$app/Contents/MacOS/Hive"
-          "$app/Contents/MacOS/Hive" --version
-          jq -e --arg commit "$SOURCE_COMMIT" \
-            '.releaseId == ("g" + $commit) and .sourceCommit == $commit and .protocolRange == "1"' \
+          smoke_home="$(mktemp -d)"
+          smoke_log="$smoke_home/shell.log"
+          cleanup() {
+            rm -rf -- "$smoke_home"
+          }
+          trap cleanup EXIT
+          HOME="$smoke_home" HIVE_RUNTIME_ROOT="$smoke_home/.hive" HIVE_PORT=43117 \
+            "$app/Contents/MacOS/Hive" --hive-smoke-test >"$smoke_log" 2>&1
+          grep -q '^HIVE_PACKAGED_SMOKE_OK$' "$smoke_log"
+          jq -e --arg commit "$SOURCE_COMMIT" --arg build "0.0.0-g${SOURCE_COMMIT:0:12}" \
+            '.releaseId == ("g" + $commit) and .buildVersion == $build and
+             .sourceCommit == $commit and .protocolRange == "1"' \
             "$app/Contents/Resources/hive-release.json"
           tar -czf "Hive-darwin-$ARCHITECTURE.tar.gz" \
             -C "packages/shell/release/Hive-darwin-$ARCHITECTURE" Hive.app
@@ -82,16 +91,21 @@ jobs:
       - run: test "$(uname -m)" = x86_64
       - run: bun install --frozen-lockfile
       - name: Build standalone Daemon
-        run: >-
-          bun build --compile --target=bun-linux-x64
-          packages/daemon/src/server/start.ts
-          --outfile hive-daemon-linux-x64
-      - name: Smoke-test standalone Daemon
         env:
-          BUILD_VERSION: 0.0.0-g${{ github.event.workflow_run.head_sha }}
+          SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          export BUILD_VERSION="${BUILD_VERSION:0:20}"
+          build_version="0.0.0-g${SOURCE_COMMIT:0:12}"
+          bun build --compile --target=bun-linux-x64 \
+            --define "process.env.HIVE_BUILD_VERSION=\"$build_version\"" \
+            packages/daemon/src/server/start.ts \
+            --outfile hive-daemon-linux-x64
+      - name: Smoke-test standalone Daemon
+        env:
+          SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          build_version="0.0.0-g${SOURCE_COMMIT:0:12}"
           smoke_home="$(mktemp -d)"
           daemon_pid=''
           cleanup() {
@@ -101,7 +115,7 @@ jobs:
           }
           trap cleanup EXIT
           chmod 755 hive-daemon-linux-x64
-          HOME="$smoke_home" HIVE_PACKAGED=1 HIVE_BUILD_VERSION="$BUILD_VERSION" \
+          HOME="$smoke_home" HIVE_PACKAGED=1 \
             HIVE_PORT=43117 ./hive-daemon-linux-x64 >"$smoke_home/daemon.log" 2>&1 &
           daemon_pid=$!
           for _ in $(seq 1 100); do
@@ -111,7 +125,7 @@ jobs:
           token="$(cat "$smoke_home/.hive/.token")"
           curl --fail --silent --show-error --retry 50 --retry-all-errors --retry-delay 0 \
             -H "Authorization: Bearer $token" http://127.0.0.1:43117/api/ready |
-            jq -e --arg build "$BUILD_VERSION" \
+            jq -e --arg build "$build_version" \
               '.status == "ok" and .buildVersion == $build and .protocolVersion == 1 and .daemonMode == "packaged"'
       - uses: actions/upload-artifact@v4
         with:
@@ -163,7 +177,8 @@ jobs:
           scripts/publish-immutable-release.sh \
             --source-commit "$SOURCE_COMMIT" \
             --assets release-assets \
-            --manifest stable.json
+            --manifest stable.json \
+            --asset-base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/hive-g$SOURCE_COMMIT/"
       - name: Advance stable channel
         env:
           GH_TOKEN: ${{ github.token }}
@@ -173,4 +188,6 @@ jobs:
           scripts/publish-stable-channel.sh \
             --repository "https://github.com/$GITHUB_REPOSITORY.git" \
             --manifest stable.json \
-            --expected-main "$SOURCE_COMMIT"
+            --expected-main "$SOURCE_COMMIT" \
+            --assets release-assets \
+            --asset-base-url "https://github.com/$GITHUB_REPOSITORY/releases/download/hive-g$SOURCE_COMMIT/"

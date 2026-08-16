@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { createDaemonRequestHandler } from "./daemon-request.ts";
+import {
+  BACKEND_UPGRADE_REQUEST_TIMEOUT_MS,
+  createDaemonRequestHandler,
+  DAEMON_REQUEST_TIMEOUT_MS,
+  daemonRequestTimeoutMs,
+} from "./daemon-request.ts";
 
 const connection = {
   kind: "external" as const,
@@ -84,5 +89,53 @@ describe("authenticated daemon request handler", () => {
     await expect(
       handler("/api/kit/state", { headers: { authorization: "Bearer renderer-token" } }),
     ).rejects.toThrow("authorization header");
+  });
+
+  test("leaves commit-bearing mutations under the Daemon's operation bounds", () => {
+    expect(daemonRequestTimeoutMs("/api/sources", "POST")).toBeNull();
+    expect(daemonRequestTimeoutMs("/api/kit/sync", "POST")).toBeNull();
+    expect(daemonRequestTimeoutMs("/api/backends/codex/upgrade", "POST")).toBe(
+      BACKEND_UPGRADE_REQUEST_TIMEOUT_MS,
+    );
+    expect(daemonRequestTimeoutMs("/api/kit/overview")).toBe(DAEMON_REQUEST_TIMEOUT_MS);
+  });
+
+  test("keeps external reauthentication sticky across older and later requests", async () => {
+    const statuses: string[] = [];
+    let finishOlder: ((response: Response) => void) | undefined;
+    const older = new Promise<Response>((resolve) => {
+      finishOlder = resolve;
+    });
+    let call = 0;
+    const handler = createDaemonRequestHandler(
+      connection,
+      async () => {
+        call++;
+        if (call === 1) return older;
+        return new Response("unauthorized", { status: 401 });
+      },
+      (status) => statuses.push(status),
+    );
+
+    const first = handler("/api/kit/overview", {});
+    await expect(handler("/api/kit/overview", {})).resolves.toMatchObject({ status: 401 });
+    finishOlder?.(Response.json({ ok: true }));
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    await expect(handler("/api/kit/overview", {})).resolves.toMatchObject({ status: 401 });
+
+    expect(statuses).toEqual(["reauthentication_required"]);
+  });
+
+  test("bounds a response body that never completes", async () => {
+    const statuses: string[] = [];
+    const handler = createDaemonRequestHandler(
+      connection,
+      async () => new Response(new ReadableStream({ start() {} })),
+      (status) => statuses.push(status),
+      10,
+    );
+
+    await expect(handler("/api/kit/overview", {})).rejects.toThrow("timed out");
+    expect(statuses).toEqual([]);
   });
 });

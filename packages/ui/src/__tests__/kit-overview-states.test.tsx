@@ -61,6 +61,7 @@ async function flush(): Promise<void> {
 }
 
 let activeRoot: Root | null = null;
+let activeClient: QueryClient | null = null;
 
 beforeAll(() => {
   setupDom();
@@ -75,20 +76,45 @@ afterEach(async () => {
   if (!activeRoot) return;
   const root = activeRoot;
   activeRoot = null;
+  activeClient = null;
   await act(async () => root.unmount());
 });
 
 async function renderPage(): Promise<HTMLElement> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  activeClient = client;
   const host = mount();
   activeRoot = createRoot(host);
+  const connection = window.__hive?.getConnection?.() ?? window.__hive?.connection;
   await act(async () => {
     activeRoot?.render(
-      createElement(QueryClientProvider, { client }, createElement(KitDeployPage, { apiConfig })),
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(KitDeployPage, { apiConfig, connection }),
+      ),
     );
   });
   await flush();
   return host;
+}
+
+async function rerenderPage(
+  connection: NonNullable<Window["__hive"]>["connection"],
+): Promise<void> {
+  const root = activeRoot;
+  const client = activeClient;
+  if (!root || !client) throw new Error("page is not mounted");
+  await act(async () => {
+    root.render(
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(KitDeployPage, { apiConfig, connection }),
+      ),
+    );
+  });
+  await flush();
 }
 
 async function click(element: Element | null): Promise<void> {
@@ -204,6 +230,60 @@ describe("KitDeployPage — daemon Overview states", () => {
       "Whole-file instruction reconciliation is blocked",
     );
     expect(host.textContent).toContain("Source unavailable");
+  });
+
+  test("shows unmanaged instruction ownership without blocking an unrelated skill Deploy", async () => {
+    const current = {
+      ...overview([
+        row({
+          key: { kind: "instruction", name: "agent-kit-rules" },
+          catalog: "unavailable",
+          reconciliation: "unmanaged_owned",
+          targets: [
+            {
+              target: "claude",
+              desired: "off",
+              reconciliation: "unmanaged_owned",
+              observation: "present_unverified",
+              lastAttempt: { state: "none" },
+            },
+          ],
+        }),
+        row({
+          key: { kind: "skill", name: "ready-skill" },
+          desired: "on",
+          reconciliation: "pending_add",
+          targets: [
+            {
+              target: "claude",
+              desired: "on",
+              reconciliation: "pending_add",
+              observation: "missing",
+              lastAttempt: { state: "none" },
+            },
+          ],
+        }),
+      ]),
+      diff: {
+        entries: [{ kind: "skill" as const, name: "ready-skill", change: "added" as const }],
+      },
+    };
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") return json(current);
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      return json({});
+    }) as typeof fetch;
+
+    const host = await renderPage();
+
+    expect(host.querySelector('[data-testid="kit-instruction-unmanaged"]')?.textContent).toContain(
+      "agent-kit-rules",
+    );
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   test("reconstructs an initially active operation on cold mount", async () => {
@@ -411,7 +491,7 @@ describe("KitDeployPage — daemon Overview states", () => {
     expect(patchCount).toBe(0);
   });
 
-  test("shows the Shell connection and refetches Overview on reconnect", async () => {
+  test("shows the disconnected Shell connection", async () => {
     window.__hive = {
       connection: { kind: "external", displayName: "Arca", status: "disconnected" },
     };
@@ -431,10 +511,7 @@ describe("KitDeployPage — daemon Overview states", () => {
     expect(host.querySelector('[data-testid="kit-connection"]')?.textContent).toContain(
       "Arca · disconnected",
     );
-    const beforeReconnect = overviewCalls;
-    await act(async () => window.dispatchEvent(new Event("online")));
-    await flush();
-    expect(overviewCalls).toBeGreaterThan(beforeReconnect);
+    expect(overviewCalls).toBe(1);
   });
 
   test("reads the mutable Shell snapshot when the exposed bridge value is frozen", async () => {
@@ -464,7 +541,7 @@ describe("KitDeployPage — daemon Overview states", () => {
     ).toBe(true);
   });
 
-  test("polls an idle Overview while the Shell connection is healthy", async () => {
+  test("does not aggressively poll an idle healthy Overview", async () => {
     window.__hive = {
       connection: { kind: "managed", displayName: "Local", status: "connected" },
     };
@@ -485,10 +562,10 @@ describe("KitDeployPage — daemon Overview states", () => {
     await act(async () => new Promise((resolve) => setTimeout(resolve, 2_050)));
     await flush();
 
-    expect(overviewCalls).toBeGreaterThan(afterInitialLoad);
+    expect(overviewCalls).toBe(afterInitialLoad);
   });
 
-  test("uses Shell transition events to gate stale actions and reload after recovery", async () => {
+  test("uses Shell state transitions to gate stale actions", async () => {
     window.__hive = {
       connection: { kind: "external", displayName: "Remote", status: "connected" },
     };
@@ -523,14 +600,10 @@ describe("KitDeployPage — daemon Overview states", () => {
         entries: [{ kind: "skill" as const, name: "remote-skill", change: "added" as const }],
       },
     };
-    let overviewCalls = 0;
     globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
       const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const path = new URL(raw).pathname;
-      if (path === "/api/kit/overview") {
-        overviewCalls++;
-        return json(current);
-      }
+      if (path === "/api/kit/overview") return json(current);
       if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
       return json({});
     }) as typeof fetch;
@@ -556,14 +629,7 @@ describe("KitDeployPage — daemon Overview states", () => {
     expect(sourceReorder.disabled).toBe(false);
     expect(addSource.disabled).toBe(false);
 
-    await act(async () =>
-      window.dispatchEvent(
-        new CustomEvent("hive:connection-changed", {
-          detail: { kind: "external", displayName: "Remote", status: "disconnected" },
-        }),
-      ),
-    );
-    await flush();
+    await rerenderPage({ kind: "external", displayName: "Remote", status: "disconnected" });
     expect(host.querySelector('[data-testid="kit-connection"]')?.textContent).toContain(
       "Remote · disconnected",
     );
@@ -574,16 +640,7 @@ describe("KitDeployPage — daemon Overview states", () => {
     expect(sourceReorder.disabled).toBe(true);
     expect(addSource.disabled).toBe(true);
 
-    const beforeRecovery = overviewCalls;
-    await act(async () =>
-      window.dispatchEvent(
-        new CustomEvent("hive:connection-changed", {
-          detail: { kind: "external", displayName: "Remote", status: "connected" },
-        }),
-      ),
-    );
-    await flush();
-    expect(overviewCalls).toBeGreaterThan(beforeRecovery);
+    await rerenderPage({ kind: "external", displayName: "Remote", status: "connected" });
     expect(host.querySelector('[data-testid="kit-connection"]')?.textContent).toContain(
       "Remote · connected",
     );

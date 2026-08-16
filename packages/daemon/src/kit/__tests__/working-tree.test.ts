@@ -16,7 +16,11 @@ import {
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { type GitProcess, GitProcessFailure } from "../acquisition/git-process.ts";
-import { acquireWorkingTree, WorkingTreeAcquireError } from "../acquisition/working-tree.ts";
+import {
+  acquireWorkingTree,
+  canonicalizeWorkingTreeLocator,
+  WorkingTreeAcquireError,
+} from "../acquisition/working-tree.ts";
 
 const roots: string[] = [];
 
@@ -49,7 +53,7 @@ function localGitProcess(
     if (result.exitCode !== 0) throw new GitProcessFailure(args, output, false);
     return output;
   };
-  return { run, runArchive: (args, options) => run(args, options) };
+  return { run };
 }
 
 function repository(): string {
@@ -126,6 +130,57 @@ describe("working-tree Source acquisition", () => {
     expect(provenance.dirty).toBe(true);
   });
 
+  test("treats a stable tracked deletion as absent content", async () => {
+    const repo = repository();
+    const work = workRoot();
+    const deleted = join(repo, "nested", "kit", "capabilities", "skills", "tracked", "bytes.bin");
+    rmSync(deleted);
+
+    const provenance = await acquireWorkingTree(
+      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
+      join(work, "mirror"),
+      { allowedRoots: [repo], tmpRoot: join(work, "tmp") },
+    );
+
+    expect(existsSync(join(work, "mirror", "capabilities", "skills", "tracked", "bytes.bin"))).toBe(
+      false,
+    );
+    expect(provenance.dirty).toBe(true);
+  });
+
+  test("retries when a tracked file is present except during deleted-path enumeration", async () => {
+    const repo = repository();
+    const work = workRoot();
+    const source = join(repo, "nested", "kit", "capabilities", "skills", "tracked", "bytes.bin");
+    const held = `${source}.held`;
+    const local = localGitProcess();
+    let injected = false;
+    const process: GitProcess = {
+      run: async (args, options) => {
+        if (!injected && args.includes("--deleted")) {
+          injected = true;
+          renameSync(source, held);
+          try {
+            return await local.run(args, options);
+          } finally {
+            renameSync(held, source);
+          }
+        }
+        return local.run(args, options);
+      },
+    };
+
+    await acquireWorkingTree(
+      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
+      join(work, "mirror"),
+      { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
+    );
+
+    expect(existsSync(join(work, "mirror", "capabilities", "skills", "tracked", "bytes.bin"))).toBe(
+      true,
+    );
+  });
+
   test("accepts a canonical allowlist root and rejects a repository outside it", async () => {
     const parent = workRoot();
     const repo = join(parent, "allowed", "repo");
@@ -155,6 +210,14 @@ describe("working-tree Source acquisition", () => {
         ),
       "working_tree_not_allowed",
     );
+    await expectCode(
+      () =>
+        canonicalizeWorkingTreeLocator(
+          { kind: "working-tree", repoRoot: join(repo, "nested"), subpath: "kit" },
+          { allowedRoots: [repo] },
+        ),
+      "working_tree_not_allowed",
+    );
   });
 
   test("rejects a Git top-level not owned by the Daemon uid", async () => {
@@ -164,7 +227,6 @@ describe("working-tree Source acquisition", () => {
         if (args.includes("--show-toplevel")) return gitResult("/tmp\n");
         throw new Error("unexpected Git command");
       },
-      runArchive: async () => gitResult(),
     };
     await expectCode(
       () =>
@@ -198,7 +260,6 @@ describe("working-tree Source acquisition", () => {
     const process: GitProcess = {
       run: async (args) =>
         args.includes("--show-toplevel") ? gitResult(`${topLevel}\n`) : gitResult(),
-      runArchive: async () => gitResult(),
     };
     await expectCode(
       () =>

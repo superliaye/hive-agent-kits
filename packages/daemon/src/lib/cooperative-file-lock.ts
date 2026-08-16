@@ -334,10 +334,10 @@ function lockTimeoutError(resourcePath: string): Error {
   return error;
 }
 
-function acquireIndependentFileLock(
+function* independentFileLockAcquisition(
   resourcePath: string,
   options: IndependentFileLockOptions,
-): () => void {
+): Generator<number, () => void, void> {
   const timeoutMs = options.timeoutMs ?? COOPERATIVE_FILE_LOCK_DEFAULTS.timeoutMs;
   const staleMs = options.staleMs ?? COOPERATIVE_FILE_LOCK_DEFAULTS.staleMs;
   const updateMs = options.updateMs ?? COOPERATIVE_FILE_LOCK_DEFAULTS.updateMs;
@@ -348,7 +348,7 @@ function acquireIndependentFileLock(
   while (true) {
     if (retirementFencesActive(lockPath, staleMs)) {
       if (Date.now() >= deadline) throw lockTimeoutError(resourcePath);
-      wait(Math.min(10, deadline - Date.now()));
+      yield Math.min(10, deadline - Date.now());
       continue;
     }
     try {
@@ -357,7 +357,7 @@ function acquireIndependentFileLock(
       if (errorCode(error) !== "EEXIST") throw error;
       recoverAbandonedLock(lockPath, staleMs);
       if (Date.now() >= deadline) throw lockTimeoutError(resourcePath);
-      wait(Math.min(25, deadline - Date.now()));
+      yield Math.min(25, deadline - Date.now());
       continue;
     }
 
@@ -396,7 +396,7 @@ function acquireIndependentFileLock(
     renameSync(temporaryOwner, join(lockPath, OWNER_FILE));
     const readyPath = join(lockPath, `ready-${token}`);
 
-    const initializationDeadline = Date.now() + Math.max(2_000, updateMs * 4);
+    const initializationDeadline = Math.min(deadline, Date.now() + Math.max(2_000, updateMs * 4));
     while (Date.now() < initializationDeadline) {
       try {
         if (readFileSync(readyPath, "utf8") === token) {
@@ -406,7 +406,7 @@ function acquireIndependentFileLock(
               retireOwnedLock(lockPath, token, "retired");
               throw lockTimeoutError(resourcePath);
             }
-            wait(Math.min(10, deadline - Date.now()));
+            yield Math.min(10, deadline - Date.now());
           }
           if (!owns(lockPath, token)) {
             keeper.kill();
@@ -415,31 +415,74 @@ function acquireIndependentFileLock(
           let released = false;
           return () => {
             if (released) return;
-            released = true;
-            if (!owns(lockPath, token)) return;
-            writeFileSync(join(lockPath, `release-${token}`), token);
-            const releaseDeadline = Date.now() + Math.max(timeoutMs, staleMs + updateMs);
-            while (owns(lockPath, token)) {
-              if (!sameProcess(keeperIdentity)) {
-                retireOwnedLock(lockPath, token, "retired");
-                break;
-              }
-              if (Date.now() >= releaseDeadline) {
-                throw new Error(`Timed out releasing manifest lock for ${resourcePath}`);
-              }
-              wait(10);
+            if (!owns(lockPath, token)) {
+              released = true;
+              return;
             }
+            let releaseError: unknown;
+            try {
+              writeFileSync(join(lockPath, `release-${token}`), token);
+              const releaseDeadline = Date.now() + Math.max(timeoutMs, staleMs + updateMs);
+              while (owns(lockPath, token)) {
+                if (!sameProcess(keeperIdentity)) {
+                  retireOwnedLock(lockPath, token, "retired");
+                  break;
+                }
+                if (Date.now() >= releaseDeadline) {
+                  throw new Error(`Timed out releasing manifest lock for ${resourcePath}`);
+                }
+                wait(10);
+              }
+            } catch (error) {
+              releaseError = error;
+            } finally {
+              if (owns(lockPath, token)) {
+                try {
+                  if (sameProcess(keeperIdentity)) keeper.kill("SIGKILL");
+                  retireOwnedLock(lockPath, token, "retired");
+                } catch (cleanupError) {
+                  releaseError ??= cleanupError;
+                }
+              }
+              released = !owns(lockPath, token);
+            }
+            if (releaseError) throw releaseError;
           };
         }
       } catch (error) {
         if (errorCode(error) !== "ENOENT") throw error;
       }
       if (!sameProcess(keeperIdentity)) break;
-      wait(10);
+      yield 10;
     }
 
-    if (!sameProcess(keeperIdentity)) retireOwnedLock(lockPath, token, "retired");
+    if (sameProcess(keeperIdentity)) keeper.kill("SIGKILL");
+    retireOwnedLock(lockPath, token, "retired");
     if (Date.now() >= deadline) throw lockTimeoutError(resourcePath);
+  }
+}
+
+function acquireIndependentFileLock(
+  resourcePath: string,
+  options: IndependentFileLockOptions,
+): () => void {
+  const acquisition = independentFileLockAcquisition(resourcePath, options);
+  while (true) {
+    const step = acquisition.next();
+    if (step.done === true) return step.value;
+    wait(step.value);
+  }
+}
+
+async function acquireIndependentFileLockAsync(
+  resourcePath: string,
+  options: IndependentFileLockOptions,
+): Promise<() => void> {
+  const acquisition = independentFileLockAcquisition(resourcePath, options);
+  while (true) {
+    const step = acquisition.next();
+    if (step.done === true) return step.value;
+    await new Promise<void>((resolve) => setTimeout(resolve, step.value));
   }
 }
 
@@ -451,6 +494,19 @@ export function withIndependentFileLock<A>(
   const release = acquireIndependentFileLock(resourcePath, options);
   try {
     return work();
+  } finally {
+    release();
+  }
+}
+
+export async function withIndependentFileLockAsync<A>(
+  resourcePath: string,
+  work: () => Promise<A>,
+  options: IndependentFileLockOptions = {},
+): Promise<A> {
+  const release = await acquireIndependentFileLockAsync(resourcePath, options);
+  try {
+    return await work();
   } finally {
     release();
   }

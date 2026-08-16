@@ -80,8 +80,8 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
     workingTreeRoots: [],
   },
   runs: {
-    // 0 = unlimited (Q5 resolution: default-unlimited). A positive integer
-    // caps the tool-loop and adds one grace turn on overrun.
+    // 0 = unlimited. A positive integer caps the tool-loop and adds one grace
+    // turn on overrun.
     maxIterations: 0,
   },
   developer: {

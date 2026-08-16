@@ -48,7 +48,7 @@ export function refineName(value: { name?: unknown }, ctx: z.RefinementCtx): voi
 }
 
 // The "name == parent directory" rule is a separate pure validator: frontmatter
-// alone can't know its directory; the daemon's fs adapter supplies it (#28/#31).
+// alone can't know its directory; the daemon's fs adapter supplies it.
 // Throws on mismatch so callers in the typed-error daemon can map it. `kind` is a
 // required CapabilityKind label so the message names the offending kind, and the
 // label can't drift from the real kind set.
