@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Catalog, Source } from "@hive/contract";
 import { createServer, type ServerHandles } from "../index.ts";
+import { acceptDesiredSelection } from "./accepted-deploy-helpers.ts";
 
 const TOKEN = "test-token";
 const FIXTURE_IDS = ["fixture-alpha", "fixture-beta", "fixture-gamma"] as const;
@@ -101,10 +102,6 @@ describe("dev fixture Sources mode", () => {
       mode: "file",
       token: TOKEN,
       fixtureSources: true,
-      fetch: async () => {
-        fetchCalls += 1;
-        throw new Error("fixture Sources must not fetch");
-      },
     });
   }
 
@@ -198,10 +195,6 @@ describe("dev fixture Sources mode", () => {
     server = await createServer({
       mode: "file",
       token: TOKEN,
-      fetch: async () => {
-        fetchCalls += 1;
-        throw new Error("normal local Starter must not fetch");
-      },
     });
     try {
       const sources = await getSources(server);
@@ -223,24 +216,13 @@ describe("dev fixture Sources mode", () => {
         join(homedir(), ".codex", "AGENTS.md"),
       ];
       const before = realPaths.map(snapshotPath);
-      const deploy = await server.app.fetch(
-        authed("/api/kit/deploy", {
-          method: "POST",
-          body: JSON.stringify({
-            presets: [],
-            add: {
-              instructions: ["alpha-code"],
-              skills: ["alpha-focus", "priority-tool"],
-              agents: ["alpha-planner"],
-              plugins: [],
-              bundles: [],
-            },
-            remove: { instructions: [], skills: [], agents: [], plugins: [], bundles: [] },
-            targets: ["claude", "codex"],
-          }),
-        }),
-      );
-      expect(deploy.status).toBe(200);
+      const deploy = await acceptDesiredSelection(server, TOKEN, [
+        { key: { kind: "instruction", name: "alpha-code" }, targets: ["claude", "codex"] },
+        { key: { kind: "skill", name: "alpha-focus" }, targets: ["claude", "codex"] },
+        { key: { kind: "skill", name: "priority-tool" }, targets: ["claude", "codex"] },
+        { key: { kind: "agent", name: "alpha-planner" }, targets: ["claude", "codex"] },
+      ]);
+      expect(deploy.lastOperation?.state).toBe("completed");
       expect(
         existsSync(join(fixtureRuntime, "homes", ".claude", "skills", "alpha-focus", "SKILL.md")),
       ).toBe(true);

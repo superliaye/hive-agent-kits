@@ -1,4 +1,4 @@
-// Selection + Deploy Diff (Plan A5).
+// Selection + Deploy Diff.
 //
 // Resolve preset(s) + individual ± + target CLIs into a concrete per-kind name
 // set; refuse colliding leaf names (un-deployable per the catalog). Compute the
@@ -63,7 +63,7 @@ function emptyCaps(): CapList {
 
 // Per-kind name sets of everything the ACTIVE catalog currently provides (any
 // Variant — deployable, shadowed, or blocked: presence, not deployability). The
-// data-loss guard (#47): an owned-but-deselected name is a real removal ONLY when
+// data-loss guard: an owned-but-deselected name is a real removal ONLY when
 // its name is in this set (its Source is active). Owned-but-absent = an ORPHAN
 // (its Source isn't active) — kept, never auto-deleted (ADR-0023). Source
 // attribution stays out of the Ledger; active-catalog membership is the signal.
@@ -115,7 +115,7 @@ function uniq(arr: string[]): string[] {
 // deployable (a single-Source malformed key). A cross-Source collision no longer
 // throws — the winner resolves (ADR-0023:91). A selected name no Source provides
 // is dropped from the deploy plan + traced; the diff/prune paths then treat such a
-// ledger-owned-but-absent name as an ORPHAN (kept, never auto-deleted — #47).
+// ledger-owned-but-absent name as an ORPHAN (kept, never auto-deleted — ).
 export function resolveSelection(catalog: Catalog, selection: Selection): ResolvedSelection {
   const seed = emptyCaps();
   for (const presetName of selection.presets) {
@@ -172,7 +172,7 @@ export function resolveSelection(catalog: Catalog, selection: Selection): Resolv
       }
       // No catalog entry at all — drop from the deploy/add plan + trace. A
       // ledger-owned name in this state is an orphan: the diff/prune paths keep it
-      // (its Source isn't active), never auto-delete it (#47).
+      // (its Source isn't active), never auto-delete it.
       log().warn(
         { module: "kit/selection", kind, name },
         "selected capability not provided by any active Source; dropped from deploy plan",
@@ -196,7 +196,7 @@ export function resolveSelection(catalog: Catalog, selection: Selection): Resolv
 // so a same-name new-body change is detectable. Mirrors what the engine writes per
 // target (incl. the Codex sidecar) so the hash is comparable to `deployedHash`.
 // Returns null when the source isn't in the winner's Mirror.
-function renderedNamedHash(
+export function renderedNamedHash(
   mirrorRoot: string,
   snippets: Map<string, string>,
   kind: "skill" | "agent",
@@ -230,16 +230,13 @@ function renderedNamedHash(
 // selection may be won by different Sources, so a single shared mirrorRoot would
 // hash the wrong bytes. Concatenation order is the resolved-array order
 // (deterministic, identical to the deploy path).
-function renderedInstructionHash(
+export function renderedInstructionHash(
   items: readonly ResolvedItem[],
   targets: DeployTargets,
 ): string | null {
-  const bodies = items
-    .map((item) => instructionBody(targets.mirrorRoot(item.sourceId), item.name))
-    .filter((b): b is string => b !== null);
-  // No surviving body (every winner Mirror lost its files post-sync) → null, so the
-  // caller skips a spurious "changed" verdict (mirrors the skill/agent guard).
-  if (bodies.length === 0) return null;
+  const bodies = items.map((item) => instructionBody(targets.mirrorRoot(item.sourceId), item.name));
+  // A selected unavailable contribution blocks this whole-file render.
+  if (!bodies.every((body): body is string => body !== null)) return null;
   return sha256(transformInstructions(bodies));
 }
 
@@ -281,7 +278,7 @@ function overwritesUserInstructionFile(
 // `activeNames` is the per-kind active-catalog membership signal: an owned-but-
 // deselected name surfaces as `removed` ONLY if it is currently in the active
 // catalog. Owned-but-absent = an ORPHAN (its Source isn't active) → no diff entry,
-// never auto-deleted (#47) — fixes the first-load destructive-diff data loss.
+// never auto-deleted — fixes the first-load destructive-diff data loss.
 export function computeDiff(
   targets: DeployTargets,
   activeMirrorRoots: readonly string[],
@@ -333,7 +330,7 @@ export function computeDiff(
       }
     }
     // removed: owned-but-deselected AND still provided by an active Source. An
-    // owned name absent from the active catalog is an orphan — kept, no entry (#47).
+    // owned name absent from the active catalog is an orphan — kept, no entry.
     for (const name of owned) {
       if (!sel.has(name) && active.has(name)) entries.push({ kind, name, change: "removed" });
     }
@@ -387,7 +384,7 @@ export function computeDiff(
     }
   }
   for (const name of ownedInstr) {
-    // Orphan guard (#47): only a still-active owned instruction is a real removal.
+    // Orphan guard: only a still-active owned instruction is a real removal.
     if (!selInstr.has(name) && activeNames.instructions.has(name)) {
       entries.push({ kind: "instruction", name, change: "removed" });
     }

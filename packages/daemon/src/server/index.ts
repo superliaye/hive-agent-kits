@@ -32,13 +32,15 @@ import {
   AppConfigSchema,
   type Config,
 } from "../config/index.ts";
+import { canonicalizeWorkingTreeLocator } from "../kit/acquisition/working-tree.ts";
+import { createDeploymentMutationCoordinator } from "../kit/deploy-coordinator.ts";
 import { Kit, KitLive, type KitSvc } from "../kit/index.ts";
 import { removeMirror } from "../kit/mirror.ts";
 import { degradedOnboardResult, onboardSource } from "../kit/onboard.ts";
 import { buildKitRoutes, type RunKit } from "../kit/routes.ts";
-import { type HttpFetch, productionFetch } from "../kit/sync.ts";
+import type { HttpFetch } from "../kit/sync.ts";
 import { defaultDeployTargets } from "../kit/targets.ts";
-import { createLogger, log, setLogger } from "../lib/log.ts";
+import { closeLogger, createLogger, log, setLogger } from "../lib/log.ts";
 import { files, runtimeRoot } from "../lib/paths.ts";
 import { SecretsLive, Secrets as SecretsTag } from "../secrets/effect/secrets-live.ts";
 import type { Secrets } from "../secrets/index.ts";
@@ -48,11 +50,13 @@ import {
   SourceRegistry as SourceRegistryTag,
 } from "../sources/effect/sources-live.ts";
 import { buildSourcesRoutes, type RunSources, type SourceLifecycle } from "../sources/routes.ts";
+import { DAEMON_PROTOCOL_VERSION, HIVE_BUILD_VERSION, runtimeRootId } from "./identity.ts";
 import { buildRoutes } from "./routes.ts";
+import { createSessionRegistry } from "./sessions.ts";
 
 export type ServerMode = "file" | "memory";
 
-export type CreateServerOptions = {
+type CreateServerBaseOptions = {
   // "memory" — no persistence, used by tests and dev fast-iter.
   // "file"   — production: audit.db on disk, config.yaml hot-reload.
   mode: ServerMode;
@@ -62,14 +66,25 @@ export type CreateServerOptions = {
   // `daemon.httpPort` — used by e2e tests for isolation. Bypasses Config so
   // a stale config.yaml value cannot fight the explicit choice.
   port?: number;
-  // Override the HTTP fetch (tests inject offline/403/fixture-tarball). Defaults
-  // to the production global fetch. Shared by the Kit launch-sync AND the add-time
-  // onboard sync, so a test add reaches a stubbed fetch — never the real network.
-  fetch?: HttpFetch;
   // Dev/test-only: seed the checked-in fixture local Sources on first file-mode
   // boot. The environment flag is read only at this composition boundary.
   fixtureSources?: boolean;
 };
+
+export type CreateServerOptions =
+  | (CreateServerBaseOptions & { mode: "memory"; fetch?: HttpFetch })
+  | (CreateServerBaseOptions & { mode: "file"; fetch?: never });
+
+// The pre-locator GitHub HTTP transport is a memory-test fixture only. Keeping
+// the mode decision adjacent to server composition makes it impossible for a
+// normal file-mode caller to opt into that path, while the runtime branch also
+// protects JavaScript callers that bypass the TypeScript boundary.
+export function legacyGithubFixtureFetchForMode(
+  mode: ServerMode,
+  fetch: HttpFetch | undefined,
+): HttpFetch | undefined {
+  return mode === "memory" ? fetch : undefined;
+}
 
 export type ServerHandles = {
   app: Hono;
@@ -80,6 +95,9 @@ export type ServerHandles = {
   kit: KitSvc;
   token: string;
   port: number;
+  buildVersion: string;
+  daemonInstanceId: string;
+  runtimeRootId: string;
   dispose(): Promise<void>;
 };
 
@@ -89,7 +107,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     mkdirSync(runtimeRoot(), { recursive: true });
   }
   // Install the trace logger before any other module emits a log line.
-  setLogger(createLogger({ mode: opts.mode === "memory" ? "silent" : "file" }));
+  const traceLogger = createLogger({ mode: opts.mode === "memory" ? "silent" : "file" });
+  setLogger(traceLogger);
 
   // Packaging signal (B5): the packaged launch sets HIVE_PACKAGED=1. Absent → dev
   // (or an unknown / hand-run daemon), which resolves the per-instance SANDBOX —
@@ -97,6 +116,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   const devMode = process.env.HIVE_PACKAGED !== "1";
   const fixtureSources =
     devMode && (opts.fixtureSources ?? process.env.HIVE_DEV_FIXTURE_SOURCES === "1");
+  const legacyGithubFixtureFetch = legacyGithubFixtureFetchForMode(opts.mode, opts.fetch);
+  const deploymentMutationCoordinator = createDeploymentMutationCoordinator();
 
   // The surviving modules compose into ONE root Layer owned by a single
   // ManagedRuntime (ADR-0011). The `mode`-driven adapter choice stays here at
@@ -117,8 +138,13 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
       : ({ mode: "file", path: files.secrets() } as const);
   const sourcesOpts =
     opts.mode === "memory"
-      ? ({ mode: "memory" } as const)
-      : ({ mode: "file", path: files.sources(), seedFixtureSources: fixtureSources } as const);
+      ? ({ mode: "memory", mutationCoordinator: deploymentMutationCoordinator } as const)
+      : ({
+          mode: "file",
+          path: files.sources(),
+          seedFixtureSources: fixtureSources,
+          mutationCoordinator: deploymentMutationCoordinator,
+        } as const);
   // Audit keeps its OWN sqlite file (~/.hive/audit.db).
   const auditOpts =
     opts.mode === "memory"
@@ -128,7 +154,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // Memory mode (tests/fast-iter) reports every backend as not installed so
   // booting a server never spawns `claude`/`codex`. File mode uses the real
   // Bun.spawn runner (the module default). The probe and the sibling updater
-  // (OQ-5) share the SAME runner option so a memory-mode probe and updater agree.
+  // Probe and update share the same runner option so memory-mode behavior agrees.
   const backendRunnerOpts = opts.mode === "memory" ? ({ runner: notInstalledRunner } as const) : {};
   const backendProbeLayer = BackendProbeLive(backendRunnerOpts);
   // One shared Sources registry layer. Kit depends on SourceRegistry and must
@@ -136,12 +162,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // instance to Kit (Effect memoizes a Layer by reference → one acquire / one
   // store) AND merge it for the routes' own resolution.
   const sourcesLayer = SourceRegistryLive(sourcesOpts);
-  // The one HTTP fetch shared by Kit (launch sync) and the Sources lifecycle
-  // adapter (add-time onboard sync).
-  const httpFetch: HttpFetch = opts.fetch ?? productionFetch();
   // The deploy-target port needs the live `developer.allowRealHomeDeploy` toggle,
   // which is only known after Config resolves off the root runtime below. The
-  // port's methods are call-time (deploy happens post-boot), so a closure-held
+  // port's methods are call-time (deploy happens after boot), so a closure-held
   // reader over the resolved Config — wired immediately after `runtime.runSync`
   // sets it — is the clean seam: no second runtime (which would acquire a duplicate
   // Config store + watcher), no `R` leak, no mutable config box.
@@ -161,14 +184,19 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     ConfigLive(configOpts),
     AuditLive(auditOpts),
     backendProbeLayer,
-    // The delegated-update verb lives on this sibling service (OQ-5), depending
+    // The delegated-update verb lives on this sibling service, depending
     // on `BackendProbe` for the re-probe. Provide the probe layer so the
     // dependency is discharged at the module boundary, not leaked to the root.
     BackendUpdaterLive(backendRunnerOpts).pipe(Layer.provide(backendProbeLayer)),
     // Kit module (capability deploy-manager). Shares the deploy-target port +
     // HTTP fetch with the Sources lifecycle adapter; its exec adapter stays
     // module-internal. SourceRegistry is provided from the one shared layer.
-    KitLive({ targets: deployTargets, fetch: httpFetch }).pipe(Layer.provide(sourcesLayer)),
+    KitLive({
+      targets: deployTargets,
+      ...(legacyGithubFixtureFetch ? { fetch: legacyGithubFixtureFetch } : {}),
+      workingTreeRoots: () => configHolder.config?.get("sources").workingTreeRoots ?? [],
+      mutationCoordinator: deploymentMutationCoordinator,
+    }).pipe(Layer.provide(sourcesLayer)),
     // Sources registry (ADR-0023). Hive-private JSON store; memory mode in
     // tests/dev writes no real ~/.hive/sources.json. Same shared instance.
     sourcesLayer,
@@ -280,7 +308,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     config,
     secrets,
     // Same `backend` source — the user-triggered delegated CLI-update action
-    // (the sibling BackendUpdater service, OQ-5).
+    // (the sibling BackendUpdater service, ).
     backendUpdate: { events: backendUpdater.events },
     // Dedicated `deploy` source — a Kit deploy is a user action (refs-only).
     deploy: { events: kit.events },
@@ -289,6 +317,9 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   });
 
   const token = opts.token ?? (opts.mode === "memory" ? "test-token" : ensureToken());
+  const sessions = createSessionRegistry();
+  const daemonInstanceId = crypto.randomUUID();
+  const daemonRuntimeRootId = runtimeRootId(opts.mode);
 
   const app = buildRoutes({
     audit,
@@ -298,7 +329,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     backendUpdater,
     config,
     daemonMode: devMode ? "dev" : "packaged",
+    protocolVersion: DAEMON_PROTOCOL_VERSION,
+    buildVersion: HIVE_BUILD_VERSION,
+    daemonInstanceId,
+    runtimeRootId: daemonRuntimeRootId,
     token,
+    sessions,
   });
 
   // Kit deploy-manager routes, mounted additively behind the surviving server.
@@ -312,6 +348,16 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
   // constant — the add can never hang the HTTP request.
   const SYNC_TIMEOUT_MS = 30_000;
   const lifecycle: SourceLifecycle = {
+    prepareLocator: (locator) =>
+      locator.kind === "working-tree"
+        ? Effect.tryPromise({
+            try: () =>
+              canonicalizeWorkingTreeLocator(locator, {
+                allowedRoots: config.get("sources").workingTreeRoots,
+              }),
+            catch: () => new Error("working tree locator is unavailable"),
+          })
+        : Effect.succeed(locator),
     // onboardSource's typed channel is already `never`; this adapter also makes the
     // port honor that contract on a DEFECT — an unexpected throw in validate /
     // enumerate / fs degrades to a well-formed (defect-honest) body + a trace,
@@ -319,7 +365,16 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     // defensive, never the real defect sink.
     onboard: (s) =>
       Effect.catchDefect(
-        onboardSource(deployTargets, httpFetch, s, SYNC_TIMEOUT_MS),
+        Effect.promise(() =>
+          deploymentMutationCoordinator.runExclusive(() =>
+            Effect.runPromise(
+              onboardSource(deployTargets, s, SYNC_TIMEOUT_MS, {
+                ...(legacyGithubFixtureFetch ? { legacyGithubFixtureFetch } : {}),
+                workingTreeRoots: config.get("sources").workingTreeRoots,
+              }),
+            ),
+          ),
+        ),
         (defect: unknown) => {
           log().error(
             { module: "sources/onboard", sourceId: s.id, err: String(defect) },
@@ -328,7 +383,12 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
           return Effect.succeed(degradedOnboardResult(s));
         },
       ),
-    forgetMirror: (id) => Effect.sync(() => removeMirror(deployTargets.mirrorRoot(id))),
+    forgetMirror: (id) =>
+      Effect.promise(() =>
+        deploymentMutationCoordinator.runExclusive(async () => {
+          removeMirror(deployTargets.mirrorRoot(id));
+        }),
+      ),
   };
   app.route("/", buildSourcesRoutes(sourceRegistry, runSources, lifecycle));
 
@@ -362,12 +422,16 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     kit,
     token,
     port,
+    buildVersion: HIVE_BUILD_VERSION,
+    daemonInstanceId,
+    runtimeRootId: daemonRuntimeRootId,
     async dispose() {
       dispose();
       // ONE teardown: releases Config (watcher + ref scope), Secrets (no-op),
       // Audit ($client.close), and the backend modules — each exactly once via
       // Layer memoization.
       await runtime.dispose();
+      await closeLogger(traceLogger);
     },
   };
 }

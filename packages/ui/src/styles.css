@@ -75,6 +75,14 @@ pre,
   overflow: hidden;
   display: flex;
 }
+
+.settings-connection-gate {
+  display: contents;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
 .sidebar {
   width: 260px;
   border-right: 1px solid var(--color-border-default);
@@ -553,7 +561,7 @@ pre.config {
   line-height: 1.5;
 }
 
-/* Transient toasts (#50): a fixed corner-anchored stack acknowledging silent
+/* Transient toasts: a fixed corner-anchored stack acknowledging silent
    mutations (sync, Source activate/deactivate/delete). The host never blocks
    the UI — `pointer-events:none` on the container, `auto` on each toast so its
    dismiss button is still clickable. Variants reuse the banner color tokens. */
@@ -611,7 +619,7 @@ pre.config {
   color: var(--color-fg-default);
 }
 
-/* Add-Source control (#46): git-URL input + button in the Capabilities header,
+/* Add-Source control: git-URL input + button in the Capabilities header,
    mirroring .api-key-form. The inline status banner sits directly beneath. */
 .add-source-form {
   display: flex;
@@ -1546,7 +1554,7 @@ pre.config {
   outline: 2px solid var(--color-danger);
   outline-offset: 2px;
 }
-/* Per-Source precedence re-rank (#51): a stacked up/down pair, muted until hover,
+/* Per-Source precedence re-rank: a stacked up/down pair, muted until hover,
    so it reads as a secondary control distinct from the toggle/delete. */
 .kit-source-rank {
   display: inline-flex;
@@ -1877,7 +1885,7 @@ pre.config {
 /* Accent-check box: the app's selection-control vocabulary, shared by the
    capability-row checkbox (.kit-row-check, a <span>) and the deploy-target
    checkbox (.kit-target-check, an <input>). Empty outline at rest, so the gutter
-   reads as "selectable, off" rather than dead space (#52); fills to a CSS-drawn
+   reads as "selectable, off" rather than dead space; fills to a CSS-drawn
    check when selected (no glyph in the source). */
 .kit-row-check,
 .kit-target-check {
@@ -1935,13 +1943,71 @@ pre.config {
   font-size: 11px;
   color: var(--color-danger);
 }
-/* Shadow explanation (#51): a muted note on a precedence-loser row naming the
+/* Shadow explanation: a muted note on a precedence-loser row naming the
    Source that actually deploys. Informational, not an error (distinct from
    .kit-row-blocked's danger color). */
 .kit-row-shadow {
   font-size: 11px;
   color: var(--color-text-muted);
   font-style: italic;
+}
+.kit-connection {
+  width: fit-content;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--color-fg-muted);
+}
+.kit-connection-disconnected {
+  color: var(--color-danger);
+}
+.kit-state-rail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 4px;
+  margin-top: 7px;
+  color: var(--color-fg-muted);
+}
+.kit-state-fact,
+.kit-state-target,
+.kit-state-attempt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 84px;
+  padding: 4px 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  background: var(--color-bg-surface);
+  font-size: 9px;
+  line-height: 1.25;
+}
+.kit-state-fact strong,
+.kit-state-target strong,
+.kit-state-attempt strong {
+  color: var(--color-fg-default);
+  font-size: 10px;
+  font-weight: 600;
+}
+.kit-state-arrow {
+  align-self: center;
+  color: var(--color-border-strong);
+}
+.kit-state-attempt.failed {
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border-default));
+}
+.kit-state-attempt.failed strong {
+  color: var(--color-danger);
+}
+@media (max-width: 720px) {
+  .kit-state-arrow {
+    display: none;
+  }
+  .kit-state-fact,
+  .kit-state-target,
+  .kit-state-attempt {
+    flex: 1 1 112px;
+  }
 }
 .kit-sticky-deploy {
   position: static;

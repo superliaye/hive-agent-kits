@@ -1,4 +1,4 @@
-// Pure deploy transforms (Plan A4) — no I/O, unit-testable. Each takes the
+// Pure deploy transforms — no I/O, unit-testable. Each takes the
 // Mirror source content as data and returns the bytes/files to write. Mirrors
 // the upstream agent-kit contract (lib/deploy.js) verified against the pinned
 // my-agent-kits SHA in AGENTS.md.

@@ -1,4 +1,4 @@
-// Kit catalog reader (Plan A2) — the read model behind the UI + deploy resolution.
+// Kit catalog reader — the read model behind the UI + deploy resolution.
 //
 // A thin daemon adapter over @hive/capability-schema-tools: build a SourceTree
 // rooted at the Mirror, run the tools' lenient `parse`, then TRANSLATE the
@@ -201,7 +201,7 @@ export function readCatalog(targets: DeployTargets, sources: readonly Source[]):
   }));
 
   // Preset-collision problems (preset precedence/merge is out of scope — presets
-  // aren't Capabilities; they keep #30's symmetric drop-both).
+  // aren't Capabilities; they keep symmetric drop-both behavior).
   for (const name of presetCollisions) {
     problems.push({
       kind: "preset",

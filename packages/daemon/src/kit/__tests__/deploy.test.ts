@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Cause, Effect, Exit } from "effect";
 import type { DeployFsExec, ExecPort, ExecRequest } from "../deploy/adapter.ts";
 import { runDeploy } from "../deploy/engine.ts";
+import { openDeploymentStateStore } from "../deployment-state.ts";
 import { DeployError } from "../effect/errors.ts";
 import { readLedger } from "../ledger.ts";
 import type { ResolvedSelection } from "../selection.ts";
@@ -135,7 +136,7 @@ function fx(exec: ExecPort, probe: (n: string) => boolean = () => true): DeployF
   return { targets, exec, probe: (n) => probe(n) };
 }
 
-// The active-catalog name-sets a deploy threads into reconcilePrune (#47): an
+// The active-catalog name-sets a deploy threads into reconcilePrune: an
 // owned-but-deselected name is prunable ONLY if it is currently in the active
 // catalog. Defaults to "everything seeded is active" for the single-Source tests.
 function activeCatalogNames(over: { skills?: string[]; agents?: string[] } = {}): {
@@ -146,6 +147,79 @@ function activeCatalogNames(over: { skills?: string[]; agents?: string[] } = {})
 }
 
 describe("runDeploy", () => {
+  test("records independent target outcomes after the Ledger commit and retains prior applied state on failure", async () => {
+    seedSkill("stateful");
+    const spy = makeSpy();
+    await Effect.runPromise(
+      runDeploy(fx(spy.port), {
+        selection: resolved({ skills: ["stateful"], targets: ["claude", "codex"] }),
+        kitSha: "sha1",
+        kitVersion: "1.0.0",
+        activeMirrorRoots: [mirror],
+        activeCatalogNames: activeCatalogNames(),
+        operationId: "op-success",
+      }),
+    );
+    const state = openDeploymentStateStore(targets.deploymentStatePath());
+    const originalClaude = state.read({ kind: "skill", name: "stateful" }, "claude")?.applied;
+    expect(originalClaude).toBeDefined();
+
+    // Claude's path is intentionally non-directory, while Codex remains writable.
+    // The engine must retain Codex's successful fact rather than allowing the
+    // sibling failure to overwrite it.
+    const isolated: DeployTargets = { ...targets, claudeHome: () => "/dev/null" };
+    await Effect.runPromise(
+      runDeploy(
+        { targets: isolated, exec: spy.port, probe: () => true },
+        {
+          selection: resolved({ skills: ["stateful"], targets: ["claude", "codex"] }),
+          kitSha: "sha1",
+          kitVersion: "1.0.0",
+          activeMirrorRoots: [mirror],
+          activeCatalogNames: activeCatalogNames(),
+          operationId: "op-partial",
+        },
+      ),
+    );
+    const after = openDeploymentStateStore(targets.deploymentStatePath());
+    expect(after.read({ kind: "skill", name: "stateful" }, "claude")).toMatchObject({
+      applied: originalClaude,
+      lastAttempt: { outcome: "failed" },
+    });
+    expect(after.read({ kind: "skill", name: "stateful" }, "codex")?.lastAttempt.outcome).toBe(
+      "succeeded",
+    );
+  });
+
+  test("normalizes a deployment-state filesystem fault without exposing its path", async () => {
+    seedSkill("state-path");
+    const brokenStatePath: DeployTargets = {
+      ...targets,
+      deploymentStatePath: () => "/dev/null/deployment-state.json",
+    };
+    const exit = await Effect.runPromiseExit(
+      runDeploy(
+        { targets: brokenStatePath, exec: makeSpy().port, probe: () => true },
+        {
+          selection: resolved({ skills: ["state-path"], targets: ["claude"] }),
+          kitSha: "sha1",
+          kitVersion: "1.0.0",
+          activeMirrorRoots: [mirror],
+          activeCatalogNames: activeCatalogNames(),
+        },
+      ),
+    );
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      const error = Cause.squash(exit.cause);
+      expect(error).toBeInstanceOf(Error);
+      if (error instanceof Error) {
+        expect(error.message).toBe("deployment state write failed");
+        expect(error.message).not.toContain("/dev/null");
+      }
+    }
+  });
+
   test("(a) skill lands in both homes; no SOURCE.md / _unshipped", async () => {
     seedSkill("alpha");
     const spy = makeSpy();
@@ -406,7 +480,7 @@ describe("runDeploy", () => {
     expect(existsSync(join(targets.claudeHome(), "skills", "s1", "SKILL.md"))).toBe(true);
   });
 
-  test("(i) #47: an owned skill absent from the active catalog is NOT pruned on deploy (file kept on disk)", async () => {
+  test("(i) an owned skill absent from the active catalog is NOT pruned on deploy (file kept on disk)", async () => {
     seedSkill("active-one");
     seedSkill("orphan-one");
     // First deploy with BOTH active → both land on disk + in the ledger.
@@ -442,7 +516,7 @@ describe("runDeploy", () => {
   });
 });
 
-describe("runDeploy — cross-Source (#30)", () => {
+describe("runDeploy — cross-Source", () => {
   test("winner-per-name: a skill won by Source A + an agent won by Source B each deploy from their own Mirror", async () => {
     const mirrorA = targets.mirrorRoot("src-a");
     const mirrorB = targets.mirrorRoot("src-b");

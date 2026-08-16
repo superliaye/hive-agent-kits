@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Selection, Source } from "@hive/contract";
@@ -9,22 +9,32 @@ import { resolveSelection } from "../selection.ts";
 import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
-const CLONE = "D:/GitRepos/my-agent-kits";
-
 // Default rank mirrors the seed: a `local` Starter sits at rank 0 (lowest), each
 // git Source gets the next increasing rank (later-declared = higher precedence).
 // Pass `rank` in `over` to pin a specific precedence.
 let gitRankSeq = 1;
 function source(id: string, over: Partial<Source> = {}): Source {
   const kind = over.kind ?? "git";
+  const origin = over.origin ?? `https://github.com/owner/${id}`;
   return {
-    id,
-    origin: `https://github.com/owner/${id}`,
-    kind: "git",
-    active: true,
-    createdAt: 0,
-    rank: kind === "local" ? 0 : gitRankSeq++,
     ...over,
+    id,
+    label: over.label ?? id,
+    locator:
+      over.locator ??
+      (kind === "local"
+        ? { kind: "starter" }
+        : {
+            kind: "git",
+            repoUrl: origin,
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          }),
+    origin,
+    kind,
+    active: over.active ?? true,
+    createdAt: over.createdAt ?? 0,
+    rank: over.rank ?? (kind === "local" ? 0 : gitRankSeq++),
   };
 }
 
@@ -153,18 +163,6 @@ describe("readCatalog (single Source)", () => {
     expect(new Set(child?.capabilities.skills)).toEqual(new Set(["alpha", "beta", "gamma"]));
     expect(child?.capabilities.skills.filter((s) => s === "beta").length).toBe(1);
   });
-
-  test("loads the real clone catalog without throwing (realistic content)", () => {
-    cpSync(join(CLONE, "capabilities"), join(mirror, "capabilities"), { recursive: true });
-    cpSync(join(CLONE, "presets"), join(mirror, "presets"), { recursive: true });
-    const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
-    expect(cat.entries.length).toBeGreaterThan(0);
-    expect(cat.presets.some((p) => p.name === "engineering")).toBe(true);
-    // my-commit ships under @my/ but flattens to the leaf name.
-    expect(cat.entries.some((e) => e.kind === "skill" && e.name === "my-commit")).toBe(true);
-    // Copies the full external clone off disk before reading — the default 5s
-    // timeout is too tight on a cold/slow filesystem, so give it generous room.
-  }, 30000);
 });
 
 describe("readCatalog (cross-Source aggregation — merge / collision / shadow)", () => {
@@ -278,7 +276,7 @@ describe("readCatalog (cross-Source aggregation — merge / collision / shadow)"
     expect(winner?.sourceIds[0]).toBe("src-a");
   });
 
-  test("(g) preset cross-Source name clash still drops both (unchanged from #30)", () => {
+  test("(g) preset cross-Source name clash drops both", () => {
     writeSkillIn(mirrorA, "alpha", "description: a");
     writeSkillIn(mirrorB, "beta", "description: b");
     writePresetIn(

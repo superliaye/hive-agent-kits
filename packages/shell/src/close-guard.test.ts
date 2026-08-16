@@ -26,28 +26,28 @@ describe("shouldConfirmClose", () => {
 
 describe("hasDaemonToDrain", () => {
   test("true when the shell owns a live daemon (packaged path)", () => {
-    expect(
-      hasDaemonToDrain({ hasDaemon: true, spawnedByShell: true, daemonKilled: false }),
-    ).toBe(true);
+    expect(hasDaemonToDrain({ hasDaemon: true, spawnedByShell: true, daemonKilled: false })).toBe(
+      true,
+    );
   });
 
   test("false when no daemon handle (dev path: daemon spawned separately)", () => {
     // Regression guard: after the close-anyway confirm preventDefaults the quit,
     // a false here tells main.ts to re-issue app.quit() instead of hanging open.
-    expect(
-      hasDaemonToDrain({ hasDaemon: false, spawnedByShell: false, daemonKilled: true }),
-    ).toBe(false);
+    expect(hasDaemonToDrain({ hasDaemon: false, spawnedByShell: false, daemonKilled: true })).toBe(
+      false,
+    );
   });
 
   test("false when a daemon exists but the shell didn't spawn it", () => {
-    expect(
-      hasDaemonToDrain({ hasDaemon: true, spawnedByShell: false, daemonKilled: false }),
-    ).toBe(false);
+    expect(hasDaemonToDrain({ hasDaemon: true, spawnedByShell: false, daemonKilled: false })).toBe(
+      false,
+    );
   });
 
   test("false when the daemon is already killed", () => {
-    expect(
-      hasDaemonToDrain({ hasDaemon: true, spawnedByShell: true, daemonKilled: true }),
-    ).toBe(false);
+    expect(hasDaemonToDrain({ hasDaemon: true, spawnedByShell: true, daemonKilled: true })).toBe(
+      false,
+    );
   });
 });

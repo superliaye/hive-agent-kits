@@ -1,4 +1,4 @@
-// Source precedence / re-rank UI + shadow explanation (#51).
+// Source precedence / re-rank UI + shadow explanation.
 //
 // The Capabilities header renders its Sources in precedence order (highest rank
 // first) and exposes per-Source move-up / move-down buttons. Clicking one POSTs
@@ -6,7 +6,7 @@
 // precedence — the winner flips live (the previously-shadowed variant deploys,
 // the previously-winning one becomes shadowed). A shadowed row explains itself:
 // "Hidden — also provided by <Source>" derived from `shadowedBy`. A merged entry
-// shows all contributing Source labels (unchanged from #34).
+// shows all contributing Source labels (unchanged from ).
 //
 // The stub is STATEFUL: it holds the two Sources' ranks and recomputes the
 // catalog from them on every GET, so a reorder POST → refetch flips the winner.
@@ -18,6 +18,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { CapabilityEntry, Catalog, KitState, Source, VerifyReport } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -54,6 +55,13 @@ function sources(): Source[] {
   return [
     {
       id: A_ID,
+      label: "owner/repo-a",
+      locator: {
+        kind: "git",
+        repoUrl: A_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: A_ORIGIN,
       kind: "git",
       active: true,
@@ -62,6 +70,13 @@ function sources(): Source[] {
     },
     {
       id: B_ID,
+      label: "owner/repo-b",
+      locator: {
+        kind: "git",
+        repoUrl: B_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: B_ORIGIN,
       kind: "git",
       active: true,
@@ -74,8 +89,8 @@ function sources(): Source[] {
 function kitState(): KitState {
   return {
     sync: [
-      { state: "up_to_date", sha: "aaa1111", fetchedAt: 1, sourceId: A_ID, origin: A_ORIGIN },
-      { state: "up_to_date", sha: "bbb2222", fetchedAt: 1, sourceId: B_ID, origin: B_ORIGIN },
+      { state: "up_to_date", sha: "aaa1111", fetchedAt: 1, sourceId: A_ID },
+      { state: "up_to_date", sha: "bbb2222", fetchedAt: 1, sourceId: B_ID },
     ],
     ledger: null,
   };
@@ -145,6 +160,10 @@ function installStubs(): void {
     const body = typeof init?.body === "string" ? init.body : undefined;
     calls.push({ method, path, body });
 
+    if (path === "/api/kit/overview")
+      return json(
+        overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: sources() }),
+      );
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
@@ -209,7 +228,7 @@ async function click(el: Element | null): Promise<void> {
   await flush();
 }
 
-describe("KitDeployPage — precedence re-rank + shadow explanation (#51)", () => {
+describe("KitDeployPage — precedence re-rank + shadow explanation", () => {
   test("each Source row exposes move-up / move-down buttons, disabled at the ends", async () => {
     installStubs();
     const host = await render();

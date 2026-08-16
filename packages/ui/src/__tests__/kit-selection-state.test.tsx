@@ -1,15 +1,12 @@
-// #52 selection-state rendering: a capability in the current selection must render
-// as selected AT REST — accent border/tint (.kit-row.selected) + filled check
-// (.kit-row-check.checked) — so a scan separates included from excluded rows. The
-// selection is seeded from the deployed Ledger on first load.
-
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import type { DeploymentOverview, OverviewRow } from "@hive/contract";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { CapabilityEntry, Catalog, KitState, Source, VerifyReport } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+
+const apiConfig = { baseUrl: "http://localhost", token: "test-token" };
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -18,140 +15,156 @@ function json(data: unknown, status = 200): Response {
   });
 }
 
+function skill(name: string, desired: "on" | "off"): OverviewRow {
+  return {
+    key: { kind: "skill", name },
+    catalog: "deployable",
+    desired,
+    reconciliation: desired === "on" ? "in_sync" : "pending_remove",
+    lastAttempt: { state: "none" },
+    applicableTargets: ["claude", "codex"],
+    targets: ["claude", "codex"].map((target) => ({
+      target: target as "claude" | "codex",
+      desired,
+      reconciliation: desired === "on" ? ("in_sync" as const) : ("pending_remove" as const),
+      observation: desired === "on" ? ("verified" as const) : ("present_unverified" as const),
+      lastAttempt: { state: "none" as const },
+    })),
+    variants: [
+      {
+        kind: "skill",
+        name,
+        description: `${name} skill`,
+        group: "",
+        deployable: true,
+        shadowed: false,
+        sourceIds: ["src"],
+        contentSha: name === "alpha" ? "a".repeat(64) : "b".repeat(64),
+        catalog: "deployable",
+      },
+    ],
+  };
+}
+
+function overview(revision = 7): DeploymentOverview {
+  const rows = [skill("alpha", "on"), skill("beta", "off")];
+  return {
+    sources: [{ id: "src", label: "Arca", kind: "git", active: true, rank: 0 }],
+    sourceRegistryRevision: 1,
+    mirrors: [{ sourceId: "src", precedence: 0, identity: "abc" }],
+    selectionRevision: revision,
+    variants: rows.flatMap((row) => row.variants),
+    rows,
+    diff: { entries: [{ kind: "skill", name: "beta", change: "removed" }] },
+    planToken: String(revision).repeat(64).slice(0, 64),
+    activeOperation: null,
+    lastOperation: null,
+  };
+}
+
 async function flush(): Promise<void> {
   for (let i = 0; i < 12; i++) {
     await act(async () => {
       await Promise.resolve();
-      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
-}
-
-const apiConfig = { baseUrl: "http://localhost", token: "test-token" };
-const emptyVerify: VerifyReport = { entries: [] };
-const GIT_ID = "git-src";
-const GIT_ORIGIN = "https://github.com/owner/repo";
-
-function skillEntry(name: string): CapabilityEntry {
-  return {
-    kind: "skill",
-    name,
-    description: `the ${name} skill`,
-    group: "",
-    deployable: true,
-    shadowed: false,
-    sourceIds: [GIT_ID],
-    contentSha: "a".repeat(64),
-  };
-}
-
-// Two skills in the active catalog; only "alpha" is in the deployed Ledger, so the
-// seeded selection contains alpha but not beta.
-function catalog(): Catalog {
-  return { entries: [skillEntry("alpha"), skillEntry("beta")], presets: [], problems: [] };
-}
-
-function kitState(): KitState {
-  return {
-    sync: [
-      {
-        state: "up_to_date",
-        sha: "abc1234def",
-        fetchedAt: 1,
-        sourceId: GIT_ID,
-        origin: GIT_ORIGIN,
-      },
-    ],
-    ledger: {
-      kitVersion: "1.0.0",
-      agents: ["claude"],
-      skills: [{ name: "alpha" }],
-      agentDefs: [],
-      instructions: [],
-      plugins: [],
-      bundles: [],
-    },
-  };
-}
-
-function installStubs(): void {
-  globalThis.fetch = (async (
-    input: string | URL | Request,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const path = new URL(raw, "http://localhost").pathname;
-    const method = (init?.method ?? "GET").toUpperCase();
-    if (path === "/api/kit/catalog") return json(catalog());
-    if (path === "/api/kit/state") return json(kitState());
-    if (path === "/api/kit/verify") return json(emptyVerify);
-    if (path === "/api/sources" && method === "GET")
-      return json([
-        {
-          id: GIT_ID,
-          origin: GIT_ORIGIN,
-          kind: "git",
-          active: true,
-          createdAt: 1,
-          rank: 0,
-        } satisfies Source,
-      ]);
-    if (path === "/api/kit/diff" && method === "POST") return json({ entries: [] });
-    return json({});
-  }) as typeof fetch;
 }
 
 let activeRoot: Root | null = null;
 beforeAll(() => setupDom());
 afterAll(() => teardownDom());
 afterEach(async () => {
-  if (activeRoot) {
-    const r = activeRoot;
-    await act(async () => {
-      r.unmount();
-    });
-    activeRoot = null;
-  }
+  if (!activeRoot) return;
+  const root = activeRoot;
+  activeRoot = null;
+  await act(async () => root.unmount());
 });
 
-async function render(): Promise<HTMLElement> {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+async function renderPage(): Promise<HTMLElement> {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const host = mount();
-  const root = createRoot(host);
-  activeRoot = root;
+  activeRoot = createRoot(host);
   await act(async () => {
-    root.render(
-      createElement(
-        QueryClientProvider,
-        { client: qc },
-        createElement(KitDeployPage, { apiConfig }),
-      ),
+    activeRoot?.render(
+      createElement(QueryClientProvider, { client }, createElement(KitDeployPage, { apiConfig })),
     );
   });
   await flush();
   return host;
 }
 
-describe("KitDeployPage — #52 selection-state rendering", () => {
-  test("a seeded-selected capability renders as selected at rest (.selected row + .checked mark)", async () => {
-    installStubs();
-    const host = await render();
+async function click(element: Element | null): Promise<void> {
+  await act(async () => element?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await flush();
+}
 
-    const alpha = host.querySelector('[data-testid="kit-row-skill-alpha"]');
-    expect(alpha).not.toBeNull();
-    expect(alpha?.classList.contains("selected")).toBe(true);
-    const alphaCheck = alpha?.querySelector(".kit-row-check");
-    expect(alphaCheck?.classList.contains("checked")).toBe(true);
+describe("KitDeployPage — revisioned Selection", () => {
+  test("renders the Daemon's desired state at rest", async () => {
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") return json(overview());
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+
+    expect(
+      host.querySelector('[data-testid="kit-row-skill-alpha"]')?.classList.contains("selected"),
+    ).toBe(true);
+    expect(
+      host.querySelector('[data-testid="kit-row-skill-beta"]')?.classList.contains("selected"),
+    ).toBe(false);
   });
 
-  test("a capability not in the selection renders deselected (no .selected / .checked)", async () => {
-    installStubs();
-    const host = await render();
+  test("a selection_conflict disables Selection until a newer Overview arrives", async () => {
+    let overviewCalls = 0;
+    let patchCalls = 0;
+    let releaseOverview: ((response: Response) => void) | undefined;
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/kit/overview") {
+        overviewCalls++;
+        if (overviewCalls === 1) return json(overview(7));
+        return await new Promise<Response>((resolve) => {
+          releaseOverview = resolve;
+        });
+      }
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      if (path === "/api/kit/selection" && init?.method === "PATCH") {
+        patchCalls++;
+        return json({ error: "selection_conflict", currentRevision: 8 }, 409);
+      }
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
 
-    const beta = host.querySelector('[data-testid="kit-row-skill-beta"]');
-    expect(beta).not.toBeNull();
-    expect(beta?.classList.contains("selected")).toBe(false);
-    const betaCheck = beta?.querySelector(".kit-row-check");
-    expect(betaCheck?.classList.contains("checked")).toBe(false);
+    await click(host.querySelector('[data-testid="kit-row-skill-beta"]'));
+
+    expect(patchCalls).toBe(1);
+    expect(overviewCalls).toBe(2);
+    expect(
+      (host.querySelector('[data-testid="kit-row-skill-beta"]') as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(host.querySelector('[data-testid="kit-selection-error"]')?.textContent).toContain(
+      "Waiting for a newer Overview",
+    );
+    expect(host.querySelector('[data-testid="kit-selection-error"]')?.textContent).not.toContain(
+      "refreshed",
+    );
+
+    await act(async () => releaseOverview?.(json(overview(8))));
+    await flush();
+
+    expect(
+      (host.querySelector('[data-testid="kit-row-skill-beta"]') as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(host.querySelector('[data-testid="kit-selection-error"]')).toBeNull();
+    expect(patchCalls).toBe(1);
   });
 });

@@ -19,14 +19,24 @@ let targets: DeployTargets;
 // mirroring the seed. Pass `rank` in `over` to pin a specific precedence.
 let rankSeq = 0;
 function src(id: string, over: Partial<Source> = {}): Source {
+  const origin = over.origin ?? `https://github.com/owner/${id}`;
   return {
-    id,
-    origin: `https://github.com/owner/${id}`,
-    kind: "git",
-    active: true,
-    createdAt: 0,
-    rank: rankSeq++,
     ...over,
+    id,
+    label: over.label ?? id,
+    locator:
+      over.locator ??
+      ({
+        kind: "git",
+        repoUrl: origin,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      } as const),
+    origin,
+    kind: over.kind ?? "git",
+    active: over.active ?? true,
+    createdAt: over.createdAt ?? 0,
+    rank: over.rank ?? rankSeq++,
   };
 }
 
@@ -82,7 +92,7 @@ const fx = (): DeployFsExec => ({
 });
 
 // The per-kind active-catalog name arrays a deploy threads into reconcilePrune
-// (#47), derived from a catalog the same way kit-live does.
+//, derived from a catalog the same way kit-live does.
 function deployActiveNames(cat: Catalog): { skills: readonly string[]; agents: readonly string[] } {
   const sets = catalogNameSets(cat);
   return { skills: [...sets.skills], agents: [...sets.agents] };
@@ -129,7 +139,7 @@ describe("resolveSelection — winner resolution", () => {
 });
 
 describe("computeDiff — orphan keep + split-winner instruction", () => {
-  test("#47: a ledger-owned orphan (no active-catalog entry) is KEPT, not removed", async () => {
+  test(": a ledger-owned orphan (no active-catalog entry) is KEPT, not removed", async () => {
     // Deploy `keep` + `gone` while both are provided by an active Source so the
     // ledger owns both.
     writeSkillIn(SRC_A.id, "keep", "k");

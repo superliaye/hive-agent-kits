@@ -18,6 +18,16 @@ describe("AppConfigSchema", () => {
     expect(parsed.developer.allowRealHomeDeploy).toBe(false);
   });
 
+  test("working-tree Source roots default to an empty allowlist", () => {
+    expect(APP_CONFIG_DEFAULTS.sources.workingTreeRoots).toEqual([]);
+    expect(
+      AppConfigSchema.parse({
+        ...APP_CONFIG_DEFAULTS,
+        sources: { workingTreeRoots: ["/home/leon.ye/universe"] },
+      }).sources.workingTreeRoots,
+    ).toEqual(["/home/leon.ye/universe"]);
+  });
+
   // Forward-compat: an existing on-disk config written before `developer`
   // existed must backfill from defaults, not be rejected. The file-mode load
   // path (loadOrSeed → deepMerge(defaults, raw) → schema.parse) is what

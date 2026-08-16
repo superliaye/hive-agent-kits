@@ -1,7 +1,7 @@
 # Hive — Capability Deploy-Manager
 
 A control surface for managing **agent capabilities** across one or more
-**Sources** — git repositories of **Capabilities** that conform to Hive's
+**Sources** — located collections of **Capabilities** that conform to Hive's
 capability format. Hive **syncs** each Source at runtime and **deploys** selected
 **Capabilities** into the **CLI homes** of Claude Code and Codex — with visibility,
 explicit control, and easy reconfigure on top of what the upstream `agent-kit`
@@ -13,18 +13,24 @@ that section below, which keeps (does not delete) the agent vocabulary.
 
 **Source**:
 A tracked collection of **Capabilities** — a *kit* of capabilities — that conforms
-to Hive's capability format. A Source is either a remote **git repository** Hive
-**syncs** over the network, or the bundled local **Starter Source** shipped with
-the app. Hive manages one or more Sources; each is synced independently into its
-own **Mirror**. A Source can be activated, deactivated, and deleted. Hive tracks
-each Source's last synced revision where one exists; there is no app-level version
-pinning (every remote Source tracks its own tip). How multiple active Sources
-reconcile (the default Starter Source, ordering, duplicate handling) is a product
-decision recorded in the multi-source ADR, not here.
-_Avoid_: "the repo", "the package" (a remote Source is the tracked, conformant
-repository; the Starter is the bundled local one). "Kit" stays fine informally — a
-Source is a kit of Capabilities — but "Source" is the precise term once more than
-one is in play.
+to Hive's capability format. A Source has a **Source Locator**: a git repository
+plus revision and subpath, a working-tree root plus subpath on the Daemon machine, or
+the bundled **Starter Source**. Hive manages one or more Sources; each is synced
+independently into its own **Mirror**. A Source can be activated, deactivated, and
+deleted. How multiple active Sources reconcile (the default Starter Source,
+ordering, duplicate handling) is a product decision recorded in the multi-source
+ADR, not here.
+_Avoid_: "the repo", "the package" (a Source may select only a subpath, or may not
+be backed by git at all). "Kit" stays fine informally — a Source is a kit of
+Capabilities — but "Source" is the precise term once more than one is in play.
+
+**Source Locator**:
+The persisted description of where a **Source** is materialized from. A git
+locator names a credential-free repository URL, a tracked ref or pinned commit,
+and a subpath. A working-tree locator names an absolute repository root on the
+**Daemon** machine and a subpath. The Daemon resolves the locator and records the
+exact revision or snapshot identity; the **Shell** never acquires Source
+credentials or reads Source files.
 
 **Starter Source**:
 The bundled **Source** shipped with Hive itself — the default, enabled on a fresh
@@ -73,13 +79,13 @@ live apart from the rest of its config).
 _Avoid_: "config dir" (CLI home is the specific per-CLI global root a Deploy writes to).
 
 **Sync**:
-Refreshing the latest tree of a **Source** into that Source's private **Mirror** —
-a runtime refresh with no rebuild. For a remote Source this *fetches* the latest
-upstream tree over the network and records the exact revision fetched; for the
-local **Starter Source** it *copies* the bundled tree (no network, no recorded
-revision). Each active Source is synced independently and keeps the previous Mirror
-until the new one is fully in place. A remote Sync that fails (offline,
-rate-limited, or a bad download) keeps the last good Mirror and is surfaced as a
+Refreshing a **Source Locator** into that Source's private **Mirror** — a runtime
+refresh with no rebuild. A git Sync uses the Daemon machine's ambient git
+credentials and records the requested revision plus resolved commit. A working-tree
+Sync snapshots the selected tree and records its HEAD, dirty state, and content
+identity. The local **Starter Source** copies bundled content without a network
+revision. Each active Source keeps its previous Mirror until the replacement is
+fully in place. A failed Sync keeps the last good Mirror and is surfaced as a
 distinct freshness state — never as "up to date".
 
 **Mirror**:
@@ -137,10 +143,11 @@ A named selection of **Capabilities** from a **Source**. Selecting a Preset seed
 parent's). Hive consumes Presets; authoring them is upstream (no preset editor).
 
 **Selection**:
-The user's chosen set to **Deploy** — a Preset seed plus individual toggles plus
-the target CLIs. Resolves to a concrete per-kind set of names across the active
-**Sources**. How a cross-Source name clash resolves is a product decision recorded
-in the multi-source ADR.
+The durable desired set to **Deploy** — CapabilityKeys plus target CLIs, persisted
+by the **Daemon** with a revision. A **Preset** seeds that set; individual toggles
+then mutate it without retaining Preset provenance. Selection changes never Deploy
+automatically. Resolution chooses the winning active **Variant** for each selected
+CapabilityKey; temporarily unavailable keys remain selected.
 
 **Deploy Diff**:
 The difference between the currently-deployed state and a pending **Selection**:
@@ -151,15 +158,30 @@ user-authored instruction file (e.g. an existing hand-written global instruction
 file the user owns). How it surfaces a duplicate displaced across **Sources** is a
 product decision recorded in the multi-source ADR.
 
+**Deployment State**:
+Hive-private per-Capability, per-target metadata separating the last successful
+applied content from the last Deploy attempt. It carries winning Source, deployed
+ContentSha, rendered fingerprint, timestamps, operation ids, and bounded outcome
+detail. It supplies provenance, verification, and failure detail without replacing
+or extending the interoperable **Deployment Ledger**.
+
+**Deployment Overview**:
+The Daemon's point-in-time projection of Sources, catalog Variants, the durable
+Selection, Deploy Diff, Deployment State, Deployment Ledger, and on-disk
+verification. It is the Shell's authoritative daily view and carries an opaque
+plan token that prevents a Deploy from applying a plan different from the one the
+user reviewed.
+
 ## Audit and trace (current)
 
 **Audit Log**:
-Append-only record of **what the user did**. In #1 the single user action is a
-**Deploy**: one audit entry per Deploy, carrying references only (the synced
-revision, per-kind counts, the target CLIs) — never file contents or secrets. A
-Deploy has no Run or Agent, so those correlation fields are empty. Built on a
-subscribe model: the deploy path emits a typed event and the Audit module
-consumes it; nothing calls Audit directly. See [ADR-0004](docs/adr/0004-audit-log-design.md).
+Append-only record of **what the user did**. Audited deploy-manager actions include
+Source mutations, durable Selection mutations, and Deploys. Events carry
+references only: Source ids, Selection revision and per-kind counts, synced
+revisions, and target CLIs — never Capability contents or secrets. These actions
+have no Run or Agent, so those correlation fields are empty. Built on a subscribe
+model: each write path emits a typed event and the Audit module consumes it;
+nothing calls Audit directly. See [ADR-0004](docs/adr/0004-audit-log-design.md).
 
 **Trace Log**:
 The system's diagnostic stream — **Sync** resolution and download, extraction,
@@ -176,9 +198,17 @@ The long-running Hive process that hosts the **Mirror**, **Sync**, **Deploy**, t
 Bun + Hono (ADR-0002). The same binary serves the desktop **Shell** and headless use.
 
 **Shell**:
-The desktop presentation layer (Electron, ADR-0002) that wraps the UI in a window
-and spawns the **Daemon** as a child process. Removing the Shell does not stop the
-Daemon.
+The desktop presentation layer (Electron, ADR-0002) that wraps the UI in a window.
+In managed mode it owns a local **Daemon** child. In external mode it connects to
+an already-running Daemon through a loopback endpoint and neither starts nor stops
+a local Daemon. One Shell instance chooses exactly one mode at launch.
+
+**External Daemon Mode**:
+A Shell launch mode driven by a short-lived connection descriptor. The descriptor
+provides a loopback endpoint, expiring session credential, expected Daemon
+identity, and display label for a Daemon owned outside Hive's Shell. External mode
+never falls back to spawning a local Daemon and never assumes how the endpoint was
+transported.
 
 **Headless Mode**:
 The **Daemon** running without a **Shell** — the mode for servers, CI, and CLI use.
@@ -205,6 +235,8 @@ tokens) live in the Secrets primitive, not in Configuration.
   selected **Capabilities** from the active Sources' Mirrors into the **CLI homes**
   of the chosen targets.
 - A **Preset** seeds a **Selection**; individual toggles and target CLIs adjust it.
+- A **Deployment Overview** joins desired, deployed, and observed state on the
+  Daemon machine; the Shell does not reconstruct that join client-side.
 - A **Deploy Diff** compares the current deployed state (the **Deployment Ledger**
   + on-disk content) to a pending **Selection**.
 - The **Deployment Ledger** is the ownership boundary: Hive-owned names may be

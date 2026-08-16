@@ -1,6 +1,121 @@
 import { describe, expect, test } from "bun:test";
 import { createSourcesStore, type SourcesWriter } from "../store.ts";
-import { normalizeOrigin, SOURCES_FILE_VERSION } from "../types.ts";
+import { locatorIdentity, normalizeOrigin, SOURCES_FILE_VERSION } from "../types.ts";
+
+const universeLocator = {
+  kind: "git" as const,
+  repoUrl: "https://github.com/databricks-eng/universe",
+  revision: { mode: "track" as const, ref: "refs/heads/master" },
+  subpath: "experimental/leon-ye_data/agent-kits",
+};
+
+function gitInput(repoUrl: string) {
+  return {
+    label: normalizeOrigin(repoUrl),
+    locator: {
+      kind: "git" as const,
+      repoUrl,
+      revision: { mode: "track" as const, ref: "refs/heads/main" },
+      subpath: ".",
+    },
+  };
+}
+
+describe("locator identity", () => {
+  test("allows two subpaths or revisions from the same repository", () => {
+    expect(locatorIdentity(universeLocator)).not.toBe(
+      locatorIdentity({ ...universeLocator, subpath: "experimental/another/agent-kits" }),
+    );
+    expect(locatorIdentity(universeLocator)).not.toBe(
+      locatorIdentity({
+        ...universeLocator,
+        revision: { mode: "pin", commit: "a".repeat(40) },
+      }),
+    );
+  });
+});
+
+describe("createSourcesStore — locator authority", () => {
+  test("deduplicates the full locator and increments registry revision", () => {
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] });
+    const added = store.add({ label: "Personal kit", locator: universeLocator });
+    expect(added.ok).toBe(true);
+    expect(store.snapshot().revision).toBe(1);
+    expect(store.add({ label: "Duplicate label", locator: universeLocator })).toEqual({
+      ok: false,
+      reason: "duplicate",
+    });
+    expect(
+      store.add({
+        label: "Other subpath",
+        locator: { ...universeLocator, subpath: "experimental/other/agent-kits" },
+      }).ok,
+    ).toBe(true);
+  });
+
+  test("isolates locator input and returned Sources from registry state", () => {
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] });
+    const input = {
+      label: "Personal kit",
+      locator: {
+        kind: "git" as const,
+        repoUrl: "https://github.com/databricks-eng/universe",
+        revision: { mode: "track" as const, ref: "refs/heads/master" },
+        subpath: "experimental/leon-ye_data/agent-kits",
+      },
+    };
+    const added = store.add(input);
+    if (
+      !added.ok ||
+      added.source.locator.kind !== "git" ||
+      added.source.locator.revision.mode !== "track"
+    ) {
+      throw new Error("setup failed");
+    }
+
+    input.locator.repoUrl = "https://github.com/attacker/input";
+    added.source.locator.revision.ref = "refs/heads/attacker-result";
+
+    const listed = store.list();
+    const firstListed = listed[0];
+    if (firstListed?.locator.kind !== "git") throw new Error("setup failed");
+    firstListed.locator.subpath = "attacker/list";
+
+    const snap = store.snapshot();
+    const firstSnap = snap.sources[0];
+    if (firstSnap?.locator.kind !== "git") throw new Error("setup failed");
+    firstSnap.locator.repoUrl = "https://github.com/attacker/snapshot";
+
+    const deactivated = store.deactivate(added.source.id);
+    if (!deactivated.ok || deactivated.source.locator.kind !== "git")
+      throw new Error("setup failed");
+    deactivated.source.locator.subpath = "attacker/deactivate";
+
+    const reordered = store.reorder(added.source.id, "up");
+    if (
+      !reordered.ok ||
+      reordered.source.locator.kind !== "git" ||
+      reordered.source.locator.revision.mode !== "track"
+    ) {
+      throw new Error("setup failed");
+    }
+    reordered.source.locator.revision.ref = "refs/heads/attacker-reorder";
+
+    expect(store.snapshot()).toMatchObject({
+      revision: 2,
+      sources: [
+        {
+          locator: {
+            kind: "git",
+            repoUrl: "https://github.com/databricks-eng/universe",
+            revision: { mode: "track", ref: "refs/heads/master" },
+            subpath: "experimental/leon-ye_data/agent-kits",
+          },
+        },
+      ],
+    });
+  });
+});
 
 describe("normalizeOrigin", () => {
   test("collapses .git, trailing slashes, and host case to one origin", () => {
@@ -26,18 +141,24 @@ describe("normalizeOrigin", () => {
 
 describe("createSourcesStore — duplicate detection over normalization", () => {
   test("rejects a .git / trailing-slash / case variant of an existing origin", () => {
-    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });
-    expect(store.add("https://github.com/a/b").ok).toBe(true);
-    expect(store.add("https://github.com/a/b.git")).toEqual({ ok: false, reason: "duplicate" });
-    expect(store.add("https://GitHub.com/a/b/")).toEqual({ ok: false, reason: "duplicate" });
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] });
+    expect(store.add(gitInput("https://github.com/a/b")).ok).toBe(true);
+    expect(store.add(gitInput("https://github.com/a/b.git"))).toEqual({
+      ok: false,
+      reason: "duplicate",
+    });
+    expect(store.add(gitInput("https://GitHub.com/a/b/"))).toEqual({
+      ok: false,
+      reason: "duplicate",
+    });
     expect(store.list()).toHaveLength(1);
   });
 });
 
 describe("createSourcesStore — public add mints a git Source", () => {
   test("add sets kind:'git'", () => {
-    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });
-    const res = store.add("https://github.com/a/b");
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] });
+    const res = store.add(gitInput("https://github.com/a/b"));
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.source.kind).toBe("git");
   });
@@ -45,10 +166,10 @@ describe("createSourcesStore — public add mints a git Source", () => {
 
 describe("createSourcesStore — rank seeding (insertion order = increasing precedence)", () => {
   test("seedLocal then add: the Starter gets the LOWEST rank, each add the new highest", () => {
-    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] });
     const starter = store.seedLocal("starter", "local:starter");
-    const a = store.add("https://github.com/a/b");
-    const b = store.add("https://github.com/c/d");
+    const a = store.add(gitInput("https://github.com/a/b"));
+    const b = store.add(gitInput("https://github.com/c/d"));
     expect(starter.ok && a.ok && b.ok).toBe(true);
     if (!starter.ok || !a.ok || !b.ok) throw new Error("setup failed");
     expect(a.source.rank).toBeGreaterThan(starter.source.rank);
@@ -58,9 +179,17 @@ describe("createSourcesStore — rank seeding (insertion order = increasing prec
   test("add into a non-empty registry assigns max(existing ranks)+1", () => {
     const store = createSourcesStore({
       version: SOURCES_FILE_VERSION,
+      revision: 0,
       sources: [
         {
           id: "x",
+          label: "X/Y",
+          locator: {
+            kind: "git",
+            repoUrl: "https://github.com/x/y",
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          },
           origin: "https://github.com/x/y",
           kind: "git",
           active: true,
@@ -69,7 +198,7 @@ describe("createSourcesStore — rank seeding (insertion order = increasing prec
         },
       ],
     });
-    const res = store.add("https://github.com/a/b");
+    const res = store.add(gitInput("https://github.com/a/b"));
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.source.rank).toBe(8);
   });
@@ -79,9 +208,17 @@ describe("createSourcesStore — reorder (adjacent rank swap)", () => {
   function seeded(): ReturnType<typeof createSourcesStore> {
     return createSourcesStore({
       version: SOURCES_FILE_VERSION,
+      revision: 0,
       sources: [
         {
           id: "low",
+          label: "low",
+          locator: {
+            kind: "git",
+            repoUrl: "https://github.com/a/low",
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          },
           origin: "https://github.com/a/low",
           kind: "git",
           active: true,
@@ -90,6 +227,13 @@ describe("createSourcesStore — reorder (adjacent rank swap)", () => {
         },
         {
           id: "mid",
+          label: "mid",
+          locator: {
+            kind: "git",
+            repoUrl: "https://github.com/a/mid",
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          },
           origin: "https://github.com/a/mid",
           kind: "git",
           active: true,
@@ -98,6 +242,13 @@ describe("createSourcesStore — reorder (adjacent rank swap)", () => {
         },
         {
           id: "high",
+          label: "high",
+          locator: {
+            kind: "git",
+            repoUrl: "https://github.com/a/high",
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          },
           origin: "https://github.com/a/high",
           kind: "git",
           active: true,
@@ -163,9 +314,12 @@ describe("createSourcesStore — reorder (adjacent rank swap)", () => {
   test("a free reorder can place the local Starter above a git Source", () => {
     const store = createSourcesStore({
       version: SOURCES_FILE_VERSION,
+      revision: 0,
       sources: [
         {
           id: "starter",
+          label: "Starter",
+          locator: { kind: "starter" },
           origin: "local:starter",
           kind: "local",
           active: true,
@@ -174,6 +328,13 @@ describe("createSourcesStore — reorder (adjacent rank swap)", () => {
         },
         {
           id: "git1",
+          label: "A/B",
+          locator: {
+            kind: "git",
+            repoUrl: "https://github.com/a/b",
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          },
           origin: "https://github.com/a/b",
           kind: "git",
           active: true,
@@ -191,7 +352,7 @@ describe("createSourcesStore — reorder (adjacent rank swap)", () => {
 
 describe("createSourcesStore — seedLocal (the bundled Starter)", () => {
   test("seeds a kind:'local' Source with the caller-supplied fixed id + origin", () => {
-    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] });
     const res = store.seedLocal("starter", "local:starter");
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -203,7 +364,7 @@ describe("createSourcesStore — seedLocal (the bundled Starter)", () => {
   });
 
   test("is the sole minter of id 'starter' — a second seed of that id no-ops (no duplicate row)", () => {
-    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] });
+    const store = createSourcesStore({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] });
     expect(store.seedLocal("starter", "local:starter").ok).toBe(true);
     const again = store.seedLocal("starter", "local:starter");
     expect(again).toEqual({ ok: false, reason: "duplicate-id" });
@@ -222,20 +383,22 @@ describe("createSourcesStore — write-fault atomicity", () => {
 
   test("a failed add does not append to the in-memory list", () => {
     const store = createSourcesStore(
-      { version: SOURCES_FILE_VERSION, sources: [] },
+      { version: SOURCES_FILE_VERSION, revision: 0, sources: [] },
       throwingWriter,
     );
-    expect(() => store.add("https://github.com/a/b")).toThrow();
+    expect(() => store.add(gitInput("https://github.com/a/b"))).toThrow();
     expect(store.list()).toHaveLength(0);
   });
 
   test("a failed delete does not remove from the in-memory list", () => {
-    const created = createSourcesStore({ version: SOURCES_FILE_VERSION, sources: [] }).add(
-      "https://github.com/a/b",
-    );
+    const created = createSourcesStore({
+      version: SOURCES_FILE_VERSION,
+      revision: 0,
+      sources: [],
+    }).add(gitInput("https://github.com/a/b"));
     if (!created.ok) throw new Error("setup failed");
     const failing = createSourcesStore(
-      { version: SOURCES_FILE_VERSION, sources: [created.source] },
+      { version: SOURCES_FILE_VERSION, revision: 0, sources: [created.source] },
       throwingWriter,
     );
     expect(() => failing.delete(created.source.id)).toThrow();

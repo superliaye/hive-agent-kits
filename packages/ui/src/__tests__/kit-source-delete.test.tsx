@@ -1,4 +1,4 @@
-// Per-Source delete control (#49, #55): the Capabilities header renders a Remove
+// Per-Source delete control: the Capabilities header renders a Remove
 // affordance for EVERY Source — user-added git Sources and the bundled Starter
 // (kind:"local") alike. The Starter is deletable on the same path as a git Source
 // (ADR-0023); deletion sticks because the first-run-only seed does not re-seed an
@@ -15,6 +15,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type { CapabilityEntry, Catalog, KitState, Source, VerifyReport } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -58,6 +59,8 @@ function sources(): Source[] {
   const all: Source[] = [
     {
       id: STARTER_ID,
+      label: STARTER_LABEL,
+      locator: { kind: "starter" },
       origin: STARTER_ORIGIN,
       kind: "local",
       active: true,
@@ -68,6 +71,13 @@ function sources(): Source[] {
   if (!onlyStarter) {
     all.push({
       id: GIT_ID,
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: GIT_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: GIT_ORIGIN,
       kind: "git",
       active: true,
@@ -136,6 +146,10 @@ function installStubs(): void {
     const method = (init?.method ?? "GET").toUpperCase();
     calls.push({ method, path });
 
+    if (path === "/api/kit/overview")
+      return json(
+        overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: sources() }),
+      );
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
@@ -193,8 +207,8 @@ async function click(el: Element | null): Promise<void> {
   await flush();
 }
 
-describe("KitDeployPage — Source delete control (#49)", () => {
-  test("a Remove control renders for the git Source AND for the bundled local Starter (#55)", async () => {
+describe("KitDeployPage — Source delete control", () => {
+  test("a Remove control renders for the git Source AND for the bundled local Starter", async () => {
     installStubs();
     const host = await render();
     expect(host.querySelector(`[data-testid="kit-source-delete-${GIT_ID}"]`)).not.toBeNull();
@@ -224,12 +238,12 @@ describe("KitDeployPage — Source delete control (#49)", () => {
     // After the ["sources"]/["kit"] refetch the row AND its capability are gone.
     expect(host.querySelector(`[data-testid="kit-source-${GIT_ID}"]`)).toBeNull();
     expect(host.querySelector('[data-testid="kit-row-skill-alpha"]')).toBeNull();
-    // The other Source (the Starter) is untouched — deleting one Source leaves the
-    // rest of the list intact (not because the Starter is special: see #55).
+    // The other Source (the Starter) is untouched; deleting one Source leaves the
+    // rest of the list intact.
     expect(host.querySelector(`[data-testid="kit-source-${STARTER_ID}"]`)).not.toBeNull();
   });
 
-  test("Starter delete: Remove → confirm fires DELETE /api/sources/<STARTER_ID>, the row disappears, and a success toast fires (#55)", async () => {
+  test("Starter delete: Remove → confirm fires DELETE /api/sources/<STARTER_ID>, the row disappears, and a success toast fires", async () => {
     installStubs();
     const host = await render();
     // The Starter row is present initially.
@@ -256,7 +270,7 @@ describe("KitDeployPage — Source delete control (#49)", () => {
     expect(toast?.textContent).toContain(`Removed ${STARTER_LABEL}`);
   });
 
-  test("deleting the only/last Source leaves a clean empty Sources list with no crash (#55)", async () => {
+  test("deleting the only/last Source leaves a clean empty Sources list with no crash", async () => {
     installStubs();
     onlyStarter = true;
     const host = await render();

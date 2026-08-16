@@ -1,4 +1,4 @@
-// Local Sync (#32): copy the bundled Starter content into a Mirror with no
+// Local Sync: copy the bundled Starter content into a Mirror with no
 // network, the atomic stage→swap reuse, no provenance, the typed
 // missing_starter_root failure, and the kind-branching sync dispatch (fetch is
 // never called for a local Source). Redirected temp homes only.
@@ -123,7 +123,21 @@ function kitOver(
 ) {
   const sourcesLayer = SourceRegistryLive({
     mode: "memory",
-    initial: sources.map((s, i) => ({ ...s, createdAt: i, rank: i })),
+    initial: sources.map((s, i) => ({
+      ...s,
+      label: s.id,
+      locator:
+        s.kind === "local"
+          ? ({ kind: "starter" } as const)
+          : {
+              kind: "git" as const,
+              repoUrl: s.origin,
+              revision: { mode: "track" as const, ref: "refs/heads/main" },
+              subpath: ".",
+            },
+      createdAt: i,
+      rank: i,
+    })),
   });
   const rt = ManagedRuntime.make(
     Layer.merge(KitLive({ fetch: fetchImpl }).pipe(Layer.provide(sourcesLayer)), sourcesLayer),
@@ -131,7 +145,7 @@ function kitOver(
   return { kit: rt.runSync(Kit), registry: rt.runSync(SourceRegistry), rt };
 }
 
-describe("Kit.sync — local kind dispatch (#32)", () => {
+describe("Kit.sync — local kind dispatch", () => {
   test("a local Source syncs by copy; fetch is NEVER called; catalog lists it; status is local", async () => {
     const { kit, rt } = kitOver(
       [{ id: "starter", origin: "local:starter", kind: "local", active: true }],
@@ -183,9 +197,9 @@ describe("Kit.sync — local kind dispatch (#32)", () => {
     expect(result.sources).toEqual([
       {
         sourceId: "mystery",
-        origin: "local:mystery",
         status: "failed",
         errorReason: "missing_starter_root",
+        errorDetail: "starter content root is unavailable",
       },
     ]);
     expect(kit.catalog().entries.some((e) => e.sourceIds.includes("mystery"))).toBe(false);
@@ -208,7 +222,7 @@ describe("Kit.sync — local kind dispatch (#32)", () => {
   });
 });
 
-describe("deploy from the local mirror (#32, offline)", () => {
+describe("deploy from the local mirror while offline", () => {
   test("deploying the Starter preset's skill lands files in the redirected ~/.claude with no exec", async () => {
     const execCalls: string[] = [];
     const sourcesLayer = SourceRegistryLive({
@@ -216,6 +230,8 @@ describe("deploy from the local mirror (#32, offline)", () => {
       initial: [
         {
           id: "starter",
+          label: "Starter",
+          locator: { kind: "starter" },
           origin: "local:starter",
           kind: "local",
           active: true,
@@ -240,14 +256,27 @@ describe("deploy from the local mirror (#32, offline)", () => {
     const kit = rt.runSync(Kit);
 
     await Effect.runPromise(kit.sync());
-    await Effect.runPromise(
-      kit.deploy({
-        presets: [],
-        add: { instructions: [], skills: ["demo-skill"], agents: [], plugins: [], bundles: [] },
-        remove: { instructions: [], skills: [], agents: [], plugins: [], bundles: [] },
-        targets: ["claude"],
-      }),
-    );
+    const selection = kit.selection();
+    await kit.mutateSelection({
+      expectedRevision: selection.revision,
+      changes: [
+        {
+          key: { kind: "skill", name: "demo-skill" },
+          enabled: true,
+          targets: ["claude"],
+        },
+      ],
+    });
+    const reviewed = kit.overview();
+    await kit.acceptDeploy({
+      selectionRevision: reviewed.selectionRevision,
+      planToken: reviewed.planToken,
+    });
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (kit.overview().lastOperation?.state === "completed") break;
+      await Bun.sleep(5);
+    }
+    expect(kit.overview().lastOperation?.state).toBe("completed");
 
     const claudeHome = failSafeDeployTargets().claudeHome();
     expect(existsSync(join(claudeHome, "skills", "demo-skill", "SKILL.md"))).toBe(true);

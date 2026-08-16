@@ -14,28 +14,31 @@
 // directly. Mirrors the deploy emitter (`kit/effect/kit-live.ts`) — the awaited
 // `emit` preserves block-on-failure (an audit persist fault fails the op).
 
-import type { Source } from "@hive/contract";
-import { Context, Effect, Layer } from "effect";
+import type { AddSourceInput, Source } from "@hive/contract";
+import { Context, Effect, Exit, Layer } from "effect";
+import {
+  createDeploymentMutationCoordinator,
+  type DeploymentMutationCoordinator,
+} from "../../kit/deploy-coordinator.ts";
 import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { SourcesPersistence } from "../persistence.ts";
 import { createSourcesStore, type ReorderDirection, type SourcesStore } from "../store.ts";
-import { SOURCES_FILE_VERSION, type SourcesAuditEvents } from "../types.ts";
+import { SOURCES_FILE_VERSION, type SourcesAuditEvents, type SourcesFile } from "../types.ts";
 import { DuplicateOrigin, SourceIoError, SourceNotFound } from "./errors.ts";
 
-export type CreateSourceRegistryOptions =
+export type CreateSourceRegistryOptions = (
   | { mode: "memory"; initial?: Source[] }
-  | { mode: "file"; path: string; seedFixtureSources?: boolean };
+  | { mode: "file"; path: string; seedFixtureSources?: boolean }
+) & { mutationCoordinator?: DeploymentMutationCoordinator };
 
 export type SourceRegistrySvc = {
   list(): Effect.Effect<readonly Source[], SourceIoError>;
-  // Synchronous getter of the in-memory state, no I/O. The Effect `list()` stays
-  // the audited/route read; `currentSources()` feeds the deliberately-sync Kit
-  // read model (catalog()/state()/sync()) which has no I/O and thus no
-  // SourceIoError to channel. NOT named `snapshot` — the store already has a
-  // `snapshot(): SourcesFile` of a different type.
+  // Synchronous getters over one in-memory registry. Consumers that join the
+  // revision with Sources use currentSnapshot() so both come from one clone.
   currentSources(): readonly Source[];
-  add(origin: string): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
+  currentSnapshot(): SourcesFile;
+  add(input: AddSourceInput): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
   activate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   deactivate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   delete(id: string): Effect.Effect<void, SourceNotFound | SourceIoError>;
@@ -74,6 +77,7 @@ function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
     // Memory mode never seeds and writes no file.
     return createSourcesStore({
       version: SOURCES_FILE_VERSION,
+      revision: 0,
       sources: opts.initial ?? [],
     });
   }
@@ -87,7 +91,7 @@ function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
   // stale-version file that read() discarded as EMPTY. A present same-version file
   // (even an empty one after the user deleted the Starter) is NOT re-seeded —
   // delete-no-reseed holds. (Plain `!exists()` would skip the re-seed for a
-  // discarded stale file and boot into an empty registry — review finding.)
+  // discarded stale file and boot into an empty registry.)
   if (!persist.isCurrentVersion()) {
     // Seed the bundled Starter Source. A SYSTEM action, not a user `add` — it goes
     // through the store's `seedLocal` (kind:"local"), which is OFF the audited
@@ -129,8 +133,33 @@ function ioGuard<A>(thunk: () => A): Effect.Effect<A, SourceIoError> {
   });
 }
 
-function buildSvc(store: SourcesStore): SourceRegistrySvc {
+function serializeMutation<A, E>(
+  coordinator: DeploymentMutationCoordinator | undefined,
+  effect: Effect.Effect<A, E>,
+): Effect.Effect<A, E> {
+  if (!coordinator) return effect;
+  return Effect.callback<A, E>((resume) => {
+    coordinator
+      .runExclusive(() => Effect.runPromiseExit(effect))
+      .then((exit) =>
+        Exit.match(exit, {
+          onSuccess: (value) => resume(Effect.succeed(value)),
+          onFailure: (cause) => resume(Effect.failCause(cause)),
+        }),
+      )
+      .catch((err: unknown) => {
+        log().warn({ module: "sources", err: String(err) }, "Source mutation coordinator failed");
+        resume(Effect.die(err));
+      });
+  });
+}
+
+function buildSvc(
+  store: SourcesStore,
+  mutationCoordinator?: DeploymentMutationCoordinator,
+): SourceRegistrySvc {
   const events = new TypedEmitter<SourcesAuditEvents>();
+  const coordinator = mutationCoordinator ?? createDeploymentMutationCoordinator();
 
   return {
     events,
@@ -139,61 +168,118 @@ function buildSvc(store: SourcesStore): SourceRegistrySvc {
 
     currentSources: () => store.list(),
 
-    add: (origin) =>
-      Effect.flatMap(
-        ioGuard(() => store.add(origin)),
-        (res) =>
-          res.ok
-            ? Effect.promise(() =>
-                events.emit("source.added", { id: res.source.id, origin: res.source.origin }),
-              ).pipe(Effect.as(res.source))
-            : Effect.fail(new DuplicateOrigin({ origin })),
+    currentSnapshot: () => store.snapshot(),
+
+    add: (input) =>
+      serializeMutation(
+        coordinator,
+        Effect.flatMap(
+          ioGuard(() => store.prepareAdd(input)),
+          (prepared): Effect.Effect<Source, DuplicateOrigin | SourceIoError> => {
+            const result = prepared.result;
+            if (!result.ok) {
+              return Effect.fail(
+                new DuplicateOrigin({
+                  origin:
+                    input.locator.kind === "git" ? input.locator.repoUrl : input.locator.repoRoot,
+                }),
+              );
+            }
+            const event: SourcesAuditEvents["source.added"] =
+              result.source.locator.kind === "git"
+                ? {
+                    id: result.source.id,
+                    kind: "git",
+                    origin: result.source.locator.repoUrl,
+                  }
+                : { id: result.source.id, kind: "working-tree" };
+            return Effect.promise(() => events.emit("source.added", event)).pipe(
+              Effect.flatMap(() => ioGuard(() => prepared.commit())),
+              Effect.map((committed) => {
+                if (!committed.ok) throw new Error("prepared Source add changed result");
+                return committed.source;
+              }),
+            );
+          },
+        ),
       ),
 
     activate: (id) =>
-      Effect.flatMap(
-        ioGuard(() => store.activate(id)),
-        (res) =>
-          res.ok
-            ? Effect.promise(() => events.emit("source.activated", { id })).pipe(
-                Effect.as(res.source),
-              )
-            : Effect.fail(new SourceNotFound({ id })),
+      serializeMutation(
+        coordinator,
+        Effect.flatMap(
+          ioGuard(() => store.prepareActivate(id)),
+          (prepared): Effect.Effect<Source, SourceNotFound | SourceIoError> =>
+            prepared.result.ok
+              ? Effect.promise(() => events.emit("source.activated", { id })).pipe(
+                  Effect.flatMap(() => ioGuard(() => prepared.commit())),
+                  Effect.map((committed) => {
+                    if (!committed.ok) throw new Error("prepared Source activation changed result");
+                    return committed.source;
+                  }),
+                )
+              : Effect.fail(new SourceNotFound({ id })),
+        ),
       ),
 
     deactivate: (id) =>
-      Effect.flatMap(
-        ioGuard(() => store.deactivate(id)),
-        (res) =>
-          res.ok
-            ? Effect.promise(() => events.emit("source.deactivated", { id })).pipe(
-                Effect.as(res.source),
-              )
-            : Effect.fail(new SourceNotFound({ id })),
+      serializeMutation(
+        coordinator,
+        Effect.flatMap(
+          ioGuard(() => store.prepareDeactivate(id)),
+          (prepared): Effect.Effect<Source, SourceNotFound | SourceIoError> =>
+            prepared.result.ok
+              ? Effect.promise(() => events.emit("source.deactivated", { id })).pipe(
+                  Effect.flatMap(() => ioGuard(() => prepared.commit())),
+                  Effect.map((committed) => {
+                    if (!committed.ok) {
+                      throw new Error("prepared Source deactivation changed result");
+                    }
+                    return committed.source;
+                  }),
+                )
+              : Effect.fail(new SourceNotFound({ id })),
+        ),
       ),
 
     delete: (id) =>
-      Effect.flatMap(
-        ioGuard(() => store.delete(id)),
-        (res) =>
-          res.ok
-            ? Effect.promise(() => events.emit("source.removed", { id }))
-            : Effect.fail(new SourceNotFound({ id })),
+      serializeMutation(
+        coordinator,
+        Effect.flatMap(
+          ioGuard(() => store.prepareDelete(id)),
+          (prepared): Effect.Effect<void, SourceNotFound | SourceIoError> =>
+            prepared.result.ok
+              ? Effect.promise(() => events.emit("source.removed", { id })).pipe(
+                  Effect.flatMap(() => ioGuard(() => prepared.commit())),
+                  Effect.asVoid,
+                )
+              : Effect.fail(new SourceNotFound({ id })),
+        ),
       ),
 
     reorder: (id, direction) =>
-      Effect.flatMap(
-        ioGuard(() => store.reorder(id, direction)),
-        (res) => {
-          if (!res.ok) return Effect.fail(new SourceNotFound({ id }));
-          // Emit the audit row only for a genuine swap (ranks moved + persisted) —
-          // a no-op (already at the requested end) wrote nothing, so it records no
-          // user-action row (AGENTS.md: audit reflects a real mutation).
-          if (!res.changed) return Effect.succeed(res.source);
-          return Effect.promise(() =>
-            events.emit("source.reordered", { id, rank: res.source.rank }),
-          ).pipe(Effect.as(res.source));
-        },
+      serializeMutation(
+        coordinator,
+        Effect.flatMap(
+          ioGuard(() => store.prepareReorder(id, direction)),
+          (prepared): Effect.Effect<Source, SourceNotFound | SourceIoError> => {
+            const result = prepared.result;
+            if (!result.ok) return Effect.fail(new SourceNotFound({ id }));
+            if (!result.changed) return Effect.succeed(result.source);
+            return Effect.promise(() =>
+              events.emit("source.reordered", {
+                id,
+                rank: result.source.rank,
+              }),
+            ).pipe(
+              Effect.flatMap(() => ioGuard(() => prepared.commit())),
+              Effect.map((committed) => {
+                if (!committed.ok) throw new Error("prepared Source reorder changed result");
+                return committed.source;
+              }),
+            );
+          },
+        ),
       ),
   };
 }
@@ -202,7 +288,7 @@ export function SourceRegistryLive(opts: CreateSourceRegistryOptions): Layer.Lay
   return Layer.effect(
     SourceRegistry,
     Effect.acquireRelease(
-      Effect.sync(() => buildSvc(openStore(opts))),
+      Effect.sync(() => buildSvc(openStore(opts), opts.mutationCoordinator)),
       () => Effect.void,
     ),
   );

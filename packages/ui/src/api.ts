@@ -6,6 +6,8 @@
 // kit names use the contract's canonical unprefixed form.
 
 import type {
+  AcceptedDeployRequest,
+  AcceptedDeployResponse,
   AddSourceResult,
   BackendReadiness,
   BackendStatus,
@@ -14,14 +16,23 @@ import type {
   DeployResult,
   KitState,
   Selection,
-  Source,
+  SelectionMutation,
+  SelectionSnapshot,
+  SourceSummary,
   SyncRunResult,
   VerifyReport,
 } from "@hive/contract";
-import { AddSourceResult as AddSourceResultSchema } from "@hive/contract";
+import {
+  AcceptedDeployResponse as AcceptedDeployResponseSchema,
+  AddSourceResult as AddSourceResultSchema,
+  DeploymentOverview as DeploymentOverviewSchema,
+  SelectionSnapshot as SelectionSnapshotSchema,
+} from "@hive/contract";
 import type { Preferences } from "@hive/theming";
 
 export type {
+  AcceptedDeployRequest,
+  AcceptedDeployResponse,
   AddSourceResult,
   BackendAuthState,
   BackendReadiness,
@@ -31,21 +42,31 @@ export type {
   Catalog,
   CatalogProblem,
   DeployDiff,
+  DeploymentOverview,
   DeployResult,
   DeployTarget,
   DiffEntry,
   KindResult,
   KitState,
   Ledger,
+  OverviewLastAttempt,
+  OverviewMirror,
+  OverviewRow,
+  OverviewSource,
   PresetSummary,
+  ReconciliationState,
   Selection,
+  SelectionMutation,
+  SelectionSnapshot,
   Source,
+  SourceSummary,
   SourceSyncStatus,
   SourceValidationReport,
   StoredSecretMeta,
   SyncRunResult,
   SyncStatus,
   SyncStatusState,
+  TargetObservation,
   VerifyEntry,
   VerifyReport,
   VerifyStatus,
@@ -55,8 +76,22 @@ export type {
 declare global {
   interface Window {
     __hive?: {
-      baseUrl: string;
-      token: string;
+      connection?: {
+        kind: "managed" | "external";
+        displayName: string;
+        status: "connected" | "disconnected" | "reauthentication_required";
+      };
+      getConnection?: () => {
+        kind: "managed" | "external";
+        displayName: string;
+        status: "connected" | "disconnected" | "reauthentication_required";
+      };
+      daemon?: {
+        request: (
+          path: string,
+          init: { method?: string; headers?: Record<string, string>; body?: string },
+        ) => Promise<{ status: number; statusText: string; body: string }>;
+      };
       /** "win32" | "darwin" | "linux" — undefined outside Electron. */
       platform?: string;
       // Open an http(s) URL in the user's default external browser. Only
@@ -100,15 +135,19 @@ export async function openUrl(url: string): Promise<void> {
   }
 }
 
-export type ApiConfig = { baseUrl: string; token: string };
+export type ApiConfig =
+  | { baseUrl: string; token: string }
+  | {
+      request: NonNullable<NonNullable<Window["__hive"]>["daemon"]>["request"];
+    };
 
 // Developer config slice — mirrors the daemon's DeveloperConfigSchema. Kept
 // local to the UI client (a tiny boolean slice, no contract entry warranted).
 export type DeveloperConfig = { allowRealHomeDeploy: boolean };
 
 export function resolveApiConfig(): ApiConfig {
-  if (typeof window !== "undefined" && window.__hive) {
-    return window.__hive;
+  if (typeof window !== "undefined" && window.__hive?.daemon) {
+    return { request: window.__hive.daemon.request };
   }
   if (typeof window !== "undefined") {
     const params = new URLSearchParams(window.location.search);
@@ -119,12 +158,32 @@ export function resolveApiConfig(): ApiConfig {
   return { baseUrl: "http://127.0.0.1:3117", token: "" };
 }
 
-async function call<T>(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
+async function request(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<Response> {
+  if ("request" in cfg) {
+    const headers = Object.fromEntries(new Headers(init.headers).entries());
+    const serialized = await cfg.request(path, {
+      method: init.method,
+      headers,
+      body: typeof init.body === "string" ? init.body : undefined,
+    });
+    const body = serialized.body === "" ? null : serialized.body;
+    return new Response(body, { status: serialized.status, statusText: serialized.statusText });
+  }
+  return fetch(`${cfg.baseUrl}${path}`, {
     ...init,
     headers: {
       ...(init.headers ?? {}),
       authorization: `Bearer ${cfg.token}`,
+      ...(init.body ? { "content-type": "application/json" } : {}),
+    },
+  });
+}
+
+async function call<T>(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<T> {
+  const res = await request(cfg, path, {
+    ...init,
+    headers: {
+      ...(init.headers ?? {}),
       ...(init.body ? { "content-type": "application/json" } : {}),
     },
   });
@@ -135,11 +194,10 @@ async function call<T>(cfg: ApiConfig, path: string, init: RequestInit = {}): Pr
 }
 
 async function callVoid(cfg: ApiConfig, path: string, init: RequestInit = {}): Promise<void> {
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
+  const res = await request(cfg, path, {
     ...init,
     headers: {
       ...(init.headers ?? {}),
-      authorization: `Bearer ${cfg.token}`,
       ...(init.body ? { "content-type": "application/json" } : {}),
     },
   });
@@ -151,71 +209,6 @@ async function callVoid(cfg: ApiConfig, path: string, init: RequestInit = {}): P
       // ignore
     }
     throw new Error(`${res.status} ${res.statusText} on ${path}${detail ? `: ${detail}` : ""}`);
-  }
-}
-
-/**
- * Consume an SSE response body line-by-line via the Fetch streams API.
- *
- * `onEvent(name, data)` fires once per SSE message. `data` is JSON-parsed
- * if it looks like JSON, otherwise passed as a string. Returns when the
- * stream ends naturally or when `signal` aborts (rejects with AbortError
- * in that case).
- */
-export async function consumeSSE(
-  cfg: ApiConfig,
-  path: string,
-  init: RequestInit,
-  onEvent: (name: string, data: unknown) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
-    ...init,
-    headers: {
-      ...(init.headers ?? {}),
-      authorization: `Bearer ${cfg.token}`,
-      ...(init.body ? { "content-type": "application/json" } : {}),
-      accept: "text/event-stream",
-    },
-    signal,
-  });
-  if (!res.ok || !res.body) {
-    let detail = "";
-    try {
-      detail = await res.text();
-    } catch {
-      // ignore
-    }
-    throw new Error(`${res.status} ${res.statusText} on ${path}${detail ? `: ${detail}` : ""}`);
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    // SSE messages are separated by a blank line.
-    let separatorIdx: number;
-    // biome-ignore lint/suspicious/noAssignInExpressions: standard SSE-parse pattern
-    while ((separatorIdx = buffer.indexOf("\n\n")) >= 0) {
-      const block = buffer.slice(0, separatorIdx);
-      buffer = buffer.slice(separatorIdx + 2);
-      let eventName = "message";
-      let dataStr = "";
-      for (const line of block.split("\n")) {
-        if (line.startsWith("event:")) eventName = line.slice(6).trim();
-        else if (line.startsWith("data:")) dataStr += line.slice(5).trim();
-      }
-      if (!dataStr) continue;
-      let parsed: unknown = dataStr;
-      try {
-        parsed = JSON.parse(dataStr);
-      } catch {
-        // leave as string
-      }
-      onEvent(eventName, parsed);
-    }
   }
 }
 
@@ -241,6 +234,20 @@ export class AddSourceError extends Error {
     super(message);
     this.name = "AddSourceError";
     this.cause = cause;
+  }
+}
+
+export class SelectionConflictError extends Error {
+  constructor(readonly currentRevision: number) {
+    super("Selection changed on the Daemon");
+    this.name = "SelectionConflictError";
+  }
+}
+
+export class PlanStaleError extends Error {
+  constructor() {
+    super("Deployment plan changed");
+    this.name = "PlanStaleError";
   }
 }
 
@@ -318,6 +325,12 @@ export const api = {
     }),
 
   // ─── Kit (capability deploy-manager) ─────────────────────────────────
+  getKitOverview: (cfg: ApiConfig) =>
+    call<unknown>(cfg, "/api/kit/overview").then((body) => DeploymentOverviewSchema.parse(body)),
+  patchKitSelection: (cfg: ApiConfig, mutation: SelectionMutation) =>
+    patchKitSelection(cfg, mutation),
+  acceptKitDeploy: (cfg: ApiConfig, requestBody: AcceptedDeployRequest) =>
+    acceptKitDeploy(cfg, requestBody),
   // Full catalog from the synced Mirror (entries + presets + load problems).
   getKitCatalog: (cfg: ApiConfig) => call<Catalog>(cfg, "/api/kit/catalog"),
   // Sync status (freshness state + SHA) + the Deployment Ledger.
@@ -347,7 +360,7 @@ export const api = {
   // ─── Sources ─────────────────────────────────────────────────────────
   // The authoritative Source list, INCLUDING inactive sources (state.sync is
   // active-only). Drives the per-Source toggle rows in the Capabilities header.
-  listSources: (cfg: ApiConfig) => call<Source[]>(cfg, "/api/sources"),
+  listSources: (cfg: ApiConfig) => call<SourceSummary[]>(cfg, "/api/sources"),
   // Register a Source by git URL. The daemon onboards it (sync + validate the
   // mirror) and returns a 201 AddSourceResult even for a non-conformant or empty
   // repo — the add is never rejected for that. Unlike `call<T>`, this reads the
@@ -358,14 +371,16 @@ export const api = {
   // emit the source.activated/deactivated audit event server-side; the catalog is
   // built from active sources only, so the page re-fetches ["kit"] to reflect it.
   activateSource: (cfg: ApiConfig, id: string) =>
-    call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/activate`, { method: "POST" }),
+    call<SourceSummary>(cfg, `/api/sources/${encodeURIComponent(id)}/activate`, { method: "POST" }),
   deactivateSource: (cfg: ApiConfig, id: string) =>
-    call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/deactivate`, { method: "POST" }),
+    call<SourceSummary>(cfg, `/api/sources/${encodeURIComponent(id)}/deactivate`, {
+      method: "POST",
+    }),
   // Raise ("up") or lower ("down") a Source one precedence step. Returns the
   // updated Source. The page re-fetches ["sources"] (row order) + ["kit"] (the
   // catalog recomputes with the new precedence → shadows flip live).
   reorderSource: (cfg: ApiConfig, id: string, direction: "up" | "down") =>
-    call<Source>(cfg, `/api/sources/${encodeURIComponent(id)}/reorder`, {
+    call<SourceSummary>(cfg, `/api/sources/${encodeURIComponent(id)}/reorder`, {
       method: "POST",
       body: JSON.stringify({ direction }),
     }),
@@ -380,13 +395,20 @@ export const api = {
 
 async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResult> {
   const path = "/api/sources";
-  const res = await fetch(`${cfg.baseUrl}${path}`, {
+  const res = await request(cfg, path, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${cfg.token}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ origin }),
+    body: JSON.stringify({
+      label: sourceLabel(origin),
+      locator: {
+        kind: "git",
+        repoUrl: origin,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
+    }),
   });
   let body: unknown;
   try {
@@ -426,4 +448,63 @@ async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResul
   const message =
     (isRecord(body) ? asString(body.message) : undefined) ?? `${res.status} ${res.statusText}`;
   throw new AddSourceError({ kind: "other", status: res.status, message }, message);
+}
+
+function sourceLabel(origin: string): string {
+  try {
+    const url = new URL(origin);
+    const segments = url.pathname.split("/").filter(Boolean);
+    return segments.slice(-2).join("/") || url.hostname;
+  } catch {
+    return origin;
+  }
+}
+
+async function patchKitSelection(
+  cfg: ApiConfig,
+  mutation: SelectionMutation,
+): Promise<SelectionSnapshot> {
+  const path = "/api/kit/selection";
+  const res = await request(cfg, path, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(mutation),
+  });
+  if (res.ok) return SelectionSnapshotSchema.parse(await res.json());
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    body = undefined;
+  }
+  if (res.status === 409 && isRecord(body) && body.error === "selection_conflict") {
+    const currentRevision = body.currentRevision;
+    throw new SelectionConflictError(
+      typeof currentRevision === "number" ? currentRevision : mutation.expectedRevision,
+    );
+  }
+  throw new Error(`${res.status} ${res.statusText} on ${path}`);
+}
+
+async function acceptKitDeploy(
+  cfg: ApiConfig,
+  requestBody: AcceptedDeployRequest,
+): Promise<AcceptedDeployResponse> {
+  const path = "/api/kit/deploy";
+  const res = await request(cfg, path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(requestBody),
+  });
+  if (res.ok) return AcceptedDeployResponseSchema.parse(await res.json());
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    body = undefined;
+  }
+  if (res.status === 409 && isRecord(body) && body.error === "plan_stale") {
+    throw new PlanStaleError();
+  }
+  throw new Error(`${res.status} ${res.statusText} on ${path}`);
 }

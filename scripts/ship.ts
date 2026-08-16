@@ -14,22 +14,26 @@
 // Run via: `bun run ship`.
 
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
+import { readReleaseMetadata } from "./release-manifest";
+import { resolveShipTarget } from "./ship-target";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const isWin = process.platform === "win32";
 const EXE = isWin ? ".exe" : "";
-
-const COMPILE_TARGET =
-  process.platform === "win32"
-    ? "bun-windows-x64"
-    : process.platform === "darwin"
-      ? "bun-darwin-x64"
-      : "bun-linux-x64";
-
-const ELECTRON_PLATFORM =
-  process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux";
+const { compileTarget, electronPlatform, electronArch } = resolveShipTarget(
+  process.platform,
+  process.arch,
+);
 
 function run(cmd: string, args: string[], cwd: string): void {
   console.log(`\n→ ${cmd} ${args.join(" ")}  [cwd=${cwd}]`);
@@ -37,6 +41,18 @@ function run(cmd: string, args: string[], cwd: string): void {
   if (result.status !== 0) {
     throw new Error(`step failed: ${cmd} ${args.join(" ")} (exit ${result.status})`);
   }
+}
+
+function sourceCommit(): string {
+  const result = spawnSync("git", ["rev-parse", "--verify", "HEAD"], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+  });
+  const commit = result.status === 0 ? result.stdout.trim() : "";
+  if (!/^[0-9a-f]{40}$/.test(commit)) {
+    throw new Error("could not resolve the exact Hive source commit");
+  }
+  return commit;
 }
 
 console.log("=== Building UI ===");
@@ -49,12 +65,19 @@ console.log("\n=== Compiling daemon binary ===");
 const stagingDir = join(REPO_ROOT, "packages", "shell", "staging");
 rmSync(stagingDir, { recursive: true, force: true });
 mkdirSync(stagingDir, { recursive: true });
+const releaseMetadataPath = join(stagingDir, "hive-release.json");
+const releaseMetadata = readReleaseMetadata(process.env, sourceCommit());
+writeFileSync(releaseMetadataPath, `${JSON.stringify(releaseMetadata, null, 2)}\n`, {
+  mode: 0o644,
+});
 run(
   "bun",
   [
     "build",
     "--compile",
-    `--target=${COMPILE_TARGET}`,
+    `--target=${compileTarget}`,
+    "--define",
+    `process.env.HIVE_BUILD_VERSION=${JSON.stringify(releaseMetadata.buildVersion)}`,
     "packages/daemon/src/server/start.ts",
     "--outfile",
     join("packages", "shell", "staging", `hive-daemon${EXE}`),
@@ -114,8 +137,8 @@ run(
     "electron-packager",
     ".",
     "Hive",
-    `--platform=${ELECTRON_PLATFORM}`,
-    "--arch=x64",
+    `--platform=${electronPlatform}`,
+    `--arch=${electronArch}`,
     `--out=${releaseDir}`,
     "--overwrite",
     // Curated app-dir node_modules (prod deps staged above); skip galactus's
@@ -125,6 +148,7 @@ run(
     // daemon binary goes alongside as extraResource (sits in Resources/,
     // accessible via process.resourcesPath).
     `--extra-resource=${join(stagingDir, `hive-daemon${EXE}`)}`,
+    `--extra-resource=${releaseMetadataPath}`,
     // Exclude build artifacts and dev-only files. Plain regex strings
     // without `|`/`$` so the Windows shell doesn't mangle them. Patterns match
     // the path relative to the app dir, rooted with a leading slash.
@@ -145,13 +169,20 @@ run(
 );
 
 console.log("\n=== Verifying build ===");
-const appDir = join(releaseDir, `Hive-${ELECTRON_PLATFORM}-x64`);
-// The two artifacts that make the folder actually runnable: the Electron
-// launcher and the self-contained daemon binary (in Resources/). Missing
-// either means a broken ship.
+const appDir = join(releaseDir, `Hive-${electronPlatform}-${electronArch}`);
+const executablePath =
+  electronPlatform === "darwin"
+    ? join(appDir, "Hive.app", "Contents", "MacOS", "Hive")
+    : join(appDir, `Hive${EXE}`);
+const resourcesDir =
+  electronPlatform === "darwin"
+    ? join(appDir, "Hive.app", "Contents", "Resources")
+    : join(appDir, "resources");
+// The launcher, standalone daemon, and release identity make a valid package.
 const artifacts: Array<[string, string]> = [
-  [`Hive${EXE}`, join(appDir, `Hive${EXE}`)],
-  [`resources/hive-daemon${EXE}`, join(appDir, "resources", `hive-daemon${EXE}`)],
+  [`Hive${EXE}`, executablePath],
+  [`resources/hive-daemon${EXE}`, join(resourcesDir, `hive-daemon${EXE}`)],
+  ["resources/hive-release.json", join(resourcesDir, "hive-release.json")],
 ];
 let ok = true;
 for (const [label, p] of artifacts) {

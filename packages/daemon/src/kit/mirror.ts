@@ -8,6 +8,7 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -20,6 +21,7 @@ import { parseTar, topFolder } from "./tar.ts";
 import { MirrorProvenance } from "./types.ts";
 
 const PROVENANCE_FILE = ".hive-mirror.json";
+const OWNED_STAGE = /^extract-owner-([1-9]\d*)-/;
 
 export function readProvenance(mirrorRoot: string): MirrorProvenance | null {
   const p = join(mirrorRoot, PROVENANCE_FILE);
@@ -35,14 +37,32 @@ export function mirrorExists(mirrorRoot: string): boolean {
   return existsSync(join(mirrorRoot, "capabilities"));
 }
 
-// Sweep stale partial temp extract dirs from a prior aborted sync. Called on
-// startup and before each new extraction. The tmp root is shared across Sources
-// (each extraction stages into a uniquely-named extract-<sha>-<ts> dir).
+function liveStageOwner(entry: string): boolean {
+  const match = OWNED_STAGE.exec(entry);
+  const rawPid = match?.[1];
+  if (!rawPid) return false;
+  const pid = Number(rawPid);
+  if (!Number.isSafeInteger(pid)) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: unknown) {
+    return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM";
+  }
+}
+
+export function createOwnedMirrorStage(tmpRoot: string): string {
+  mkdirSync(tmpRoot, { recursive: true });
+  return mkdtempSync(join(tmpRoot, `extract-owner-${process.pid}-`));
+}
+
+// Sweep partial temp extract dirs from Daemons that are no longer alive. Legacy
+// and malformed names carry no live owner and are safe crash remnants to remove.
 export function sweepStaleTmp(tmpRoot: string): void {
   const root = tmpRoot;
   if (!existsSync(root)) return;
   for (const entry of readdirSync(root)) {
-    if (entry.startsWith("extract-")) {
+    if (entry.startsWith("extract-") && !liveStageOwner(entry)) {
       try {
         rmSync(join(root, entry), { recursive: true, force: true });
       } catch (err) {
@@ -93,7 +113,7 @@ export function recoverMirror(mirrorRoot: string): void {
   }
 }
 
-// Remove a Source's whole Mirror dir on delete (#36, Q7), best-effort. An fs
+// Remove a Source's whole Mirror dir on delete, best-effort. An fs
 // fault must NOT fail the delete — the registry row is already gone; a lingering
 // Mirror is harmless (deactivated/deleted Sources never aggregate). Models the
 // sweepStaleTmp best-effort pattern: rmSync recursive+force in try/catch, trace on
@@ -123,10 +143,7 @@ export function writeMirror(
   tarBuf: Uint8Array,
   sha: string,
 ): MirrorProvenance {
-  sweepStaleTmp(tmpRoot);
-  mkdirSync(tmpRoot, { recursive: true });
-  const stageDir = join(tmpRoot, `extract-${sha.slice(0, 12)}-${Date.now()}`);
-  mkdirSync(stageDir, { recursive: true });
+  const stageDir = createOwnedMirrorStage(tmpRoot);
 
   const entries = parseTar(tarBuf);
   const strip = topFolder(entries);
@@ -144,7 +161,7 @@ export function writeMirror(
     const dest = join(stageDir, rel);
     if (entry.type === "dir") {
       mkdirSync(dest, { recursive: true });
-    } else {
+    } else if (entry.type === "file") {
       mkdirSync(dirname(dest), { recursive: true });
       writeFileSync(dest, entry.data);
     }
@@ -153,7 +170,7 @@ export function writeMirror(
   const provenance: MirrorProvenance = { sha, fetchedAt: Date.now() };
   writeFileSync(join(stageDir, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
 
-  swapMirror(mirrorRoot, stageDir);
+  swapMirror(mirrorRoot, stageDir)();
   return provenance;
 }
 
@@ -163,7 +180,9 @@ export function writeMirror(
 // a swap failure. Shared by both writeMirror (tar path) and localSyncMirror
 // (copy path) — the only common tail; tar parse/strip/traversal stay in
 // writeMirror, copy concerns stay in localSyncMirror.
-function swapMirror(mirrorRoot: string, stageDir: string): void {
+type MirrorCleanup = () => void;
+
+function swapMirror(mirrorRoot: string, stageDir: string): MirrorCleanup {
   mkdirSync(dirname(mirrorRoot), { recursive: true });
   const backup = `${mirrorRoot}.prev-${Date.now()}`;
   const hadPrior = existsSync(mirrorRoot);
@@ -177,13 +196,23 @@ function swapMirror(mirrorRoot: string, stageDir: string): void {
     }
     throw err;
   }
-  if (hadPrior) {
+  return () => {
+    if (!hadPrior) return;
     try {
       rmSync(backup, { recursive: true, force: true });
     } catch (err) {
       log().warn({ module: "kit/mirror", err: String(err) }, "prior mirror cleanup failed");
     }
-  }
+  };
+}
+
+export function commitStagedMirror(
+  mirrorRoot: string,
+  stageDir: string,
+  provenance: MirrorProvenance,
+): MirrorCleanup {
+  writeFileSync(join(stageDir, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
+  return swapMirror(mirrorRoot, stageDir);
 }
 
 // Thrown by localSyncMirror when the bundled Starter content root (its
@@ -194,12 +223,12 @@ export class MissingStarterRoot extends Error {
   override readonly name = "MissingStarterRoot";
 }
 
-// Local Sync (#32): copy the bundled Starter's `capabilities/` + `presets/` from
+// Local Sync: copy the bundled Starter's `capabilities/` + `presets/` from
 // `starterRoot` into a staged dir, then atomically swap it into the mirror —
 // producing a NORMAL Mirror the catalog/deploy already read, with no network and
 // no tar. Writes NO provenance file: MirrorProvenance mandates a 40-hex sha, and
-// a local mirror has none (the sync-status derives "local" from Source.kind, not
-// from provenance). Re-copies on every call (no sha to short-circuit on) — that
+// a local mirror has none (the sync-status derives "local" from
+// Source.locator.kind, not from provenance). Re-copies on every call (no sha to short-circuit on) — that
 // is how a bundled-content update propagates when the app updates. Throws
 // MissingStarterRoot on an absent content root, or a bare Error on a copy/swap
 // fault; the caller maps both to a typed per-source SyncError (never a raw throw
@@ -210,10 +239,7 @@ export function localSyncMirror(mirrorRoot: string, tmpRoot: string, starterRoot
     throw new MissingStarterRoot(`starter capabilities not found at ${capsSrc}`);
   }
 
-  sweepStaleTmp(tmpRoot);
-  mkdirSync(tmpRoot, { recursive: true });
-  const stageDir = join(tmpRoot, `extract-local-${Date.now()}`);
-  mkdirSync(stageDir, { recursive: true });
+  const stageDir = createOwnedMirrorStage(tmpRoot);
 
   cpSync(capsSrc, join(stageDir, "capabilities"), { recursive: true });
   const presetsSrc = join(starterRoot, "presets");
@@ -221,5 +247,5 @@ export function localSyncMirror(mirrorRoot: string, tmpRoot: string, starterRoot
     cpSync(presetsSrc, join(stageDir, "presets"), { recursive: true });
   }
 
-  swapMirror(mirrorRoot, stageDir);
+  swapMirror(mirrorRoot, stageDir)();
 }

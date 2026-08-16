@@ -1,4 +1,4 @@
-// Kit module orchestration (#30): per-Source sync over the injected
+// Kit module orchestration: per-Source sync over the injected
 // SourceRegistry, per-Source freshness in state(), the retired single-kit
 // identity in the deploy audit, and the launch-sync ordering invariant.
 
@@ -9,10 +9,10 @@ import { join } from "node:path";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { SourceRegistry, SourceRegistryLive } from "../../../sources/effect/sources-live.ts";
 import { buildGzipTar, clearHomeEnv, redirectHomeEnv } from "../../__tests__/helpers.ts";
+import { createDeploymentMutationCoordinator, PlanStaleError } from "../../deploy-coordinator.ts";
 import { mirrorExists } from "../../mirror.ts";
 import type { HttpFetch } from "../../sync.ts";
 import { failSafeDeployTargets } from "../../targets.ts";
-import type { DeployAuditEvents } from "../../types.ts";
 import { Kit, KitLive } from "../kit-live.ts";
 
 const SHA = "a".repeat(40);
@@ -52,25 +52,19 @@ function okFetch(sha: string): HttpFetch {
       : tarball(sha, "foo");
 }
 
-// Each Source ships a distinct skill named after its owner-path segment, so a
-// multi-Source deploy has no cross-Source CapabilityKey collision.
-function distinctFetch(sha: string): HttpFetch {
-  return async (url) => {
-    if (url.includes("api.github.com")) {
-      return new Response(JSON.stringify({ sha }), { status: 200 });
-    }
-    // codeload URL: .../owner/<repo>/tar.gz/<sha>
-    const m = /codeload\.github\.com\/owner\/([^/]+)\//.exec(url);
-    return tarball(sha, `skill-${m?.[1] ?? "x"}`);
-  };
-}
-
 // A KitLive over a memory SourceRegistry seeded with `origins` (all active).
 function kitOver(origins: string[], fetchImpl: HttpFetch) {
   const sourcesLayer = SourceRegistryLive({
     mode: "memory",
     initial: origins.map((origin, i) => ({
       id: `src-${i}`,
+      label: `src-${i}`,
+      locator: {
+        kind: "git" as const,
+        repoUrl: origin,
+        revision: { mode: "track" as const, ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin,
       kind: "git" as const,
       active: true,
@@ -90,7 +84,75 @@ function kitOver(origins: string[], fetchImpl: HttpFetch) {
   return { kit, registry, rt };
 }
 
-describe("Kit.sync — per-Source (#30)", () => {
+describe("Kit.sync — per-Source", () => {
+  test("Source sync holds the shared mutation gate across its Mirror swap and acceptance revalidates after", async () => {
+    const mutationCoordinator = createDeploymentMutationCoordinator();
+    let releaseDownload = (): void => {};
+    let downloadStarted = (): void => {};
+    const started = new Promise<void>((resolve) => {
+      downloadStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseDownload = resolve;
+    });
+    const fetchImpl: HttpFetch = async (url) => {
+      if (url.includes("api.github.com")) {
+        return new Response(JSON.stringify({ sha: SHA }), { status: 200 });
+      }
+      downloadStarted();
+      await release;
+      return tarball(SHA, "foo");
+    };
+    const origin = "https://github.com/owner/a";
+    const sourcesLayer = SourceRegistryLive({
+      mode: "memory",
+      mutationCoordinator,
+      initial: [
+        {
+          id: "src-0",
+          label: "src-0",
+          locator: {
+            kind: "git",
+            repoUrl: origin,
+            revision: { mode: "track", ref: "refs/heads/main" },
+            subpath: ".",
+          },
+          origin,
+          kind: "git",
+          active: true,
+          createdAt: 0,
+          rank: 0,
+        },
+      ],
+    });
+    const rt = ManagedRuntime.make(
+      Layer.merge(
+        KitLive({ fetch: fetchImpl, mutationCoordinator }).pipe(Layer.provide(sourcesLayer)),
+        sourcesLayer,
+      ),
+    );
+    const kit = rt.runSync(Kit);
+    const reviewed = kit.overview();
+    const syncing = Effect.runPromise(kit.sync());
+    await started;
+    let settled = false;
+    const accepting = kit
+      .acceptDeploy({
+        selectionRevision: reviewed.selectionRevision,
+        planToken: reviewed.planToken,
+      })
+      .finally(() => {
+        settled = true;
+      });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseDownload();
+    await syncing;
+    await expect(accepting).rejects.toBeInstanceOf(PlanStaleError);
+    rt.dispose();
+  });
+
   test("two active Sources sync into two distinct mirrors; state() has one entry each", async () => {
     const { kit, registry, rt } = kitOver(
       ["https://github.com/owner/a", "https://github.com/owner/b"],
@@ -137,67 +199,9 @@ describe("Kit.sync — per-Source (#30)", () => {
     expect(bState?.state).toBe("up_to_date");
     rt.dispose();
   });
-
-  test("deploy audit payload is refs-only with kitSha:null for N==1 and N>1", async () => {
-    // N==1
-    const single = kitOver(["https://github.com/owner/a"], okFetch(SHA));
-    await Effect.runPromise(single.kit.sync());
-    const events1: DeployAuditEvents["deploy.applied"][] = [];
-    single.kit.events.on("deploy.applied", (e) => {
-      events1.push(e);
-    });
-    await Effect.runPromise(
-      single.kit.deploy({
-        presets: [],
-        add: { instructions: [], skills: ["foo"], agents: [], plugins: [], bundles: [] },
-        remove: { instructions: [], skills: [], agents: [], plugins: [], bundles: [] },
-        targets: ["claude"],
-      }),
-    );
-    expect(events1).toHaveLength(1);
-    expect(events1[0]?.kitSha).toBeNull();
-    single.rt.dispose();
-
-    // N>1 (fresh home so mirrors don't clash). Distinct skills per Source so the
-    // union-resolver deploys both with no cross-Source collision.
-    clearHomeEnv();
-    rmSync(tmpRoot, { recursive: true, force: true });
-    tmpRoot = mkdtempSync(join(tmpdir(), "kit-live-"));
-    redirectHomeEnv(tmpRoot);
-    const multi = kitOver(
-      ["https://github.com/owner/a", "https://github.com/owner/b"],
-      distinctFetch(SHA),
-    );
-    await Effect.runPromise(multi.kit.sync());
-    const events2: DeployAuditEvents["deploy.applied"][] = [];
-    multi.kit.events.on("deploy.applied", (e) => {
-      events2.push(e);
-    });
-    const result = await Effect.runPromise(
-      multi.kit.deploy({
-        presets: [],
-        add: {
-          instructions: [],
-          skills: ["skill-a", "skill-b"],
-          agents: [],
-          plugins: [],
-          bundles: [],
-        },
-        remove: { instructions: [], skills: [], agents: [], plugins: [], bundles: [] },
-        targets: ["claude"],
-      }),
-    );
-    expect(result.perKind.find((k) => k.kind === "skill")?.applied.sort()).toEqual([
-      "skill-a",
-      "skill-b",
-    ]);
-    expect(events2).toHaveLength(1);
-    expect(events2[0]?.kitSha).toBeNull();
-    multi.rt.dispose();
-  });
 });
 
-describe("Kit launch-sync ordering (#32, file mode — local Starter seed)", () => {
+describe("Kit launch-sync ordering with a file-mode local Starter seed", () => {
   // Point the Starter content root at the real in-repo package (hermetic, no env
   // leak between tests).
   const STARTER_PKG = join(
@@ -266,7 +270,7 @@ describe("Kit launch-sync ordering (#32, file mode — local Starter seed)", () 
   });
 });
 
-describe("Kit ↔ SourceRegistry shared store (#30 wiring invariant)", () => {
+describe("Kit ↔ SourceRegistry shared store ( wiring invariant)", () => {
   test("a registry mutation is visible to Kit's read model (one shared store)", async () => {
     // The server wires KitLive.pipe(Layer.provide(sourcesLayer)) + merges the same
     // sourcesLayer, so Kit and the Sources routes resolve ONE store (Effect
@@ -280,10 +284,101 @@ describe("Kit ↔ SourceRegistry shared store (#30 wiring invariant)", () => {
     const kit = rt.runSync(Kit);
 
     expect(kit.state().sync).toHaveLength(0);
-    await Effect.runPromise(registry.add("https://github.com/owner/added-at-runtime"));
+    const source = await Effect.runPromise(
+      registry.add({
+        label: "added-at-runtime",
+        locator: {
+          kind: "git",
+          repoUrl: "https://github.com/owner/added-at-runtime",
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+      }),
+    );
     // Visible to Kit without any re-wiring — proves the single shared store.
     expect(kit.state().sync).toHaveLength(1);
-    expect(kit.state().sync[0]?.origin).toBe("https://github.com/owner/added-at-runtime");
+    expect(kit.state().sync[0]?.sourceId).toBe(source.id);
+    rt.dispose();
+  });
+
+  test("overview captures registry, Mirror, Selection, catalog, and plan from one safe snapshot", async () => {
+    const { kit, registry, rt } = kitOver(["https://github.com/owner/a"], okFetch(SHA));
+    await Effect.runPromise(kit.sync());
+
+    const before = kit.overview();
+    expect(before.sourceRegistryRevision).toBe(0);
+    expect(before.selectionRevision).toBe(1);
+    expect(before.sources).toEqual([
+      { id: "src-0", label: "src-0", kind: "git", active: true, rank: 0 },
+    ]);
+    expect(JSON.stringify(before.sources)).not.toContain("repoUrl");
+    expect(before.mirrors).toHaveLength(1);
+    expect(before.mirrors[0]?.identity).toMatch(/^[0-9a-f]{64}$/);
+    expect(before.variants.some((entry) => entry.kind === "skill" && entry.name === "foo")).toBe(
+      true,
+    );
+    expect(
+      before.rows.some((entry) => entry.key.kind === "skill" && entry.key.name === "foo"),
+    ).toBe(true);
+    expect(before.planToken).toMatch(/^[0-9a-f]{64}$/);
+
+    await Effect.runPromise(
+      registry.add({
+        label: "second",
+        locator: {
+          kind: "git",
+          repoUrl: "https://github.com/owner/second",
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+      }),
+    );
+    const after = kit.overview();
+    expect(after.sourceRegistryRevision).toBe(1);
+    expect(after.sources).toHaveLength(2);
+    expect(after.planToken).not.toBe(before.planToken);
+    rt.dispose();
+  });
+
+  test("overview never exposes a working-tree locator path", () => {
+    const rawPath = "/private/arca/credential-bearing-worktree";
+    const sourcesLayer = SourceRegistryLive({
+      mode: "memory",
+      initial: [
+        {
+          id: "working-source",
+          label: "Working Source",
+          locator: { kind: "working-tree", repoRoot: rawPath, subpath: "." },
+          origin: rawPath,
+          kind: "local",
+          active: true,
+          createdAt: 1,
+          rank: 1,
+        },
+      ],
+    });
+    const rt = ManagedRuntime.make(
+      Layer.merge(KitLive().pipe(Layer.provide(sourcesLayer)), sourcesLayer),
+    );
+    const overview = rt.runSync(Kit).overview();
+    expect(overview.sources).toEqual([
+      {
+        id: "working-source",
+        label: "Working Source",
+        kind: "local",
+        active: true,
+        rank: 1,
+      },
+    ]);
+    expect(JSON.stringify(overview)).not.toContain(rawPath);
+    expect(overview.mirrors).toEqual([
+      {
+        sourceId: "working-source",
+        precedence: 1,
+        identity: null,
+        error: "unavailable",
+      },
+    ]);
     rt.dispose();
   });
 });

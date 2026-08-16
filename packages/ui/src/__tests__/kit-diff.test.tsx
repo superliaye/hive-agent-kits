@@ -1,4 +1,4 @@
-// #53 Deploy Diff visual treatment (UI). The diff panel is a collapsible,
+//  Deploy Diff visual treatment (UI). The diff panel is a collapsible,
 // count-bearing summary (collapsed by default) so the catalog holds prime fold;
 // only populated buckets render (no marooned empty columns); removed rows carry
 // row-level danger so a destructive deploy is legible from the rows, not only the
@@ -21,6 +21,7 @@ import type {
 } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -52,8 +53,36 @@ let ledgerInstructions: string[];
 
 function sources(): Source[] {
   return [
-    { id: GIT_ID, origin: GIT_ORIGIN, kind: "git", active: true, createdAt: 1, rank: 0 },
-    { id: OTHER_ID, origin: OTHER_ORIGIN, kind: "git", active: true, createdAt: 2, rank: 1 },
+    {
+      id: GIT_ID,
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: GIT_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
+      origin: GIT_ORIGIN,
+      kind: "git",
+      active: true,
+      createdAt: 1,
+      rank: 0,
+    },
+    {
+      id: OTHER_ID,
+      label: "owner/repo-b",
+      locator: {
+        kind: "git",
+        repoUrl: OTHER_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
+      origin: OTHER_ORIGIN,
+      kind: "git",
+      active: true,
+      createdAt: 2,
+      rank: 1,
+    },
   ];
 }
 
@@ -112,14 +141,12 @@ function kitState(): KitState {
         sha: "abc1234def",
         fetchedAt: 1,
         sourceId: GIT_ID,
-        origin: GIT_ORIGIN,
       },
       {
         state: "up_to_date",
         sha: "def5678abc",
         fetchedAt: 1,
         sourceId: OTHER_ID,
-        origin: OTHER_ORIGIN,
       },
     ],
     ledger: {
@@ -145,6 +172,17 @@ function installStubs(): void {
     const path = new URL(raw, "http://localhost").pathname;
     const method = (init?.method ?? "GET").toUpperCase();
 
+    if (path === "/api/kit/overview")
+      return json(
+        overviewFromLegacy({
+          catalog: catalog(),
+          state: kitState(),
+          sources: sources(),
+          diff: { entries: diffEntries },
+        }),
+      );
+    if (path === "/api/kit/selection" && method === "PATCH")
+      return json({ revision: 8, enabled: [], removalIntents: [] });
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
@@ -205,7 +243,7 @@ async function renderWithDiff(entries: DiffEntry[]): Promise<HTMLElement> {
   return host;
 }
 
-describe("KitDeployPage — #53 Deploy Diff visual treatment", () => {
+describe("KitDeployPage —  Deploy Diff visual treatment", () => {
   test("a one-sided (removed-only) diff renders only the removed bucket, no marooned empty columns", async () => {
     const host = await renderWithDiff([
       { kind: "skill", name: "alpha", change: "removed", replacesUserFile: false },
@@ -296,7 +334,6 @@ describe("KitDeployPage — #53 Deploy Diff visual treatment", () => {
     await click(host.querySelector('[data-testid="kit-diff-toggle"]'));
 
     const review = host.querySelector('[data-testid="kit-diff-review"]');
-    expect(review?.textContent ?? "").toContain("Targets: Claude");
     expect(review?.textContent ?? "").toContain("Changed 1");
 
     const source = host.querySelector('[data-testid="kit-diff-sources-priority-tool"]');

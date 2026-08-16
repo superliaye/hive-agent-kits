@@ -1,4 +1,4 @@
-// Transient action feedback (#50): the Capabilities tab pushes a toast when a
+// Transient action feedback: the Capabilities tab pushes a toast when a
 // previously-silent mutation resolves — sync (POST /api/kit/sync), Source
 // activate/deactivate (…/activate, …/deactivate), and a confirmed delete
 // (DELETE /api/sources/:id). Toasts complement, not replace, the persistent
@@ -23,6 +23,7 @@ import type {
 } from "../api.ts";
 import { KitDeployPage, syncToast } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -61,6 +62,8 @@ function sources(): Source[] {
   const all: Source[] = [
     {
       id: STARTER_ID,
+      label: "Starter",
+      locator: { kind: "starter" },
       origin: STARTER_ORIGIN,
       kind: "local",
       active: !inactive.has(STARTER_ID),
@@ -69,6 +72,13 @@ function sources(): Source[] {
     },
     {
       id: GIT_ID,
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: GIT_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: GIT_ORIGIN,
       kind: "git",
       active: !inactive.has(GIT_ID),
@@ -128,8 +138,8 @@ function installStubs(): void {
   failSync = false;
   syncResult = {
     sources: [
-      { sourceId: STARTER_ID, origin: STARTER_ORIGIN, status: "unchanged" },
-      { sourceId: GIT_ID, origin: GIT_ORIGIN, status: "unchanged" },
+      { sourceId: STARTER_ID, status: "unchanged" },
+      { sourceId: GIT_ID, status: "unchanged" },
     ],
   };
   globalThis.fetch = (async (
@@ -141,6 +151,10 @@ function installStubs(): void {
     const method = (init?.method ?? "GET").toUpperCase();
     calls.push({ method, path });
 
+    if (path === "/api/kit/overview")
+      return json(
+        overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: sources() }),
+      );
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
@@ -261,7 +275,7 @@ describe("syncToast — failure-dominates aggregation (q3a)", () => {
   });
 });
 
-describe("KitDeployPage — action feedback toasts (#50)", () => {
+describe("KitDeployPage — action feedback toasts", () => {
   test("the toast host renders with an aria-live region and is non-blocking", async () => {
     installStubs();
     const host = await render();
@@ -289,8 +303,8 @@ describe("KitDeployPage — action feedback toasts (#50)", () => {
     // Mixed: one synced, one failed → the failed must dominate (q3a).
     syncResult = {
       sources: [
-        { sourceId: STARTER_ID, origin: STARTER_ORIGIN, status: "synced" },
-        { sourceId: GIT_ID, origin: GIT_ORIGIN, status: "failed", errorReason: "boom" },
+        { sourceId: STARTER_ID, status: "synced" },
+        { sourceId: GIT_ID, status: "failed", errorReason: "boom" },
       ],
     };
     const host = await render();

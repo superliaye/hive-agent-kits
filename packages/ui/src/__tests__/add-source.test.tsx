@@ -1,4 +1,4 @@
-// Add-Source UI (#46): the Capabilities header exposes a git-URL input that POSTs
+// Add-Source UI: the Capabilities header exposes a git-URL input that POSTs
 // /api/sources. The daemon onboards (sync + validate) and keeps the Source even
 // when non-conformant/empty — so the inline status classifies the 201 by its
 // `validation` body (success / empty / conformance-warning) and never drops the
@@ -7,7 +7,7 @@
 // The fetch stub is STATEFUL (mirrors kit-source-toggle.test.tsx): a mutable
 // `added` flag flips when POST /api/sources is observed, and only THEN do
 // GET /api/sources and GET /api/kit/catalog return the new Source + its
-// capability — so the add→appears assertions depend on the post-add
+// capability — so the add→appears assertions depend on the after add
 // ["sources"]/["kit"] invalidation refetch, not the initial load.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
@@ -24,6 +24,7 @@ import type {
 } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
+import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -61,11 +62,27 @@ let addOutcome: "conformant" | "empty" | "nonconformant" | "bad" | "duplicate";
 
 function sources(): Source[] {
   const list: Source[] = [
-    { id: STARTER_ID, origin: STARTER_ORIGIN, kind: "local", active: true, createdAt: 1, rank: 0 },
+    {
+      id: STARTER_ID,
+      label: "Starter",
+      locator: { kind: "starter" },
+      origin: STARTER_ORIGIN,
+      kind: "local",
+      active: true,
+      createdAt: 1,
+      rank: 0,
+    },
   ];
   if (added) {
     list.push({
       id: ADDED_ID,
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: ADDED_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: ADDED_ORIGIN,
       kind: "git",
       active: true,
@@ -105,7 +122,6 @@ function kitState(): KitState {
       sha: null,
       fetchedAt: 1,
       sourceId: STARTER_ID,
-      origin: STARTER_ORIGIN,
     },
   ];
   if (added) {
@@ -114,7 +130,6 @@ function kitState(): KitState {
       sha: "abc1234def",
       fetchedAt: 1,
       sourceId: ADDED_ID,
-      origin: ADDED_ORIGIN,
     });
   }
   return { sync, ledger: null };
@@ -141,6 +156,13 @@ function addResult(): unknown {
   return {
     source: {
       id: ADDED_ID,
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: ADDED_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
       origin: ADDED_ORIGIN,
       kind: "git",
       active: true,
@@ -186,10 +208,14 @@ function installStubs(): void {
         return json({ error: "duplicate origin", origin: ADDED_ORIGIN }, 409);
       }
       // The daemon keeps the Source on a 201 regardless of conformance — flip the
-      // flag so the post-add refetch surfaces the new row + (conformant) caps.
+      // flag so the after add refetch surfaces the new row + (conformant) caps.
       added = true;
       return json(addResult(), 201);
     }
+    if (path === "/api/kit/overview")
+      return json(
+        overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: sources() }),
+      );
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/kit/verify") return json(emptyVerify);
@@ -246,7 +272,7 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
   await flush();
 }
 
-describe("KitDeployPage — Add-Source UI (#46)", () => {
+describe("KitDeployPage — Add-Source UI", () => {
   test("(a) the Add-Source form renders an input + submit in the header", async () => {
     installStubs();
     const host = await render();
@@ -272,10 +298,18 @@ describe("KitDeployPage — Add-Source UI (#46)", () => {
     await typeUrl(input, ADDED_ORIGIN);
     await submitForm(host.querySelector('[data-testid="add-source-form"]') as HTMLFormElement);
 
-    // The request was POST /api/sources with body { origin }.
+    // The request uses the locator-native Source contract.
     const post = calls.find((c) => c.method === "POST" && c.path === "/api/sources");
     expect(post).not.toBeUndefined();
-    expect(post?.body).toBe(JSON.stringify({ origin: ADDED_ORIGIN }));
+    expect(JSON.parse(post?.body ?? "{}")).toEqual({
+      label: "owner/repo",
+      locator: {
+        kind: "git",
+        repoUrl: ADDED_ORIGIN,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
+    });
 
     // Success banner shows the owner/repo label + the capability count.
     const success = host.querySelector('[data-testid="add-source-success"]');

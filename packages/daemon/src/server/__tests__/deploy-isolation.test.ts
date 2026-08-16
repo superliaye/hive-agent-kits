@@ -1,5 +1,5 @@
 /**
- * Deploy-isolation integration test (Plan B2 — the real safety boundary).
+ * Deploy-isolation integration test ( — the real safety boundary).
  *
  * A dev daemon (devMode, allowRealHomeDeploy:false — the fail-safe default)
  * performs a Deploy. It must:
@@ -26,6 +26,7 @@ import { AddSourceResult } from "@hive/contract";
 import { buildGzipTar, type TarFixtureEntry } from "../../kit/__tests__/helpers.ts";
 import type { HttpFetch } from "../../kit/sync.ts";
 import { createServer, type ServerHandles } from "../index.ts";
+import { acceptDesiredSelection } from "./accepted-deploy-helpers.ts";
 
 const TOKEN = "test-token";
 const ORIGIN = "https://github.com/org/iso-source";
@@ -111,23 +112,29 @@ describe("deploy isolation — dev daemon (toggle off) never touches real homes"
     });
     try {
       const add = await server.app.fetch(
-        authed("/api/sources", { method: "POST", body: JSON.stringify({ origin: ORIGIN }) }),
+        authed("/api/sources", {
+          method: "POST",
+          body: JSON.stringify({
+            label: ORIGIN,
+            locator: {
+              kind: "git",
+              repoUrl: ORIGIN,
+              revision: { mode: "track", ref: "refs/heads/main" },
+              subpath: ".",
+            },
+          }),
+        }),
       );
       expect(add.status).toBe(201);
       AddSourceResult.parse(await add.json());
 
-      const deploy = await server.app.fetch(
-        authed("/api/kit/deploy", {
-          method: "POST",
-          body: JSON.stringify({
-            presets: [],
-            add: { skills: [ISO_SKILL_NAME], agents: [], instructions: [] },
-            remove: {},
-            targets: ["claude", "codex"],
-          }),
-        }),
-      );
-      expect(deploy.status).toBe(200);
+      const deploy = await acceptDesiredSelection(server, TOKEN, [
+        {
+          key: { kind: "skill", name: ISO_SKILL_NAME },
+          targets: ["claude", "codex"],
+        },
+      ]);
+      expect(deploy.lastOperation?.state).toBe("completed");
 
       // The SANDBOX is populated — claude (skills) + agents (codex skills land in
       // the agents home per the deploy contract).

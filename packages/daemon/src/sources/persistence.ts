@@ -15,6 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+import { z } from "zod";
 import {
   SOURCES_FILE_VERSION,
   type SourcesFile,
@@ -22,7 +23,7 @@ import {
   SourcesFileVersionProbe,
 } from "./types.ts";
 
-const EMPTY: SourcesFile = { version: SOURCES_FILE_VERSION, sources: [] };
+const EMPTY: SourcesFile = { version: SOURCES_FILE_VERSION, revision: 0, sources: [] };
 
 export class SourcesPersistence {
   constructor(private readonly path: string) {}
@@ -64,6 +65,42 @@ export class SourcesPersistence {
     const raw = readFileSync(this.path, "utf8");
     const json: unknown = JSON.parse(raw);
     const probe = SourcesFileVersionProbe.safeParse(json);
+    if (probe.success && probe.data.version === 3) {
+      const legacy = z
+        .object({
+          version: z.literal(3),
+          sources: z.array(
+            z.object({
+              id: z.string(),
+              origin: z.string(),
+              kind: z.enum(["git", "local"]),
+              active: z.boolean(),
+              createdAt: z.number().int(),
+              rank: z.number().int(),
+            }),
+          ),
+        })
+        .parse(json);
+      const migrated: SourcesFile = {
+        version: SOURCES_FILE_VERSION,
+        revision: 0,
+        sources: legacy.sources.map((source) => ({
+          ...source,
+          label: source.origin,
+          locator:
+            source.kind === "git"
+              ? {
+                  kind: "git" as const,
+                  repoUrl: source.origin,
+                  revision: { mode: "track" as const, ref: "refs/heads/main" },
+                  subpath: ".",
+                }
+              : { kind: "starter" as const },
+        })),
+      };
+      this.write(migrated);
+      return migrated;
+    }
     if (!probe.success || probe.data.version !== SOURCES_FILE_VERSION) return EMPTY;
     return SourcesFileSchema.parse(json);
   }

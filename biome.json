@@ -2,7 +2,15 @@
   "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "files": {
-    "includes": ["packages/daemon/src/**", "scripts/**", "packages/ui/src/**", "!**/.claude"]
+    "includes": [
+      "packages/daemon/src/**",
+      "packages/contract/src/**",
+      "packages/shell/src/**",
+      "scripts/**",
+      "packages/ui/src/**",
+      "!scripts/fixtures/my-agent-kits",
+      "!**/.claude"
+    ]
   },
   "formatter": {
     "enabled": true,

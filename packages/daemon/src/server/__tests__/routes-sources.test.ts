@@ -1,5 +1,5 @@
 /**
- * HTTP routes for the Sources registry (ADR-0023) + add → sync → validate (#33).
+ * HTTP routes for the Sources registry (ADR-0023) + add → sync → validate.
  * Covers the five verbs and their pinned statuses, plus the add-on-validate body:
  *   - GET    /api/sources                 list (200)
  *   - POST   /api/sources                 add (400 malformed, 201 valid, 409 dup)
@@ -127,7 +127,18 @@ function repoTarWithInstruction(name: string, frontmatter: string): TarFixtureEn
 
 async function postOrigin(server: ServerHandles, origin: string): Promise<Response> {
   return server.app.fetch(
-    authed("/api/sources", { method: "POST", body: JSON.stringify({ origin }) }),
+    authed("/api/sources", {
+      method: "POST",
+      body: JSON.stringify({
+        label: origin,
+        locator: {
+          kind: "git",
+          repoUrl: origin,
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+      }),
+    }),
   );
 }
 
@@ -184,7 +195,33 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#33) reachable + conforming → 201 AddSourceResult, up_to_date, conformant, count>0", async () => {
+  test("POST /api/sources accepts a labeled git locator", async () => {
+    const server = await serverWith(stubFetch(repoTar([conformingSkill("foo")])));
+    try {
+      const locator = {
+        kind: "git",
+        repoUrl: "https://github.com/a/b",
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      } as const;
+      const res = await server.app.fetch(
+        authed("/api/sources", {
+          method: "POST",
+          body: JSON.stringify({ label: "Personal kit", locator }),
+        }),
+      );
+
+      expect(res.status).toBe(201);
+      const body = AddSourceResult.parse(await res.json());
+      expect(body.source).toMatchObject({ label: "Personal kit", kind: "git" });
+      expect(body.source).not.toHaveProperty("locator");
+      expect(body.source).not.toHaveProperty("origin");
+    } finally {
+      await server.dispose();
+    }
+  });
+
+  test("reachable + conforming → 201 AddSourceResult, up_to_date, conformant, count>0", async () => {
     const server = await serverWith(stubFetch(repoTar([conformingSkill("foo")])));
     try {
       const res = await postOrigin(server, "https://github.com/a/b");
@@ -230,7 +267,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#33) reachable + a malformed skill → 201, conformant:false, located error", async () => {
+  test("reachable + a malformed skill → 201, conformant:false, located error", async () => {
     // name mismatch (name !== dir) is a located conformance error, not a rejection.
     const malformed: SkillSpec = {
       dir: "bar",
@@ -249,7 +286,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#45) reachable + a malformed plugin → 201, conformant:false, located plugin error", async () => {
+  test("reachable + a malformed plugin → 201, conformant:false, located plugin error", async () => {
     // The failure surfaces at ADD time (validate runs inside onboardSource), not
     // mid-Deploy: a plugin missing marketplace_source is a located conformance error.
     const server = await serverWith(
@@ -268,7 +305,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#45) reachable + a malformed agent (name != dir) → 201, conformant:false, located agent error", async () => {
+  test("reachable + a malformed agent (name != dir) → 201, conformant:false, located agent error", async () => {
     // The failure surfaces at ADD time, not mid-Deploy: an agent whose declared
     // name does not match its directory is a located conformance error.
     const server = await serverWith(
@@ -287,7 +324,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#45) reachable + a malformed instruction (empty description) → 201, conformant:false, located instruction error", async () => {
+  test("reachable + a malformed instruction (empty description) → 201, conformant:false, located instruction error", async () => {
     const server = await serverWith(
       stubFetch(repoTarWithInstruction("core", "description:\napplyTo: '**'")),
     );
@@ -304,7 +341,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#33) unreachable repo → 201, source registered, sync.state check_failed + errorReason", async () => {
+  test("unreachable repo → 201, source registered, sync.state check_failed + errorReason", async () => {
     const server = await serverWith(stubFetch(null));
     try {
       const res = await postOrigin(server, "https://github.com/a/b");
@@ -324,7 +361,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#33) rate-limited repo → 201, sync.state rate_limited", async () => {
+  test("rate-limited repo → 201, sync.state rate_limited", async () => {
     const server = await serverWith(rateLimitedFetch());
     try {
       const res = await postOrigin(server, "https://github.com/a/b");
@@ -336,7 +373,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#33) reachable + zero capabilities → 201, capabilityCount === 0", async () => {
+  test("reachable + zero capabilities → 201, capabilityCount === 0", async () => {
     // An empty tarball (top folder only — no capabilities/).
     const server = await serverWith(stubFetch([{ path: `repo-${SHA.slice(0, 7)}/` }]));
     try {
@@ -349,7 +386,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#33) reachable + within-kind collision → 201, count>0 (not empty), conformant", async () => {
+  test("reachable + within-kind collision → 201, count>0 (not empty), conformant", async () => {
     // Two well-formed same-named skills under @-groups: each is conformant on its
     // own, but they collide on (skill, baz) → both non-resolvable. They still
     // ENUMERATE as leaves → capabilityCount>0, never mislabeled empty.
@@ -380,7 +417,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#33) GET /api/kit/state after a failed add reports errorReason no_mirror", async () => {
+  test("GET /api/kit/state after a failed add reports errorReason no_mirror", async () => {
     const server = await serverWith(stubFetch(null));
     try {
       const res = await postOrigin(server, "https://github.com/a/b");
@@ -450,7 +487,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#51) POST /api/sources/:id/reorder swaps ranks (200) and validates direction", async () => {
+  test("POST /api/sources/:id/reorder swaps ranks (200) and validates direction", async () => {
     const server = await serverWith(stubFetch(repoTar([conformingSkill("foo")])));
     try {
       const a = AddSourceResult.parse(
@@ -484,7 +521,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#51) reorder with an invalid direction → 400", async () => {
+  test("reorder with an invalid direction → 400", async () => {
     const server = await serverWith(stubFetch(repoTar([conformingSkill("foo")])));
     try {
       const a = AddSourceResult.parse(
@@ -502,7 +539,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#51) reorder an unknown id → 404", async () => {
+  test("reorder an unknown id → 404", async () => {
     const server = await serverWith(stubFetch([]));
     try {
       const res = await server.app.fetch(
@@ -517,7 +554,7 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("(#36) DELETE removes the on-disk Mirror dir + GET omits the Source", async () => {
+  test("DELETE removes the on-disk Mirror dir + GET omits the Source", async () => {
     const server = await serverWith(stubFetch(repoTar([conformingSkill("foo")])));
     try {
       const add = await postOrigin(server, "https://github.com/a/b");

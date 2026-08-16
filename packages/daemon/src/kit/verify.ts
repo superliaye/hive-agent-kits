@@ -1,4 +1,4 @@
-// Self-check / verify pass (Feature 1 + drift from Feature 2).
+// On-disk existence and drift verification.
 //
 // The ledger records INTENT/ownership; it does not observe disk. This pass stats
 // each ledger entry's expected on-disk target path(s) — resolved via DeployTargets

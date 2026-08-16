@@ -1,5 +1,5 @@
 // Home-resolution precedence + redirect-predicate + childEnv reconciliation
-// tests for the deploy-target port (Plan B2/B2a/B3/B5).
+// Tests for the deploy-target port's path and environment resolution.
 //
 // The SAFETY INVARIANT under test: the fail-safe default is the SANDBOX. A real-
 // home deploy happens only when positively proven — explicit HIVE_*_HOME env,

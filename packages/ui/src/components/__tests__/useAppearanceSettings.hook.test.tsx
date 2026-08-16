@@ -57,8 +57,6 @@ beforeAll(() => {
   // Electron bridge). The actual OS accent reaches the hook via ThemeProvider's
   // `systemAccent` prop, so this stub just needs to be present and typed.
   window.__hive = {
-    baseUrl: "http://localhost",
-    token: "test-token",
     getSystemAccent: async () => null,
   };
 });

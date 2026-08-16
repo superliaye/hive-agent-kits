@@ -1,4 +1,4 @@
-// Deploy engine orchestrator (Plan A4) — ordered best-effort apply.
+// Deploy engine orchestrator — ordered best-effort apply.
 //
 // Pre-flight binaries for SELECTED kinds only, abort BEFORE any write on a
 // missing tool (typed DeployError naming it). Apply kinds in order, collect a
@@ -11,6 +11,8 @@ import { join } from "node:path";
 import type { CapabilityKind, DeployResult, KindResult } from "@hive/contract";
 import { Effect } from "effect";
 import { log } from "../../lib/log.ts";
+import { mirrorContentSha } from "../content-sha.ts";
+import { openDeploymentStateStore } from "../deployment-state.ts";
 import { DeployError } from "../effect/errors.ts";
 import { recordFingerprints } from "../fingerprint.ts";
 import {
@@ -33,7 +35,14 @@ import {
   writeFileAt,
   writeSkillFolder,
 } from "./adapter.ts";
-import { deployedAgentPath, deployedInstructionPath, deployedSkillDir } from "./artifact-hash.ts";
+import {
+  deployedAgentPath,
+  deployedInstructionPath,
+  deployedSkillDir,
+  hashDeployedAgent,
+  hashDeployedInstruction,
+  hashDeployedSkill,
+} from "./artifact-hash.ts";
 import {
   agentSourceDir,
   bundleMeta,
@@ -52,6 +61,14 @@ const skipPlugin = (): boolean => process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL === 
 function emptyKind(kind: CapabilityKind): KindResult {
   return { kind, applied: [], failed: [] };
 }
+
+type TargetOutcome = {
+  kind: CapabilityKind;
+  name: string;
+  target: DeployTarget;
+  succeeded: boolean;
+  sourceMissing?: boolean;
+};
 
 // Pre-flight: which binaries does this selection require, and are they present?
 // claude iff a plugin; git iff a setup-script bundle; npx iff an npx-skills
@@ -84,7 +101,11 @@ function preflight(fx: DeployFsExec, sel: ResolvedSelection): DeployError | null
 
 // ---- per-kind apply ----
 
-function applyInstructions(fx: DeployFsExec, sel: ResolvedSelection): KindResult {
+function applyInstructions(
+  fx: DeployFsExec,
+  sel: ResolvedSelection,
+  outcomes: TargetOutcome[],
+): KindResult {
   const res = emptyKind("instruction");
   const bodies: string[] = [];
   const resolvedNames: string[] = [];
@@ -95,6 +116,15 @@ function applyInstructions(fx: DeployFsExec, sel: ResolvedSelection): KindResult
     const body = instructionBody(fx.targets.mirrorRoot(item.sourceId), item.name);
     if (body === null) {
       res.failed.push({ name: item.name, error: "source not found in mirror" });
+      for (const target of sel.targets) {
+        outcomes.push({
+          kind: "instruction",
+          name: item.name,
+          target,
+          succeeded: false,
+          sourceMissing: true,
+        });
+      }
       continue;
     }
     bodies.push(body);
@@ -104,21 +134,36 @@ function applyInstructions(fx: DeployFsExec, sel: ResolvedSelection): KindResult
   // The whole-file write is the unit of success — only mark the names applied
   // once every selected target's file landed. A write fault (EACCES/EROFS) is
   // captured as a per-kind failure, never an untyped defect escaping to a 500.
-  try {
-    if (sel.targets.includes("claude")) {
+  let landed = false;
+  if (sel.targets.includes("claude")) {
+    try {
       const claudeMd = deployedInstructionPath(fx.targets, "claude");
       backupIfExists(claudeMd);
       writeFileAt(claudeMd, compiled);
+      landed = true;
+      for (const name of resolvedNames)
+        outcomes.push({ kind: "instruction", name, target: "claude", succeeded: true });
+    } catch (err) {
+      for (const name of resolvedNames) res.failed.push({ name, error: String(err) });
+      for (const name of resolvedNames)
+        outcomes.push({ kind: "instruction", name, target: "claude", succeeded: false });
     }
-    if (sel.targets.includes("codex")) {
+  }
+  if (sel.targets.includes("codex")) {
+    try {
       const agentsMd = deployedInstructionPath(fx.targets, "codex");
       backupIfExists(agentsMd);
       writeFileAt(agentsMd, compiled);
+      landed = true;
+      for (const name of resolvedNames)
+        outcomes.push({ kind: "instruction", name, target: "codex", succeeded: true });
+    } catch (err) {
+      for (const name of resolvedNames) res.failed.push({ name, error: String(err) });
+      for (const name of resolvedNames)
+        outcomes.push({ kind: "instruction", name, target: "codex", succeeded: false });
     }
-    res.applied.push(...resolvedNames);
-  } catch (err) {
-    for (const name of resolvedNames) res.failed.push({ name, error: String(err) });
   }
+  if (landed) res.applied.push(...resolvedNames);
   return res;
 }
 
@@ -126,30 +171,51 @@ function applySkills(
   fx: DeployFsExec,
   sel: ResolvedSelection,
   snippets: Map<string, string>,
+  outcomes: TargetOutcome[],
 ): KindResult {
   const res = emptyKind("skill");
   for (const item of sel.skills) {
     const srcDir = skillSourceDir(fx.targets.mirrorRoot(item.sourceId), item.name);
     if (!srcDir) {
       res.failed.push({ name: item.name, error: "source not found in mirror" });
+      for (const target of sel.targets)
+        outcomes.push({
+          kind: "skill",
+          name: item.name,
+          target,
+          succeeded: false,
+          sourceMissing: true,
+        });
       continue;
     }
+    let out: ReturnType<typeof transformSkill>;
     try {
       const files = readSkillSource(srcDir);
-      const out = transformSkill(
+      out = transformSkill(
         { name: item.name, files, disableModelInvocation: skillDisablesModelInvocation(srcDir) },
         snippets,
       );
-      for (const target of sel.targets) {
+    } catch (err) {
+      res.failed.push({ name: item.name, error: String(err) });
+      for (const target of sel.targets)
+        outcomes.push({ kind: "skill", name: item.name, target, succeeded: false });
+      continue;
+    }
+    let landed = false;
+    for (const target of sel.targets) {
+      try {
         const skillsDir = deployedSkillDir(fx.targets, item.name, target);
         const allFiles =
           out.sidecar && target === "codex" ? [...out.files, out.sidecar] : out.files;
         writeSkillFolder(skillsDir, allFiles);
+        landed = true;
+        outcomes.push({ kind: "skill", name: item.name, target, succeeded: true });
+      } catch (err) {
+        res.failed.push({ name: item.name, error: String(err) });
+        outcomes.push({ kind: "skill", name: item.name, target, succeeded: false });
       }
-      res.applied.push(item.name);
-    } catch (err) {
-      res.failed.push({ name: item.name, error: String(err) });
     }
+    if (landed) res.applied.push(item.name);
   }
   return res;
 }
@@ -158,32 +224,64 @@ function applyAgents(
   fx: DeployFsExec,
   sel: ResolvedSelection,
   snippets: Map<string, string>,
+  outcomes: TargetOutcome[],
 ): KindResult {
   const res = emptyKind("agent");
   for (const item of sel.agents) {
     const srcDir = agentSourceDir(fx.targets.mirrorRoot(item.sourceId), item.name);
     if (!srcDir) {
       res.failed.push({ name: item.name, error: "source not found in mirror" });
+      for (const target of sel.targets)
+        outcomes.push({
+          kind: "agent",
+          name: item.name,
+          target,
+          succeeded: false,
+          sourceMissing: true,
+        });
       continue;
     }
+    let out: ReturnType<typeof transformAgent>;
     try {
       const content = readFileSync(join(srcDir, "AGENT.md"), "utf8");
-      const out = transformAgent({ name: item.name, raw: content }, snippets);
-      if (sel.targets.includes("claude")) {
-        writeFileAt(deployedAgentPath(fx.targets, item.name, "claude"), out.claudeMd);
-      }
-      if (sel.targets.includes("codex")) {
-        writeFileAt(deployedAgentPath(fx.targets, item.name, "codex"), out.codexToml);
-      }
-      res.applied.push(item.name);
+      out = transformAgent({ name: item.name, raw: content }, snippets);
     } catch (err) {
       res.failed.push({ name: item.name, error: String(err) });
+      for (const target of sel.targets)
+        outcomes.push({ kind: "agent", name: item.name, target, succeeded: false });
+      continue;
     }
+    let landed = false;
+    if (sel.targets.includes("claude")) {
+      try {
+        writeFileAt(deployedAgentPath(fx.targets, item.name, "claude"), out.claudeMd);
+        landed = true;
+        outcomes.push({ kind: "agent", name: item.name, target: "claude", succeeded: true });
+      } catch (err) {
+        res.failed.push({ name: item.name, error: String(err) });
+        outcomes.push({ kind: "agent", name: item.name, target: "claude", succeeded: false });
+      }
+    }
+    if (sel.targets.includes("codex")) {
+      try {
+        writeFileAt(deployedAgentPath(fx.targets, item.name, "codex"), out.codexToml);
+        landed = true;
+        outcomes.push({ kind: "agent", name: item.name, target: "codex", succeeded: true });
+      } catch (err) {
+        res.failed.push({ name: item.name, error: String(err) });
+        outcomes.push({ kind: "agent", name: item.name, target: "codex", succeeded: false });
+      }
+    }
+    if (landed) res.applied.push(item.name);
   }
   return res;
 }
 
-function applyPlugins(fx: DeployFsExec, sel: ResolvedSelection): KindResult {
+function applyPlugins(
+  fx: DeployFsExec,
+  sel: ResolvedSelection,
+  outcomes: TargetOutcome[],
+): KindResult {
   const res = emptyKind("plugin");
   // Claude-only.
   if (!sel.targets.includes("claude")) return res;
@@ -192,6 +290,13 @@ function applyPlugins(fx: DeployFsExec, sel: ResolvedSelection): KindResult {
     const meta = pluginMeta(fx.targets.mirrorRoot(item.sourceId), name);
     if (!meta) {
       res.failed.push({ name, error: "plugin source not found in mirror" });
+      outcomes.push({
+        kind: "plugin",
+        name,
+        target: "claude",
+        succeeded: false,
+        sourceMissing: true,
+      });
       continue;
     }
     if (skipPlugin()) {
@@ -200,10 +305,12 @@ function applyPlugins(fx: DeployFsExec, sel: ResolvedSelection): KindResult {
         "plugin install skipped (AGENT_KIT_SKIP_PLUGIN_INSTALL)",
       );
       res.applied.push(name);
+      outcomes.push({ kind: "plugin", name, target: "claude", succeeded: true });
       continue;
     }
     if (!meta.source || !meta.market) {
       res.failed.push({ name, error: "missing marketplace_source/marketplace_name" });
+      outcomes.push({ kind: "plugin", name, target: "claude", succeeded: false });
       continue;
     }
     try {
@@ -214,6 +321,7 @@ function applyPlugins(fx: DeployFsExec, sel: ResolvedSelection): KindResult {
       );
       if (add.status !== 0) {
         res.failed.push({ name, error: `marketplace add exited ${add.status}` });
+        outcomes.push({ kind: "plugin", name, target: "claude", succeeded: false });
         continue;
       }
       const install = execInstaller(
@@ -226,14 +334,17 @@ function applyPlugins(fx: DeployFsExec, sel: ResolvedSelection): KindResult {
       );
       if (install.status !== 0) {
         res.failed.push({ name, error: `plugin install exited ${install.status}` });
+        outcomes.push({ kind: "plugin", name, target: "claude", succeeded: false });
         continue;
       }
       res.applied.push(name);
+      outcomes.push({ kind: "plugin", name, target: "claude", succeeded: true });
     } catch (err) {
       // The not_redirected guard is a blast-radius safety stop — it must abort
       // the deploy, not downgrade to a per-plugin failure.
       if (err instanceof DeployError && err.reason === "not_redirected") throw err;
       res.failed.push({ name, error: String(err) });
+      outcomes.push({ kind: "plugin", name, target: "claude", succeeded: false });
     }
   }
   return res;
@@ -242,6 +353,7 @@ function applyPlugins(fx: DeployFsExec, sel: ResolvedSelection): KindResult {
 function applyBundles(
   fx: DeployFsExec,
   sel: ResolvedSelection,
+  outcomes: TargetOutcome[],
 ): { result: KindResult; pins: Record<string, string | null> } {
   const res = emptyKind("bundle");
   const pins: Record<string, string | null> = {};
@@ -250,6 +362,8 @@ function applyBundles(
     const meta = bundleMeta(fx.targets.mirrorRoot(item.sourceId), name);
     if (!meta) {
       res.failed.push({ name, error: "bundle source not found in mirror" });
+      for (const target of sel.targets)
+        outcomes.push({ kind: "bundle", name, target, succeeded: false, sourceMissing: true });
       continue;
     }
     const pin = meta.installerKind === "npx-skills" ? meta.pkg : meta.pinnedCommit;
@@ -260,6 +374,8 @@ function applyBundles(
       );
       pins[name] = pin || null;
       res.applied.push(name);
+      for (const target of sel.targets)
+        outcomes.push({ kind: "bundle", name, target, succeeded: true });
       continue;
     }
     try {
@@ -286,7 +402,10 @@ function applyBundles(
             },
             "npx",
           );
-          if (r.status !== 0) allOk = false;
+          if (r.status !== 0) {
+            allOk = false;
+            outcomes.push({ kind: "bundle", name, target, succeeded: false });
+          } else outcomes.push({ kind: "bundle", name, target, succeeded: true });
         }
         if (allOk) {
           pins[name] = pin || null;
@@ -305,7 +424,10 @@ function applyBundles(
             { command: "bash", args: [meta.command, ...meta.flags, ...hostFlags] },
             "git",
           );
-          if (r.status !== 0) allOk = false;
+          if (r.status !== 0) {
+            allOk = false;
+            outcomes.push({ kind: "bundle", name, target, succeeded: false });
+          } else outcomes.push({ kind: "bundle", name, target, succeeded: true });
         }
         if (allOk) {
           pins[name] = pin || null;
@@ -317,6 +439,8 @@ function applyBundles(
     } catch (err) {
       if (err instanceof DeployError && err.reason === "not_redirected") throw err;
       res.failed.push({ name, error: String(err) });
+      for (const target of sel.targets)
+        outcomes.push({ kind: "bundle", name, target, succeeded: false });
     }
   }
   return { result: res, pins };
@@ -329,20 +453,50 @@ function pruneOrphans(
   pruneSkills: string[],
   pruneAgents: string[],
   targets: DeployTarget[],
-): { kind: CapabilityKind; name: string }[] {
+): {
+  pruned: { kind: CapabilityKind; name: string }[];
+  removed: { kind: "skill" | "agent"; name: string; target: DeployTarget }[];
+  failed: { kind: "skill" | "agent"; name: string; target: DeployTarget }[];
+} {
   const pruned: { kind: CapabilityKind; name: string }[] = [];
+  const removed: { kind: "skill" | "agent"; name: string; target: DeployTarget }[] = [];
+  const failed: { kind: "skill" | "agent"; name: string; target: DeployTarget }[] = [];
   for (const name of pruneSkills) {
+    let complete = true;
     for (const target of targets) {
-      removeDir(deployedSkillDir(fx.targets, name, target));
+      try {
+        removeDir(deployedSkillDir(fx.targets, name, target));
+        removed.push({ kind: "skill", name, target });
+      } catch {
+        complete = false;
+        failed.push({ kind: "skill", name, target });
+      }
     }
-    pruned.push({ kind: "skill", name });
+    if (complete) pruned.push({ kind: "skill", name });
   }
   for (const name of pruneAgents) {
-    if (targets.includes("claude")) removeFile(deployedAgentPath(fx.targets, name, "claude"));
-    if (targets.includes("codex")) removeFile(deployedAgentPath(fx.targets, name, "codex"));
-    pruned.push({ kind: "agent", name });
+    let complete = true;
+    if (targets.includes("claude")) {
+      try {
+        removeFile(deployedAgentPath(fx.targets, name, "claude"));
+        removed.push({ kind: "agent", name, target: "claude" });
+      } catch {
+        complete = false;
+        failed.push({ kind: "agent", name, target: "claude" });
+      }
+    }
+    if (targets.includes("codex")) {
+      try {
+        removeFile(deployedAgentPath(fx.targets, name, "codex"));
+        removed.push({ kind: "agent", name, target: "codex" });
+      } catch {
+        complete = false;
+        failed.push({ kind: "agent", name, target: "codex" });
+      }
+    }
+    if (complete) pruned.push({ kind: "agent", name });
   }
-  return pruned;
+  return { pruned, removed, failed };
 }
 
 // ---- public verb ----
@@ -355,11 +509,14 @@ export type DeployInput = {
   // (snippets aren't Capabilities, so they have no winner). Each Capability's
   // winner Mirror travels in `selection` (the resolved item's sourceId).
   activeMirrorRoots: readonly string[];
-  // Per-kind names the ACTIVE catalog currently provides (#47 data-loss guard).
+  // Per-kind names the ACTIVE catalog currently provides ( data-loss guard).
   // reconcilePrune unlinks an owned-but-deselected name ONLY if it is in this set;
   // an owned name absent from it is an ORPHAN (its Source isn't active) and is KEPT
   // — never auto-deleted. Built at the deploy seam from the same active catalog.
   activeCatalogNames: { skills: readonly string[]; agents: readonly string[] };
+  // Accepted Deploy orchestration supplies the durable id; direct synchronous
+  // callers may let the engine create one.
+  operationId?: string;
 };
 
 export function runDeploy(
@@ -368,6 +525,7 @@ export function runDeploy(
 ): Effect.Effect<DeployResult, DeployError> {
   return Effect.gen(function* () {
     const sel = input.selection;
+    const operationId = input.operationId ?? crypto.randomUUID();
 
     // Load snippets once, up front: a cross-Source snippet collision is a typed
     // DeployError that must ABORT the deploy (snippets aren't capabilities, so the
@@ -391,17 +549,18 @@ export function runDeploy(
     if (missing) return yield* Effect.fail(missing);
 
     const perKind: KindResult[] = [];
+    const targetOutcomes: TargetOutcome[] = [];
 
     // Ordered best-effort: instructions, skills, agents, plugins, bundles.
-    perKind.push(applyInstructions(fx, sel));
-    perKind.push(applySkills(fx, sel, snippets));
-    perKind.push(applyAgents(fx, sel, snippets));
+    perKind.push(applyInstructions(fx, sel, targetOutcomes));
+    perKind.push(applySkills(fx, sel, snippets, targetOutcomes));
+    perKind.push(applyAgents(fx, sel, snippets, targetOutcomes));
 
     let pluginResult: KindResult;
     let bundlePins: Record<string, string | null> = {};
     let bundleResult: KindResult;
     try {
-      pluginResult = applyPlugins(fx, sel);
+      pluginResult = applyPlugins(fx, sel, targetOutcomes);
     } catch (err) {
       // A not_redirected guard throw aborts the deploy (it's a real safety stop).
       if (err instanceof DeployError && err.reason === "not_redirected") {
@@ -412,7 +571,7 @@ export function runDeploy(
     perKind.push(pluginResult);
 
     try {
-      const b = applyBundles(fx, sel);
+      const b = applyBundles(fx, sel, targetOutcomes);
       bundleResult = b.result;
       bundlePins = b.pins;
     } catch (err) {
@@ -425,7 +584,7 @@ export function runDeploy(
 
     // Reconcile: re-read the ledger NOW, prune only names that were Hive-owned at
     // request start AND are now deselected AND still in the active catalog — never a
-    // concurrently-CLI-added name, never an owned-but-absent orphan (#47).
+    // concurrently-CLI-added name, never an owned-but-absent orphan.
     const orphan = reconcilePrune(
       fx.targets,
       sel.skills.map((i) => i.name),
@@ -436,7 +595,7 @@ export function runDeploy(
         agents: new Set(input.activeCatalogNames.agents),
       },
     );
-    const pruned = pruneOrphans(fx, orphan.skills, orphan.agents, sel.targets);
+    const pruneOutcome = pruneOrphans(fx, orphan.skills, orphan.agents, sel.targets);
 
     // Plugins/bundles are never auto-removed: hint when one is owned-but-deselected.
     const bundleHint = deselectedBundleHint(
@@ -470,9 +629,108 @@ export function runDeploy(
         plugins: pluginResult.applied,
         bundles: bundleResult.applied.map((name) => ({ name, pin: bundlePins[name] ?? null })),
       },
-      orphan.skills,
-      orphan.agents,
+      pruneOutcome.pruned.filter((entry) => entry.kind === "skill").map((entry) => entry.name),
+      pruneOutcome.pruned.filter((entry) => entry.kind === "agent").map((entry) => entry.name),
     );
+
+    // Deployment State is Hive-private authority for factual outcomes. It is
+    // committed only after the filesystem apply/removal and the interoperable
+    // Ledger merge above have succeeded. The Ledger bytes remain untouched.
+    yield* Effect.try({
+      try: () => {
+        const state = openDeploymentStateStore(fx.targets.deploymentStatePath(), {
+          legacyFingerprintPath: fx.targets.fingerprintPath(),
+        });
+        const sourceByKind = new Map<CapabilityKind, Map<string, string>>([
+          ["instruction", new Map(sel.instructions.map((item) => [item.name, item.sourceId]))],
+          ["skill", new Map(sel.skills.map((item) => [item.name, item.sourceId]))],
+          ["agent", new Map(sel.agents.map((item) => [item.name, item.sourceId]))],
+          ["plugin", new Map(sel.plugins.map((item) => [item.name, item.sourceId]))],
+          ["bundle", new Map(sel.bundles.map((item) => [item.name, item.sourceId]))],
+        ]);
+        const renderedHash = (
+          kind: CapabilityKind,
+          name: string,
+          target: DeployTarget,
+        ): string | null => {
+          if (kind === "skill") return hashDeployedSkill(fx.targets, name, target);
+          if (kind === "agent") return hashDeployedAgent(fx.targets, name, target);
+          if (kind === "instruction") return hashDeployedInstruction(fx.targets, target);
+          const sourceId = sourceByKind.get(kind)?.get(name);
+          return sourceId ? mirrorContentSha(fx.targets.mirrorRoot(sourceId), kind, name) : null;
+        };
+        for (const outcome of targetOutcomes) {
+          const sourceId = sourceByKind.get(outcome.kind)?.get(outcome.name);
+          if (!sourceId) continue;
+          if (!outcome.succeeded) {
+            state.recordFailure(
+              { kind: outcome.kind, name: outcome.name },
+              outcome.target,
+              {
+                action: state.read({ kind: outcome.kind, name: outcome.name }, outcome.target)
+                  ?.applied
+                  ? "update"
+                  : "add",
+                code: outcome.sourceMissing ? "source_missing" : "io",
+                detail: outcome.sourceMissing
+                  ? "source unavailable in mirror"
+                  : "deploy action failed",
+              },
+              operationId,
+            );
+            continue;
+          }
+          const contentSha = mirrorContentSha(
+            fx.targets.mirrorRoot(sourceId),
+            outcome.kind,
+            outcome.name,
+          );
+          const hash = renderedHash(outcome.kind, outcome.name, outcome.target);
+          if (!contentSha || !hash) {
+            state.recordFailure(
+              { kind: outcome.kind, name: outcome.name },
+              outcome.target,
+              {
+                action: state.read({ kind: outcome.kind, name: outcome.name }, outcome.target)
+                  ?.applied
+                  ? "update"
+                  : "add",
+                code: "io",
+                detail: "rendered deployment fingerprint unavailable",
+              },
+              operationId,
+            );
+            continue;
+          }
+          state.recordSuccess(
+            { kind: outcome.kind, name: outcome.name },
+            outcome.target,
+            { sourceId, contentSha, renderedHash: hash, appliedAt: Date.now() },
+            operationId,
+          );
+        }
+        for (const removed of pruneOutcome.removed) {
+          state.recordRemoval(
+            { kind: removed.kind, name: removed.name },
+            removed.target,
+            operationId,
+          );
+        }
+        for (const failedRemoval of pruneOutcome.failed) {
+          state.recordFailure(
+            { kind: failedRemoval.kind, name: failedRemoval.name },
+            failedRemoval.target,
+            {
+              action: "remove",
+              code: "io",
+              detail: "deployment removal failed",
+            },
+            operationId,
+          );
+        }
+      },
+      catch: () => new DeployError({ reason: "io", message: "deployment state write failed" }),
+    });
 
     // Record integrity fingerprints for EXACTLY what landed (hashing the on-disk
     // artifact deploy just wrote), pruning deselected names in lockstep with the
@@ -489,8 +747,8 @@ export function runDeploy(
             instructions: instructionResultApplied(perKind),
             targets: sel.targets,
           },
-          orphan.skills,
-          orphan.agents,
+          pruneOutcome.pruned.filter((entry) => entry.kind === "skill").map((entry) => entry.name),
+          pruneOutcome.pruned.filter((entry) => entry.kind === "agent").map((entry) => entry.name),
           Date.now(),
         );
       } catch (err) {
@@ -501,7 +759,7 @@ export function runDeploy(
     return {
       kitSha: input.kitSha,
       perKind,
-      pruned,
+      pruned: pruneOutcome.pruned,
       targets: sel.targets,
     };
   });

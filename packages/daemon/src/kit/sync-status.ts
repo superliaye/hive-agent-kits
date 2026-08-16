@@ -1,4 +1,4 @@
-// Per-Source freshness builder (#33) — a PLAIN (non-Effect) kit module, so both
+// Per-Source freshness builder — a PLAIN (non-Effect) kit module, so both
 // the Kit service's `state()` and the stateless `onboardSource` helper build the
 // same `SourceSyncStatus` shape from one definition. Kept OFF the Context.Service
 // module (kit-live.ts) so the onboard edge does not import the Kit service.
@@ -10,17 +10,20 @@ import { readProvenance } from "./mirror.ts";
 // The last sync error for a Source, surfaced in its freshness state. `reason`
 // stays on the typed channel (the wire `errorReason` is free-form, but the
 // in-process branch is a checked discriminant).
-export type LastSyncError = { reason: SyncFailureReason; rateLimitReset?: number };
+export type LastSyncError = {
+  reason: SyncFailureReason;
+  detail?: string;
+  rateLimitReset?: number;
+};
 
 // Build one Source's freshness status. A failed/rate-limited check is surfaced
-// distinctly and never reports "up to date". `origin` is read live from the
-// passed Source entry, not a cached value.
+// distinctly and never reports "up to date".
 export function buildSourceSyncStatus(
   source: Source,
   mirrorRoot: string,
   lastError: LastSyncError | undefined,
 ): SourceSyncStatus {
-  const base = { sourceId: source.id, origin: source.origin };
+  const base = { sourceId: source.id };
   // A local (bundled) Source short-circuits BEFORE readProvenance: a local mirror
   // writes no provenance file, so falling through would mis-report a CLEAN local
   // sync as `check_failed`. But a local sync can still FAIL (a bad
@@ -28,7 +31,7 @@ export function buildSourceSyncStatus(
   // recorded for it, surface `check_failed` like any other failed Source — never
   // mask a failure as the healthy `local` state. A clean local sync → `local`,
   // null sha/fetchedAt (derived from kind, never a synthetic sha).
-  if (source.kind === "local") {
+  if (source.locator.kind === "starter") {
     if (lastError) {
       return {
         ...base,
@@ -36,6 +39,7 @@ export function buildSourceSyncStatus(
         sha: null,
         fetchedAt: null,
         errorReason: lastError.reason,
+        ...(lastError.detail ? { errorDetail: lastError.detail } : {}),
       };
     }
     return { ...base, state: "local", sha: null, fetchedAt: null };
@@ -48,6 +52,7 @@ export function buildSourceSyncStatus(
       sha: prov?.sha ?? null,
       fetchedAt: prov?.fetchedAt ?? null,
       errorReason: lastError.reason,
+      ...(lastError.detail ? { errorDetail: lastError.detail } : {}),
       ...(lastError.rateLimitReset !== undefined
         ? { rateLimitReset: lastError.rateLimitReset }
         : {}),

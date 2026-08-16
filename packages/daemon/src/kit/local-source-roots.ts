@@ -3,8 +3,7 @@ import type { Source } from "@hive/contract";
 import type { DeployTargets } from "./targets.ts";
 
 const STARTER_SOURCE_ID = "starter";
-const STARTER_SOURCE_ORIGIN = "local:starter";
-const FIXTURE_ORIGIN_PREFIX = "local:fixture-";
+const FIXTURE_SOURCE_ID_PREFIX = "fixture-";
 
 function envOr(key: string, fallback: string): string {
   const value = process.env[key];
@@ -19,11 +18,12 @@ export function fixtureSourcesRoot(): string {
 }
 
 export function localSourceRootFor(source: Source, targets: DeployTargets): string | null {
-  if (source.id === STARTER_SOURCE_ID || source.origin === STARTER_SOURCE_ORIGIN) {
+  if (source.locator.kind !== "starter") return null;
+  if (source.id === STARTER_SOURCE_ID) {
     return targets.starterRoot();
   }
-  if (source.origin.startsWith(FIXTURE_ORIGIN_PREFIX)) {
-    return join(fixtureSourcesRoot(), source.origin.slice(FIXTURE_ORIGIN_PREFIX.length));
+  if (source.id.startsWith(FIXTURE_SOURCE_ID_PREFIX)) {
+    return join(fixtureSourcesRoot(), source.id.slice(FIXTURE_SOURCE_ID_PREFIX.length));
   }
   return null;
 }

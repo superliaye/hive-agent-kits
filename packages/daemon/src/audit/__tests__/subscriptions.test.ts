@@ -99,6 +99,31 @@ describe("wireSubscriptions", () => {
     disposeConfig();
   });
 
+  test("sources config.change never records working-tree allowlist paths", async () => {
+    const audit = makeAudit();
+    const schema = z.object({ sources: z.object({ workingTreeRoots: z.array(z.string()) }) });
+    const { svc: config, dispose: disposeConfig } = configRuntime({
+      mode: "memory",
+      initial: { sources: { workingTreeRoots: [] } },
+      schema,
+    });
+    const dispose = wireSubscriptions(audit, { config });
+    const privateRoot = "/private/daemon/worktree";
+
+    await config.set("sources", { workingTreeRoots: [privateRoot] });
+
+    const rows = await audit.query({ source: "config" });
+    expect(rows[0]?.payload).toMatchObject({
+      key: "sources",
+      previous: { workingTreeRoots: "[redacted]" },
+      current: { workingTreeRoots: "[redacted]" },
+    });
+    expect(JSON.stringify(rows)).not.toContain(privateRoot);
+
+    dispose();
+    disposeConfig();
+  });
+
   // Secrets is user/agent-driven, so its mutating verbs ARE audited. The
   // verbs are async + block-on-failure (4.2-A1): a write produces a row, and
   // a persist failure must fail the originating op (ADR-0004 Verify item 4,

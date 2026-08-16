@@ -1,4 +1,4 @@
-// Deploy-target port (Plan A0) — the safety boundary for the deploy engine.
+// Deploy-target port — the safety boundary for the deploy engine.
 //
 // The Kit module never reads `~/.claude` from a bare global; it resolves every
 // CLI-home path through this consumer-owned port. Each home is env-overridable
@@ -14,9 +14,11 @@
 // home, and `isChildEnvRedirected()` lets the exec adapter refuse to run a real
 // installer unless redirection is in place (or an AGENT_KIT_SKIP_* hatch is set).
 
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DeployTarget } from "@hive/contract";
+import { bundledStarterRoot } from "./bundled-starter.ts";
 
 // `DeployTarget` (claude | codex) is the canonical wire enum in @hive/contract —
 // distinct from the AgentBackend enum (claude-code | codex). Re-exported here so
@@ -36,6 +38,9 @@ export type DeployTargets = {
   // Distinct from the ledger — the ledger is the fixed agent-kit interop schema
   // and cannot carry Hive deploy-time hashes; this is where they live instead.
   fingerprintPath(): string;
+  // Hive-private durable applied/attempt state. This is intentionally separate
+  // from the byte-compatible agent-kit ledger.
+  deploymentStatePath(): string;
   // Working temp dir for sync extraction (under the Hive home, swept on start).
   kitTmpRoot(): string;
   // Content root of the bundled Starter Source — the in-repo package dir whose
@@ -118,16 +123,17 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
 
   const mirrorRoot = (sourceId: string) => join(hiveHome(), "kit", "mirrors", sourceId);
   const fingerprintPath = () => join(hiveHome(), "kit", "fingerprints.json");
+  const deploymentStatePath = () => join(hiveHome(), "kit", "deployment-state.json");
   const kitTmpRoot = () => join(hiveHome(), "kit", "tmp");
-  // Dev default: this file lives at packages/daemon/src/kit/targets.ts; the
-  // Starter package is packages/agent-kit-starter-template. Walk up to packages/
-  // (kit → src → daemon → packages) then into the Starter dir. Shipped builds set
-  // HIVE_STARTER_ROOT to the packaged resources dir.
-  const starterRoot = () =>
-    envOr(
-      "HIVE_STARTER_ROOT",
-      join(dirname(dirname(dirname(import.meta.dir))), "agent-kit-starter-template"),
+  const starterRoot = () => {
+    const configured = process.env.HIVE_STARTER_ROOT;
+    if (configured && configured.length > 0) return configured;
+    const workspace = join(
+      dirname(dirname(dirname(import.meta.dir))),
+      "agent-kit-starter-template",
     );
+    return existsSync(join(workspace, "capabilities")) ? workspace : bundledStarterRoot(hiveHome());
+  };
 
   // Honest redirect predicate (B3): true IFF EVERY deploy-target home resolves
   // off its real OS-default dir, normalized for Windows. This drives both the
@@ -145,6 +151,7 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
     ledgerPath,
     mirrorRoot,
     fingerprintPath,
+    deploymentStatePath,
     kitTmpRoot,
     starterRoot,
     isChildEnvRedirected,

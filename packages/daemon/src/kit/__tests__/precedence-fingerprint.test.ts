@@ -1,12 +1,9 @@
-// #35 close-hygiene — Source precedence + Shadowed-at-deploy provenance, plus the
-// enforceable non-decision guard (Q6).
-//
-// (E.1) A cross-Source precedence deploy: two active git Sources provide the same
+// Two active git Sources provide the same
 // skill key with DIFFERENT content so one wins and the other is shadowed. After a
 // deploy, the fingerprint sidecar records winnerSourceId = the winning Source for
 // that name, and the shadowed Variant is neither deployed nor fingerprinted.
 //
-// (E.3) The deliberate closure can't silently regress: FingerprintEntrySchema and
+// FingerprintEntrySchema and
 // FingerprintFileSchema carry NO content-fingerprint key.
 //
 // Hermetic: Mirrors written directly to disk (no sync, no network); redirected
@@ -46,6 +43,13 @@ function gitSource(id: string, createdAt: number): Source {
   // precedence rank (higher = later-added = wins a collision).
   return {
     id,
+    label: id,
+    locator: {
+      kind: "git",
+      repoUrl: `https://github.com/owner/${id}`,
+      revision: { mode: "track", ref: "refs/heads/main" },
+      subpath: ".",
+    },
     origin: `https://github.com/owner/${id}`,
     kind: "git",
     active: true,
@@ -65,7 +69,7 @@ function fx(): DeployFsExec {
   return { targets, exec: okExec, probe: () => true };
 }
 
-describe("#35 — cross-Source precedence deploy provenance (E.1)", () => {
+describe("cross-Source precedence deploy provenance", () => {
   test("fingerprint records winnerSourceId; shadowed Variant neither deployed nor recorded", async () => {
     const A = gitSource("src-a", 0);
     const B = gitSource("src-b", 1);
@@ -121,7 +125,7 @@ describe("#35 — cross-Source precedence deploy provenance (E.1)", () => {
   });
 });
 
-describe("#35 — enforceable non-decision guard (E.3, Q6)", () => {
+describe("fingerprint content-identity boundary", () => {
   test("FingerprintEntrySchema records no content fingerprint key", () => {
     const keys = Object.keys(FingerprintEntrySchema.shape);
     expect(keys).not.toContain("contentSha");

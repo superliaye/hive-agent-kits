@@ -5,7 +5,7 @@
 // daemon internals, so the UI's Vite bundle can pull this in without dragging
 // Effect/Hono/vendor SDKs into the renderer.
 
-import { CapabilityKind } from "@hive/capability-schema";
+import { CapabilityKey, CapabilityKind } from "@hive/capability-schema";
 import { z } from "zod";
 
 // The five deployable capability kinds (upstream taxonomy) — re-exported from the
@@ -97,6 +97,7 @@ export const SyncStatus = z.object({
   fetchedAt: z.number().nullable(),
   // Last sync error reason, when state is check_failed/rate_limited.
   errorReason: z.string().optional(),
+  errorDetail: z.string().max(160).optional(),
   rateLimitReset: z.number().optional(),
 });
 export type SyncStatus = z.infer<typeof SyncStatus>;
@@ -106,7 +107,6 @@ export type SyncStatus = z.infer<typeof SyncStatus>;
 // another's freshness (each active Source syncs into its own Mirror).
 export const SourceSyncStatus = SyncStatus.extend({
   sourceId: z.string(),
-  origin: z.string(),
 });
 export type SourceSyncStatus = z.infer<typeof SourceSyncStatus>;
 
@@ -115,9 +115,9 @@ export const SyncRunResult = z.object({
   sources: z.array(
     z.object({
       sourceId: z.string(),
-      origin: z.string(),
       status: z.enum(["synced", "unchanged", "failed"]),
       errorReason: z.string().optional(),
+      errorDetail: z.string().max(160).optional(),
       rateLimitReset: z.number().optional(),
     }),
   ),
@@ -142,6 +142,38 @@ export const SelectionSchema = z.object({
   targets: z.array(DeployTarget).min(1),
 });
 export type Selection = z.infer<typeof SelectionSchema>;
+
+// Durable desired state. Unlike the legacy SelectionSchema above, this retains
+// resolved deploy identities and their exact target sets only: a Source and a
+// ContentSha are deliberately not part of desired state.
+export const DesiredSelection = z.object({
+  enabled: z.array(z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) })),
+  removalIntents: z.array(
+    z.object({
+      key: CapabilityKey,
+      targets: z.array(DeployTarget).min(1),
+      generation: z.string().min(1).optional(),
+    }),
+  ),
+});
+export type DesiredSelection = z.infer<typeof DesiredSelection>;
+
+export const SelectionMutation = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  changes: z.array(
+    z.object({
+      key: CapabilityKey,
+      enabled: z.boolean(),
+      targets: z.array(DeployTarget).min(1),
+    }),
+  ),
+});
+export type SelectionMutation = z.infer<typeof SelectionMutation>;
+
+export const SelectionSnapshot = DesiredSelection.extend({
+  revision: z.number().int().nonnegative(),
+});
+export type SelectionSnapshot = z.infer<typeof SelectionSnapshot>;
 
 // ---- Deployment Ledger ----
 
@@ -237,3 +269,140 @@ export const VerifyReport = z.object({
   entries: z.array(VerifyEntry),
 });
 export type VerifyReport = z.infer<typeof VerifyReport>;
+
+// ---- Authoritative Deployment Overview ----
+
+export const OverviewCatalogState = z.enum(["deployable", "shadowed", "blocked", "unavailable"]);
+export type OverviewCatalogState = z.infer<typeof OverviewCatalogState>;
+
+export const OverviewDesiredState = z.enum(["on", "off"]);
+export type OverviewDesiredState = z.infer<typeof OverviewDesiredState>;
+
+export const ReconciliationState = z.enum([
+  "in_sync",
+  "pending_add",
+  "pending_update",
+  "pending_remove",
+  "waiting_for_source",
+  "orphaned",
+  "unmanaged_owned",
+  "manual_install_required",
+  "manual_removal_required",
+]);
+export type ReconciliationState = z.infer<typeof ReconciliationState>;
+
+export const TargetObservation = z.enum([
+  "verified",
+  "present_unverified",
+  "missing",
+  "drifted",
+  "recorded_unverified",
+  "verification_error",
+]);
+export type TargetObservation = z.infer<typeof TargetObservation>;
+
+export const OverviewLastAttempt = z.discriminatedUnion("state", [
+  z.object({ state: z.literal("none") }),
+  z.object({
+    state: z.literal("succeeded"),
+    operationId: z.string(),
+    attemptedAt: z.number().int().nonnegative(),
+  }),
+  z.object({
+    state: z.literal("failed"),
+    operationId: z.string(),
+    attemptedAt: z.number().int().nonnegative(),
+    code: z.string().max(80),
+    detail: z.string().max(512).optional(),
+  }),
+]);
+export type OverviewLastAttempt = z.infer<typeof OverviewLastAttempt>;
+
+export const OverviewTargetState = z.object({
+  target: DeployTarget,
+  desired: OverviewDesiredState,
+  reconciliation: ReconciliationState,
+  observation: TargetObservation,
+  lastAttempt: OverviewLastAttempt,
+});
+export type OverviewTargetState = z.infer<typeof OverviewTargetState>;
+
+export const OverviewVariant = CapabilityEntry.extend({
+  catalog: z.enum(["deployable", "shadowed", "blocked"]),
+});
+export type OverviewVariant = z.infer<typeof OverviewVariant>;
+
+export const OverviewRow = z.object({
+  key: CapabilityKey,
+  catalog: OverviewCatalogState,
+  desired: OverviewDesiredState,
+  reconciliation: ReconciliationState,
+  lastAttempt: OverviewLastAttempt,
+  applicableTargets: z.array(DeployTarget),
+  targets: z.array(OverviewTargetState),
+  variants: z.array(OverviewVariant),
+});
+export type OverviewRow = z.infer<typeof OverviewRow>;
+
+// Deliberately omits Source locators/origins: working-tree locators contain raw
+// Daemon paths, which never belong in the Overview or plan diagnostics.
+export const OverviewSource = z.object({
+  id: z.string(),
+  label: z.string(),
+  kind: z.enum(["git", "local"]),
+  active: z.boolean(),
+  rank: z.number().int(),
+});
+export type OverviewSource = z.infer<typeof OverviewSource>;
+
+export const OverviewMirror = z.object({
+  sourceId: z.string(),
+  precedence: z.number().int(),
+  identity: z.string().nullable(),
+  error: z.enum(["unavailable"]).optional(),
+});
+export type OverviewMirror = z.infer<typeof OverviewMirror>;
+
+export const DeployOperationState = z.enum([
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "interrupted",
+]);
+export type DeployOperationState = z.infer<typeof DeployOperationState>;
+
+export const DeployOperationSummary = z.object({
+  operationId: z.string(),
+  state: DeployOperationState,
+  acceptedAt: z.number().int().nonnegative(),
+  selectionRevision: z.number().int().nonnegative(),
+  planToken: z.string().min(1),
+  completedAt: z.number().int().nonnegative().optional(),
+});
+export type DeployOperationSummary = z.infer<typeof DeployOperationSummary>;
+
+export const DeploymentOverview = z.object({
+  sources: z.array(OverviewSource),
+  sourceRegistryRevision: z.number().int().nonnegative(),
+  mirrors: z.array(OverviewMirror),
+  selectionRevision: z.number().int().nonnegative(),
+  variants: z.array(CapabilityEntry),
+  rows: z.array(OverviewRow),
+  diff: DeployDiff,
+  planToken: z.string().regex(/^[0-9a-f]{64}$/),
+  activeOperation: DeployOperationSummary.nullable(),
+  lastOperation: DeployOperationSummary.nullable(),
+});
+export type DeploymentOverview = z.infer<typeof DeploymentOverview>;
+
+export const AcceptedDeployRequest = z
+  .object({
+    selectionRevision: z.number().int().nonnegative(),
+    planToken: z.string().regex(/^[0-9a-f]{64}$/),
+  })
+  .strict();
+export type AcceptedDeployRequest = z.infer<typeof AcceptedDeployRequest>;
+
+export const AcceptedDeployResponse = z.object({ operationId: z.string().min(1) }).strict();
+export type AcceptedDeployResponse = z.infer<typeof AcceptedDeployResponse>;

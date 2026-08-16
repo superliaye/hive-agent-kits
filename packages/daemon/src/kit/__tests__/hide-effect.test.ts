@@ -1,4 +1,4 @@
-// #36 toggle hide-effect (kit boundary). Deactivating a git Source removes its
+//  toggle hide-effect (kit boundary). Deactivating a git Source removes its
 // capabilities from the catalog and PROMOTES a capability it was shadowing
 // (provided by another active Source) to the deployable winner; reactivating
 // restores the hidden capability and re-shadows the other Source. Driven through
@@ -39,6 +39,13 @@ function gitSource(id: string, active: boolean, createdAt: number): Source {
   // `createdAt` encodes the intended order; reuse it as the stored precedence rank.
   return {
     id,
+    label: id,
+    locator: {
+      kind: "git",
+      repoUrl: `https://github.com/owner/${id}`,
+      revision: { mode: "track", ref: "refs/heads/main" },
+      subpath: ".",
+    },
     origin: `https://github.com/owner/${id}`,
     kind: "git",
     active,
@@ -68,7 +75,7 @@ function winner(entries: CapabilityEntry[], name: string): CapabilityEntry | und
   return entriesNamed(entries, name).find((e) => e.deployable);
 }
 
-describe("Kit.catalog — toggle hide-effect (#36)", () => {
+describe("Kit.catalog — toggle hide-effect", () => {
   test("deactivate promotes the shadow; reactivate restores + re-shadows", async () => {
     // A and B both provide skill `x` with DIFFERENT content (collision); A also
     // provides a unique skill `y`. B inserted later → B wins `x`, A is shadowed.

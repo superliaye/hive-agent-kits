@@ -1,4 +1,4 @@
-// Verify pass + integrity fingerprint (Feature 1 + Feature 2).
+// On-disk existence and integrity-fingerprint verification.
 //
 // Deploys through the REAL engine into a redirected temp home (so the real
 // ~/.claude is never touched), then asserts the on-disk self-check reports
@@ -78,7 +78,7 @@ function fx(): DeployFsExec {
 }
 
 // `active` overrides the per-kind active-catalog names a deploy threads into
-// reconcilePrune (#47). It defaults to the selection (every selected name is
+// reconcilePrune. It defaults to the selection (every selected name is
 // active); a prune test must list the still-active-but-deselected name too, or it
 // would be treated as an orphan and KEPT instead of pruned.
 async function deploy(
@@ -107,7 +107,7 @@ function statusOn(entry: VerifyEntry | undefined, target: "claude" | "codex"): s
   return entry?.targets.find((t) => t.target === target)?.status;
 }
 
-describe("verify — on-disk existence (Feature 1)", () => {
+describe("verify — on-disk existence", () => {
   test("deployed skill reports present; deleting its dir reports missing", async () => {
     seedSkill("alpha");
     await deploy({ skills: ["alpha"], targets: ["claude"] });
@@ -168,7 +168,7 @@ describe("verify — on-disk existence (Feature 1)", () => {
   });
 });
 
-describe("verify — drift detection (Feature 2)", () => {
+describe("verify — drift detection", () => {
   test("editing a deployed skill byte makes verify report drifted; unedited stays present", async () => {
     seedSkill("edit");
     await deploy({ skills: ["edit"], targets: ["claude"] });
@@ -209,7 +209,7 @@ describe("verify — drift detection (Feature 2)", () => {
   });
 });
 
-describe("fingerprint sidecar — Hive-private + lockstep prune (Feature 2)", () => {
+describe("fingerprint sidecar — Hive-private + lockstep prune", () => {
   test("sidecar lives under the Hive home; ledger keeps its EXACT schema (no added keys)", async () => {
     seedSkill("priv");
     await deploy({ skills: ["priv"], targets: ["claude"] });

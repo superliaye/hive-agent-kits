@@ -12,7 +12,7 @@ import { Data } from "effect";
 // X-RateLimit-Reset epoch when present. `missing_starter_root` is the local-sync
 // equivalent of a bad config — the bundled Starter content root is absent (a bad
 // HIVE_STARTER_ROOT override or a packaging miss); isolated to that Source.
-// `timeout` is the add-time bounded-sync abort (#33): a sync that outruns the
+// `timeout` is the add-time bounded-sync abort: a sync that outruns the
 // request budget folds into the Source's freshness as `check_failed`, so the add
 // can never hang the HTTP request.
 export type SyncFailureReason =
@@ -21,11 +21,22 @@ export type SyncFailureReason =
   | "parse"
   | "io"
   | "missing_starter_root"
-  | "timeout";
+  | "timeout"
+  | "auth_or_repository_unavailable"
+  | "invalid_locator"
+  | "missing_ref"
+  | "invalid_subpath"
+  | "budget_exceeded"
+  | "unsafe_tree"
+  | "working_tree_not_allowed"
+  | "working_tree_changed";
 
 export class SyncError extends Data.TaggedError("SyncError")<{
   readonly reason: SyncFailureReason;
   readonly message: string;
+  // A short, caller-safe description. Acquisition errors deliberately never
+  // expose Git stderr, repository URLs, paths, or credential-bearing text.
+  readonly detail?: string;
   // Epoch seconds from X-RateLimit-Reset, only on `rate_limited`.
   readonly rateLimitReset?: number;
 }> {}

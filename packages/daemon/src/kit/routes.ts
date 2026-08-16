@@ -1,13 +1,25 @@
-// Kit HTTP routes (Plan A6). Mounted additively behind the surviving server.
+// Kit HTTP routes. Mounted additively behind the surviving server.
 // Zod at the boundary; typed errors mapped to wire codes.
 
-import { SelectionSchema } from "@hive/contract";
+import {
+  AcceptedDeployRequest,
+  SelectionMutation,
+  SelectionSchema,
+  SelectionSnapshot,
+} from "@hive/contract";
 import { Effect } from "effect";
 import { Hono } from "hono";
 import { ZodError } from "zod";
 import { log } from "../lib/log.ts";
+import {
+  DeployInProgressError,
+  ImmutableInstallerStagingError,
+  PlanStaleError,
+} from "./deploy-coordinator.ts";
 import { DeployError } from "./effect/errors.ts";
 import type { KitSvc } from "./effect/kit-live.ts";
+import { DeploymentSnapshotChangedError } from "./overview.ts";
+import { SelectionConflictError, SelectionTargetNotApplicableError } from "./selection-store.ts";
 
 // Discharge a Kit Effect off the root runtime. Returns a Promise<Either>-like.
 export type RunKit = <A, E>(
@@ -37,17 +49,69 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
 
   app.get("/api/kit/state", (c) => c.json(kit.state()));
 
-  // On-disk self-check (Feature 1/2). Read-only — no audit row, no body.
+  app.get("/api/kit/overview", (c) => {
+    try {
+      return c.json(kit.overview());
+    } catch (error) {
+      if (error instanceof DeploymentSnapshotChangedError) {
+        return c.json({ error: error.code }, 409);
+      }
+      log().error(
+        { module: "kit/routes", route: "overview", err: String(error) },
+        "overview snapshot failed",
+      );
+      return c.json({ error: "overview_unavailable" }, 500);
+    }
+  });
+
+  app.get("/api/kit/selection", (c) => {
+    try {
+      return c.json(SelectionSnapshot.parse(kit.selection()));
+    } catch (error) {
+      log().error(
+        { module: "kit/routes", route: "selection.read", err: String(error) },
+        "selection read failed",
+      );
+      return c.json({ error: "selection_unavailable" }, 500);
+    }
+  });
+
+  app.patch("/api/kit/selection", async (c) => {
+    const body = await readJson(c);
+    if (!body.ok) return c.json({ error: "invalid JSON body" }, 400);
+    const parsed = SelectionMutation.safeParse(body.value);
+    if (!parsed.success) {
+      return c.json({ error: "invalid selection mutation", issues: zodIssues(parsed.error) }, 400);
+    }
+    try {
+      const committed = SelectionSnapshot.parse(await kit.mutateSelection(parsed.data));
+      return c.json(committed);
+    } catch (error) {
+      if (error instanceof SelectionConflictError) {
+        return c.json({ error: "selection_conflict", currentRevision: error.currentRevision }, 409);
+      }
+      if (error instanceof SelectionTargetNotApplicableError) {
+        return c.json({ error: error.code }, 400);
+      }
+      log().error(
+        { module: "kit/routes", route: "selection.mutate", err: String(error) },
+        "selection mutation failed",
+      );
+      return c.json({ error: "selection_mutation_failed" }, 500);
+    }
+  });
+
+  // On-disk self-check. Read-only — no audit row, no body.
   app.get("/api/kit/verify", (c) => c.json(kit.verify()));
 
-  // Per-Source sync (#30): one Source's failure never fails the whole run, so the
+  // Per-Source sync: one Source's failure never fails the whole run, so the
   // verb itself does not fail — the response is the per-Source SyncRunResult.
   app.post("/api/kit/sync", async (c) => {
     const res = await runKit(kit.sync());
     if (res.ok) return c.json(res.value);
     // sync() has no typed failure channel; a defect here is a 500.
     log().error({ module: "kit/routes", route: "sync", err: String(res.error) }, "sync defect");
-    return c.json({ error: "sync failed", message: String(res.error) }, 500);
+    return c.json({ error: "sync_failed" }, 500);
   });
 
   app.post("/api/kit/diff", async (c) => {
@@ -60,39 +124,41 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
     const res = await runKit(kit.diff(parsed.data));
     if (res.ok) return c.json(res.value);
     const err = res.error as DeployError;
+    const status = deployErrorCode(err);
     return c.json(
-      { error: "diff failed", reason: err.reason, message: err.message },
-      deployErrorCode(err),
+      status === 500
+        ? { error: "diff_failed", reason: err.reason }
+        : { error: "diff_failed", reason: err.reason, message: err.message },
+      status,
     );
   });
 
   app.post("/api/kit/deploy", async (c) => {
     const body = await readJson(c);
     if (!body.ok) return c.json({ error: "invalid JSON body" }, 400);
-    const parsed = SelectionSchema.safeParse(body.value);
+    const parsed = AcceptedDeployRequest.safeParse(body.value);
     if (!parsed.success) {
-      return c.json({ error: "invalid selection", issues: zodIssues(parsed.error) }, 400);
+      return c.json({ error: "invalid deploy request", issues: zodIssues(parsed.error) }, 400);
     }
-    const res = await runKit(kit.deploy(parsed.data));
-    if (res.ok) return c.json(res.value);
-    const err = res.error;
-    // A defect (untyped throw) squashes to a non-DeployError here. Without this it
-    // would surface as a 500 with `reason: undefined` and NO trace line — exactly
-    // the blind 500 that made this path hard to diagnose. Log it, return clearly.
-    if (!(err instanceof DeployError)) {
-      log().error({ module: "kit/routes", route: "deploy", err: String(err) }, "deploy defect");
-      return c.json({ error: "deploy failed", reason: "io", message: String(err) }, 500);
+    try {
+      const accepted = await kit.acceptDeploy(parsed.data);
+      return c.json(accepted, 202);
+    } catch (error) {
+      if (error instanceof PlanStaleError) {
+        return c.json({ error: "plan_stale" }, 409);
+      }
+      if (error instanceof DeployInProgressError) {
+        return c.json({ error: "deploy_in_progress", operationId: error.operationId }, 409);
+      }
+      if (error instanceof ImmutableInstallerStagingError) {
+        return c.json({ error: error.code }, 409);
+      }
+      log().error(
+        { module: "kit/routes", route: "deploy", err: String(error) },
+        "deploy acceptance failed",
+      );
+      return c.json({ error: "deploy_unavailable" }, 500);
     }
-    return c.json(
-      {
-        error: "deploy failed",
-        reason: err.reason,
-        message: err.message,
-        ...(err.tool ? { tool: err.tool } : {}),
-        ...(err.name ? { name: err.name } : {}),
-      },
-      deployErrorCode(err),
-    );
   });
 
   return app;

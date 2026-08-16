@@ -7,14 +7,24 @@ import { type AggInput, aggregate, sourcePrecedence } from "../aggregation.ts";
 // rank). Pass `rank` in `over` to pin a specific precedence (e.g. a re-rank).
 let rankSeq = 0;
 function src(id: string, over: Partial<Source> = {}): Source {
+  const origin = over.origin ?? `https://github.com/owner/${id}`;
   return {
-    id,
-    origin: `https://github.com/owner/${id}`,
-    kind: "git",
-    active: true,
-    createdAt: 0,
-    rank: rankSeq++,
     ...over,
+    id,
+    label: over.label ?? id,
+    locator:
+      over.locator ??
+      ({
+        kind: "git",
+        repoUrl: origin,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      } as const),
+    origin,
+    kind: over.kind ?? "git",
+    active: over.active ?? true,
+    createdAt: over.createdAt ?? 0,
+    rank: over.rank ?? rankSeq++,
   };
 }
 

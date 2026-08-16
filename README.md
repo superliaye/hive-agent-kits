@@ -1,6 +1,8 @@
 # Hive
 
-A portable personal AI system. Capabilities carry an origin tag: Personal travels with the user; Workplace stays at the company. Full vocabulary in [CONTEXT.md](CONTEXT.md).
+A desktop control surface for syncing capability Sources and deploying selected
+Capabilities into Claude Code and Codex CLI homes. Full vocabulary in
+[CONTEXT.md](CONTEXT.md).
 
 ## Prerequisites
 
@@ -22,6 +24,7 @@ On Windows the launcher windows open minimized and the app window opens unfocuse
 ```
 bun test            # unit tests
 bun run check       # Biome check (lint + format)
+bun run verify      # full CI-equivalent verification
 bun run format      # Biome format (writes)
 ```
 
@@ -31,7 +34,7 @@ bun run format      # Biome format (writes)
 bun run ship
 ```
 
-Produces a runnable app folder at `packages/shell/release/Hive-<platform>-x64/` — double-click `Hive.exe` (or the platform equivalent). This is a copy-and-run folder, not an `.msi`/`.dmg` installer.
+Produces a runnable app folder at `packages/shell/release/Hive-<platform>-<arch>/` — double-click `Hive.exe` (or the platform equivalent). This is a copy-and-run folder, not an `.msi`/`.dmg` installer.
 
 ## Learn more
 

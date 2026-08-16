@@ -1,30 +1,22 @@
-// KitDeployPage — the capability deploy-manager (Plan C2).
-//
-// Full Kit catalog grouped by kind + @-namespace, each row name/description +
-// deployed/pending indicator. Header: synced version (short SHA) + freshness
-// state (update available / check failed / rate-limited) + Check for updates +
-// explicit Deploy. Controls: preset selector (seeds Selection), per-CLI target
-// toggles, individual toggles, the Deploy Diff (added/removed/changed incl. the
-// CLAUDE.md-replacement warning). Deploy is NEVER automatic.
-
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import {
   AddSourceError,
   type AddSourceResult,
   type ApiConfig,
   api,
-  type CapabilityEntry,
   type CapabilityKind,
-  type DeployDiff,
+  type DeploymentOverview,
   type DeployTarget,
-  type DiffEntry,
-  type Selection,
-  type Source,
-  type SourceSyncStatus,
+  type OverviewLastAttempt,
+  type OverviewMirror,
+  type OverviewRow,
+  type OverviewSource,
+  PlanStaleError,
+  type ReconciliationState,
+  SelectionConflictError,
   type SyncRunResult,
-  type VerifyReport,
-  type VerifyStatus,
+  type TargetObservation,
 } from "../api.ts";
 import { Skeleton, SkeletonGroup } from "../components/Skeleton.tsx";
 import { ToastHost, useToasts } from "../components/Toasts.tsx";
@@ -39,549 +31,361 @@ const KIND_LABEL: Record<CapabilityKind, string> = {
   plugin: "Plugins",
   bundle: "Bundles",
 };
-
-const KIND_TO_CAP: Record<CapabilityKind, keyof Selection["add"]> = {
-  instruction: "instructions",
-  skill: "skills",
-  agent: "agents",
-  plugin: "plugins",
-  bundle: "bundles",
+const TARGET_LABEL: Record<DeployTarget, string> = { claude: "Claude", codex: "Codex" };
+const RECONCILIATION_LABEL: Record<ReconciliationState, string> = {
+  in_sync: "In sync",
+  pending_add: "Pending add",
+  pending_update: "Pending update",
+  pending_remove: "Pending removal",
+  waiting_for_source: "Waiting for source",
+  orphaned: "Source unavailable",
+  unmanaged_owned: "Owned outside deployment state",
+  manual_install_required: "Manual install required",
+  manual_removal_required: "Manual removal required",
+};
+const OBSERVATION_LABEL: Record<TargetObservation, string> = {
+  verified: "Verified",
+  present_unverified: "Present, not verified",
+  missing: "Missing",
+  drifted: "Drifted",
+  recorded_unverified: "Recorded, not verified",
+  verification_error: "Verification error",
 };
 
-const TARGET_LABEL: Record<DeployTarget, string> = {
-  claude: "Claude",
-  codex: "Codex",
+type DiffChange = "added" | "changed" | "removed";
+type SelectionAttempt = { row: OverviewRow; expectedRevision: number };
+type DeployAttempt = {
+  selectionRevision: number;
+  planToken: string;
+  baselineOperationIds: string[];
+};
+type AmbiguousDeploy = DeployAttempt & {
+  overviewUpdatedAt: number;
 };
 
-// One ordered source of truth for the three change buckets: the summary chips and
-// the expanded columns both derive from this, so they never drift in order/label.
-// `glyph` prefixes the count chip (+ ~ -); removed is last so its danger reads as
-// the climax in both the summary and the columns.
-const DIFF_BUCKETS = [
-  { tone: "added", label: "Added", glyph: "+", change: "added" },
-  { tone: "changed", label: "Changed", glyph: "~", change: "changed" },
-  { tone: "removed", label: "Removed", glyph: "−", change: "removed" },
-] as const;
+const DIFF_BUCKETS: Array<{ change: DiffChange; label: string; glyph: string }> = [
+  { change: "added", label: "Added", glyph: "+" },
+  { change: "changed", label: "Changed", glyph: "~" },
+  { change: "removed", label: "Removed", glyph: "−" },
+];
 
-type DiffChange = (typeof DIFF_BUCKETS)[number]["change"];
-
-type DiffReviewItem = {
-  kind: CapabilityKind;
-  name: string;
-  change: DiffChange;
-  replacesUserFile: boolean;
-  sourceLabels: string[];
-  hiddenVariants: {
-    sourceLabels: string[];
-    winnerLabel: string | null;
-  }[];
-};
-
-type DeployReview = {
-  selectedCount: number;
-  targetLabels: string[];
-  changeCounts: Record<DiffChange, number>;
-  items: DiffReviewItem[];
-  hasUserFileWarning: boolean;
-  manualSelectionCount: number;
-};
-
-function shortSha(sha: string | null): string {
-  return sha ? sha.slice(0, 7) : "no SHA";
+function shortIdentity(identity: string | null): string {
+  return identity ? identity.slice(0, 7) : "no identity";
 }
 
-// Short, human-readable origin label (owner/repo for a GitHub URL, else the
-// last path segment / host).
-function shortOrigin(origin: string): string {
-  try {
-    const url = new URL(origin);
-    const segments = url.pathname.split("/").filter((s) => s.length > 0);
-    if (segments.length >= 2)
-      return `${segments[segments.length - 2]}/${segments[segments.length - 1]}`;
-    if (segments.length === 1) return segments[0] ?? url.hostname;
-    return url.hostname;
-  } catch {
-    return origin;
+function operationAfter(
+  overview: DeploymentOverview,
+  attempt: Pick<DeployAttempt, "baselineOperationIds" | "selectionRevision" | "planToken">,
+): NonNullable<DeploymentOverview["activeOperation"]> | null {
+  const baseline = new Set(attempt.baselineOperationIds);
+  const matches = (operation: NonNullable<DeploymentOverview["activeOperation"]>): boolean =>
+    !baseline.has(operation.operationId) &&
+    operation.selectionRevision === attempt.selectionRevision &&
+    operation.planToken === attempt.planToken;
+  if (overview.activeOperation && matches(overview.activeOperation)) {
+    return overview.activeOperation;
   }
+  if (overview.lastOperation && matches(overview.lastOperation)) {
+    return overview.lastOperation;
+  }
+  return null;
 }
 
-// Aggregate one sync run's per-Source outcomes into a single toast. q3a:
-// failure DOMINATES — any failed Source surfaces an ERROR toast (never a
-// success count); else any synced → a success count; else all unchanged →
-// "Up to date". Exported for isolated unit testing of the precedence rule.
 export function syncToast(result: SyncRunResult): { kind: "success" | "error"; message: string } {
-  const failed = result.sources.filter((s) => s.status === "failed").length;
+  const failed = result.sources.filter((source) => source.status === "failed").length;
   if (failed > 0) {
     return { kind: "error", message: `Sync failed for ${failed} Source${failed === 1 ? "" : "s"}` };
   }
-  const synced = result.sources.filter((s) => s.status === "synced").length;
-  if (synced > 0) {
-    return { kind: "success", message: `Synced ${synced} Source${synced === 1 ? "" : "s"}` };
-  }
-  return { kind: "success", message: "Up to date" };
+  const synced = result.sources.filter((source) => source.status === "synced").length;
+  return synced > 0
+    ? { kind: "success", message: `Synced ${synced} Source${synced === 1 ? "" : "s"}` }
+    : { kind: "success", message: "Up to date" };
 }
 
-function countDeployableSelected(entries: CapabilityEntry[], caps: Selection["add"]): number {
-  let count = 0;
-  for (const entry of entries) {
-    if (!entry.deployable) continue;
-    if (caps[KIND_TO_CAP[entry.kind]].includes(entry.name)) count += 1;
-  }
-  return count;
-}
-
-function uniqueLabels(sourceIds: string[], sourceLabels: Map<string, string>): string[] {
-  return [...new Set(sourceIds.map((sid) => sourceLabels.get(sid) ?? sid))];
-}
-
-function matchingCatalogEntries(
-  entries: CapabilityEntry[],
-  diffEntry: DiffEntry,
-  selected: Selection["add"],
-): CapabilityEntry[] {
-  if (diffEntry.kind === "instruction" && diffEntry.name === "(CLAUDE.md)") {
-    return entries.filter(
-      (entry) =>
-        entry.kind === "instruction" &&
-        entry.deployable &&
-        selected.instructions.includes(entry.name),
-    );
-  }
-  return entries.filter((entry) => entry.kind === diffEntry.kind && entry.name === diffEntry.name);
-}
-
-function buildDeployReview(args: {
-  catalogEntries: CapabilityEntry[];
-  presets: Array<{ name: string; capabilities: Selection["add"] }>;
-  selected: Selection["add"];
-  targets: DeployTarget[];
-  diff: DeployDiff | undefined;
-  sourceLabels: Map<string, string>;
-}): DeployReview {
-  const { catalogEntries, presets, selected, targets, diff, sourceLabels } = args;
-  const activePresetNames = presets
-    .filter((preset) => presetActive(preset, selected))
-    .map((preset) => preset.name);
-  const activePresetCovered = emptyCapSets();
-  for (const preset of presets) {
-    if (!activePresetNames.includes(preset.name)) continue;
-    for (const kind of KINDS) {
-      const cap = KIND_TO_CAP[kind];
-      for (const name of preset.capabilities[cap]) activePresetCovered[cap].add(name);
-    }
-  }
-  let manualSelectionCount = 0;
-  for (const entry of catalogEntries) {
-    if (!entry.deployable) continue;
-    const cap = KIND_TO_CAP[entry.kind];
-    if (selected[cap].includes(entry.name) && !activePresetCovered[cap].has(entry.name)) {
-      manualSelectionCount += 1;
-    }
-  }
-
-  const changeCounts: Record<DiffChange, number> = { added: 0, changed: 0, removed: 0 };
-  const items: DiffReviewItem[] = [];
-  for (const entry of diff?.entries ?? []) {
-    changeCounts[entry.change] += 1;
-    const matching = matchingCatalogEntries(catalogEntries, entry, selected);
-    const deployable = matching.filter((catalogEntry) => !catalogEntry.shadowed);
-    const hiddenVariants = matching
-      .filter((catalogEntry) => catalogEntry.shadowed)
-      .map((catalogEntry) => ({
-        sourceLabels: uniqueLabels(catalogEntry.sourceIds, sourceLabels),
-        winnerLabel: catalogEntry.shadowedBy
-          ? (sourceLabels.get(catalogEntry.shadowedBy) ?? catalogEntry.shadowedBy)
-          : null,
-      }));
-    items.push({
-      kind: entry.kind,
-      name: entry.name,
-      change: entry.change,
-      replacesUserFile: entry.replacesUserFile ?? false,
-      sourceLabels: uniqueLabels(
-        deployable.flatMap((catalogEntry) => catalogEntry.sourceIds),
-        sourceLabels,
-      ),
-      hiddenVariants,
-    });
-  }
-
-  return {
-    selectedCount: countDeployableSelected(catalogEntries, selected),
-    targetLabels: targets.map((target) => TARGET_LABEL[target]),
-    changeCounts,
-    items,
-    hasUserFileWarning: items.some((item) => item.replacesUserFile),
-    manualSelectionCount,
-  };
-}
-
-type Freshness = {
-  label: string;
-  className: string;
-};
-
-function freshnessOf(state: string | undefined): Freshness {
-  switch (state) {
-    case "rate_limited":
-      return { label: "Rate-limited", className: "kit-fresh-error" };
-    case "check_failed":
-      return { label: "Check failed", className: "kit-fresh-error" };
-    case "local":
-      // The bundled Starter Source: copied from the in-repo package, never fetched
-      // — no SHA, no network state. Surface it as bundled, not "Up to date".
-      return { label: "Bundled", className: "kit-fresh-ok" };
-    default:
-      return { label: "Up to date", className: "kit-fresh-ok" };
-  }
-}
-
-export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Element {
-  const qc = useQueryClient();
+export function KitDeployPage({
+  apiConfig,
+  connection,
+}: {
+  apiConfig: ApiConfig;
+  connection?: NonNullable<Window["__hive"]>["connection"];
+}): JSX.Element {
+  const queryClient = useQueryClient();
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
-
-  const catalogQuery = useQuery({
-    queryKey: ["kit", "catalog"],
-    queryFn: () => api.getKitCatalog(apiConfig),
-  });
-  const stateQuery = useQuery({
-    queryKey: ["kit", "state"],
-    queryFn: () => api.getKitState(apiConfig),
-  });
-  // The authoritative Source list, incl. inactive sources, for the header toggle
-  // rows. state.sync is active-only, so a deactivated Source would otherwise vanish
-  // and could never be re-enabled in place.
-  const sourcesQuery = useQuery({
-    queryKey: ["sources"],
-    queryFn: () => api.listSources(apiConfig),
-  });
-  // Developer-only deploy escape hatch. When `allowRealHomeDeploy` is on, a Deploy
-  // from this dev instance writes/overwrites the REAL CLI homes — surfaced here as a
-  // persistent armed banner so a user at the Deploy surface (not just inside the
-  // Developer Settings tab) sees the consequence before deploying. Shares the data
-  // seam (useDeveloperConfig) with DeveloperSettings, so a toggle there arms this
-  // banner live (the optimistic write updates the shared query cache).
-  //
-  // Fail closed deliberately: while the developer read is loading or errored `armed`
-  // is false (banner hidden). A false-negative here is a banner that briefly doesn't
-  // show; the daemon is local, and the page's required catalog/state queries share
-  // its fate — if /api/developer is down the surface is already non-functional. We
-  // do not raise a degraded "could not confirm" banner: it would fire on every
-  // transient blip and dull the real warning.
+  const [acceptedOperationId, setAcceptedOperationId] = useState<string | null>(null);
+  const [armedPlanToken, setArmedPlanToken] = useState<string | null>(null);
+  const [staleSelectionRevision, setStaleSelectionRevision] = useState<number | null>(null);
+  const [stalePlanToken, setStalePlanToken] = useState<string | null>(null);
+  const [ambiguousDeploy, setAmbiguousDeploy] = useState<AmbiguousDeploy | null>(null);
+  const [selectionConflictResolved, setSelectionConflictResolved] = useState(false);
+  const [planStaleResolved, setPlanStaleResolved] = useState(false);
+  const [transportAcceptanceProven, setTransportAcceptanceProven] = useState(false);
+  const addSourceInputRef = useRef<HTMLInputElement>(null);
   const { armed: realHomeArmed } = useDeveloperConfig(apiConfig);
 
-  // The concrete per-kind selected name set is the single source of truth.
-  // Presets are a convenience tool over it (seed / clear / active-overview), not
-  // stored selection — there is no preset provenance to persist (the Ledger
-  // records resolved names only), so a preset reads "active" purely by whether
-  // all its capabilities are currently selected.
-  const [selected, setSelected] = useState<Selection["add"]>(emptyCaps());
-  const [targets, setTargets] = useState<DeployTarget[]>(["claude"]);
-
-  const catalog = catalogQuery.data;
-  const state = stateQuery.data;
-
-  // Wire selection: presets/remove stay empty — the resolved `selected` set is
-  // sent as `add`, which the daemon resolves identically (presets ∪ add − remove).
-  const selection: Selection = useMemo(
-    () => ({ presets: [], add: selected, remove: emptyCaps(), targets }),
-    [selected, targets],
-  );
-
-  // On-disk self-check (Feature 1/2): runs on load and is re-fetched after every
-  // deploy (the deploy mutation invalidates the ["kit","verify"] key). The row
-  // indicator reflects DISK reality, not just the ledger.
-  const verifyQuery = useQuery({
-    queryKey: ["kit", "verify"],
-    queryFn: () => api.getKitVerify(apiConfig),
+  const overviewQuery = useQuery({
+    queryKey: ["kit", "overview"],
+    queryFn: () => api.getKitOverview(apiConfig),
+    refetchOnReconnect: true,
+    refetchIntervalInBackground: false,
+    refetchInterval: (query) => {
+      if (connection?.status === "reauthentication_required") return false;
+      if (
+        acceptedOperationId !== null ||
+        query.state.data?.activeOperation ||
+        staleSelectionRevision !== null ||
+        stalePlanToken !== null ||
+        ambiguousDeploy !== null
+      ) {
+        return 750;
+      }
+      return connection?.status === "disconnected" ? 15_000 : 10_000;
+    },
   });
+  const overview = overviewQuery.data;
 
-  // Per-kind, per-name collapsed on-disk status for the row indicator. A
-  // capability split across targets collapses to its worst state
-  // (drifted > missing > present/recorded) so a single missing/edited target
-  // still flags the row.
-  const onDisk = useMemo(() => collapseVerify(verifyQuery.data), [verifyQuery.data]);
-
-  // Currently-deployed (ledger-owned) names, for the deployed/pending indicator.
-  const deployed = useMemo(() => {
-    const ledger = state?.ledger;
-    return {
-      instruction: new Set((ledger?.instructions ?? []).map((e) => e.name)),
-      skill: new Set((ledger?.skills ?? []).map((e) => e.name)),
-      agent: new Set((ledger?.agentDefs ?? []).map((e) => e.name)),
-      plugin: new Set((ledger?.plugins ?? []).map((e) => e.name)),
-      bundle: new Set((ledger?.bundles ?? []).map((e) => e.name)),
-    };
-  }, [state]);
-
-  // Seed the working selection from the deployed Ledger once the state query
-  // first resolves, so the page opens reflecting what is actually deployed rather
-  // than blank. User edits then layer on top; the guard keeps a post-deploy
-  // refetch from clobbering those edits.
-  const seededRef = useRef(false);
-  const [ledgerSeeded, setLedgerSeeded] = useState(false);
   useEffect(() => {
-    if (seededRef.current || !stateQuery.isSuccess) return;
-    seededRef.current = true;
-    const ledger = stateQuery.data?.ledger;
-    if (ledger) {
-      setSelected({
-        instructions: ledger.instructions.map((e) => e.name),
-        skills: ledger.skills.map((e) => e.name),
-        agents: ledger.agentDefs.map((e) => e.name),
-        plugins: ledger.plugins.map((e) => e.name),
-        bundles: ledger.bundles.map((e) => e.name),
-      });
-      const seededTargets = ledger.agents.filter(
-        (a): a is DeployTarget => a === "claude" || a === "codex",
-      );
-      if (seededTargets.length > 0) setTargets(seededTargets);
+    if (!acceptedOperationId || !overview) return;
+    const operation =
+      overview.activeOperation?.operationId === acceptedOperationId
+        ? overview.activeOperation
+        : overview.lastOperation?.operationId === acceptedOperationId
+          ? overview.lastOperation
+          : null;
+    if (operation && !["queued", "running"].includes(operation.state)) {
+      setAcceptedOperationId(null);
     }
-    setLedgerSeeded(true);
-  }, [stateQuery.isSuccess, stateQuery.data]);
+  }, [acceptedOperationId, overview]);
 
-  const diffQuery = useQuery({
-    queryKey: ["kit", "diff", JSON.stringify(selection)],
-    queryFn: () => api.kitDiff(apiConfig, selection),
-    enabled: Boolean(catalog) && ledgerSeeded,
-  });
+  const operationInFlight = Boolean(acceptedOperationId || overview?.activeOperation);
+  useEffect(() => {
+    void signalDeployInFlight(operationInFlight);
+    return () => {
+      if (operationInFlight) void signalDeployInFlight(false);
+    };
+  }, [operationInFlight]);
+
+  const refetchOverview = (): void => {
+    void queryClient.invalidateQueries({ queryKey: ["kit", "overview"] });
+  };
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncKit(apiConfig),
     onSuccess: (result: SyncRunResult) => {
-      const { kind, message } = syncToast(result);
-      pushToast(kind, message);
+      const toast = syncToast(result);
+      pushToast(toast.kind, toast.message);
     },
     onError: () => pushToast("error", "Sync failed"),
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: ["kit"] });
-    },
+    onSettled: refetchOverview,
   });
 
-  // Flip a Source on/off. The catalog is server-side active-only, so invalidating
-  // ["kit"] re-fetches the catalog (the deactivated Source's capabilities now gone)
-  // and ["sources"] flips the row's active state — both live, no manual refresh.
-  // Selection is name-based and source-agnostic (ADR-0023): we do NOT prune the
-  // `selected` set here — the daemon drops an absent name from the deploy plan.
   const toggleSource = useMutation({
-    mutationFn: (s: Source) =>
-      s.active ? api.deactivateSource(apiConfig, s.id) : api.activateSource(apiConfig, s.id),
-    // The verb is derived from the toggled Source's PRIOR `active` (the mutation
-    // variable): an active Source was just deactivated, and vice versa.
-    onSuccess: (_data, s: Source) => {
-      const label = shortOrigin(s.origin);
-      pushToast("success", s.active ? `Deactivated ${label}` : `Activated ${label}`);
-      void qc.invalidateQueries({ queryKey: ["sources"] });
-      void qc.invalidateQueries({ queryKey: ["kit"] });
+    mutationFn: (source: OverviewSource) =>
+      source.active
+        ? api.deactivateSource(apiConfig, source.id)
+        : api.activateSource(apiConfig, source.id),
+    onSuccess: (_result, source) => {
+      pushToast("success", `${source.active ? "Deactivated" : "Activated"} ${source.label}`);
+      refetchOverview();
     },
-    // The inline kit-source-toggle-error banner (below) persists the failure;
-    // the toast is a transient nudge on top of it.
     onError: () => pushToast("error", "Could not change the Source"),
   });
 
-  // Remove a Source entirely (DELETE /api/sources/:id). Like the toggle, invalidate
-  // ["sources"] (the row disappears) + ["kit"] (its capabilities, built from active
-  // sources, disappear) so both update live. Already-deployed files are not deleted
-  // — an orphaned capability is kept until the user re-deploys.
   const deleteSource = useMutation({
-    mutationFn: (s: Source) => api.deleteSource(apiConfig, s.id),
-    onSuccess: (_data, s: Source) => {
-      pushToast("success", `Removed ${shortOrigin(s.origin)}`);
-      void qc.invalidateQueries({ queryKey: ["sources"] });
-      void qc.invalidateQueries({ queryKey: ["kit"] });
+    mutationFn: (source: OverviewSource) => api.deleteSource(apiConfig, source.id),
+    onSuccess: (_result, source) => {
+      pushToast("success", `Removed ${source.label}`);
+      refetchOverview();
     },
-    // The inline kit-source-delete-error banner persists the failure; the toast
-    // is a transient nudge on top of it.
     onError: () => pushToast("error", "Could not remove the Source"),
   });
 
-  // Raise/lower a Source one precedence step. Invalidate ["sources"] (row order)
-  // + ["kit"] (the catalog recomputes with the new precedence → shadows flip live).
-  // A success toast (consistent with the toggle/delete acknowledgements, #50).
   const reorderSource = useMutation({
-    mutationFn: (v: { source: Source; direction: "up" | "down" }) =>
-      api.reorderSource(apiConfig, v.source.id, v.direction),
-    onSuccess: (_data, v) => {
-      pushToast("success", `Moved ${shortOrigin(v.source.origin)} ${v.direction}`);
-      void qc.invalidateQueries({ queryKey: ["sources"] });
-      void qc.invalidateQueries({ queryKey: ["kit"] });
+    mutationFn: (input: { source: OverviewSource; direction: "up" | "down" }) =>
+      api.reorderSource(apiConfig, input.source.id, input.direction),
+    onSuccess: (_result, input) => {
+      pushToast("success", `Moved ${input.source.label} ${input.direction}`);
+      refetchOverview();
     },
     onError: () => pushToast("error", "Could not reorder the Source"),
   });
 
-  const deployMutation = useMutation({
-    mutationFn: () => api.kitDeploy(apiConfig, selection),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["kit", "state"] });
-      void qc.invalidateQueries({ queryKey: ["kit", "diff"] });
-      // Re-run the on-disk self-check so rows reflect what the deploy just wrote.
-      void qc.invalidateQueries({ queryKey: ["kit", "verify"] });
+  const selectionMutation = useMutation({
+    mutationFn: ({ row, expectedRevision }: SelectionAttempt) => {
+      return api.patchKitSelection(apiConfig, {
+        expectedRevision,
+        changes: [
+          {
+            key: row.key,
+            enabled: row.desired === "off",
+            targets: row.applicableTargets,
+          },
+        ],
+      });
+    },
+    onMutate: () => setSelectionConflictResolved(false),
+    onSuccess: refetchOverview,
+    onError: async (error, attempt) => {
+      if (error instanceof SelectionConflictError) {
+        setStaleSelectionRevision(attempt.expectedRevision);
+        await overviewQuery.refetch();
+        return;
+      }
+      refetchOverview();
     },
   });
 
-  // Feature 3: signal the Electron main process while a deploy is in flight, so a
-  // quit during the deploy prompts a confirm instead of SIGKILLing the daemon
-  // mid-write. The signal toggles with the mutation's pending state and is cleared
-  // when it settles (incl. on unmount). No-op in a plain browser tab.
-  const deployPending = deployMutation.isPending;
-  useEffect(() => {
-    void signalDeployInFlight(deployPending);
-    return () => {
-      if (deployPending) void signalDeployInFlight(false);
-    };
-  }, [deployPending]);
+  const deployMutation = useMutation({
+    mutationFn: ({ selectionRevision, planToken }: DeployAttempt) => {
+      return api.acceptKitDeploy(apiConfig, {
+        selectionRevision,
+        planToken,
+      });
+    },
+    onMutate: () => {
+      setPlanStaleResolved(false);
+      setTransportAcceptanceProven(false);
+    },
+    onSuccess: (accepted) => {
+      setAcceptedOperationId(accepted.operationId);
+      setArmedPlanToken(null);
+      refetchOverview();
+    },
+    onError: async (error, attempt) => {
+      setArmedPlanToken(null);
+      if (error instanceof PlanStaleError) {
+        setStalePlanToken(attempt.planToken);
+        await overviewQuery.refetch();
+        return;
+      }
 
-  // A preset is just a tool over the selection: clicking an inactive preset
-  // selects all its capabilities; clicking an active one (all selected)
-  // deselects them — except any also covered by another still-active preset, so
-  // shared capabilities survive and that other preset stays active.
-  function togglePreset(name: string): void {
-    if (!catalog) return;
-    const preset = catalog.presets.find((p) => p.name === name);
-    if (!preset) return;
-    const allPresets = catalog.presets;
-    setSelected((cur) => {
-      if (!presetActive(preset, cur)) {
-        const next = emptyCaps();
-        for (const k of KINDS) {
-          const cap = KIND_TO_CAP[k];
-          next[cap] = Array.from(new Set([...cur[cap], ...preset.capabilities[cap]]));
-        }
-        return next;
-      }
-      const keep = emptyCapSets();
-      for (const other of allPresets) {
-        if (other.name === name || !presetActive(other, cur)) continue;
-        for (const k of KINDS) {
-          const cap = KIND_TO_CAP[k];
-          for (const n of other.capabilities[cap]) keep[cap].add(n);
-        }
-      }
-      const next = emptyCaps();
-      for (const k of KINDS) {
-        const cap = KIND_TO_CAP[k];
-        const drop = new Set(preset.capabilities[cap].filter((n) => !keep[cap].has(n)));
-        next[cap] = cur[cap].filter((n) => !drop.has(n));
-      }
-      return next;
-    });
-  }
-
-  function toggleTarget(t: DeployTarget): void {
-    setTargets((cur) => {
-      if (cur.includes(t)) {
-        const next = cur.filter((x) => x !== t);
-        return next.length > 0 ? next : cur; // at least one target required
-      }
-      return [...cur, t];
-    });
-  }
-
-  function toggleIndividual(kind: CapabilityKind, name: string): void {
-    const cap = KIND_TO_CAP[kind];
-    setSelected((cur) => {
-      const has = cur[cap].includes(name);
-      return {
-        ...cur,
-        [cap]: has ? cur[cap].filter((n) => n !== name) : [...cur[cap], name],
+      const ambiguous = {
+        baselineOperationIds: attempt.baselineOperationIds,
+        selectionRevision: attempt.selectionRevision,
+        planToken: attempt.planToken,
+        overviewUpdatedAt: overviewQuery.dataUpdatedAt,
       };
-    });
-  }
+      setAmbiguousDeploy(ambiguous);
+      const reloaded = await overviewQuery.refetch();
+      if (!reloaded.isSuccess || !reloaded.data) return;
+      const accepted = operationAfter(reloaded.data, ambiguous);
+      if (!accepted) {
+        setAmbiguousDeploy(null);
+        return;
+      }
+      setAcceptedOperationId(accepted.operationId);
+      setTransportAcceptanceProven(true);
+      setAmbiguousDeploy(null);
+    },
+  });
 
-  const sourceStatuses = state?.sync ?? [];
-  // Human label per Source id (owner/repo), so a Merge row names its Sources the
-  // way the header does — never the opaque sourceId. Falls back to the id when a
-  // Source isn't in the freshness array.
-  const sourceLabels = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const s of sourceStatuses) map.set(s.sourceId, shortOrigin(s.origin));
-    return map;
-  }, [sourceStatuses]);
-  const diff = diffQuery.data;
-
-  // The authoritative row set: the full Source list (incl. inactive) when it has
-  // resolved. While the query is loading/errored — or returns a non-array payload
-  // — fall back to the active-only state.sync rows (read-only, no toggle) so the
-  // header never blanks and never renders a wrong toggle state.
-  const sources = Array.isArray(sourcesQuery.data) ? sourcesQuery.data : undefined;
-  const anyActiveSource = sources?.some((s) => s.active) ?? false;
-
-  // A removal-bearing Deploy is destructive: it unlinks those capabilities from the
-  // CLI homes. The server is authoritative — only a genuinely removable capability
-  // (owned, deselected, AND still in the active catalog) reaches the "removed" set
-  // (#47); an owned-but-absent orphan never does. Count drives both the plain-
-  // language warning and the explicit two-step confirm gate below.
-  const removedCount = (diffQuery.data?.entries ?? []).filter((e) => e.change === "removed").length;
-
-  // Two-step confirm: when removedCount>0 the primary Deploy click ARMS the gate
-  // (does not fire the mutation); the armed "Confirm" click fires it. The armed
-  // state is keyed to the exact diff it was armed against, so any settled diff
-  // change auto-disarms.
-  const diffKey = `${JSON.stringify(selection)}|${JSON.stringify(diff?.entries ?? [])}`;
-  const [armedKey, setArmedKey] = useState<string | null>(null);
-  const deployArmed = armedKey === diffKey;
-
-  // Deploy may only act on a SETTLED diff for the current selection. Mid-refetch
-  // `diffQuery.data` is undefined, so `removedCount` reads 0 and the confirm gate
-  // would be skipped while the server still deletes (#47 bypass). Gate on this.
-  const diffReady = diffQuery.isSuccess && !diffQuery.isFetching;
-  const diffHasEntries = diffReady && (diff?.entries?.length ?? 0) > 0;
-  const deployActionable = diffHasEntries && !deployMutation.isPending;
-  const deployLabel = deployMutation.isPending
-    ? "Deploying…"
-    : diffReady && !diffHasEntries
-      ? "Up to date"
-      : "Deploy";
-
-  function onDeployClick(): void {
-    if (!deployActionable) return;
-    if (removedCount > 0) {
-      setArmedKey(diffKey);
+  useEffect(() => {
+    if (
+      staleSelectionRevision === null ||
+      !overview ||
+      overview.selectionRevision <= staleSelectionRevision
+    ) {
       return;
     }
-    deployMutation.mutate();
+    setStaleSelectionRevision(null);
+    setSelectionConflictResolved(true);
+  }, [overview, staleSelectionRevision]);
+
+  useEffect(() => {
+    if (stalePlanToken === null || !overview || overview.planToken === stalePlanToken) return;
+    setStalePlanToken(null);
+    setPlanStaleResolved(true);
+  }, [overview, stalePlanToken]);
+
+  useEffect(() => {
+    if (!ambiguousDeploy || !overview) return;
+    const accepted = operationAfter(overview, ambiguousDeploy);
+    if (accepted) {
+      setAcceptedOperationId(accepted.operationId);
+      setTransportAcceptanceProven(true);
+      setAmbiguousDeploy(null);
+      return;
+    }
+    if (overviewQuery.dataUpdatedAt === ambiguousDeploy.overviewUpdatedAt) return;
+    setAmbiguousDeploy(null);
+  }, [ambiguousDeploy, overview, overviewQuery.dataUpdatedAt]);
+
+  useEffect(() => {
+    if (!selectionConflictResolved || !selectionMutation.isError) return;
+    selectionMutation.reset();
+    setSelectionConflictResolved(false);
+  }, [selectionConflictResolved, selectionMutation.isError, selectionMutation.reset]);
+
+  useEffect(() => {
+    if ((!planStaleResolved && !transportAcceptanceProven) || !deployMutation.isError) return;
+    deployMutation.reset();
+    setPlanStaleResolved(false);
+    setTransportAcceptanceProven(false);
+  }, [deployMutation.isError, deployMutation.reset, planStaleResolved, transportAcceptanceProven]);
+
+  const removedCount =
+    overview?.diff.entries.filter((entry) => entry.change === "removed").length ?? 0;
+  const actionable = (overview?.diff.entries.length ?? 0) > 0;
+  const deployArmed = overview !== undefined && armedPlanToken === overview.planToken;
+  const authorityUnknown =
+    staleSelectionRevision !== null ||
+    stalePlanToken !== null ||
+    ambiguousDeploy !== null ||
+    (connection !== undefined && connection.status !== "connected") ||
+    overview === undefined ||
+    overviewQuery.isError;
+  const deployEnabled =
+    actionable && !operationInFlight && !deployMutation.isPending && !authorityUnknown;
+  const unmanagedInstructionRows =
+    overview?.rows.filter(
+      (row) => row.key.kind === "instruction" && row.reconciliation === "unmanaged_owned",
+    ) ?? [];
+  const deployLabel = authorityUnknown
+    ? "Waiting for Overview…"
+    : operationInFlight
+      ? "Deploying…"
+      : actionable
+        ? "Deploy"
+        : unmanagedInstructionRows.length > 0
+          ? "Instructions paused"
+          : "Up to date";
+  const selectedRows = overview?.rows.filter((row) => row.desired === "on") ?? [];
+  const selectedTargets = [
+    ...new Set(
+      selectedRows.flatMap((row) =>
+        row.targets.filter((target) => target.desired === "on").map((target) => target.target),
+      ),
+    ),
+  ];
+  const manualInstallRows =
+    overview?.rows.filter((row) => row.reconciliation === "manual_install_required") ?? [];
+  const manualRemovalRows =
+    overview?.rows.filter((row) => row.reconciliation === "manual_removal_required") ?? [];
+  const blockedInstructionRows =
+    overview?.rows.filter(
+      (row) =>
+        row.key.kind === "instruction" && row.desired === "on" && row.catalog === "unavailable",
+    ) ?? [];
+
+  function deploy(): void {
+    if (!deployEnabled || !overview) return;
+    if (removedCount > 0 && !deployArmed) {
+      setArmedPlanToken(overview.planToken);
+      return;
+    }
+    deployMutation.mutate({
+      selectionRevision: overview.selectionRevision,
+      planToken: overview.planToken,
+      baselineOperationIds: [
+        overview.activeOperation?.operationId,
+        overview.lastOperation?.operationId,
+      ].filter((operationId): operationId is string => operationId !== undefined),
+    });
   }
 
-  function onDeployConfirmClick(): void {
-    if (!deployActionable) return;
-    deployMutation.mutate();
-  }
-
-  // The add-source input ref lives here so the first-run empty-state CTA can focus
-  // it without a DOM query: AddSourceForm receives the ref and the body CTA calls
-  // focusAddSource (no forwardRef ceremony, no document.querySelector).
-  const addSourceInputRef = useRef<HTMLInputElement>(null);
-  function focusAddSource(): void {
-    addSourceInputRef.current?.focus();
-  }
-
-  // `catalogReady` is the single gate for "show the real catalog body": not the
-  // initial-load skeleton, and not the error state. It's also false on a refetch
-  // that errored while stale `catalog` data lingers (react-query keeps the last
-  // success in `.data`), so the error state never co-renders over a stale catalog.
-  const catalogReady = !catalogQuery.isLoading && !catalogQuery.isError;
-  const hasEntries = catalogReady && (catalog?.entries.length ?? 0) > 0;
-  // Distinguish the all-disabled empty (re-enable a Source above) from the
-  // genuinely-first-run / never-synced case. Only meaningful once the catalog has
-  // resolved empty.
+  const sources = overview?.sources ?? [];
+  const hasRows = (overview?.rows.length ?? 0) > 0;
   const allDisabled =
-    catalogReady &&
-    catalog?.entries.length === 0 &&
-    sources !== undefined &&
-    sources.length > 0 &&
-    !anyActiveSource;
-  const deployReview = useMemo(
-    () =>
-      buildDeployReview({
-        catalogEntries: catalog?.entries ?? [],
-        presets: catalog?.presets ?? [],
-        selected,
-        targets,
-        diff,
-        sourceLabels,
-      }),
-    [catalog?.entries, catalog?.presets, selected, targets, diff, sourceLabels],
-  );
+    overview !== undefined && sources.length > 0 && !sources.some((source) => source.active);
 
   return (
     <div className="kit-page" data-testid="kit-deploy-page">
@@ -590,8 +394,19 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           <div className="kit-title-block">
             <h1>Capabilities</h1>
             <span className="kit-title-meta">
-              {deployReview.selectedCount} selected for {deployReview.targetLabels.join(", ")}
+              {selectedRows.length} selected
+              {selectedTargets.length > 0
+                ? ` for ${selectedTargets.map((target) => TARGET_LABEL[target]).join(", ")}`
+                : ""}
             </span>
+            {connection && (
+              <span
+                className={`kit-connection kit-connection-${connection.status}`}
+                data-testid="kit-connection"
+              >
+                {connection.displayName} · {connection.status}
+              </span>
+            )}
           </div>
           <div className="kit-source-panel">
             <div className="kit-source-panel-head">
@@ -601,20 +416,26 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
             <div className="kit-sources" data-testid="kit-sources">
               <SourceRows
                 sources={sources}
-                syncStatuses={sourceStatuses}
-                onToggle={(s) => toggleSource.mutate(s)}
+                mirrors={overview?.mirrors ?? []}
+                disabled={authorityUnknown}
+                onToggle={(source) => toggleSource.mutate(source)}
                 pendingId={toggleSource.isPending ? toggleSource.variables?.id : undefined}
-                onDelete={(s) => deleteSource.mutate(s)}
+                onDelete={(source) => deleteSource.mutate(source)}
                 deletePendingId={deleteSource.isPending ? deleteSource.variables?.id : undefined}
                 deleteFailedId={deleteSource.isError ? deleteSource.variables?.id : undefined}
-                onReorder={(s, direction) => reorderSource.mutate({ source: s, direction })}
+                onReorder={(source, direction) => reorderSource.mutate({ source, direction })}
                 reorderPendingId={
                   reorderSource.isPending ? reorderSource.variables?.source.id : undefined
                 }
               />
             </div>
             <div className="kit-add-source-panel">
-              <AddSourceForm apiConfig={apiConfig} inputRef={addSourceInputRef} />
+              <AddSourceForm
+                apiConfig={apiConfig}
+                inputRef={addSourceInputRef}
+                onChanged={refetchOverview}
+                disabled={authorityUnknown}
+              />
             </div>
           </div>
         </div>
@@ -623,7 +444,7 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
             type="button"
             className="button ghost"
             onClick={() => syncMutation.mutate()}
-            disabled={syncMutation.isPending}
+            disabled={syncMutation.isPending || authorityUnknown}
             data-testid="kit-check-updates"
           >
             {syncMutation.isPending ? "Checking…" : "Check for updates"}
@@ -631,8 +452,8 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
           <button
             type="button"
             className="button ghost kit-header-deploy"
-            onClick={onDeployClick}
-            disabled={!deployActionable}
+            onClick={deploy}
+            disabled={!deployEnabled}
             data-testid="kit-deploy"
           >
             {deployLabel}
@@ -641,8 +462,8 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
             <button
               type="button"
               className="button danger"
-              onClick={onDeployConfirmClick}
-              disabled={!deployActionable}
+              onClick={deploy}
+              disabled={!deployEnabled}
               data-testid="kit-deploy-confirm"
             >
               Confirm: delete {removedCount} &amp; deploy
@@ -652,120 +473,101 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
       </header>
 
       {realHomeArmed && (
-        // role="alert" (assertive): unlike the sibling banner in Developer Settings —
-        // which appears in response to the user's own toggle click (polite is fine) —
-        // this one is present on first render of the Deploy surface, so a polite live
-        // region may never announce. The banner mirrors that sibling's wording, plus a
-        // recovery pointer to where the user disarms it.
         <div className="banner-warn" data-testid="deploy-real-home-armed" role="alert">
           Deploys now write your real <code>~/.claude</code>, <code>~/.codex</code>, and{" "}
           <code>~/.agents</code> — no sandbox. Turn this off in Settings → Developer.
         </div>
       )}
-
       {removedCount > 0 && (
         <div className="banner-warn kit-deploy-remove-warn" data-testid="kit-deploy-remove-warn">
           Deploy will DELETE {removedCount} installed{" "}
-          {removedCount === 1 ? "capability" : "capabilities"} from your CLI home
-          {targets.length === 1 ? "" : "s"}. This removes the files — confirm below before
-          deploying.
+          {removedCount === 1 ? "capability" : "capabilities"}. Review and confirm before deploying.
         </div>
       )}
-
-      {hasEntries && (
-        <div className="kit-controls">
-          <div className="kit-presets" data-testid="kit-presets">
-            <span className="kit-control-label">Preset</span>
-            {(catalog?.presets ?? []).length === 0 ? (
-              <span className="kit-presets-none">none</span>
-            ) : (
-              (catalog?.presets ?? []).map((p) => (
-                <button
-                  type="button"
-                  key={p.name}
-                  className={`badge kit-preset ${presetActive(p, selected) ? "active" : ""}`}
-                  onClick={() => togglePreset(p.name)}
-                  title={p.description}
-                >
-                  {p.name}
-                </button>
-              ))
-            )}
-            {(catalog?.presets ?? []).length > 0 && (
-              <span className="kit-preset-note" data-testid="kit-preset-note">
-                Presets add to the current Selection; {deployReview.manualSelectionCount} selected
-                outside active Presets.
-              </span>
-            )}
-          </div>
-          <div className="kit-targets" data-testid="kit-targets">
-            <span className="kit-control-label">Targets</span>
-            {(["claude", "codex"] as DeployTarget[]).map((t) => (
-              <label key={t} className="kit-target-toggle">
-                <input
-                  type="checkbox"
-                  className="kit-target-check"
-                  checked={targets.includes(t)}
-                  onChange={() => toggleTarget(t)}
-                  data-testid={`kit-target-${t}`}
-                />
-                {TARGET_LABEL[t]}
-              </label>
-            ))}
-          </div>
+      {manualInstallRows.length > 0 && (
+        <div className="banner-warn" data-testid="kit-manual-install">
+          Manual install required for {manualInstallRows.map((row) => row.key.name).join(", ")}.
+          Hive does not run plugin or bundle installers from a durable Deploy.
         </div>
       )}
-
-      {diff && (diff.entries?.length ?? 0) > 0 && (
-        <DeployDiffPanel key={JSON.stringify(selection)} review={deployReview} />
+      {manualRemovalRows.length > 0 && (
+        <div className="banner-error" data-testid="kit-manual-removal">
+          Manual removal required for {manualRemovalRows.map((row) => row.key.name).join(", ")}.
+          Deploy does not uninstall plugins or bundles.
+        </div>
       )}
-
-      {deployMutation.isError && (
+      {blockedInstructionRows.length > 0 && (
+        <div className="banner-warn" data-testid="kit-instruction-blocked">
+          Selected instructions are unavailable. Whole-file instruction reconciliation is blocked.
+        </div>
+      )}
+      {unmanagedInstructionRows.length > 0 && (
+        <div className="banner-warn" data-testid="kit-instruction-unmanaged">
+          Whole-file instruction reconciliation is paused because the Deployment Ledger contains
+          instruction contributions Hive does not manage:{" "}
+          {unmanagedInstructionRows.map((row) => row.key.name).join(", ")}. Other capability changes
+          can still Deploy.
+        </div>
+      )}
+      {overview?.activeOperation && <OperationStatus operation={overview.activeOperation} />}
+      {!overview?.activeOperation && overview?.lastOperation && (
+        <OperationStatus operation={overview.lastOperation} />
+      )}
+      {(staleSelectionRevision !== null ||
+        (selectionMutation.isError && !selectionConflictResolved)) && (
+        <div className="banner-error" data-testid="kit-selection-error">
+          {staleSelectionRevision !== null
+            ? "Selection changed on the Daemon. Waiting for a newer Overview before changing it again."
+            : selectionMutation.error instanceof SelectionConflictError
+              ? "Selection changed on the Daemon. Reload the Overview before changing it again."
+              : `Could not update Selection: ${selectionMutation.error?.message ?? "Unknown error"}`}
+        </div>
+      )}
+      {(stalePlanToken !== null ||
+        ambiguousDeploy !== null ||
+        (deployMutation.isError && !planStaleResolved && !transportAcceptanceProven)) && (
         <div className="banner-error" data-testid="kit-deploy-error">
-          Deploy failed: {(deployMutation.error as Error).message}
-        </div>
-      )}
-      {deployMutation.isSuccess && (!diff || (diff.entries?.length ?? 0) === 0) && (
-        <div className="kit-deploy-ok" data-testid="kit-deploy-ok">
-          Deployed. Diff cleared.
+          {stalePlanToken !== null
+            ? "The deployment plan changed. Waiting for a newer Overview before deploying again."
+            : ambiguousDeploy !== null
+              ? "Deploy acceptance is unknown. Waiting for Overview verification before retrying."
+              : deployMutation.error instanceof PlanStaleError
+                ? "The deployment plan changed. Reload the Overview before deploying again."
+                : `Deploy could not be accepted: ${deployMutation.error?.message ?? "Unknown error"}`}
         </div>
       )}
       {toggleSource.isError && (
         <div className="banner-error" data-testid="kit-source-toggle-error">
-          Could not change the Source — {(toggleSource.error as Error).message}
+          Could not change the Source — {toggleSource.error.message}
         </div>
       )}
       {deleteSource.isError && (
         <div className="banner-error" data-testid="kit-source-delete-error">
-          Could not remove the Source — {(deleteSource.error as Error).message}
+          Could not remove the Source — {deleteSource.error.message}
         </div>
       )}
 
+      {overview && overview.diff.entries.length > 0 && <DeployDiffPanel overview={overview} />}
+
       <div className="kit-catalog" data-testid="kit-catalog">
-        {catalogQuery.isLoading && <CatalogSkeleton />}
-        {catalogQuery.isError && (
+        {overviewQuery.isLoading && <CatalogSkeleton />}
+        {overviewQuery.isError && (
           <div className="kit-catalog-state kit-catalog-error" data-testid="kit-catalog-error">
-            <p className="kit-catalog-state-title">Couldn't load the catalog.</p>
-            <p className="kit-catalog-state-body">
-              The deploy daemon didn't return the catalog. Check that the Hive daemon is running,
-              then retry.
-            </p>
+            <p className="kit-catalog-state-title">Couldn&apos;t load the Deployment Overview.</p>
+            <p className="kit-catalog-state-body">Check the Hive Daemon connection, then retry.</p>
             <button
               type="button"
               className="button primary"
-              onClick={() => void catalogQuery.refetch()}
-              disabled={catalogQuery.isFetching}
+              onClick={() => void overviewQuery.refetch()}
+              disabled={overviewQuery.isFetching}
               data-testid="kit-catalog-retry"
             >
-              {catalogQuery.isFetching ? "Retrying…" : "Retry"}
+              {overviewQuery.isFetching ? "Retrying…" : "Retry"}
             </button>
           </div>
         )}
-        {catalogReady &&
-          catalog?.entries.length === 0 &&
-          // Distinguish "every Source is disabled" (re-enable one above) from the
-          // genuinely-first-run / no-sources case. The all-disabled message only
-          // applies once the source list has resolved with ≥1 entry, none active.
+        {overview &&
+          !hasRows &&
           (allDisabled ? (
             <div className="empty" data-testid="kit-empty-disabled">
               All Sources are disabled — enable one above to see its capabilities.
@@ -774,105 +576,103 @@ export function KitDeployPage({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elem
             <div className="kit-catalog-state kit-empty-state" data-testid="kit-empty">
               <p className="kit-catalog-state-title">No capabilities yet.</p>
               <p className="kit-catalog-state-body">
-                Hive deploys capabilities from one or more Git Sources into your Claude/Codex homes.
+                Hive deploys capabilities from one or more Sources into your Claude and Codex homes.
               </p>
               <button
                 type="button"
                 className="button primary"
-                onClick={focusAddSource}
+                onClick={() => addSourceInputRef.current?.focus()}
+                disabled={authorityUnknown}
                 data-testid="kit-empty-add-source"
               >
                 Add a Source
               </button>
             </div>
           ))}
-        {catalogReady &&
+        {overview &&
           KINDS.map((kind) => {
-            const entries = (catalog?.entries ?? []).filter((e) => e.kind === kind);
-            if (entries.length === 0) return null;
+            const rows = overview.rows.filter((row) => row.key.kind === kind);
+            if (rows.length === 0) return null;
             return (
               <KindSection
                 key={kind}
                 kind={kind}
-                entries={entries}
-                selected={new Set(selected[KIND_TO_CAP[kind]])}
-                deployed={deployed[kind]}
-                onDisk={onDisk[kind]}
-                sourceLabels={sourceLabels}
-                onToggle={(name) => toggleIndividual(kind, name)}
+                rows={rows}
+                sourceLabels={new Map(overview.sources.map((source) => [source.id, source.label]))}
+                pendingKey={
+                  selectionMutation.isPending ? selectionMutation.variables?.row.key : undefined
+                }
+                selectionDisabled={authorityUnknown}
+                onToggle={(row) =>
+                  selectionMutation.mutate({
+                    row,
+                    expectedRevision: overview.selectionRevision,
+                  })
+                }
               />
             );
           })}
       </div>
 
-      {hasEntries && (
+      {overview && hasRows && (
         <DeploySummaryBar
-          review={deployReview}
-          diffReady={diffReady}
-          deployActionable={deployActionable}
+          overview={overview}
+          deployEnabled={deployEnabled}
           deployLabel={deployLabel}
           deployArmed={deployArmed}
           removedCount={removedCount}
-          onDeployClick={onDeployClick}
-          onDeployConfirmClick={onDeployConfirmClick}
+          onDeploy={deploy}
         />
       )}
-
       <ToastHost toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
 
-// The per-Source header rows. Renders from the authoritative Source list (incl.
-// inactive) when it has resolved, each row carrying an on/off toggle. While the
-// list is loading/errored (`sources` undefined) it falls back to the active-only
-// `state.sync` rows, read-only (no toggle), so the header never blanks against an
-// already-populated catalog and never shows a wrong toggle state.
-// Self-contained Add-Source control (mirrors ApiKeyForm): a git-URL input that
-// registers a Source via POST /api/sources, plus the inline status beneath it.
-// Owns its own mutation + query invalidation so the page body stays thin. The
-// daemon onboards (sync + validate) and KEEPS the Source even when non-conformant
-// or empty, so on success we always invalidate ["sources"] (new row) + ["kit"]
-// (its capabilities, built from active sources); the returned AddSourceResult
-// drives the status copy.
+function OperationStatus({
+  operation,
+}: {
+  operation: NonNullable<DeploymentOverview["activeOperation"]>;
+}): JSX.Element {
+  const danger = operation.state === "failed" || operation.state === "interrupted";
+  return (
+    <div
+      className={danger ? "banner-error" : "banner-info"}
+      data-testid="kit-operation-status"
+      role="status"
+    >
+      Deploy {operation.state} · {operation.operationId}
+    </div>
+  );
+}
+
 function AddSourceForm({
   apiConfig,
   inputRef,
+  onChanged,
+  disabled,
 }: {
   apiConfig: ApiConfig;
-  // Owned by the parent so the first-run empty-state CTA can focus this input
-  // without a DOM query (see focusAddSource in KitDeployPage).
   inputRef: RefObject<HTMLInputElement>;
+  onChanged: () => void;
+  disabled: boolean;
 }): JSX.Element {
-  const qc = useQueryClient();
-  // Uncontrolled (matches the api-key-form pattern): read on submit, cleared on a
-  // successful add. `empty` tracks only emptiness so submit can disable on a blank
-  // field without making the input controlled.
   const [empty, setEmpty] = useState(true);
-
   const addSource = useMutation<AddSourceResult, AddSourceError, string>({
-    mutationFn: (origin: string) => api.addSource(apiConfig, origin),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["sources"] });
-      void qc.invalidateQueries({ queryKey: ["kit"] });
-    },
-    onError: (err) => {
-      // A malformed 201 still committed the Source server-side — refetch so the
-      // new row surfaces even though the body couldn't drive the status banner.
-      if (err.cause.kind === "malformed-success") {
-        void qc.invalidateQueries({ queryKey: ["sources"] });
-        void qc.invalidateQueries({ queryKey: ["kit"] });
-      }
+    mutationFn: (origin) => api.addSource(apiConfig, origin),
+    onSuccess: onChanged,
+    onError: (error) => {
+      if (error.cause.kind === "malformed-success") onChanged();
     },
   });
-
   return (
     <>
       <form
         className="add-source-form"
         data-testid="add-source-form"
-        onSubmit={(e) => {
-          e.preventDefault();
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (disabled) return;
           const origin = inputRef.current?.value.trim() ?? "";
           if (!origin) return;
           addSource.mutate(origin, {
@@ -887,12 +687,10 @@ function AddSourceForm({
           ref={inputRef}
           type="text"
           placeholder="https://github.com/owner/repo"
-          disabled={addSource.isPending}
-          onInput={(e) => {
-            setEmpty(e.currentTarget.value.trim().length === 0);
-            if (!addSource.isPending && (addSource.isError || addSource.data !== undefined)) {
-              addSource.reset();
-            }
+          disabled={addSource.isPending || disabled}
+          onInput={(event) => {
+            setEmpty(event.currentTarget.value.trim().length === 0);
+            if (!addSource.isPending && (addSource.isError || addSource.data)) addSource.reset();
           }}
           aria-label="Git URL of a Source to add"
           data-testid="add-source-input"
@@ -900,7 +698,7 @@ function AddSourceForm({
         <button
           type="submit"
           className="button"
-          disabled={addSource.isPending || empty}
+          disabled={addSource.isPending || empty || disabled}
           data-testid="add-source-submit"
         >
           {addSource.isPending ? "Adding…" : "Add Source"}
@@ -911,11 +709,6 @@ function AddSourceForm({
   );
 }
 
-// Inline status beneath the Add-Source form, scoped to this control (not a toast
-// — #50 owns that). Driven by the mutation state + the 201 `validation` body:
-// pending → error (parsed AddSourceError) → success / empty / conformance-warning.
-// The Source is kept on every 201, so the empty + warning cases are informational,
-// not failures.
 function AddSourceStatus({
   state,
 }: {
@@ -942,53 +735,47 @@ function AddSourceStatus({
   }
   const result = state.data;
   if (!result) return null;
-  const lbl = shortOrigin(result.source.origin);
-  const { validation } = result;
-  if (!validation.conformant) {
-    const n = validation.errors.length;
+  if (!result.validation.conformant) {
+    const count = result.validation.errors.length;
     return (
       <div className="banner-warn add-source-status" data-testid="add-source-warning">
-        Added {lbl} — {n} conformance problem{n === 1 ? "" : "s"}; nothing will deploy until fixed.
+        Added {result.source.label} — {count} conformance problem{count === 1 ? "" : "s"}; nothing
+        will deploy until fixed.
       </div>
     );
   }
-  if (validation.capabilityCount === 0) {
+  if (result.validation.capabilityCount === 0) {
     return (
       <div className="banner-info add-source-status" data-testid="add-source-empty">
-        Added {lbl} — no capabilities found.
+        Added {result.source.label} — no capabilities found.
       </div>
     );
   }
   return (
     <div className="banner-success add-source-status" data-testid="add-source-success">
-      Added {lbl} — {validation.capabilityCount} capabilit
-      {validation.capabilityCount === 1 ? "y" : "ies"}.
+      Added {result.source.label} — {result.validation.capabilityCount}{" "}
+      {result.validation.capabilityCount === 1 ? "capability" : "capabilities"}.
     </div>
   );
 }
 
-// Render the parsed AddSourceError cause into user copy: 400 → join issue
-// messages; 409 → the duplicate origin; malformed-success → an advisory note (the
-// Source was added but the response couldn't be read); else → the carried message.
-function addSourceErrorMessage(err: AddSourceError): string {
-  const cause = err.cause;
+function addSourceErrorMessage(error: AddSourceError): string {
+  const cause = error.cause;
   if (cause.kind === "invalid") {
     return cause.issues.length > 0
-      ? cause.issues.map((i) => i.message).join("; ")
-      : "Invalid source URL.";
+      ? cause.issues.map((issue) => issue.message).join("; ")
+      : "Invalid Source.";
   }
-  if (cause.kind === "duplicate") {
-    return `Already added: ${cause.origin}`;
-  }
-  if (cause.kind === "malformed-success") {
+  if (cause.kind === "duplicate") return `Already added: ${cause.origin}`;
+  if (cause.kind === "malformed-success")
     return "Source added, but the response could not be read — refresh to see it.";
-  }
   return cause.message;
 }
 
 function SourceRows({
   sources,
-  syncStatuses,
+  mirrors,
+  disabled,
   onToggle,
   pendingId,
   onDelete,
@@ -997,101 +784,45 @@ function SourceRows({
   onReorder,
   reorderPendingId,
 }: {
-  sources: Source[] | undefined;
-  syncStatuses: SourceSyncStatus[];
-  onToggle: (s: Source) => void;
-  // The id of the Source whose toggle is currently mutating, so only that row's
-  // control disables — an in-flight toggle on one Source must not freeze the rest.
+  sources: OverviewSource[];
+  mirrors: OverviewMirror[];
+  disabled: boolean;
+  onToggle: (source: OverviewSource) => void;
   pendingId: string | undefined;
-  onDelete: (s: Source) => void;
-  // The id of the Source whose delete is currently mutating (same per-row scoping
-  // as `pendingId`).
+  onDelete: (source: OverviewSource) => void;
   deletePendingId: string | undefined;
-  // The id of the Source whose last delete FAILED, so that row auto-disarms its
-  // confirm (the error banner above carries the failure; the row returns to its
-  // Remove trigger rather than sitting armed).
   deleteFailedId: string | undefined;
-  // Raise ("up") / lower ("down") a Source one precedence step.
-  onReorder: (s: Source, direction: "up" | "down") => void;
-  // The id of the Source whose reorder is currently mutating (same per-row scoping).
+  onReorder: (source: OverviewSource, direction: "up" | "down") => void;
   reorderPendingId: string | undefined;
 }): JSX.Element {
-  if (sources === undefined) {
-    // Fallback: render the active-only sync rows read-only. The first row keeps the
-    // stable bare testids (every sync row is, by definition, an active synced row).
-    return (
-      <>
-        {syncStatuses.map((s, idx) => (
-          <SourceRow
-            key={s.sourceId}
-            id={s.sourceId}
-            origin={s.origin}
-            sync={s}
-            active
-            anchor={idx === 0}
-          />
-        ))}
-      </>
-    );
-  }
-
-  const syncById = new Map(syncStatuses.map((s) => [s.sourceId, s] as const));
-  // Render in precedence order: highest rank first (the default seed keeps the
-  // Starter — lowest rank — at the bottom). A stable id tiebreak keeps equal ranks
-  // deterministic.
-  const ordered = [...sources].sort((a, b) =>
-    b.rank !== a.rank ? b.rank - a.rank : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-  );
-  // Stable freshness-testid anchor: the bare `kit-sha`/`kit-freshness` go on the
-  // FIRST row (in precedence order) that has a state.sync entry — never raw idx 0,
-  // since a SHA-less Source could sit at the top.
-  const firstSyncedId = ordered.find((s) => syncById.has(s.id))?.id;
+  const mirrorBySource = new Map(mirrors.map((mirror) => [mirror.sourceId, mirror]));
   return (
     <>
-      {ordered.map((s, idx) => (
+      {sources.map((source, index) => (
         <SourceRow
-          key={s.id}
-          id={s.id}
-          origin={s.origin}
-          kind={s.kind}
-          sync={syncById.get(s.id)}
-          active={s.active}
-          anchor={s.id === firstSyncedId}
-          onToggle={() => onToggle(s)}
-          togglePending={pendingId === s.id}
-          onDelete={() => onDelete(s)}
-          deletePending={deletePendingId === s.id}
-          deleteFailed={deleteFailedId === s.id}
-          onReorder={(direction) => onReorder(s, direction)}
-          reorderPending={reorderPendingId === s.id}
-          // Disable move-up on the top row and move-down on the bottom row.
-          isFirst={idx === 0}
-          isLast={idx === ordered.length - 1}
+          key={source.id}
+          source={source}
+          mirror={mirrorBySource.get(source.id)}
+          disabled={disabled}
+          onToggle={() => onToggle(source)}
+          togglePending={pendingId === source.id}
+          onDelete={() => onDelete(source)}
+          deletePending={deletePendingId === source.id}
+          deleteFailed={deleteFailedId === source.id}
+          onReorder={(direction) => onReorder(source, direction)}
+          reorderPending={reorderPendingId === source.id}
+          isFirst={index === 0}
+          isLast={index === sources.length - 1}
         />
       ))}
     </>
   );
 }
 
-// A single Source header row. With `onToggle` present it renders an on/off toggle
-// bound to `active`; without it (the loading fallback) it is read-only. SHA +
-// freshness render only for an active, currently-synced Source; an inactive row
-// is muted and shows origin only. The bare `kit-sha`/`kit-freshness` testids land
-// on the `anchor` (first synced) row; every other synced row gets the `-<id>`
-// suffix; un-synced/inactive rows carry no SHA/freshness testid at all.
-//
-// The delete control renders for any Source with `onDelete` wired — including the
-// bundled Starter, which is deletable on the same path as a git Source (ADR-0023).
-// The Starter is still only system-seeded, never user-added; deleting it sticks
-// because the first-run-only seed does not re-seed an already-initialised registry
-// (gated on isCurrentVersion() at sources-live.ts:85). Delete is destructive (drops
-// the Source + Mirror + catalog entries) so it is gated by a two-step inline confirm.
 function SourceRow({
-  id,
-  origin,
-  sync,
-  active,
-  anchor,
+  source,
+  mirror,
+  disabled,
   onToggle,
   togglePending,
   onDelete,
@@ -1102,174 +833,139 @@ function SourceRow({
   isFirst,
   isLast,
 }: {
-  id: string;
-  origin: string;
-  kind?: Source["kind"];
-  sync: SourceSyncStatus | undefined;
-  active: boolean;
-  anchor: boolean;
-  onToggle?: () => void;
-  togglePending?: boolean;
-  onDelete?: () => void;
-  deletePending?: boolean;
-  deleteFailed?: boolean;
-  // Raise ("up") / lower ("down") this Source one precedence step. Absent in the
-  // read-only loading fallback (no reorder controls render there).
-  onReorder?: (direction: "up" | "down") => void;
-  reorderPending?: boolean;
-  // Position in the precedence-ordered list, so the top row disables move-up and
-  // the bottom row disables move-down.
-  isFirst?: boolean;
-  isLast?: boolean;
+  source: OverviewSource;
+  mirror: OverviewMirror | undefined;
+  disabled: boolean;
+  onToggle: () => void;
+  togglePending: boolean;
+  onDelete: () => void;
+  deletePending: boolean;
+  deleteFailed: boolean;
+  onReorder: (direction: "up" | "down") => void;
+  reorderPending: boolean;
+  isFirst: boolean;
+  isLast: boolean;
 }): JSX.Element {
-  const fresh = sync ? freshnessOf(sync.state) : null;
-  // Two-step inline confirm: the first "Remove" click arms (reveals Confirm +
-  // Cancel) without firing; the armed Confirm click calls onDelete. A SUCCESSFUL
-  // delete unmounts this row (its Source leaves the refetched list), discarding
-  // this state; a FAILED delete keeps the row, so disarm on failure (below) so it
-  // returns to the Remove trigger rather than sitting armed.
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
     if (deleteFailed) setConfirming(false);
   }, [deleteFailed]);
-  const deletable = !!onDelete;
   return (
     <div
-      className={`kit-source-row ${active ? "" : "kit-source-row-inactive"}`}
-      data-testid={`kit-source-${id}`}
+      className={`kit-source-row ${source.active ? "" : "kit-source-row-inactive"}`}
+      data-testid={`kit-source-${source.id}`}
     >
-      <span className="kit-source-origin" title={origin}>
-        {shortOrigin(origin)}
+      <span className="kit-source-origin" title={source.label}>
+        {source.label}
       </span>
-      {sync && fresh && (
+      {source.active && mirror && (
         <span className="kit-source-facts">
           <span
-            className={`kit-fresh ${fresh.className}`}
-            data-testid={anchor ? "kit-freshness" : `kit-freshness-${id}`}
+            className={`kit-fresh ${mirror.error ? "kit-fresh-error" : "kit-fresh-ok"}`}
+            data-testid={`kit-freshness-${source.id}`}
           >
-            {fresh.label}
+            {mirror.error ? "Unavailable" : "Ready"}
           </span>
           <span
-            className={`kit-sha ${sync.sha ? "" : "kit-sha-empty"}`}
-            data-testid={anchor ? "kit-sha" : `kit-sha-${id}`}
-            title={sync.sha ?? ""}
+            className={`kit-sha ${mirror.identity ? "" : "kit-sha-empty"}`}
+            data-testid={`kit-sha-${source.id}`}
+            title={mirror.identity ?? ""}
           >
-            {shortSha(sync.sha)}
+            {shortIdentity(mirror.identity)}
           </span>
-          {sync.rateLimitReset !== undefined && (
-            <span className="kit-rate-reset">
-              resets {new Date(sync.rateLimitReset * 1000).toLocaleTimeString()}
-            </span>
-          )}
         </span>
       )}
-      {onToggle && (
-        <label
-          className={`kit-source-toggle ${active ? "on" : "off"}`}
-          title={active ? "Deactivate" : "Activate"}
+      <label
+        className={`kit-source-toggle ${source.active ? "on" : "off"}`}
+        title={source.active ? "Deactivate" : "Activate"}
+      >
+        <input
+          type="checkbox"
+          className="kit-source-switch"
+          checked={source.active}
+          onChange={onToggle}
+          disabled={togglePending || disabled}
+          data-testid={`kit-source-toggle-${source.id}`}
+          aria-label={`${source.active ? "Deactivate" : "Activate"} ${source.label}`}
+        />
+        <span className="kit-source-toggle-label" aria-hidden="true">
+          {source.active ? "On" : "Off"}
+        </span>
+      </label>
+      <span className="kit-source-rank" data-testid={`kit-source-rank-${source.id}`}>
+        <button
+          type="button"
+          className="kit-source-up"
+          onClick={() => onReorder("up")}
+          disabled={reorderPending || isFirst || disabled}
+          aria-label={`Raise precedence of ${source.label}`}
+          data-testid={`kit-source-up-${source.id}`}
         >
-          <input
-            type="checkbox"
-            className="kit-source-switch"
-            checked={active}
-            onChange={onToggle}
-            disabled={togglePending}
-            data-testid={`kit-source-toggle-${id}`}
-            aria-label={`${active ? "Deactivate" : "Activate"} ${shortOrigin(origin)}`}
-          />
-          {/* Visible on/off word so the state never relies on color/opacity alone. */}
-          <span className="kit-source-toggle-label" aria-hidden="true">
-            {active ? "On" : "Off"}
-          </span>
-        </label>
-      )}
-      {onReorder && (
-        <span className="kit-source-rank" data-testid={`kit-source-rank-${id}`}>
+          ▲
+        </button>
+        <button
+          type="button"
+          className="kit-source-down"
+          onClick={() => onReorder("down")}
+          disabled={reorderPending || isLast || disabled}
+          aria-label={`Lower precedence of ${source.label}`}
+          data-testid={`kit-source-down-${source.id}`}
+        >
+          ▼
+        </button>
+      </span>
+      {confirming ? (
+        <span
+          className="kit-source-delete-confirm"
+          data-testid={`kit-source-delete-arm-${source.id}`}
+        >
+          <span className="kit-source-delete-prompt">Remove?</span>
           <button
             type="button"
-            className="kit-source-up"
-            onClick={() => onReorder("up")}
-            disabled={reorderPending || isFirst}
-            title="Raise precedence. Source precedence decides the deployable Variant."
-            aria-label={`Raise precedence of ${shortOrigin(origin)}`}
-            data-testid={`kit-source-up-${id}`}
+            className="kit-source-delete-go"
+            onClick={onDelete}
+            disabled={deletePending || disabled}
+            data-testid={`kit-source-delete-confirm-${source.id}`}
           >
-            ▲
+            {deletePending ? "Removing…" : "Remove"}
           </button>
           <button
             type="button"
-            className="kit-source-down"
-            onClick={() => onReorder("down")}
-            disabled={reorderPending || isLast}
-            title="Lower precedence. Source precedence decides the deployable Variant."
-            aria-label={`Lower precedence of ${shortOrigin(origin)}`}
-            data-testid={`kit-source-down-${id}`}
+            className="kit-source-delete-cancel"
+            onClick={() => setConfirming(false)}
+            data-testid={`kit-source-delete-cancel-${source.id}`}
           >
-            ▼
+            Cancel
           </button>
         </span>
+      ) : (
+        <button
+          type="button"
+          className="kit-source-delete"
+          onClick={() => setConfirming(true)}
+          disabled={disabled}
+          aria-label={`Remove ${source.label}`}
+          data-testid={`kit-source-delete-${source.id}`}
+        >
+          Remove
+        </button>
       )}
-      {deletable &&
-        (confirming ? (
-          <span className="kit-source-delete-confirm" data-testid={`kit-source-delete-arm-${id}`}>
-            <span className="kit-source-delete-prompt">Remove?</span>
-            <button
-              type="button"
-              className="kit-source-delete-go"
-              onClick={() => onDelete?.()}
-              disabled={deletePending}
-              title="Removes this Source and its capabilities from the catalog. Already-deployed files stay until you re-deploy."
-              data-testid={`kit-source-delete-confirm-${id}`}
-            >
-              {deletePending ? "Removing…" : "Remove"}
-            </button>
-            {/* Cancel only flips local UI state, so it stays enabled even while
-                the delete is in flight — a hung request must never trap the user. */}
-            <button
-              type="button"
-              className="kit-source-delete-cancel"
-              onClick={() => setConfirming(false)}
-              data-testid={`kit-source-delete-cancel-${id}`}
-            >
-              Cancel
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            className="kit-source-delete"
-            onClick={() => setConfirming(true)}
-            title="Remove this Source"
-            aria-label={`Remove ${shortOrigin(origin)}`}
-            data-testid={`kit-source-delete-${id}`}
-          >
-            Remove
-          </button>
-        ))}
     </div>
   );
 }
 
-// Content-shaped placeholder for the loading catalog: a couple of skeleton
-// "kind sections" (title + a few rows) mirroring .kit-kind → .kit-row.
 function CatalogSkeleton(): JSX.Element {
-  // Two skeleton kind-sections, identified by stable synthetic names so the
-  // placeholder rows carry non-index keys.
-  const sections = [
-    { id: "a", rows: ["a1", "a2", "a3"] },
-    { id: "b", rows: ["b1", "b2"] },
-  ];
   return (
     <SkeletonGroup
-      label="Loading catalog…"
+      label="Loading Deployment Overview…"
       testId="kit-catalog-skeleton"
       className="kit-catalog-skeleton"
     >
-      {sections.map((section) => (
-        <div className="skeleton-kind" key={section.id}>
+      {["a", "b"].map((section) => (
+        <div className="skeleton-kind" key={section}>
           <Skeleton width="40%" height="18px" />
-          {section.rows.map((rowId) => (
-            <div className="skeleton-row" key={rowId}>
+          {["1", "2", "3"].map((row) => (
+            <div className="skeleton-row" key={row}>
               <Skeleton width="16px" height="16px" radius="4px" />
               <div className="skeleton-row-main">
                 <Skeleton width="35%" height="13px" />
@@ -1285,183 +981,212 @@ function CatalogSkeleton(): JSX.Element {
 
 function KindSection({
   kind,
-  entries,
-  selected,
-  deployed,
-  onDisk,
+  rows,
   sourceLabels,
+  pendingKey,
+  selectionDisabled,
   onToggle,
 }: {
   kind: CapabilityKind;
-  entries: CapabilityEntry[];
-  selected: Set<string>;
-  deployed: Set<string>;
-  onDisk: Map<string, VerifyStatus>;
+  rows: OverviewRow[];
   sourceLabels: Map<string, string>;
-  onToggle: (name: string) => void;
+  pendingKey: OverviewRow["key"] | undefined;
+  selectionDisabled: boolean;
+  onToggle: (row: OverviewRow) => void;
 }): JSX.Element {
-  // Group by @-namespace within the kind.
-  const groups = useMemo(() => {
-    const map = new Map<string, CapabilityEntry[]>();
-    for (const e of entries) {
-      const g = e.group || "";
-      const arr = map.get(g) ?? [];
-      arr.push(e);
-      map.set(g, arr);
-    }
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [entries]);
-
-  // CapabilityKeys with >1 variant (same (kind,name), different ContentSha). A
-  // multi-variant row disambiguates its testid by a short contentSha suffix; the
-  // common single-variant row keeps the stable bare testid.
-  const variantCount = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const e of entries) counts.set(e.name, (counts.get(e.name) ?? 0) + 1);
-    return counts;
-  }, [entries]);
-
+  type Displayed = { row: OverviewRow; variant: OverviewRow["variants"][number] | undefined };
+  const displayed: Displayed[] = [];
+  for (const row of rows) {
+    if (row.variants.length === 0) displayed.push({ row, variant: undefined });
+    else for (const variant of row.variants) displayed.push({ row, variant });
+  }
+  const counts = new Map<string, number>();
+  for (const item of displayed)
+    counts.set(item.row.key.name, (counts.get(item.row.key.name) ?? 0) + 1);
   return (
     <section className="kit-kind" data-testid={`kit-kind-${kind}`}>
       <h2 className="kit-kind-title">
         <span>{KIND_LABEL[kind]}</span>
-        <span className="kit-kind-count">{entries.length}</span>
+        <span className="kit-kind-count">{displayed.length}</span>
       </h2>
-      {groups.map(([group, rows]) => (
-        <div className="kit-group" key={group || "(root)"}>
-          {group && <div className="kit-group-name">{group}</div>}
-          {rows.map((e) => {
-            const isSelected = selected.has(e.name);
-            const isDeployed = deployed.has(e.name);
-            const disk = onDisk.get(e.name);
-            const indicator = rowIndicator({
-              deployable: e.deployable,
-              shadowed: e.shadowed,
-              isSelected,
-              isDeployed,
-              disk,
-            });
-            const blocked = !e.deployable && !e.shadowed;
-            const selectable = e.deployable;
-            // Multi-variant rows key uniformly on the short contentSha (winner and
-            // losers alike) so React keys + testids are unique across ≥3 variants.
-            const multi = (variantCount.get(e.name) ?? 1) > 1;
-            const shortSha = e.contentSha.slice(0, 8);
-            const rowKey = multi ? `${group}/${e.name}/${shortSha}` : `${group}/${e.name}`;
-            const rowTestId = multi
-              ? `kit-row-${kind}-${e.name}-${shortSha}`
-              : `kit-row-${kind}-${e.name}`;
-            const indicatorTestId = multi
-              ? `kit-indicator-${e.name}-${shortSha}`
-              : `kit-indicator-${e.name}`;
-            return (
-              <button
-                type="button"
-                key={rowKey}
-                className={`kit-row ${isSelected ? "selected" : ""} ${blocked ? "blocked" : ""} ${
-                  e.shadowed ? "shadowed" : ""
-                }`}
-                onClick={() => selectable && onToggle(e.name)}
-                disabled={!selectable}
-                data-testid={rowTestId}
-              >
-                <span
-                  className={`kit-row-check ${isSelected ? "checked" : ""}`}
-                  aria-hidden="true"
-                />
-                <span className="kit-row-main">
-                  <span className="kit-row-name">{e.name}</span>
-                  {e.description && <span className="kit-row-desc">{e.description}</span>}
-                  {/* Merge labels: the Source(s) providing this variant, by their
-                      human owner/repo label (the same the header uses). */}
-                  {e.sourceIds.length > 1 && (
-                    <span className="kit-row-sources" data-testid={`kit-row-sources-${e.name}`}>
-                      {e.sourceIds.map((sid) => (
-                        <span className="kit-source-label" key={sid}>
-                          {sourceLabels.get(sid) ?? sid}
-                        </span>
-                      ))}
-                    </span>
-                  )}
-                  {/* A shadowed (precedence-loser) variant explains itself: the
-                      winning Source provides the deployed content. Name that Source
-                      by its human label (the same the header/merge labels use). The
-                      testid carries the short contentSha (a shadowed row is always
-                      multi-variant) so ≥2 shadowed variants of one key stay distinct. */}
-                  {e.shadowed && e.shadowedBy && (
-                    <span
-                      className="kit-row-shadow"
-                      data-testid={`kit-row-shadow-${e.name}-${shortSha}`}
-                    >
-                      Hidden by Source precedence: {sourceLabels.get(e.shadowedBy) ?? e.shadowedBy}{" "}
-                      has higher Source precedence.
-                    </span>
-                  )}
-                  {blocked && (
-                    <span className="kit-row-blocked">{e.blockedReason ?? "un-deployable"}</span>
-                  )}
-                </span>
-                {indicator && (
-                  <span
-                    className={`kit-indicator kit-indicator-${indicator}`}
-                    data-testid={indicatorTestId}
-                    data-status={indicator}
-                  >
-                    {INDICATOR_LABEL[indicator]}
+      <div className="kit-group">
+        {displayed.map(({ row, variant }) => {
+          const catalog = variant?.catalog ?? row.catalog;
+          const shadowed = catalog === "shadowed";
+          const blocked = catalog === "blocked";
+          const selectable = !shadowed && !blocked;
+          const multi = (counts.get(row.key.name) ?? 0) > 1;
+          const suffix = variant?.contentSha.slice(0, 8);
+          const testId =
+            multi && suffix
+              ? `kit-row-${kind}-${row.key.name}-${suffix}`
+              : `kit-row-${kind}-${row.key.name}`;
+          const selected = row.desired === "on" && !shadowed;
+          const isPending =
+            pendingKey !== undefined &&
+            pendingKey.kind === row.key.kind &&
+            pendingKey.name === row.key.name;
+          return (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={selected}
+              aria-label={`${row.key.name} desired ${row.desired}`}
+              key={`${row.key.kind}:${row.key.name}:${variant?.contentSha ?? "unavailable"}`}
+              className={`kit-row ${selected ? "selected" : ""} ${blocked ? "blocked" : ""} ${shadowed ? "shadowed" : ""}`}
+              onClick={() => selectable && onToggle(row)}
+              disabled={!selectable || isPending || selectionDisabled}
+              data-testid={testId}
+            >
+              <span className={`kit-row-check ${selected ? "checked" : ""}`} aria-hidden="true" />
+              <span className="kit-row-main">
+                <span className="kit-row-name">{row.key.name}</span>
+                {variant?.description && (
+                  <span className="kit-row-desc">{variant.description}</span>
+                )}
+                {variant && variant.sourceIds.length > 0 && (
+                  <span className="kit-row-sources" data-testid={`kit-row-sources-${row.key.name}`}>
+                    {variant.sourceIds.map((sourceId) => (
+                      <span className="kit-source-label" key={sourceId}>
+                        {sourceLabels.get(sourceId) ?? sourceId}
+                      </span>
+                    ))}
                   </span>
                 )}
-              </button>
-            );
-          })}
-        </div>
-      ))}
+                {shadowed && (
+                  <span
+                    className="kit-row-shadow"
+                    data-testid={`kit-row-shadow-${row.key.name}-${suffix ?? "unknown"}`}
+                  >
+                    Hidden by Source precedence
+                    {variant?.shadowedBy
+                      ? `: ${sourceLabels.get(variant.shadowedBy) ?? variant.shadowedBy} has higher Source precedence.`
+                      : "."}
+                  </span>
+                )}
+                {blocked && (
+                  <span className="kit-row-blocked">
+                    {variant?.blockedReason ?? "un-deployable"}
+                  </span>
+                )}
+                <StateRail row={row} catalog={catalog} />
+              </span>
+              {shadowed && (
+                <span className="kit-indicator kit-indicator-duplicate" data-status="duplicate">
+                  not deployed (duplicate)
+                </span>
+              )}
+              {blocked && (
+                <span className="kit-indicator kit-indicator-blocked" data-status="blocked">
+                  blocked
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
     </section>
   );
 }
 
+function StateRail({ row, catalog }: { row: OverviewRow; catalog: string }): JSX.Element {
+  const attempt = attemptLabel(row.lastAttempt);
+  return (
+    <span className="kit-state-rail" data-testid={`kit-state-${row.key.kind}-${row.key.name}`}>
+      <span className="kit-state-fact">
+        <span>Catalog</span>
+        <strong>{catalogLabel(catalog)}</strong>
+      </span>
+      <span className="kit-state-arrow" aria-hidden="true">
+        →
+      </span>
+      <span className="kit-state-fact">
+        <span>Desired</span>
+        <strong>{row.desired === "on" ? "On" : "Off"}</strong>
+      </span>
+      <span className="kit-state-arrow" aria-hidden="true">
+        →
+      </span>
+      <span className="kit-state-fact">
+        <span>Reconciliation</span>
+        <strong>{RECONCILIATION_LABEL[row.reconciliation]}</strong>
+      </span>
+      {row.targets.map((target) => (
+        <span className="kit-state-target" key={target.target}>
+          <span>{TARGET_LABEL[target.target]}</span>
+          <strong>{OBSERVATION_LABEL[target.observation]}</strong>
+        </span>
+      ))}
+      <span className={`kit-state-attempt ${row.lastAttempt.state === "failed" ? "failed" : ""}`}>
+        <span>Last attempt</span>
+        <strong>{attempt}</strong>
+      </span>
+    </span>
+  );
+}
+
+function catalogLabel(catalog: string): string {
+  switch (catalog) {
+    case "deployable":
+      return "Available";
+    case "shadowed":
+      return "Shadowed";
+    case "blocked":
+      return "Blocked";
+    default:
+      return "Unavailable";
+  }
+}
+
+function attemptLabel(attempt: OverviewLastAttempt): string {
+  if (attempt.state === "none") return "None";
+  if (attempt.state === "succeeded") return "Succeeded";
+  return `Failed · ${attempt.code}`;
+}
+
 function DeploySummaryBar({
-  review,
-  diffReady,
-  deployActionable,
+  overview,
+  deployEnabled,
   deployLabel,
   deployArmed,
   removedCount,
-  onDeployClick,
-  onDeployConfirmClick,
+  onDeploy,
 }: {
-  review: DeployReview;
-  diffReady: boolean;
-  deployActionable: boolean;
+  overview: DeploymentOverview;
+  deployEnabled: boolean;
   deployLabel: string;
   deployArmed: boolean;
   removedCount: number;
-  onDeployClick: () => void;
-  onDeployConfirmClick: () => void;
+  onDeploy: () => void;
 }): JSX.Element {
-  const diffText = diffReady
-    ? DIFF_BUCKETS.map((bucket) => `${bucket.label} ${review.changeCounts[bucket.change]}`).join(
-        " / ",
-      )
-    : "Deploy Diff loading";
+  const selected = overview.rows.filter((row) => row.desired === "on");
+  const targets = [
+    ...new Set(
+      selected.flatMap((row) =>
+        row.targets.filter((target) => target.desired === "on").map((target) => target.target),
+      ),
+    ),
+  ];
+  const counts = diffCounts(overview);
   return (
     <div className="kit-sticky-deploy" data-testid="kit-sticky-deploy">
       <div className="kit-sticky-main">
         <span className="kit-sticky-count" data-testid="kit-sticky-selected">
-          {review.selectedCount} selected
+          {selected.length} selected
         </span>
         <span className="kit-sticky-targets" data-testid="kit-sticky-targets">
-          {review.targetLabels.join(", ")}
+          {targets.map((target) => TARGET_LABEL[target]).join(", ") || "No targets"}
         </span>
         <span className="kit-sticky-diff" data-testid="kit-sticky-diff">
-          {diffText}
+          Added {counts.added} / Changed {counts.changed} / Removed {counts.removed}
         </span>
       </div>
       <div className="kit-sticky-actions">
         <button
           type="button"
           className="button primary"
-          onClick={onDeployClick}
-          disabled={!deployActionable}
+          onClick={onDeploy}
+          disabled={!deployEnabled}
           data-testid="kit-sticky-deploy-action"
         >
           {deployLabel}
@@ -1470,8 +1195,8 @@ function DeploySummaryBar({
           <button
             type="button"
             className="button danger"
-            onClick={onDeployConfirmClick}
-            disabled={!deployActionable}
+            onClick={onDeploy}
+            disabled={!deployEnabled}
             data-testid="kit-sticky-deploy-confirm"
           >
             Confirm: delete {removedCount} &amp; deploy
@@ -1482,216 +1207,102 @@ function DeploySummaryBar({
   );
 }
 
-function DeployDiffPanel({ review }: { review: DeployReview }): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const buckets = DIFF_BUCKETS.map((b) => ({
-    ...b,
-    entries: review.items.filter((item) => item.change === b.change),
-  }));
-  // Only populated buckets render a column — a one-sided diff isn't marooned among
-  // empties. Removed severity outranks added/changed via row-level danger (CSS).
-  const populated = buckets.filter((b) => b.entries.length > 0);
+function diffCounts(overview: DeploymentOverview): Record<DiffChange, number> {
+  const counts: Record<DiffChange, number> = { added: 0, changed: 0, removed: 0 };
+  for (const entry of overview.diff.entries) counts[entry.change]++;
+  return counts;
+}
+
+function DeployDiffPanel({ overview }: { overview: DeploymentOverview }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const counts = diffCounts(overview);
+  const hasUserFileWarning = overview.diff.entries.some((entry) => entry.replacesUserFile);
+  const sourceLabels = new Map(overview.sources.map((source) => [source.id, source.label]));
+  const rowsForEntry = (kind: CapabilityKind, name: string): OverviewRow[] =>
+    kind === "instruction" && name.startsWith("(")
+      ? overview.rows.filter((row) => row.key.kind === "instruction" && row.desired === "on")
+      : overview.rows.filter((row) => row.key.kind === kind && row.key.name === name);
   return (
-    <div className="kit-diff" data-testid="kit-diff">
+    <section className="kit-diff" data-testid="kit-diff">
       <button
         type="button"
-        className="kit-diff-toggle"
+        className="kit-diff-head"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
         data-testid="kit-diff-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
       >
-        <span className="kit-diff-caret" aria-hidden="true">
-          {open ? "▾" : "▸"}
-        </span>
         <span className="kit-diff-summary" data-testid="kit-diff-summary">
-          <span className="kit-diff-summary-title">Deploy diff</span>
-          {buckets.map((b) =>
-            b.entries.length > 0 ? (
-              <span key={b.tone} className={`kit-diff-count-${b.tone}`}>
-                {b.glyph}
-                {b.entries.length}
-              </span>
-            ) : null,
-          )}
+          {DIFF_BUCKETS.map((bucket) => (
+            <span className={`kit-diff-count kit-diff-count-${bucket.change}`} key={bucket.change}>
+              {bucket.glyph}
+              {counts[bucket.change]} {bucket.label}
+            </span>
+          ))}
         </span>
       </button>
-      {/* Always visible regardless of collapse: a user-authored CLAUDE.md overwrite
-          is a destructive-action notice (no separate page-level banner covers it). */}
-      {review.hasUserFileWarning && (
-        <div className="banner-error kit-diff-warn" data-testid="kit-diff-userfile-warn">
-          This deploy replaces an existing user-authored CLAUDE.md (backed up to
-          CLAUDE.md.hive-bak).
+      {hasUserFileWarning && (
+        <div className="banner-warn" data-testid="kit-diff-userfile-warn">
+          This Deploy replaces an existing global instruction file such as CLAUDE.md.
         </div>
       )}
-      {open && (
-        <div className="kit-diff-body">
-          <div className="kit-diff-review" data-testid="kit-diff-review">
-            <span>Targets: {review.targetLabels.join(", ")}</span>
-            <span>
-              {DIFF_BUCKETS.map(
-                (bucket) => `${bucket.label} ${review.changeCounts[bucket.change]}`,
-              ).join(" / ")}
-            </span>
-          </div>
-          <div className="kit-diff-cols">
-            {populated.map((b) => (
-              <DiffCol key={b.tone} label={b.label} tone={b.tone} entries={b.entries} />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DiffCol({
-  label,
-  tone,
-  entries,
-}: {
-  label: string;
-  tone: string;
-  entries: DiffReviewItem[];
-}): JSX.Element {
-  return (
-    <div className={`kit-diff-col kit-diff-${tone}`} data-testid={`kit-diff-${tone}`}>
-      <div className="kit-diff-col-head">
-        {label} ({entries.length})
-      </div>
-      <ul>
-        {entries.map((item) => (
-          <li key={`${item.kind}/${item.name}`}>
-            <span className="kit-diff-line">
-              <span className="kit-diff-kind">{item.kind}</span> {item.name}
-            </span>
-            {item.sourceLabels.length > 0 && (
-              <span className="kit-diff-meta" data-testid={`kit-diff-sources-${item.name}`}>
-                Source: {item.sourceLabels.join(", ")}
-              </span>
-            )}
-            {item.hiddenVariants.map((variant) => (
-              <span
-                key={`${item.kind}/${item.name}/${variant.sourceLabels.join("|")}`}
-                className="kit-diff-shadow"
-                data-testid={`kit-diff-hidden-${item.name}`}
+      {expanded && (
+        <div className="kit-diff-review" data-testid="kit-diff-review">
+          {DIFF_BUCKETS.map((bucket) => {
+            const entries = overview.diff.entries.filter((entry) => entry.change === bucket.change);
+            if (entries.length === 0) return null;
+            return (
+              <div
+                className={`kit-diff-column ${bucket.change === "removed" ? "kit-diff-removed" : ""}`}
+                key={bucket.change}
+                data-testid={`kit-diff-${bucket.change}`}
               >
-                Hidden duplicate from {variant.sourceLabels.join(", ")}
-                {variant.winnerLabel ? `; ${variant.winnerLabel} wins by Source precedence` : ""}
-              </span>
-            ))}
-          </li>
-        ))}
-      </ul>
-    </div>
+                <h3>
+                  {bucket.label} {entries.length}
+                </h3>
+                <ul>
+                  {entries.map((entry) => {
+                    const rows = rowsForEntry(entry.kind, entry.name);
+                    const winners = rows.flatMap((row) =>
+                      row.variants.filter((variant) => variant.catalog === "deployable"),
+                    );
+                    const hidden = rows.flatMap((row) =>
+                      row.variants.filter((variant) => variant.catalog === "shadowed"),
+                    );
+                    const winnerLabels = [
+                      ...new Set(
+                        winners
+                          .flatMap((variant) => variant.sourceIds)
+                          .map((sourceId) => sourceLabels.get(sourceId) ?? sourceId),
+                      ),
+                    ];
+                    return (
+                      <li key={`${entry.kind}:${entry.name}`}>
+                        <span>{entry.name}</span>
+                        <span>{entry.kind}</span>
+                        {winnerLabels.length > 0 && (
+                          <span data-testid={`kit-diff-sources-${entry.name}`}>
+                            {winnerLabels.join(", ")}
+                          </span>
+                        )}
+                        {hidden.length > 0 && (
+                          <span data-testid={`kit-diff-hidden-${entry.name}`}>
+                            Hidden duplicate from{" "}
+                            {hidden
+                              .flatMap((variant) => variant.sourceIds)
+                              .map((sourceId) => sourceLabels.get(sourceId) ?? sourceId)
+                              .join(", ")}
+                            ; {winnerLabels.join(", ")} wins by Source precedence.
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
-}
-
-// Row indicator states. `blocked` and `duplicate` are the non-deployable states
-// (malformed vs precedence-shadowed); the next four are ledger/selection-derived;
-// `missing` and `drifted` are the disk-truth states from the verify pass.
-type Indicator =
-  | "blocked"
-  | "duplicate"
-  | "deployed"
-  | "pending"
-  | "removing"
-  | "missing"
-  | "drifted"
-  | "";
-
-const INDICATOR_LABEL: Record<Exclude<Indicator, "">, string> = {
-  blocked: "blocked",
-  duplicate: "not deployed (duplicate)",
-  deployed: "deployed",
-  pending: "pending",
-  removing: "removing",
-  missing: "missing on disk",
-  drifted: "drifted",
-};
-
-// Fold ledger ownership + working selection + on-disk verify status into one
-// indicator. A shadowed variant (lost precedence) reads `duplicate` — a third
-// state distinct from `blocked` (malformed). Disk truth WINS for a deployed
-// capability: a ledger-owned row whose files were removed reads `missing`; one
-// edited since deploy reads `drifted`.
-function rowIndicator(args: {
-  deployable: boolean;
-  shadowed: boolean;
-  isSelected: boolean;
-  isDeployed: boolean;
-  disk: VerifyStatus | undefined;
-}): Indicator {
-  const { deployable, shadowed, isSelected, isDeployed, disk } = args;
-  if (shadowed) return "duplicate";
-  if (!deployable) return "blocked";
-  if (isDeployed) {
-    if (disk === "missing") return "missing";
-    if (disk === "drifted") return "drifted";
-    if (isSelected) return "deployed";
-    return "removing";
-  }
-  return isSelected ? "pending" : "";
-}
-
-// Collapse the per-target verify report into a per-kind, per-name single status.
-// Worst-state wins so a row split across targets still flags a problem:
-// drifted > missing > present > recorded.
-const STATUS_RANK: Record<VerifyStatus, number> = {
-  drifted: 3,
-  missing: 2,
-  present: 1,
-  recorded: 0,
-};
-
-function collapseVerify(
-  report: VerifyReport | undefined,
-): Record<CapabilityKind, Map<string, VerifyStatus>> {
-  const out: Record<CapabilityKind, Map<string, VerifyStatus>> = {
-    instruction: new Map(),
-    skill: new Map(),
-    agent: new Map(),
-    plugin: new Map(),
-    bundle: new Map(),
-  };
-  if (!report) return out;
-  for (const e of report.entries) {
-    let worst: VerifyStatus | undefined;
-    for (const t of e.targets) {
-      if (!worst || STATUS_RANK[t.status] > STATUS_RANK[worst]) worst = t.status;
-    }
-    if (worst) out[e.kind].set(e.name, worst);
-  }
-  return out;
-}
-
-// A preset is active iff it has at least one capability and every one is in the
-// current selection. Empty presets never read active (nothing to reflect).
-function presetActive(
-  preset: { capabilities: Selection["add"] },
-  selected: Selection["add"],
-): boolean {
-  let any = false;
-  for (const k of KINDS) {
-    const cap = KIND_TO_CAP[k];
-    const sel = new Set(selected[cap]);
-    for (const n of preset.capabilities[cap]) {
-      any = true;
-      if (!sel.has(n)) return false;
-    }
-  }
-  return any;
-}
-
-function emptyCaps(): Selection["add"] {
-  return { instructions: [], skills: [], agents: [], plugins: [], bundles: [] };
-}
-
-function emptyCapSets(): Record<keyof Selection["add"], Set<string>> {
-  return {
-    instructions: new Set(),
-    skills: new Set(),
-    agents: new Set(),
-    plugins: new Set(),
-    bundles: new Set(),
-  };
 }

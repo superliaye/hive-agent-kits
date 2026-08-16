@@ -5,5 +5,10 @@
 # everywhere removes both.
 * text=auto eol=lf
 
+# Source files are always reviewable text; escaped control bytes belong in the
+# source representation rather than making Git classify a TypeScript diff as binary.
+*.ts  text eol=lf diff
+*.tsx text eol=lf diff
+
 # Generated lockfiles: text (LF-normalized) but never diffed or hand-edited.
 bun.lock  linguist-generated -diff

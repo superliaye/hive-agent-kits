@@ -224,10 +224,10 @@ describe("computeDiff", () => {
     expect((thrown as DeployError).name).toBe("shared");
   });
 
-  // #47 data-loss guard: an owned-but-deselected name is "removed" ONLY when its
+  // An owned-but-deselected name is "removed" ONLY when its
   // name is in the active catalog. Owned-but-absent (its Source isn't active) is an
   // ORPHAN — no diff entry, never auto-deleted.
-  test("(h) #47: an owned skill absent from the active catalog produces NO removed entry; an owned+active one IS removed", async () => {
+  test("(h) an owned skill absent from the active catalog produces NO removed entry; an owned+active one IS removed", async () => {
     seedSkill("active-one");
     seedSkill("orphan-one");
     // Ledger owns both after a deploy while both Sources were active.
@@ -247,7 +247,7 @@ describe("computeDiff", () => {
     expect(diff.entries.some((e) => e.name === "orphan-one")).toBe(false);
   });
 
-  test("(i) #47: first load — every owned name absent from the active catalog yields zero removed", async () => {
+  test("(i) first load — every owned name absent from the active catalog yields zero removed", async () => {
     seedSkill("s1");
     seedSkill("s2");
     await deploy(resolved({ skills: ["s1", "s2"] }));
@@ -258,7 +258,7 @@ describe("computeDiff", () => {
     expect(diff.entries.filter((e) => e.change === "removed")).toEqual([]);
   });
 
-  test("(j) #47: an owned agent absent from the active catalog is not removed (agents loop)", async () => {
+  test("(j) an owned agent absent from the active catalog is not removed (agents loop)", async () => {
     // Owned agent with no active-catalog membership → orphan, no diff entry.
     await deploy(resolved({ skills: [] }));
     // Seed a ledger that owns an agent the active catalog no longer provides.

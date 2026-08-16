@@ -23,6 +23,10 @@ export const DaemonConfigSchema = z.object({
   logLevel: z.enum(["trace", "debug", "info", "warn", "error"]),
 });
 
+export const SourcesConfigSchema = z.object({
+  workingTreeRoots: z.array(z.string().min(1)),
+});
+
 // Runs subtree (ADR-0006 + ADR-0017). `maxIterations` is the tool-loop turn
 // cap. Sentinel `0` = UNLIMITED (no cap, no grace turn); a positive integer
 // is a finite cap that triggers one grace turn (tools stripped) on overrun.
@@ -47,6 +51,7 @@ export const AppConfigSchema = z.object({
   ui: UiConfigSchema,
   appearance: AppearanceConfigSchema,
   daemon: DaemonConfigSchema,
+  sources: SourcesConfigSchema,
   runs: RunsConfigSchema,
   developer: DeveloperConfigSchema,
 });
@@ -71,9 +76,12 @@ export const APP_CONFIG_DEFAULTS: AppConfig = {
     httpPort: 3117,
     logLevel: "info",
   },
+  sources: {
+    workingTreeRoots: [],
+  },
   runs: {
-    // 0 = unlimited (Q5 resolution: default-unlimited). A positive integer
-    // caps the tool-loop and adds one grace turn on overrun.
+    // 0 = unlimited. A positive integer caps the tool-loop and adds one grace
+    // turn on overrun.
     maxIterations: 0,
   },
   developer: {

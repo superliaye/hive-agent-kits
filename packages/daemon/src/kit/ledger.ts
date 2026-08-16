@@ -1,11 +1,15 @@
-// Deployment Ledger (Plan A3) — the shared interop record at ~/.agent-kit/
+// Deployment Ledger — the shared interop record at ~/.agent-kit/
 // manifest.json (the EXACT agent-kit schema). Two-writer file (Hive + the
 // agent-kit CLI), so writes are read-modify-merge and prune decisions re-read
 // the on-disk ledger immediately before deciding — never from a stale snapshot.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 import { type Ledger, LedgerSchema } from "@hive/contract";
+import {
+  type AtomicWriteOptions,
+  atomicWriteFile,
+  withCooperativeFileLock,
+} from "../lib/durable-file.ts";
 import type { DeployTarget, DeployTargets } from "./targets.ts";
 
 // The wire schema + type live in @hive/contract; re-exported so kit-internal
@@ -80,13 +84,6 @@ function coerceLegacy(raw: unknown): Ledger | null {
   };
 }
 
-function writeAtomic(path: string, ledger: Ledger): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, `${JSON.stringify(ledger, null, 2)}\n`);
-  renameSync(tmp, path);
-}
-
 export type LedgerMergeInput = {
   kitVersion: string;
   targets: DeployTarget[];
@@ -96,6 +93,28 @@ export type LedgerMergeInput = {
   plugins: string[];
   bundles: { name: string; pin: string | null }[];
 };
+
+export type LedgerWriteOptions = AtomicWriteOptions & {
+  lockTimeoutMs?: number;
+  lockStaleMs?: number;
+  lockUpdateMs?: number;
+  beforeCommit?: (attempt: number) => void;
+};
+
+function readLedgerBytes(path: string): string | null {
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
+function parseLedgerBytes(raw: string | null): Ledger {
+  if (raw === null) return emptyLedger();
+  try {
+    const value: unknown = JSON.parse(raw);
+    const parsed = LedgerSchema.safeParse(value);
+    return parsed.success ? parsed.data : (coerceLegacy(value) ?? emptyLedger());
+  } catch {
+    return emptyLedger();
+  }
+}
 
 // Read-modify-merge: re-read the on-disk ledger, fold in what THIS deploy
 // landed, and write atomically. Names this deploy did not touch (e.g. a skill
@@ -107,10 +126,37 @@ export function mergeLedger(
   input: LedgerMergeInput,
   prunedSkills: string[],
   prunedAgents: string[],
+  prunedInstructions: string[] = [],
+  options: LedgerWriteOptions = {},
 ): Ledger {
-  const current = readLedger(targets) ?? emptyLedger();
+  const path = targets.ledgerPath();
+  return withCooperativeFileLock(
+    path,
+    options.lockTimeoutMs ?? 5_000,
+    () =>
+      mergeLedgerWithinLock(
+        targets,
+        input,
+        prunedSkills,
+        prunedAgents,
+        prunedInstructions,
+        options,
+      ),
+    { staleMs: options.lockStaleMs, updateMs: options.lockUpdateMs },
+  );
+}
+
+export function mergeLedgerWithinLock(
+  targets: DeployTargets,
+  input: LedgerMergeInput,
+  prunedSkills: string[],
+  prunedAgents: string[],
+  prunedInstructions: string[] = [],
+  options: LedgerWriteOptions = {},
+): Ledger {
   const dropSkill = new Set(prunedSkills);
   const dropAgent = new Set(prunedAgents);
+  const dropInstruction = new Set(prunedInstructions);
 
   const mergeNames = (existing: { name: string }[], add: string[], drop: Set<string>) => {
     const set = new Map<string, { name: string }>();
@@ -129,19 +175,25 @@ export function mergeLedger(
     return [...set.values()];
   };
 
-  const next: Ledger = {
-    kitVersion: input.kitVersion || current.kitVersion,
-    agents: Array.from(new Set([...current.agents, ...input.targets])),
-    skills: mergeNames(current.skills, input.skills, dropSkill),
-    agentDefs: mergeNames(current.agentDefs, input.agents, dropAgent),
-    // Instructions are whole-file ownership; merge by name (no prune — agent-kit
-    // never prunes instructions and re-concat overwrites).
-    instructions: mergeNames(current.instructions, input.instructions, new Set()),
-    plugins: mergeNames(current.plugins, input.plugins, new Set()),
-    bundles: mergeBundles(current.bundles, input.bundles),
-  };
-  writeAtomic(targets.ledgerPath(), next);
-  return next;
+  const path = targets.ledgerPath();
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const before = readLedgerBytes(path);
+    const current = parseLedgerBytes(before);
+    const next: Ledger = {
+      kitVersion: input.kitVersion || current.kitVersion,
+      agents: Array.from(new Set([...current.agents, ...input.targets])),
+      skills: mergeNames(current.skills, input.skills, dropSkill),
+      agentDefs: mergeNames(current.agentDefs, input.agents, dropAgent),
+      instructions: mergeNames(current.instructions, input.instructions, dropInstruction),
+      plugins: mergeNames(current.plugins, input.plugins, new Set()),
+      bundles: mergeBundles(current.bundles, input.bundles),
+    };
+    options.beforeCommit?.(attempt);
+    if (readLedgerBytes(path) !== before) continue;
+    atomicWriteFile(path, Buffer.from(`${JSON.stringify(next, null, 2)}\n`), options);
+    return next;
+  }
+  throw new Error("ledger_concurrent_update");
 }
 
 // Compute owned-but-deselected names by RE-READING the on-disk ledger NOW (A3:
@@ -156,7 +208,7 @@ export function mergeLedger(
 // name an external writer already removed.
 //
 // `activeNames` is the per-kind set of names the ACTIVE catalog currently provides
-// (#47 data-loss guard): an owned-but-deselected name is prunable ONLY if it is
+// ( data-loss guard): an owned-but-deselected name is prunable ONLY if it is
 // still in the active catalog. An owned name absent from it is an ORPHAN — its
 // Source isn't active — and is KEPT (never auto-unlinked), honoring ADR-0023's
 // "disabling only hides" without putting Source attribution in the Ledger.

@@ -1,0 +1,125 @@
+import { Database } from "bun:sqlite";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
+import { dirname } from "node:path";
+import { withIndependentFileLock, withIndependentFileLockAsync } from "./cooperative-file-lock.ts";
+
+export type AtomicWriteOptions = {
+  rename?: (oldPath: string, newPath: string) => void;
+  fsyncDirectory?: (directory: string) => void;
+  write?: (fd: number, bytes: Uint8Array, offset: number, length: number) => number;
+};
+
+export type CooperativeFileLockOptions = {
+  staleMs?: number;
+  updateMs?: number;
+};
+
+export function withCooperativeFileLock<A>(
+  resourcePath: string,
+  timeoutMs: number,
+  work: () => A,
+  options: CooperativeFileLockOptions = {},
+): A {
+  return withIndependentFileLock(resourcePath, work, { timeoutMs, ...options });
+}
+
+export function withCooperativeFileLockAsync<A>(
+  resourcePath: string,
+  timeoutMs: number,
+  work: () => Promise<A>,
+  options: CooperativeFileLockOptions = {},
+): Promise<A> {
+  return withIndependentFileLockAsync(resourcePath, work, { timeoutMs, ...options });
+}
+
+export function withAdvisoryFileLock<A>(resourcePath: string, timeoutMs: number, work: () => A): A {
+  const directory = dirname(resourcePath);
+  mkdirSync(directory, { recursive: true });
+  const database = new Database(`${resourcePath}.lock.sqlite`, { create: true });
+  let began = false;
+  try {
+    database.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.floor(timeoutMs))}`);
+    database.exec("CREATE TABLE IF NOT EXISTS durable_file_lock (id INTEGER PRIMARY KEY)");
+    database.exec("BEGIN IMMEDIATE");
+    began = true;
+    const value = work();
+    database.exec("COMMIT");
+    began = false;
+    return value;
+  } finally {
+    if (began) {
+      try {
+        database.exec("ROLLBACK");
+      } catch {
+        // The original lock-holder failure remains authoritative.
+      }
+    }
+    database.close();
+  }
+}
+
+export function syncDirectoryForDurability(
+  directory: string,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform === "win32") return;
+  const fd = openSync(directory, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function atomicWriteFile(
+  path: string,
+  bytes: Uint8Array,
+  options: AtomicWriteOptions = {},
+): void {
+  const directory = dirname(path);
+  const rename = options.rename ?? renameSync;
+  const writeBytes =
+    options.write ??
+    ((fd: number, value: Uint8Array, offset: number, length: number) =>
+      writeSync(fd, value, offset, length));
+  const fsyncDirectory = options.fsyncDirectory ?? syncDirectoryForDurability;
+  mkdirSync(directory, { recursive: true });
+  const temporary = `${path}.tmp-${process.pid}-${crypto.randomUUID()}`;
+  let renamed = false;
+  try {
+    const fd = openSync(temporary, "w", 0o600);
+    try {
+      let offset = 0;
+      while (offset < bytes.length) {
+        const written = writeBytes(fd, bytes, offset, bytes.length - offset);
+        if (!Number.isInteger(written) || written <= 0 || written > bytes.length - offset) {
+          throw new Error("durable write made no progress");
+        }
+        offset += written;
+      }
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    rename(temporary, path);
+    renamed = true;
+    fsyncDirectory(directory);
+  } finally {
+    if (!renamed && existsSync(temporary)) {
+      try {
+        unlinkSync(temporary);
+      } catch {
+        // Preserve the primary write failure.
+      }
+    }
+  }
+}

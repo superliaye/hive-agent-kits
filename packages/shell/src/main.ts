@@ -11,16 +11,36 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { BrowserWindow, app, dialog, ipcMain, nativeTheme, shell, systemPreferences } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  nativeTheme,
+  shell,
+  systemPreferences,
+} from "electron";
 import { z } from "zod";
-import { hasDaemonToDrain, shouldConfirmClose } from "./close-guard";
+import { resolveShellLaunch, type ShellLaunch } from "./connection";
 import {
   canReuseReadyDaemon,
   incompatibleDaemonMessage,
   parseReadyProbe,
+  probeExternalReadyWithRetries,
   type ReadyProbe,
   type ShellMode,
+  validateExternalReady,
 } from "./daemon-ready";
+import {
+  type ActiveDaemonConnection,
+  createDaemonRequestHandler,
+  type DaemonConnectionStatus,
+} from "./daemon-request";
+import {
+  deploymentActiveFromOverview,
+  shouldConfirmShellClose,
+  shouldDrainShellDaemon,
+} from "./lifecycle";
 
 // Renderer→main IPC contracts. AGENTS.md requires Zod at external
 // boundaries — the renderer process is its own untrusted context even
@@ -41,11 +61,47 @@ const SystemAccentResponseSchema = z
   .regex(/^#[0-9a-f]{6}$/i)
   .nullable();
 
+const DaemonRequestPayloadSchema = z
+  .object({
+    path: z.string().min(1).max(2048),
+    request: z
+      .object({
+        method: z.string().min(1).max(16).optional(),
+        headers: z.record(z.string().max(8192)).optional(),
+        body: z
+          .string()
+          .max(16 * 1024 * 1024)
+          .optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+const ShellReleaseIdentitySchema = z
+  .object({
+    releaseId: z.string().regex(/^g[0-9a-f]{40}$/),
+    buildVersion: z.string().min(1),
+    sourceCommit: z.string().regex(/^[0-9a-f]{40}$/),
+    protocolRange: z.literal("1"),
+  })
+  .strict()
+  .superRefine((metadata, context) => {
+    if (metadata.releaseId !== `g${metadata.sourceCommit}`) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["releaseId"],
+        message: "releaseId must identify sourceCommit",
+      });
+    }
+  });
+
 const isWin = process.platform === "win32";
+const SHELL_SMOKE_TEST = process.argv.includes("--hive-smoke-test");
 const PORT = process.env.HIVE_PORT ? Number(process.env.HIVE_PORT) : 3117;
 const DAEMON_URL = `http://127.0.0.1:${PORT}`;
 const RUNTIME_ROOT = process.env.HIVE_RUNTIME_ROOT ?? join(homedir(), ".hive");
 const TOKEN_PATH = join(RUNTIME_ROOT, ".token");
+let shellLaunch: ShellLaunch = { kind: "managed" };
 
 // __dirname = shell/dist after compile; repo root is two levels up.
 // Only meaningful in dev mode — packaged apps don't have a repo root.
@@ -57,8 +113,7 @@ const UI_DEV_URL = process.env.HIVE_UI_DEV_URL ?? "http://127.0.0.1:5173";
 // Default port 9333; HIVE_CDP_PORT lets parallel dev instances each open a
 // distinct port (dev.ps1/dev.ts derive it per -Instance, alongside HIVE_PORT
 // and the Vite URL, so isolated stacks never collide). Gated on !app.isPackaged
-// so the port can never open in a shipped build, where the renderer holds the
-// daemon bearer token. Must run before app.whenReady().
+// so the port can never open in a shipped build. Must run before app.whenReady().
 if (!app.isPackaged) {
   app.commandLine.appendSwitch("remote-debugging-port", process.env.HIVE_CDP_PORT ?? "9333");
   // Anti-occlusion / anti-backgrounding. The dev window is visible-but-unfocused
@@ -84,29 +139,87 @@ const UI_DIST_INDEX = app.isPackaged
 
 let daemon: ChildProcess | null = null;
 let spawnedByShell = false;
-// Feature 3: set by the renderer over IPC while a Kit deploy mutation is pending.
-// before-quit consults it to confirm before SIGKILLing the daemon mid-write.
-let deployInFlight = false;
+let activeConnection: ActiveDaemonConnection | null = null;
+let daemonRequestHandler: ReturnType<typeof createDaemonRequestHandler> | null = null;
+let authorizedWebContentsId: number | null = null;
+let connectionStatus: DaemonConnectionStatus = "connected";
+let quitting = false;
+let closeConfirmed = false;
+let daemonActivityChecked = false;
+let checkingDaemonActivity = false;
 
-async function probeDaemonReady(): Promise<ReadyProbe> {
+function publishConnectionStatus(status: DaemonConnectionStatus): void {
+  if (connectionStatus === "reauthentication_required") return;
+  if (status === connectionStatus) return;
+  connectionStatus = status;
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send("hive:connectionStatus", status);
+  }
+}
+
+async function probeDaemonReady(baseUrl = DAEMON_URL, token?: string): Promise<ReadyProbe> {
   try {
-    const res = await fetch(`${DAEMON_URL}/api/ready`);
+    const res = await fetch(`${baseUrl}/api/ready`, {
+      ...(token ? { headers: { authorization: `Bearer ${token}` } } : {}),
+      signal: AbortSignal.timeout(1_500),
+    });
     let body: unknown = null;
     try {
       body = await res.json();
     } catch {
       body = null;
     }
-    return parseReadyProbe(res.ok, body);
+    return parseReadyProbe(res.status, body);
   } catch {
     return { ready: false };
   }
 }
 
+async function connectDaemon(): Promise<ActiveDaemonConnection> {
+  if (shellLaunch.kind === "managed") {
+    await ensureDaemon();
+    return {
+      kind: "managed",
+      baseUrl: DAEMON_URL,
+      token: readToken(),
+      displayName: "Local",
+    };
+  }
+
+  const externalLaunch = shellLaunch;
+  const probe = await probeExternalReadyWithRetries(
+    () => probeDaemonReady(externalLaunch.baseUrl, externalLaunch.session.sessionToken),
+    [100, 250, 500, 1_000, 2_000],
+  );
+  if (!probe.ready && probe.reason === "unauthorized") {
+    throw new Error(
+      "The external Hive session expired or was revoked. Relaunch the external connection to continue.",
+    );
+  }
+  if (!probe.ready || !probe.metadata) {
+    throw new Error("external daemon did not return compatible readiness metadata");
+  }
+  if (!app.isPackaged) {
+    throw new Error("external daemon mode requires a packaged shell release");
+  }
+  const shellRelease = ShellReleaseIdentitySchema.parse(
+    JSON.parse(readFileSync(join(process.resourcesPath, "hive-release.json"), "utf8")) as unknown,
+  );
+  const validation = validateExternalReady(externalLaunch, probe.metadata, shellRelease);
+  if (!validation.ok) throw new Error(validation.message);
+  return {
+    kind: "external",
+    baseUrl: externalLaunch.baseUrl,
+    token: externalLaunch.session.sessionToken,
+    displayName: externalLaunch.displayName,
+  };
+}
+
 async function waitForReady(timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const probe = await probeDaemonReady();
+    const token = readTokenIfPresent();
+    const probe = await probeDaemonReady(DAEMON_URL, token ?? undefined);
     if (canReuseReadyDaemon(SHELL_MODE, probe)) return;
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -114,7 +227,8 @@ async function waitForReady(timeoutMs = 10_000): Promise<void> {
 }
 
 async function ensureDaemon(): Promise<void> {
-  const probe = await probeDaemonReady();
+  const token = readTokenIfPresent();
+  const probe = await probeDaemonReady(DAEMON_URL, token ?? undefined);
   if (canReuseReadyDaemon(SHELL_MODE, probe)) return;
   if (SHELL_MODE === "packaged" && probe.ready) {
     throw new Error(incompatibleDaemonMessage(probe));
@@ -154,6 +268,12 @@ function readToken(): string {
   return readFileSync(TOKEN_PATH, "utf8").trim();
 }
 
+function readTokenIfPresent(): string | null {
+  if (!existsSync(TOKEN_PATH)) return null;
+  const token = readFileSync(TOKEN_PATH, "utf8").trim();
+  return token.length > 0 ? token : null;
+}
+
 // In dev, Vite may not be serving yet when the window loads (the launchers
 // stagger only ~1-2s before Electron). A failed loadURL would reject and exit
 // the app; retry until Vite responds, letting the final attempt throw so a
@@ -171,7 +291,7 @@ async function loadDevUrl(win: BrowserWindow, attempts = 30): Promise<void> {
 }
 
 async function createWindow(): Promise<void> {
-  const token = readToken();
+  if (!activeConnection) throw new Error("daemon connection is not initialized");
   const devMode = process.env.HIVE_UI_MODE === "dev" || process.env.NODE_ENV === "development";
   const win = new BrowserWindow({
     width: 1100,
@@ -199,9 +319,14 @@ async function createWindow(): Promise<void> {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      additionalArguments: [`--hive-base=${DAEMON_URL}`, `--hive-token=${token}`],
+      additionalArguments: [
+        `--hive-connection-kind=${activeConnection.kind}`,
+        `--hive-display-name=${encodeURIComponent(activeConnection.displayName)}`,
+        `--hive-connection-status=${connectionStatus}`,
+      ],
     },
   });
+  authorizedWebContentsId = win.webContents.id;
   win.webContents.on("did-fail-load", (_e, code, desc, url) => {
     console.error(`[shell] did-fail-load: ${code} ${desc} ${url}`);
   });
@@ -214,8 +339,10 @@ async function createWindow(): Promise<void> {
   }
   // Dev launches shouldn't pull focus from whatever you're working on;
   // a production double-click should focus normally.
-  if (devMode) win.showInactive();
-  else win.show();
+  if (!SHELL_SMOKE_TEST) {
+    if (devMode) win.showInactive();
+    else win.show();
+  }
 }
 
 // Renderer → main bridge for `shell.openExternal`. The preload exposes this
@@ -268,10 +395,17 @@ ipcMain.handle("hive:getSystemAccent", (): string | null => {
   return parsed.success ? parsed.data : null;
 });
 
-// Renderer → main: the Kit deploy mutation toggles its in-flight state. A boolean
-// payload only; anything else is ignored (the flag stays at its prior value).
-ipcMain.handle("hive:setDeployInFlight", (_event, value: unknown) => {
-  if (typeof value === "boolean") deployInFlight = value;
+// Compatibility-only renderer signal. Accepted operations outlive their request,
+// so shutdown uses the Daemon's durable operation truth below.
+ipcMain.handle("hive:setDeployInFlight", () => {});
+
+ipcMain.handle("hive:daemonRequest", async (event, path: unknown, request: unknown) => {
+  if (event.sender.id !== authorizedWebContentsId || !daemonRequestHandler) {
+    throw new Error("daemon request rejected for an unexpected renderer");
+  }
+  const parsed = DaemonRequestPayloadSchema.safeParse({ path, request });
+  if (!parsed.success) throw new Error("invalid daemon request payload");
+  return daemonRequestHandler(parsed.data.path, parsed.data.request);
 });
 
 ipcMain.handle("hive:openExternal", async (_event, url: unknown) => {
@@ -292,10 +426,25 @@ ipcMain.handle("hive:openExternal", async (_event, url: unknown) => {
 
 app.whenReady().then(async () => {
   try {
-    await ensureDaemon();
+    shellLaunch = resolveShellLaunch(process.argv);
+    activeConnection = await connectDaemon();
+    daemonRequestHandler = createDaemonRequestHandler(
+      activeConnection,
+      fetch,
+      publishConnectionStatus,
+    );
     await createWindow();
+    if (SHELL_SMOKE_TEST) {
+      console.log("HIVE_PACKAGED_SMOKE_OK");
+      daemonActivityChecked = true;
+      app.quit();
+    }
   } catch (err) {
     console.error("[shell] startup failed:", err);
+    dialog.showErrorBox(
+      "Hive could not start",
+      err instanceof Error ? err.message : "An unexpected startup error occurred.",
+    );
     app.exit(1);
   }
   app.on("activate", () => {
@@ -312,46 +461,60 @@ app.on("window-all-closed", () => {
 // Block Electron's exit until the daemon child has actually exited. Without
 // this, on Windows the orphan bun.exe keeps `audit.db` open and binds the
 // port — e2e tests then race against cleanup.
-let quitting = false;
 // Set once the user picks "Close anyway" so the confirm isn't re-shown on the
 // fall-through (and on any subsequent before-quit pass) this quit cycle.
-let closeConfirmed = false;
-app.on("before-quit", (event) => {
-  // Confirm BEFORE the drain when a deploy is in flight. Cancel keeps the app
-  // open (no drain); "Close anyway" records the choice and falls through to the
-  // existing daemon-drain sequencing below — no second preventDefault.
-  if (shouldConfirmClose(deployInFlight, closeConfirmed)) {
-    event.preventDefault();
-    const choice = dialog.showMessageBoxSync({
-      type: "warning",
-      buttons: ["Cancel", "Close anyway"],
-      defaultId: 0,
-      cancelId: 0,
-      title: "Deploy in progress",
-      message: "A capability deploy is still in progress.",
-      detail: "Closing now will interrupt it and may leave a partial deploy on disk.",
-    });
-    if (choice === 0) return; // Cancel — stay open, do NOT drain.
-    closeConfirmed = true;
-    // We already preventDefaulted to show the dialog, so the quit is cancelled.
-    // If there is no shell-spawned daemon to drain (the dev path spawns the
-    // daemon separately, so daemon===null/spawnedByShell===false here), the drain
-    // block below would early-return and the app would hang open. Re-issue the
-    // quit ourselves; the next before-quit pass has closeConfirmed set, so it
-    // skips the dialog and either drains or quits cleanly.
-    if (
-      !hasDaemonToDrain({
-        hasDaemon: daemon !== null,
-        spawnedByShell,
-        daemonKilled: daemon?.killed ?? true,
-      })
-    ) {
-      app.quit();
-      return;
-    }
-    // Otherwise fall through to the drain sequencing below in this same pass.
+
+async function daemonDeployIsActive(): Promise<boolean> {
+  if (shellLaunch.kind === "external" || !activeConnection) return false;
+  try {
+    const response = await createDaemonRequestHandler(
+      activeConnection,
+      fetch,
+      undefined,
+      5_000,
+    )("/api/kit/overview", {});
+    return deploymentActiveFromOverview(response.status, response.body);
+  } catch (error) {
+    console.warn("[shell] deployment activity could not be confirmed:", error);
+    return false;
   }
-  if (!daemon || !spawnedByShell || daemon.killed || quitting) return;
+}
+
+app.on("before-quit", (event) => {
+  if (shellLaunch.kind === "managed" && !closeConfirmed && !daemonActivityChecked) {
+    event.preventDefault();
+    if (checkingDaemonActivity) return;
+    checkingDaemonActivity = true;
+    void daemonDeployIsActive().then((active) => {
+      checkingDaemonActivity = false;
+      if (shouldConfirmShellClose(shellLaunch.kind, active, closeConfirmed)) {
+        const choice = dialog.showMessageBoxSync({
+          type: "warning",
+          buttons: ["Cancel", "Close anyway"],
+          defaultId: 0,
+          cancelId: 0,
+          title: "Deploy in progress",
+          message: "A capability deploy is still in progress.",
+          detail: "Closing now will interrupt it and may leave a partial deploy on disk.",
+        });
+        if (choice === 0) return;
+        closeConfirmed = true;
+      }
+      daemonActivityChecked = true;
+      app.quit();
+    });
+    return;
+  }
+  if (
+    !shouldDrainShellDaemon(shellLaunch.kind, {
+      hasDaemon: daemon !== null,
+      spawnedByShell,
+      daemonKilled: daemon?.killed ?? true,
+    }) ||
+    !daemon ||
+    quitting
+  )
+    return;
   event.preventDefault();
   quitting = true;
   const sig: NodeJS.Signals = isWin ? "SIGKILL" : "SIGTERM";
