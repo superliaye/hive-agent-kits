@@ -8,7 +8,7 @@
     "prepare": "git config core.hooksPath .githooks",
     "test": "bun test",
     "test:manifest-interop": "bun run scripts/test-cross-repo-manifest-lock.ts",
-    "test:release-scripts": "bash scripts/__tests__/publish-stable-channel.test.sh && bash scripts/__tests__/publish-immutable-release.test.sh",
+    "test:release-scripts": "bash scripts/__tests__/publish-stable-channel.test.sh && bash scripts/__tests__/publish-immutable-release.test.sh && bash scripts/__tests__/packaged-daemon-starter.test.sh",
     "check": "biome check",
     "check:no-float": "bun run scripts/check-no-floating-suppressions.ts",
     "typecheck": "bun run --filter '*' typecheck",
