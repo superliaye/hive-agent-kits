@@ -4,6 +4,7 @@ import {
   shouldConfirmShellClose,
   shouldDrainShellDaemon,
   shouldManageDaemon,
+  shouldQuitAfterAllWindowsClosed,
 } from "./lifecycle.ts";
 
 describe("Shell launch lifecycle", () => {
@@ -29,6 +30,12 @@ describe("Shell launch lifecycle", () => {
         daemonKilled: false,
       }),
     ).toBe(false);
+  });
+
+  test("external mode quits after its last macOS window closes", () => {
+    expect(shouldQuitAfterAllWindowsClosed("external", "darwin")).toBe(true);
+    expect(shouldQuitAfterAllWindowsClosed("managed", "darwin")).toBe(false);
+    expect(shouldQuitAfterAllWindowsClosed("managed", "linux")).toBe(true);
   });
 
   test("prompts only when durable Overview confirms an active Deploy", () => {
