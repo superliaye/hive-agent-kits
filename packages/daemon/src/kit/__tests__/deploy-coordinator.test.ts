@@ -1079,7 +1079,7 @@ npx
     mkdirSync(join(descriptor, ".."), { recursive: true });
     writeFileSync(
       descriptor,
-      `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: ${packageRef}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.codex/skills/archify\n---\n`,
+      `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: ${packageRef}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.agents/skills/archify\n---\n`,
     );
     const contentSha = mirrorContentSha(mirror, "bundle", "archify");
     const parsed = bundleMeta(mirror, "archify");
@@ -1132,7 +1132,7 @@ npx
         target: "codex",
         package: packageRef,
         skills: ["archify"],
-        verifyPaths: [join(targets.codexHome(), "skills", "archify")],
+        verifyPaths: [join(targets.agentsHome(), "skills", "archify")],
         pin: packageRef,
         sourceId: "source-a",
         contentSha,
@@ -1161,7 +1161,8 @@ npx
     const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
       now: () => 20,
     });
-    const packageRef = `https://github.com/tt-a1i/archify/tree/${"b".repeat(40)}`;
+    const packageCommit = "b".repeat(40);
+    const packageRef = `https://github.com/tt-a1i/archify/tree/${packageCommit}`;
     const renderedHash = "c".repeat(64);
     const verifyPath = join(homes.claudeHome, "skills", "archify");
     const action: DeployPlan["actions"][number] = {
@@ -1200,21 +1201,31 @@ npx
         metadata: {},
       } as unknown as StagedDeployPayload,
     });
-    const requests: Array<{ command: string; args: string[]; claudeHome: string | undefined }> = [];
+    const requests: Array<{
+      command: string;
+      args: string[];
+      cwd: string | undefined;
+      claudeHome: string | undefined;
+    }> = [];
     let addOutcomes: DeployOperationOutcome[] = [];
     await executeStagedDeploy(
       {
         fx: {
           targets,
-          probe: (name) => name === "npx",
+          probe: (name) => name === "npx" || name === "git",
           exec: (request, env) => {
             requests.push({
               command: request.command,
               args: request.args,
+              cwd: request.cwd,
               claudeHome: env.CLAUDE_CONFIG_DIR,
             });
-            mkdirSync(verifyPath, { recursive: true });
-            return { status: 0, stdout: "installed", stderr: "" };
+            if (request.command === "npx") mkdirSync(verifyPath, { recursive: true });
+            return {
+              status: 0,
+              stdout: request.args.includes("rev-parse") ? `${packageCommit}\n` : "installed",
+              stderr: "",
+            };
           },
         },
         deploymentState,
@@ -1225,24 +1236,28 @@ npx
         addOutcomes = [...outcomes];
       },
     );
-    expect(requests).toEqual([
-      {
-        command: "npx",
-        args: [
-          "-y",
-          "skills",
-          "add",
-          packageRef,
-          "--global",
-          "--agent",
-          "claude-code",
-          "--skill",
-          "archify",
-          "--yes",
-        ],
-        claudeHome: homes.claudeHome,
-      },
-    ]);
+    const fetch = requests.find(
+      (request) => request.command === "git" && request.args.includes("fetch"),
+    );
+    expect(fetch?.args).toContain(packageCommit);
+    expect(fetch?.args).toContain("--depth");
+    expect(requests.find((request) => request.command === "npx")).toEqual({
+      command: "npx",
+      args: [
+        "-y",
+        "skills",
+        "add",
+        ".",
+        "--global",
+        "--agent",
+        "claude-code",
+        "--skill",
+        "archify",
+        "--yes",
+      ],
+      cwd: expect.stringContaining(packageCommit),
+      claudeHome: homes.claudeHome,
+    });
     expect(addOutcomes).toMatchObject([{ outcome: "succeeded" }]);
     expect(deploymentState.read(action.key, "claude")?.applied).toMatchObject({
       sourceId: "source-a",
@@ -1292,7 +1307,12 @@ npx
           targets,
           probe: () => true,
           exec: (request) => {
-            requests.push({ command: request.command, args: request.args, claudeHome: undefined });
+            requests.push({
+              command: request.command,
+              args: request.args,
+              cwd: request.cwd,
+              claudeHome: undefined,
+            });
             rmSync(verifyPath, { recursive: true, force: true });
             return { status: 0, stdout: "removed", stderr: "" };
           },
@@ -1375,14 +1395,25 @@ npx
 
     const nonzero = await run("nonzero-npx", {
       probe: () => true,
-      exec: () => ({
-        status: 9,
-        stdout: "",
-        stderr: `token=private ${"x".repeat(800)}`,
-      }),
+      exec: (request) => {
+        if (request.command === "git") {
+          return {
+            status: 0,
+            stdout: request.args.includes("rev-parse") ? `${"a".repeat(40)}\n` : "",
+            stderr: "",
+          };
+        }
+        return {
+          status: 9,
+          stdout: `\u001b[32m${"installer banner ".repeat(50)}\u001b[0m\ntoken=private fatal: Remote branch ${"a".repeat(40)} not found`,
+          stderr: "",
+        };
+      },
     });
     expect(nonzero).toMatchObject({ outcome: "failed", code: "installer_failed" });
     expect(nonzero.detail).toContain("token=<redacted>");
+    expect(nonzero.detail).toContain("fatal: Remote branch");
+    expect(nonzero.detail).not.toContain("\u001b[");
     expect(nonzero.detail?.length).toBeLessThanOrEqual(512);
     expect(
       deploymentState.read({ kind: "bundle", name: "archify" }, "claude")?.lastAttempt,
@@ -1394,7 +1425,14 @@ npx
 
     const missingEffect = await run("missing-effect", {
       probe: () => true,
-      exec: () => ({ status: 0, stdout: "ok", stderr: "" }),
+      exec: (request) => ({
+        status: 0,
+        stdout:
+          request.command === "git" && request.args.includes("rev-parse")
+            ? `${"a".repeat(40)}\n`
+            : "ok",
+        stderr: "",
+      }),
     });
     expect(missingEffect).toMatchObject({ outcome: "failed", code: "installer_failed" });
     expect(missingEffect.detail).toContain("postcondition");

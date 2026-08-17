@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { serializeCapabilityKey } from "@hive/capability-schema";
 import type { AcceptedDeployRequest, DeployTarget } from "@hive/contract";
 import { withCooperativeFileLockAsync } from "../lib/durable-file.ts";
@@ -8,6 +9,7 @@ import { mirrorContentSha } from "./content-sha.ts";
 import {
   backupIfExists,
   type DeployFsExec,
+  ensureDir,
   execInstaller,
   probeBinary,
   readSkillSource,
@@ -27,6 +29,7 @@ import {
   sha256,
 } from "./deploy/artifact-hash.ts";
 import {
+  immutableNpxBundleSource,
   managedNpxBundleHash,
   managedNpxBundleMeta,
   probeManagedNpxBundle,
@@ -627,17 +630,82 @@ class InstallerTaskError extends Error {
 }
 
 function boundedInstallerDetail(value: string): string {
-  return value
+  const redacted = stripVTControlCharacters(value)
     .replace(/\bbearer\s+[^\s,;]+/gi, "bearer <redacted>")
     .replace(
       /\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi,
       "$1=<redacted>",
     )
-    .slice(0, 512);
+    .trim();
+  return redacted.length <= 512 ? redacted : redacted.slice(-512);
 }
 
 function expectedBundleProbe(task: Extract<StagedDeployTask, { type: "npx-bundle" }>) {
   return task.action === "remove" ? "all-absent" : "all-present";
+}
+
+function prepareImmutableNpxBundleSource(
+  fx: DeployFsExec,
+  task: Extract<StagedDeployTask, { type: "npx-bundle" }>,
+): string {
+  const source = immutableNpxBundleSource(task.package);
+  if (!source) throw new InstallerTaskError("installer_failed", "invalid immutable package");
+  if (!probeBinary(fx, "git")) {
+    throw new InstallerTaskError("missing_binary", "git is not available on PATH");
+  }
+
+  const checkout = join(fx.targets.kitTmpRoot(), "npx-skills", task.key.name, source.commit);
+  const installRoot = source.subpath ? join(checkout, ...source.subpath.split("/")) : checkout;
+  if (existsSync(checkout)) {
+    const head = execInstaller(
+      fx,
+      { command: "git", args: ["-C", checkout, "rev-parse", "HEAD"] },
+      "git",
+    );
+    if (head.status === 0 && head.stdout.trim().toLowerCase() === source.commit) {
+      if (!existsSync(installRoot)) {
+        throw new InstallerTaskError("installer_failed", "immutable package subpath is missing");
+      }
+      return installRoot;
+    }
+    removeDir(checkout);
+  }
+
+  ensureDir(checkout);
+  const commands = [
+    ["init", checkout],
+    ["-C", checkout, "remote", "add", "origin", source.source],
+    ["-C", checkout, "fetch", "--depth", "1", "origin", source.commit],
+    ["-C", checkout, "checkout", "--detach", "FETCH_HEAD"],
+  ];
+  for (const args of commands) {
+    const result = execInstaller(fx, { command: "git", args }, "git");
+    if (result.status !== 0) {
+      removeDir(checkout);
+      throw new InstallerTaskError(
+        "installer_failed",
+        boundedInstallerDetail(
+          [result.stdout, result.stderr].filter(Boolean).join("\n") ||
+            `git exited ${result.status}`,
+        ),
+      );
+    }
+  }
+
+  const head = execInstaller(
+    fx,
+    { command: "git", args: ["-C", checkout, "rev-parse", "HEAD"] },
+    "git",
+  );
+  if (head.status !== 0 || head.stdout.trim().toLowerCase() !== source.commit) {
+    removeDir(checkout);
+    throw new InstallerTaskError("installer_failed", "immutable package checkout mismatch");
+  }
+  if (!existsSync(installRoot)) {
+    removeDir(checkout);
+    throw new InstallerTaskError("installer_failed", "immutable package subpath is missing");
+  }
+  return installRoot;
 }
 
 function applyManagedNpxBundle(
@@ -649,6 +717,8 @@ function applyManagedNpxBundle(
     throw new InstallerTaskError("missing_binary", "npx is not available on PATH");
   }
   const agent = task.target === "claude" ? "claude-code" : "codex";
+  const installRoot =
+    task.action === "remove" ? undefined : prepareImmutableNpxBundleSource(fx, task);
   const args =
     task.action === "remove"
       ? ["-y", "skills", "remove", ...task.skills, "--global", "--agent", agent, "--yes"]
@@ -656,18 +726,20 @@ function applyManagedNpxBundle(
           "-y",
           "skills",
           "add",
-          task.package,
+          ".",
           "--global",
           "--agent",
           agent,
           ...task.skills.flatMap((skill) => ["--skill", skill]),
           "--yes",
         ];
-  const result = execInstaller(fx, { command: "npx", args }, "npx");
+  const result = execInstaller(fx, { command: "npx", args, cwd: installRoot }, "npx");
   if (result.status !== 0) {
     throw new InstallerTaskError(
       "installer_failed",
-      boundedInstallerDetail(result.stderr || result.stdout || `npx exited ${result.status}`),
+      boundedInstallerDetail(
+        [result.stdout, result.stderr].filter(Boolean).join("\n") || `npx exited ${result.status}`,
+      ),
     );
   }
   if (probeManagedNpxBundle(task) !== expectedBundleProbe(task)) {
