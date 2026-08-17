@@ -52,6 +52,10 @@ export function writeFileAt(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
+export function ensureDir(path: string): void {
+  mkdirSync(path, { recursive: true });
+}
+
 export function removeDir(path: string): void {
   if (existsSync(path)) rmSync(path, { recursive: true, force: true });
 }

@@ -32,8 +32,8 @@ installer:
 verify_paths:
   claude: ~/.claude/skills/archify
   codex:
-    - ~/.codex/skills/archify
-    - ~/.codex/skills/archify-export`);
+    - ~/.agents/skills/archify
+    - ~/.agents/skills/archify-export`);
 
     expect(bundleMeta(mirror, "archify")).toMatchObject({
       installerKind: "npx-skills",
@@ -41,7 +41,7 @@ verify_paths:
       skills: ["archify", "archify-export"],
       verifyPaths: {
         claude: ["~/.claude/skills/archify"],
-        codex: ["~/.codex/skills/archify", "~/.codex/skills/archify-export"],
+        codex: ["~/.agents/skills/archify", "~/.agents/skills/archify-export"],
       },
     });
   });
@@ -66,7 +66,7 @@ installer:
   skills: [archify]
 verify_paths:
   claude: ~/.claude/skills/archify
-  codex: ~/.codex/skills/archify`);
+  codex: ~/.agents/skills/archify`);
     const parsed = bundleMeta(mirror, "archify");
     if (!parsed) throw new Error("bundle fixture did not parse");
     const root = mkdtempSync(join(tmpdir(), "managed-npx-homes-"));
@@ -74,12 +74,13 @@ verify_paths:
     const targets = {
       claudeHome: () => join(root, ".claude"),
       codexHome: () => join(root, ".codex"),
-    } as Pick<DeployTargets, "claudeHome" | "codexHome">;
+      agentsHome: () => join(root, ".agents"),
+    } as Pick<DeployTargets, "claudeHome" | "codexHome" | "agentsHome">;
     const managed = Reflect.get(npxBundle, "managedNpxBundleMeta") as
       | ((
           meta: typeof parsed,
           target: DeployTarget,
-          homes: Pick<DeployTargets, "claudeHome" | "codexHome">,
+          homes: Pick<DeployTargets, "claudeHome" | "codexHome" | "agentsHome">,
         ) => { package: string; skills: string[]; verifyPaths: string[] } | null)
       | undefined;
 
@@ -93,8 +94,23 @@ verify_paths:
     expect(managed(parsed, "codex", targets)).toEqual({
       package: `https://github.com/tt-a1i/archify/tree/${"a".repeat(40)}`,
       skills: ["archify"],
-      verifyPaths: [join(root, ".codex", "skills", "archify")],
+      verifyPaths: [join(root, ".agents", "skills", "archify")],
     });
+  });
+
+  test("resolves an immutable tree package to its exact git source and commit", () => {
+    const resolve = Reflect.get(npxBundle, "immutableNpxBundleSource") as
+      | ((packageRef: string) => { source: string; commit: string } | null)
+      | undefined;
+    expect(resolve).toBeFunction();
+    if (!resolve) throw new Error("immutableNpxBundleSource is unavailable");
+    const commit = "a".repeat(40);
+    expect(resolve(`https://github.com/tt-a1i/archify/tree/${commit}`)).toEqual({
+      source: "https://github.com/tt-a1i/archify.git",
+      commit,
+    });
+    expect(resolve("https://github.com/tt-a1i/archify/tree/main")).toBeNull();
+    expect(resolve(`https://github.com/tt-a1i/archify/tree/${commit}/../private`)).toBeNull();
   });
 
   test("rejects mutable, incomplete, and target-escaping declarations", () => {
@@ -103,12 +119,13 @@ verify_paths:
     const targets = {
       claudeHome: () => join(root, ".claude"),
       codexHome: () => join(root, ".codex"),
-    } as Pick<DeployTargets, "claudeHome" | "codexHome">;
+      agentsHome: () => join(root, ".agents"),
+    } as Pick<DeployTargets, "claudeHome" | "codexHome" | "agentsHome">;
     const managed = Reflect.get(npxBundle, "managedNpxBundleMeta") as
       | ((
           meta: NonNullable<ReturnType<typeof bundleMeta>>,
           target: DeployTarget,
-          homes: Pick<DeployTargets, "claudeHome" | "codexHome">,
+          homes: Pick<DeployTargets, "claudeHome" | "codexHome" | "agentsHome">,
         ) => unknown)
       | undefined;
     expect(managed).toBeFunction();

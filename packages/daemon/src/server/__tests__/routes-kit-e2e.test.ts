@@ -158,7 +158,7 @@ function installerEntries(): TarFixtureEntry[] {
     },
     {
       path: `${top}/capabilities/bundles/archify.bundle.md`,
-      content: `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.codex/skills/archify\n---\narchify\n`,
+      content: `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.agents/skills/archify\n---\narchify\n`,
     },
   ];
 }
@@ -951,17 +951,24 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
   });
 
   test("managed Archify installs, becomes in sync, and removes one target through fake npx", async () => {
-    const requests: Array<{ command: string; args: string[] }> = [];
+    const requests: Array<{ command: string; args: string[]; cwd?: string }> = [];
     const server = await serverWith(installerFetch(), {
-      probe: (name) => name === "npx",
+      probe: (name) => name === "npx" || name === "git",
       exec: (request) => {
         requests.push(request);
+        if (request.command === "git") {
+          return {
+            status: 0,
+            stdout: request.args.includes("rev-parse") ? `${"e".repeat(40)}\n` : "ok",
+            stderr: "",
+          };
+        }
         const agentIndex = request.args.indexOf("--agent");
         const agent = request.args[agentIndex + 1];
         const path =
           agent === "claude-code"
             ? join(homes.claudeHome, "skills", "archify")
-            : join(homes.codexHome, "skills", "archify");
+            : join(homes.agentsHome, "skills", "archify");
         if (request.args.includes("add")) mkdirSync(path, { recursive: true });
         if (request.args.includes("remove")) rmSync(path, { recursive: true, force: true });
         return { status: 0, stdout: "ok", stderr: "" };
@@ -983,7 +990,7 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
         { target: "codex", reconciliation: "in_sync", observation: "verified" },
       ]);
       expect(existsSync(join(homes.claudeHome, "skills", "archify"))).toBe(true);
-      expect(existsSync(join(homes.codexHome, "skills", "archify"))).toBe(true);
+      expect(existsSync(join(homes.agentsHome, "skills", "archify"))).toBe(true);
 
       const oneTarget = await acceptSelection(server, {
         bundles: ["archify"],
@@ -991,12 +998,15 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
       });
       expect(oneTarget.lastOperation?.state).toBe("completed");
       expect(existsSync(join(homes.claudeHome, "skills", "archify"))).toBe(false);
-      expect(existsSync(join(homes.codexHome, "skills", "archify"))).toBe(true);
-      expect(requests.map((request) => request.args.slice(1, 4))).toEqual([
-        ["skills", "add", `https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}`],
-        ["skills", "add", `https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}`],
+      expect(existsSync(join(homes.agentsHome, "skills", "archify"))).toBe(true);
+      const npxRequests = requests.filter((request) => request.command === "npx");
+      expect(npxRequests.map((request) => request.args.slice(1, 4))).toEqual([
+        ["skills", "add", "."],
+        ["skills", "add", "."],
         ["skills", "remove", "archify"],
       ]);
+      expect(npxRequests[0]?.cwd).toContain("e".repeat(40));
+      expect(npxRequests[1]?.cwd).toContain("e".repeat(40));
     } finally {
       await server.dispose();
     }
