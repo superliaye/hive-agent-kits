@@ -420,10 +420,9 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     for (const target of intent.targets) {
       if (!applicableTargets(intent.key).includes(target)) continue;
       if (intent.key.kind === "instruction" && blockedByTarget.has(target)) continue;
-      if (
-        intent.key.kind === "bundle" &&
-        wouldDeploy.get(pairId(intent.key, target))?.renderedHash == null
-      ) {
+      const renderedBundle =
+        intent.key.kind === "bundle" ? wouldDeploy.get(pairId(intent.key, target)) : undefined;
+      if (intent.key.kind === "bundle" && renderedBundle?.renderedHash == null) {
         continue;
       }
       const privatelyApplied = records.get(pairId(intent.key, target))?.applied;
@@ -435,6 +434,13 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
         action: "remove",
         key: intent.key,
         target,
+        ...(renderedBundle
+          ? {
+              sourceId: renderedBundle.sourceId,
+              contentSha: renderedBundle.contentSha,
+              renderedHash: renderedBundle.renderedHash,
+            }
+          : {}),
         ...(intent.generation ? { removalIntentGeneration: intent.generation } : {}),
         artifact: artifactFor(snapshot.artifacts, intent.key, target),
       });

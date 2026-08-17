@@ -21,6 +21,7 @@ const AttemptOutcome = z.enum(["succeeded", "failed", "interrupted"]);
 const FailureCode = z.enum([
   "io",
   "source_missing",
+  "missing_binary",
   "installer_failed",
   "recovery_state_changed",
   "unknown",

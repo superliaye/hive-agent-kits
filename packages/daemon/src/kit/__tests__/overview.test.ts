@@ -600,6 +600,7 @@ describe("managed npx bundle snapshot capture", () => {
       expect(claude?.renderedHash).toMatch(/^[0-9a-f]{64}$/);
       expect(codex?.renderedHash).toMatch(/^[0-9a-f]{64}$/);
       expect(claude?.renderedHash).not.toBe(codex?.renderedHash);
+      if (!claude?.renderedHash) throw new Error("missing Claude managed bundle hash");
       expect(captured.artifacts).toContainEqual({
         key: archify,
         target: "claude",

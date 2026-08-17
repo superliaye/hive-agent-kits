@@ -15,7 +15,10 @@ import { dirname, join } from "node:path";
 import type { DeployTarget } from "@hive/contract";
 import { withCooperativeFileLock } from "../../lib/durable-file.ts";
 import { mirrorContentSha } from "../content-sha.ts";
+import type { DeployFsExec } from "../deploy/adapter.ts";
 import { hashSkillFiles } from "../deploy/artifact-hash.ts";
+import { managedNpxBundleHash, managedNpxBundleMeta } from "../deploy/npx-bundle.ts";
+import { bundleMeta } from "../deploy/sources.ts";
 import {
   createDeployCoordinator,
   createDeploymentMutationCoordinator,
@@ -110,6 +113,27 @@ const staged = (value = "accepted"): StagedDeployPayload => ({
 });
 
 type StagedSkillTask = Extract<StagedDeployTask, { type: "skill" }>;
+type StagedManagedNpxTask = Extract<StagedDeployTask, { type: "npx-bundle" }>;
+
+function managedNpxTask(
+  verifyPath: string,
+  overrides: Partial<StagedManagedNpxTask> = {},
+): StagedManagedNpxTask {
+  return {
+    type: "npx-bundle",
+    action: "add",
+    key: { kind: "bundle", name: "archify" },
+    target: "claude",
+    package: `https://github.com/tt-a1i/archify/tree/${"a".repeat(40)}`,
+    skills: ["archify"],
+    verifyPaths: [verifyPath],
+    pin: `https://github.com/tt-a1i/archify/tree/${"a".repeat(40)}`,
+    sourceId: "source-a",
+    contentSha: "b".repeat(64),
+    renderedHash: "c".repeat(64),
+    ...overrides,
+  };
+}
 
 function successOutcome(
   operation: DeployOperation,
@@ -1042,6 +1066,499 @@ npx
     expect(() => stageDeployPlan(targets, snapshot(deployPlan), deployPlan)).toThrow(
       expect.objectContaining({ code: "immutable_installer_unavailable" }),
     );
+  });
+
+  test("stages and persists complete immutable npx bundle tasks", () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-managed-npx-stage-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const mirror = targets.mirrorRoot("source-a");
+    const descriptor = join(mirror, "capabilities", "bundles", "archify.bundle.md");
+    const packageRef = `https://github.com/tt-a1i/archify/tree/${"a".repeat(40)}`;
+    mkdirSync(join(descriptor, ".."), { recursive: true });
+    writeFileSync(
+      descriptor,
+      `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: ${packageRef}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.agents/skills/archify\n---\n`,
+    );
+    const contentSha = mirrorContentSha(mirror, "bundle", "archify");
+    const parsed = bundleMeta(mirror, "archify");
+    if (!contentSha || !parsed) throw new Error("missing managed bundle fixture");
+    const claudeMeta = managedNpxBundleMeta(parsed, "claude", targets);
+    const codexMeta = managedNpxBundleMeta(parsed, "codex", targets);
+    if (!claudeMeta || !codexMeta) throw new Error("ineligible managed bundle fixture");
+    const add: DeployPlan["actions"][number] = {
+      action: "add",
+      key: { kind: "bundle", name: "archify" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha,
+      renderedHash: managedNpxBundleHash(claudeMeta, "claude"),
+      artifact: { existence: "missing", hash: null },
+    };
+    const remove: DeployPlan["actions"][number] = {
+      action: "remove",
+      key: { kind: "bundle", name: "archify" },
+      target: "codex",
+      sourceId: "source-a",
+      contentSha,
+      renderedHash: managedNpxBundleHash(codexMeta, "codex"),
+      artifact: { existence: "present", hash: managedNpxBundleHash(codexMeta, "codex") },
+    };
+    const deployPlan = plan({
+      mirrors: [{ sourceId: "source-a", precedence: 1, identity: readMirrorIdentity(mirror) }],
+      actions: [add, remove],
+    });
+
+    const payload = stageDeployPlan(targets, snapshot(deployPlan), deployPlan);
+    expect(payload.tasks).toEqual([
+      {
+        type: "npx-bundle",
+        action: "add",
+        key: { kind: "bundle", name: "archify" },
+        target: "claude",
+        package: packageRef,
+        skills: ["archify"],
+        verifyPaths: [join(targets.claudeHome(), "skills", "archify")],
+        pin: packageRef,
+        sourceId: "source-a",
+        contentSha,
+        renderedHash: managedNpxBundleHash(claudeMeta, "claude"),
+      },
+      {
+        type: "npx-bundle",
+        action: "remove",
+        key: { kind: "bundle", name: "archify" },
+        target: "codex",
+        package: packageRef,
+        skills: ["archify"],
+        verifyPaths: [join(targets.agentsHome(), "skills", "archify")],
+        pin: packageRef,
+        sourceId: "source-a",
+        contentSha,
+        renderedHash: managedNpxBundleHash(codexMeta, "codex"),
+      },
+    ]);
+
+    const store = openDeployOperationStore(operationPath());
+    expect(
+      store.createQueued({
+        operationId: "managed-npx-persisted",
+        acceptedAt: 1,
+        selectionRevision: deployPlan.selectionRevision,
+        planToken: "token",
+        plan: deployPlan,
+        staged: payload,
+      }).staged.tasks,
+    ).toEqual(payload.tasks);
+  });
+
+  test("executes exact npx add/remove argv and verifies filesystem postconditions", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-managed-npx-exec-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const packageRef = `https://github.com/tt-a1i/archify/tree/${"b".repeat(40)}`;
+    const renderedHash = "c".repeat(64);
+    const verifyPath = join(homes.claudeHome, "skills", "archify");
+    const action: DeployPlan["actions"][number] = {
+      action: "add",
+      key: { kind: "bundle", name: "archify" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha: "d".repeat(64),
+      renderedHash,
+      artifact: { existence: "missing", hash: null },
+    };
+    const addPlan = plan({ actions: [action], mirrors: [] }, action);
+    const addStore = openDeployOperationStore(operationPath());
+    addStore.createQueued({
+      operationId: "managed-npx-add",
+      acceptedAt: 1,
+      selectionRevision: addPlan.selectionRevision,
+      planToken: "token",
+      plan: addPlan,
+      staged: {
+        tasks: [
+          {
+            type: "npx-bundle",
+            action: "add",
+            key: action.key,
+            target: "claude",
+            package: packageRef,
+            skills: ["archify"],
+            verifyPaths: [verifyPath],
+            pin: packageRef,
+            sourceId: "source-a",
+            contentSha: "d".repeat(64),
+            renderedHash,
+          },
+        ],
+        metadata: {},
+      } as unknown as StagedDeployPayload,
+    });
+    const requests: Array<{ command: string; args: string[]; claudeHome: string | undefined }> = [];
+    let addOutcomes: DeployOperationOutcome[] = [];
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: (name) => name === "npx",
+          exec: (request, env) => {
+            requests.push({
+              command: request.command,
+              args: request.args,
+              claudeHome: env.CLAUDE_CONFIG_DIR,
+            });
+            mkdirSync(verifyPath, { recursive: true });
+            return { status: 0, stdout: "installed", stderr: "" };
+          },
+        },
+        deploymentState,
+        now: () => 20,
+      },
+      addStore.markRunning("managed-npx-add"),
+      async (outcomes) => {
+        addOutcomes = [...outcomes];
+      },
+    );
+    expect(requests).toEqual([
+      {
+        command: "npx",
+        args: [
+          "-y",
+          "skills",
+          "add",
+          packageRef,
+          "--global",
+          "--agent",
+          "claude-code",
+          "--skill",
+          "archify",
+          "--yes",
+        ],
+        claudeHome: homes.claudeHome,
+      },
+    ]);
+    expect(addOutcomes).toMatchObject([{ outcome: "succeeded" }]);
+    expect(deploymentState.read(action.key, "claude")?.applied).toMatchObject({
+      sourceId: "source-a",
+      contentSha: "d".repeat(64),
+      renderedHash,
+    });
+    expect(readLedger(targets)?.bundles).toEqual([{ name: "archify", pin: packageRef }]);
+
+    const removeAction: DeployPlan["actions"][number] = {
+      ...action,
+      action: "remove",
+      sourceId: "source-a",
+      contentSha: "d".repeat(64),
+      artifact: { existence: "present", hash: renderedHash },
+    };
+    const removePlan = plan({ actions: [removeAction], mirrors: [] }, removeAction);
+    const removeStore = openDeployOperationStore(operationPath());
+    removeStore.createQueued({
+      operationId: "managed-npx-remove",
+      acceptedAt: 2,
+      selectionRevision: removePlan.selectionRevision,
+      planToken: "token-remove",
+      plan: removePlan,
+      staged: {
+        tasks: [
+          {
+            type: "npx-bundle",
+            action: "remove",
+            key: removeAction.key,
+            target: "claude",
+            package: packageRef,
+            skills: ["archify"],
+            verifyPaths: [verifyPath],
+            pin: packageRef,
+            sourceId: "source-a",
+            contentSha: "d".repeat(64),
+            renderedHash,
+          },
+        ],
+        metadata: {},
+      } as unknown as StagedDeployPayload,
+    });
+    requests.length = 0;
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: () => true,
+          exec: (request) => {
+            requests.push({ command: request.command, args: request.args, claudeHome: undefined });
+            rmSync(verifyPath, { recursive: true, force: true });
+            return { status: 0, stdout: "removed", stderr: "" };
+          },
+        },
+        deploymentState,
+        now: () => 30,
+      },
+      removeStore.markRunning("managed-npx-remove"),
+      async () => {},
+    );
+    expect(requests[0]?.args).toEqual([
+      "-y",
+      "skills",
+      "remove",
+      "archify",
+      "--global",
+      "--agent",
+      "claude-code",
+      "--yes",
+    ]);
+    expect(deploymentState.read(removeAction.key, "claude")?.applied).toBeUndefined();
+    expect(readLedger(targets)?.bundles).toEqual([]);
+  });
+
+  test("reports missing npx, nonzero exit, and unsatisfied postconditions with bounded details", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-managed-npx-failures-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const run = async (
+      id: string,
+      fx: Pick<DeployFsExec, "exec" | "probe">,
+    ): Promise<DeployOperationOutcome> => {
+      const task = managedNpxTask(join(targets.claudeHome(), "skills", id));
+      const action: DeployPlan["actions"][number] = {
+        action: task.action,
+        key: task.key,
+        target: task.target,
+        sourceId: task.sourceId ?? undefined,
+        contentSha: task.contentSha ?? undefined,
+        renderedHash: task.renderedHash,
+        artifact: { existence: "missing", hash: null },
+      };
+      const deployPlan = plan({ actions: [action], mirrors: [] }, action);
+      const store = openDeployOperationStore(operationPath());
+      store.createQueued({
+        operationId: id,
+        acceptedAt: 1,
+        selectionRevision: deployPlan.selectionRevision,
+        planToken: id,
+        plan: deployPlan,
+        staged: { tasks: [task], metadata: {} },
+      });
+      let observed: DeployOperationOutcome[] = [];
+      await executeStagedDeploy(
+        { fx: { targets, ...fx }, deploymentState, now: () => 20 },
+        store.markRunning(id),
+        async (outcomes) => {
+          observed = [...outcomes];
+        },
+      );
+      const outcome = observed[0];
+      if (!outcome) throw new Error("missing failure outcome");
+      return outcome;
+    };
+
+    let execCalls = 0;
+    const missing = await run("missing-npx", {
+      probe: () => false,
+      exec: () => {
+        execCalls += 1;
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    expect(missing).toMatchObject({ outcome: "failed", code: "missing_binary" });
+    expect(execCalls).toBe(0);
+
+    const nonzero = await run("nonzero-npx", {
+      probe: () => true,
+      exec: () => ({
+        status: 9,
+        stdout: "",
+        stderr: `token=private ${"x".repeat(800)}`,
+      }),
+    });
+    expect(nonzero).toMatchObject({ outcome: "failed", code: "installer_failed" });
+    expect(nonzero.detail).toContain("token=<redacted>");
+    expect(nonzero.detail?.length).toBeLessThanOrEqual(512);
+    expect(
+      deploymentState.read({ kind: "bundle", name: "archify" }, "claude")?.lastAttempt,
+    ).toMatchObject({
+      outcome: "failed",
+      code: "installer_failed",
+      detail: expect.stringContaining("token=<redacted>"),
+    });
+
+    const missingEffect = await run("missing-effect", {
+      probe: () => true,
+      exec: () => ({ status: 0, stdout: "ok", stderr: "" }),
+    });
+    expect(missingEffect).toMatchObject({ outcome: "failed", code: "installer_failed" });
+    expect(missingEffect.detail).toContain("postcondition");
+  });
+
+  test("continues unrelated staged file work after a managed bundle failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-managed-npx-mixed-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const npxTask = managedNpxTask(join(homes.claudeHome, "skills", "archify"));
+    const files = [{ rel: "SKILL.md", content: "---\ndescription: local\n---\nlocal\n" }];
+    const skillTask: StagedSkillTask = {
+      type: "skill",
+      action: "add",
+      key: { kind: "skill", name: "local" },
+      target: "claude",
+      sourceId: "source-a",
+      contentSha: "d".repeat(64),
+      renderedHash: hashSkillFiles(files),
+      files,
+    };
+    const actions: DeployPlan["actions"] = [npxTask, skillTask].map((task) => ({
+      action: task.action,
+      key: task.key,
+      target: task.target,
+      sourceId: task.sourceId ?? undefined,
+      contentSha: task.contentSha ?? undefined,
+      renderedHash: task.renderedHash,
+      artifact: { existence: "missing" as const, hash: null },
+    }));
+    const deployPlan = plan({ actions, mirrors: [] }, actions[0]);
+    const store = openDeployOperationStore(operationPath());
+    store.createQueued({
+      operationId: "managed-npx-mixed",
+      acceptedAt: 1,
+      selectionRevision: deployPlan.selectionRevision,
+      planToken: "mixed",
+      plan: deployPlan,
+      staged: { tasks: [npxTask, skillTask], metadata: {} },
+    });
+    let outcomes: DeployOperationOutcome[] = [];
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: () => true,
+          exec: () => ({ status: 1, stdout: "", stderr: "failed" }),
+        },
+        deploymentState,
+        now: () => 20,
+      },
+      store.markRunning("managed-npx-mixed"),
+      async (next) => {
+        outcomes = [...next];
+      },
+    );
+    expect(outcomes.map(({ key, outcome }) => [key.name, outcome])).toEqual([
+      ["archify", "failed"],
+      ["local", "succeeded"],
+    ]);
+    expect(readFileSync(join(homes.claudeHome, "skills", "local", "SKILL.md"), "utf8")).toContain(
+      "local",
+    );
+  });
+
+  test("recovery probes managed bundle effects before rerunning or committing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-managed-npx-recovery-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 30,
+    });
+    const verifyPath = join(homes.claudeHome, "skills", "archify");
+    const task = managedNpxTask(verifyPath);
+    const action: DeployPlan["actions"][number] = {
+      action: "add",
+      key: task.key,
+      target: task.target,
+      sourceId: task.sourceId ?? undefined,
+      contentSha: task.contentSha ?? undefined,
+      renderedHash: task.renderedHash,
+      artifact: { existence: "missing", hash: null },
+    };
+    const deployPlan = plan({ actions: [action], mirrors: [] }, action);
+    const store = openDeployOperationStore(operationPath());
+    store.createQueued({
+      operationId: "managed-npx-recovery",
+      acceptedAt: 1,
+      selectionRevision: deployPlan.selectionRevision,
+      planToken: "recovery",
+      plan: deployPlan,
+      staged: { tasks: [task], metadata: {} },
+    });
+    const applying = store.markRunning("managed-npx-recovery");
+    mkdirSync(verifyPath, { recursive: true });
+    let execCalls = 0;
+    let final: DeployOperationOutcome[] = [];
+    const journal = Object.assign(
+      async (outcomes: readonly DeployOperationOutcome[]) => {
+        final = [...outcomes];
+      },
+      {
+        provisional: async () => {},
+        markLedgerPending: () => {},
+        markLedgerCommitted: () => {},
+        markFinalizing: () => {},
+      },
+    );
+    await resumeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: () => true,
+          exec: () => {
+            execCalls += 1;
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+        deploymentState,
+        now: () => 30,
+      },
+      applying,
+      journal,
+    );
+    expect(execCalls).toBe(0);
+    expect(final).toMatchObject([{ outcome: "succeeded" }]);
+
+    rmSync(verifyPath, { recursive: true, force: true });
+    final = [];
+    await resumeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: () => true,
+          exec: () => {
+            execCalls += 1;
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+        deploymentState,
+        now: () => 40,
+      },
+      {
+        ...applying,
+        executionPhase: "ledger_pending",
+        provisionalOutcomes: [
+          {
+            action: "add",
+            key: task.key,
+            target: "claude",
+            outcome: "succeeded",
+            attemptedAt: 20,
+          },
+        ],
+      },
+      journal,
+    );
+    expect(execCalls).toBe(0);
+    expect(final).toMatchObject([{ outcome: "failed", code: "recovery_state_changed" }]);
   });
 
   test("keeps successful targets factual when another staged target fails", async () => {
