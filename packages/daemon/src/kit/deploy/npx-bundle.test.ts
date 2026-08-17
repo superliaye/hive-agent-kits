@@ -32,8 +32,8 @@ installer:
 verify_paths:
   claude: ~/.claude/skills/archify
   codex:
-    - ~/.agents/skills/archify
-    - ~/.agents/skills/archify-export`);
+    - ~/.codex/skills/archify
+    - ~/.codex/skills/archify-export`);
 
     expect(bundleMeta(mirror, "archify")).toMatchObject({
       installerKind: "npx-skills",
@@ -41,7 +41,7 @@ verify_paths:
       skills: ["archify", "archify-export"],
       verifyPaths: {
         claude: ["~/.claude/skills/archify"],
-        codex: ["~/.agents/skills/archify", "~/.agents/skills/archify-export"],
+        codex: ["~/.codex/skills/archify", "~/.codex/skills/archify-export"],
       },
     });
   });
@@ -66,20 +66,20 @@ installer:
   skills: [archify]
 verify_paths:
   claude: ~/.claude/skills/archify
-  codex: ~/.agents/skills/archify`);
+  codex: ~/.codex/skills/archify`);
     const parsed = bundleMeta(mirror, "archify");
     if (!parsed) throw new Error("bundle fixture did not parse");
     const root = mkdtempSync(join(tmpdir(), "managed-npx-homes-"));
     roots.push(root);
     const targets = {
       claudeHome: () => join(root, ".claude"),
-      agentsHome: () => join(root, ".agents"),
-    } as Pick<DeployTargets, "claudeHome" | "agentsHome">;
+      codexHome: () => join(root, ".codex"),
+    } as Pick<DeployTargets, "claudeHome" | "codexHome">;
     const managed = Reflect.get(npxBundle, "managedNpxBundleMeta") as
       | ((
           meta: typeof parsed,
           target: DeployTarget,
-          homes: Pick<DeployTargets, "claudeHome" | "agentsHome">,
+          homes: Pick<DeployTargets, "claudeHome" | "codexHome">,
         ) => { package: string; skills: string[]; verifyPaths: string[] } | null)
       | undefined;
 
@@ -93,7 +93,7 @@ verify_paths:
     expect(managed(parsed, "codex", targets)).toEqual({
       package: `https://github.com/tt-a1i/archify/tree/${"a".repeat(40)}`,
       skills: ["archify"],
-      verifyPaths: [join(root, ".agents", "skills", "archify")],
+      verifyPaths: [join(root, ".codex", "skills", "archify")],
     });
   });
 
@@ -102,13 +102,13 @@ verify_paths:
     roots.push(root);
     const targets = {
       claudeHome: () => join(root, ".claude"),
-      agentsHome: () => join(root, ".agents"),
-    } as Pick<DeployTargets, "claudeHome" | "agentsHome">;
+      codexHome: () => join(root, ".codex"),
+    } as Pick<DeployTargets, "claudeHome" | "codexHome">;
     const managed = Reflect.get(npxBundle, "managedNpxBundleMeta") as
       | ((
           meta: NonNullable<ReturnType<typeof bundleMeta>>,
           target: DeployTarget,
-          homes: Pick<DeployTargets, "claudeHome" | "agentsHome">,
+          homes: Pick<DeployTargets, "claudeHome" | "codexHome">,
         ) => unknown)
       | undefined;
     expect(managed).toBeFunction();

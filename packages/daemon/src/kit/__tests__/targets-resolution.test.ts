@@ -121,6 +121,18 @@ describe("childEnv sandbox reconciliation (B2a)", () => {
     expect(env.USERPROFILE).toBe("C:\\real\\home");
     expect(env.CLAUDE_CONFIG_DIR).toBe(REAL_CLAUDE);
   });
+
+  test("packaged installer env leaves npm registry resolution to the user's npm config", () => {
+    const t = packaged();
+    const inherited = t.childEnv({ HOME: "/real/home" });
+    const explicit = t.childEnv({
+      HOME: "/real/home",
+      NPM_CONFIG_REGISTRY: "https://registry.example.invalid/",
+    });
+
+    expect(inherited.NPM_CONFIG_REGISTRY).toBeUndefined();
+    expect(explicit.NPM_CONFIG_REGISTRY).toBe("https://registry.example.invalid/");
+  });
 });
 
 describe("redirected predicate (B3) — honest, resolved-home, normalized", () => {

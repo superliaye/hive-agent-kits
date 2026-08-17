@@ -40,7 +40,7 @@
 expect(BundleFrontmatter.safeParse({
   description: "archify",
   installer: { kind: "npx-skills", package: "tt-a1i/archify@2.10.0", skills: ["archify"] },
-  verify_paths: { claude: ["~/.claude/skills/archify"], codex: "~/.agents/skills/archify" },
+  verify_paths: { claude: ["~/.claude/skills/archify"], codex: "~/.codex/skills/archify" },
 }).success).toBe(true);
 ```
 
@@ -227,7 +227,7 @@ installer:
   skills: [archify]
 verify_paths:
   claude: [~/.claude/skills/archify]
-  codex: [~/.agents/skills/archify]
+  codex: [~/.codex/skills/archify]
 ```
 
 - [ ] **Step 4: Bump the kit patch version and changelog, then run each changed capability's isolated case and the deploy/roundtrip suite required by `AGENTS.md`.**

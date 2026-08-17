@@ -17,14 +17,14 @@ export type ManagedNpxBundleMeta = {
 
 export type ManagedNpxBundleProbe = "all-present" | "all-absent" | "mixed";
 
-type BundleHomes = Pick<DeployTargets, "claudeHome" | "agentsHome">;
+type BundleHomes = Pick<DeployTargets, "claudeHome" | "codexHome">;
 
 function resolveVerifyPath(
   configured: string,
   target: DeployTarget,
   targets: BundleHomes,
 ): string | null {
-  const prefix = target === "claude" ? "~/.claude/" : "~/.agents/";
+  const prefix = target === "claude" ? "~/.claude/" : "~/.codex/";
   if (!configured.startsWith(prefix)) return null;
   const suffix = configured.slice(prefix.length);
   if (!suffix.startsWith("skills/") || suffix.length === "skills/".length) return null;
@@ -33,7 +33,7 @@ function resolveVerifyPath(
   if (segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")) {
     return null;
   }
-  const base = target === "claude" ? targets.claudeHome() : targets.agentsHome();
+  const base = target === "claude" ? targets.claudeHome() : targets.codexHome();
   const resolved = normalize(join(base, ...segments));
   const fromBase = relative(base, resolved);
   if (fromBase.length === 0 || fromBase.startsWith("..") || isAbsolute(fromBase)) return null;

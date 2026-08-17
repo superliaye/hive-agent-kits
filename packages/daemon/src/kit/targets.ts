@@ -178,11 +178,6 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
         env.HOME = redirectedHome;
         env.USERPROFILE = redirectedHome;
       }
-      // Force public npm registry for installer subprocesses (matches the
-      // upstream agent-kit behavior) unless the caller pinned one.
-      if (!env.NPM_CONFIG_REGISTRY) {
-        env.NPM_CONFIG_REGISTRY = "https://registry.npmjs.org/";
-      }
       return env;
     },
   };
