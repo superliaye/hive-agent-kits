@@ -1079,7 +1079,7 @@ npx
     mkdirSync(join(descriptor, ".."), { recursive: true });
     writeFileSync(
       descriptor,
-      `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: ${packageRef}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.agents/skills/archify\n---\n`,
+      `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: ${packageRef}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.codex/skills/archify\n---\n`,
     );
     const contentSha = mirrorContentSha(mirror, "bundle", "archify");
     const parsed = bundleMeta(mirror, "archify");
@@ -1132,7 +1132,7 @@ npx
         target: "codex",
         package: packageRef,
         skills: ["archify"],
-        verifyPaths: [join(targets.agentsHome(), "skills", "archify")],
+        verifyPaths: [join(targets.codexHome(), "skills", "archify")],
         pin: packageRef,
         sourceId: "source-a",
         contentSha,

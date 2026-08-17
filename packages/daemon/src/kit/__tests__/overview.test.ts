@@ -563,7 +563,7 @@ describe("managed npx bundle snapshot capture", () => {
       mkdirSync(join(bundlePath, ".."), { recursive: true });
       writeFileSync(
         bundlePath,
-        `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: https://github.com/tt-a1i/archify/tree/${"a".repeat(40)}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.agents/skills/archify\n---\n`,
+        `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: https://github.com/tt-a1i/archify/tree/${"a".repeat(40)}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.codex/skills/archify\n---\n`,
       );
       mkdirSync(join(targets.claudeHome(), "skills", "archify"), { recursive: true });
       const archify = key("bundle", "archify");

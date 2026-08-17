@@ -30,7 +30,7 @@ verify_paths:
   claude:
     - ~/.claude/skills/archify
   codex:
-    - ~/.agents/skills/archify
+    - ~/.codex/skills/archify
 ```
 
 `installer.skills` is the list passed to both `skills add --skill` and `skills remove`. `verify_paths` is normalized to a per-target list and supplies the postcondition. Both are required for automatic management; an older or incomplete declaration stays visible as manual instead of guessing ownership.

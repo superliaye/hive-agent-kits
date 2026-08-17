@@ -158,7 +158,7 @@ function installerEntries(): TarFixtureEntry[] {
     },
     {
       path: `${top}/capabilities/bundles/archify.bundle.md`,
-      content: `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.agents/skills/archify\n---\narchify\n`,
+      content: `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.codex/skills/archify\n---\narchify\n`,
     },
   ];
 }
@@ -961,7 +961,7 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
         const path =
           agent === "claude-code"
             ? join(homes.claudeHome, "skills", "archify")
-            : join(homes.agentsHome, "skills", "archify");
+            : join(homes.codexHome, "skills", "archify");
         if (request.args.includes("add")) mkdirSync(path, { recursive: true });
         if (request.args.includes("remove")) rmSync(path, { recursive: true, force: true });
         return { status: 0, stdout: "ok", stderr: "" };
@@ -983,7 +983,7 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
         { target: "codex", reconciliation: "in_sync", observation: "verified" },
       ]);
       expect(existsSync(join(homes.claudeHome, "skills", "archify"))).toBe(true);
-      expect(existsSync(join(homes.agentsHome, "skills", "archify"))).toBe(true);
+      expect(existsSync(join(homes.codexHome, "skills", "archify"))).toBe(true);
 
       const oneTarget = await acceptSelection(server, {
         bundles: ["archify"],
@@ -991,7 +991,7 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
       });
       expect(oneTarget.lastOperation?.state).toBe("completed");
       expect(existsSync(join(homes.claudeHome, "skills", "archify"))).toBe(false);
-      expect(existsSync(join(homes.agentsHome, "skills", "archify"))).toBe(true);
+      expect(existsSync(join(homes.codexHome, "skills", "archify"))).toBe(true);
       expect(requests.map((request) => request.args.slice(1, 4))).toEqual([
         ["skills", "add", `https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}`],
         ["skills", "add", `https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}`],

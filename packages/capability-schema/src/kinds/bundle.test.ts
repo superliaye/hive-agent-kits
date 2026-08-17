@@ -103,7 +103,7 @@ describe("BundleFrontmatter — valid fixtures (lenient superset)", () => {
       },
       verify_paths: {
         claude: "~/.claude/skills/archify",
-        codex: ["~/.agents/skills/archify", "~/.agents/skills/archify-export"],
+        codex: ["~/.codex/skills/archify", "~/.codex/skills/archify-export"],
       },
     };
     expect(BundleFrontmatter.safeParse(fm).success).toBe(true);
