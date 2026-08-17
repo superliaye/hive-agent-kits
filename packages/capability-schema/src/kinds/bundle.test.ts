@@ -92,6 +92,22 @@ describe("BundleFrontmatter — valid fixtures (lenient superset)", () => {
     const fm = { ...MINIMAL_SETUP_SCRIPT, installer: { command: "./setup", env: { FOO: "bar" } } };
     expect(BundleFrontmatter.safeParse(fm).success).toBe(true);
   });
+
+  test("managed npx-skills metadata accepts exact skills and scalar-or-list verify paths", () => {
+    const fm = {
+      ...MINIMAL_NPX,
+      installer: {
+        kind: "npx-skills",
+        package: "owner/pkg@v1.2.3",
+        skills: ["archify", "archify-export"],
+      },
+      verify_paths: {
+        claude: "~/.claude/skills/archify",
+        codex: ["~/.agents/skills/archify", "~/.agents/skills/archify-export"],
+      },
+    };
+    expect(BundleFrontmatter.safeParse(fm).success).toBe(true);
+  });
 });
 
 describe("BundleFrontmatter — one invalid case per rule", () => {
@@ -144,6 +160,29 @@ describe("BundleFrontmatter — one invalid case per rule", () => {
   test("npx-skills blank installer.package", () => {
     const fm = { ...MINIMAL_NPX, installer: { kind: "npx-skills", package: "" } };
     expect(reject(fm)).not.toBeNull();
+  });
+
+  test("npx-skills rejects blank or duplicate managed skill names", () => {
+    expect(
+      reject({
+        ...MINIMAL_NPX,
+        installer: { kind: "npx-skills", package: "owner/pkg", skills: [""] },
+      }),
+    ).not.toBeNull();
+    expect(
+      reject({
+        ...MINIMAL_NPX,
+        installer: { kind: "npx-skills", package: "owner/pkg", skills: ["archify", "archify"] },
+      }),
+    ).not.toBeNull();
+  });
+
+  test("verify_paths rejects empty target paths and unsupported targets", () => {
+    expect(reject({ ...MINIMAL_NPX, verify_paths: { claude: [] } })).not.toBeNull();
+    expect(reject({ ...MINIMAL_NPX, verify_paths: { codex: "" } })).not.toBeNull();
+    expect(
+      reject({ ...MINIMAL_NPX, verify_paths: { cursor: "~/.cursor/skills/archify" } }),
+    ).not.toBeNull();
   });
 
   test("unknown installer.kind is rejected (discriminated union)", () => {

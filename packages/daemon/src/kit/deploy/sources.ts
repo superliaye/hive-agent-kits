@@ -170,6 +170,8 @@ export type BundleMeta = {
   flags: string[];
   hostFlagMap: Record<string, string[]>;
   pkg: string;
+  skills: string[];
+  verifyPaths: Partial<Record<"claude" | "codex", string[]>>;
   requires: string[];
 };
 
@@ -192,10 +194,36 @@ export function bundleMeta(mirrorRoot: string, name: string): BundleMeta | null 
       : [],
     hostFlagMap: normalizeHostFlagMap(installer.host_flag_map),
     pkg: typeof installer.package === "string" ? installer.package : "",
+    skills: normalizeStringList(installer.skills),
+    verifyPaths: normalizeVerifyPaths(fm.verify_paths),
     requires: Array.isArray(fm.requires)
       ? fm.requires.filter((x): x is string => typeof x === "string")
       : [],
   };
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [
+    ...new Set(value.filter((item): item is string => typeof item === "string" && item.length > 0)),
+  ].sort();
+}
+
+function normalizeVerifyPaths(value: unknown): Partial<Record<"claude" | "codex", string[]>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const source = value as Record<string, unknown>;
+  const result: Partial<Record<"claude" | "codex", string[]>> = {};
+  for (const target of ["claude", "codex"] as const) {
+    const configured = source[target];
+    const paths =
+      typeof configured === "string"
+        ? configured.length > 0
+          ? [configured]
+          : []
+        : normalizeStringList(configured);
+    if (paths.length > 0) result[target] = paths;
+  }
+  return result;
 }
 
 function normalizeHostFlagMap(v: unknown): Record<string, string[]> {

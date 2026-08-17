@@ -33,6 +33,7 @@ import {
   type Config,
 } from "../config/index.ts";
 import { canonicalizeWorkingTreeLocator } from "../kit/acquisition/working-tree.ts";
+import type { BinaryProbe, ExecPort } from "../kit/deploy/adapter.ts";
 import { createDeploymentMutationCoordinator } from "../kit/deploy-coordinator.ts";
 import { Kit, KitLive, type KitSvc } from "../kit/index.ts";
 import { removeMirror } from "../kit/mirror.ts";
@@ -72,7 +73,12 @@ type CreateServerBaseOptions = {
 };
 
 export type CreateServerOptions =
-  | (CreateServerBaseOptions & { mode: "memory"; fetch?: HttpFetch })
+  | (CreateServerBaseOptions & {
+      mode: "memory";
+      fetch?: HttpFetch;
+      exec?: ExecPort;
+      probe?: BinaryProbe;
+    })
   | (CreateServerBaseOptions & { mode: "file"; fetch?: never });
 
 // The pre-locator GitHub HTTP transport is a memory-test fixture only. Keeping
@@ -194,6 +200,8 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
     KitLive({
       targets: deployTargets,
       ...(legacyGithubFixtureFetch ? { fetch: legacyGithubFixtureFetch } : {}),
+      ...(opts.mode === "memory" && opts.exec ? { exec: opts.exec } : {}),
+      ...(opts.mode === "memory" && opts.probe ? { probe: opts.probe } : {}),
       workingTreeRoots: () => configHolder.config?.get("sources").workingTreeRoots ?? [],
       mutationCoordinator: deploymentMutationCoordinator,
     }).pipe(Layer.provide(sourcesLayer)),

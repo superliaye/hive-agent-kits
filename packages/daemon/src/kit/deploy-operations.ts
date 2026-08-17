@@ -125,6 +125,20 @@ const StagedBundleTask = z.object({
   pin: z.string().nullable(),
 });
 
+const StagedManagedNpxBundleTask = z.object({
+  type: z.literal("npx-bundle"),
+  action: z.enum(["add", "update", "remove"]),
+  key: z.object({ kind: z.literal("bundle"), name: z.string() }),
+  target: DeployTarget,
+  package: z.string(),
+  skills: z.array(z.string()).min(1),
+  verifyPaths: z.array(z.string()).min(1),
+  pin: z.string(),
+  sourceId: z.string().nullable(),
+  contentSha: z.string().nullable(),
+  renderedHash: z.string(),
+});
+
 const StagedRemovalTask = z.object({
   type: z.literal("remove"),
   action: z.literal("remove"),
@@ -143,6 +157,7 @@ export const StagedDeployPayloadSchema = z.object({
       StagedAgentTask,
       StagedPluginTask,
       StagedBundleTask,
+      StagedManagedNpxBundleTask,
       StagedRemovalTask,
     ]),
   ),

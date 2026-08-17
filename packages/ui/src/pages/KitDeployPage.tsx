@@ -574,13 +574,13 @@ export function KitDeployPage({
       {manualInstallRows.length > 0 && (
         <div className="banner-warn" data-testid="kit-manual-install">
           Manual install required for {manualInstallRows.map((row) => row.key.name).join(", ")}.
-          Hive does not run plugin or bundle installers from a durable Deploy.
+          Hive does not run installers that lack durable metadata.
         </div>
       )}
       {manualRemovalRows.length > 0 && (
         <div className="banner-error" data-testid="kit-manual-removal">
           Manual removal required for {manualRemovalRows.map((row) => row.key.name).join(", ")}.
-          Deploy does not uninstall plugins or bundles.
+          Deploy does not uninstall installers that lack durable metadata.
         </div>
       )}
       {blockedInstructionRows.length > 0 && (

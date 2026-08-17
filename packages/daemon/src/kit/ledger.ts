@@ -92,6 +92,7 @@ export type LedgerMergeInput = {
   instructions: string[];
   plugins: string[];
   bundles: { name: string; pin: string | null }[];
+  prunedBundles?: string[];
 };
 
 export type LedgerWriteOptions = AtomicWriteOptions & {
@@ -157,6 +158,7 @@ export function mergeLedgerWithinLock(
   const dropSkill = new Set(prunedSkills);
   const dropAgent = new Set(prunedAgents);
   const dropInstruction = new Set(prunedInstructions);
+  const dropBundle = new Set(input.prunedBundles ?? []);
 
   const mergeNames = (existing: { name: string }[], add: string[], drop: Set<string>) => {
     const set = new Map<string, { name: string }>();
@@ -168,9 +170,10 @@ export function mergeLedgerWithinLock(
   const mergeBundles = (
     existing: { name: string; pin: string | null }[],
     add: { name: string; pin: string | null }[],
+    drop: Set<string>,
   ) => {
     const set = new Map<string, { name: string; pin: string | null }>();
-    for (const e of existing) set.set(e.name, e);
+    for (const e of existing) if (!drop.has(e.name)) set.set(e.name, e);
     for (const b of add) set.set(b.name, b);
     return [...set.values()];
   };
@@ -186,7 +189,7 @@ export function mergeLedgerWithinLock(
       agentDefs: mergeNames(current.agentDefs, input.agents, dropAgent),
       instructions: mergeNames(current.instructions, input.instructions, dropInstruction),
       plugins: mergeNames(current.plugins, input.plugins, new Set()),
-      bundles: mergeBundles(current.bundles, input.bundles),
+      bundles: mergeBundles(current.bundles, input.bundles, dropBundle),
     };
     options.beforeCommit?.(attempt);
     if (readLedgerBytes(path) !== before) continue;

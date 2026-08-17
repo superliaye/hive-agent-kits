@@ -16,24 +16,31 @@ function json(data: unknown, status = 200): Response {
 }
 
 function row(
-  kind: "skill" | "plugin",
+  kind: "skill" | "plugin" | "bundle",
   reconciliation: OverviewRow["reconciliation"] = "pending_add",
 ): OverviewRow {
-  const name = kind === "skill" ? "arca-smoke" : "arca-plugin";
+  const name = kind === "skill" ? "arca-smoke" : kind === "plugin" ? "arca-plugin" : "archify";
   const applicableTargets =
-    kind === "skill" ? (["claude", "codex"] as const) : (["claude"] as const);
+    kind === "plugin" ? (["claude"] as const) : (["claude", "codex"] as const);
+  const desired =
+    kind === "plugin" || reconciliation === "pending_remove" ? ("off" as const) : ("on" as const);
   return {
     key: { kind, name },
     catalog: "deployable",
-    desired: kind === "skill" ? "on" : "off",
+    desired,
     reconciliation,
     lastAttempt: { state: "none" },
     applicableTargets: [...applicableTargets],
     targets: applicableTargets.map((target) => ({
       target,
-      desired: kind === "skill" ? ("on" as const) : ("off" as const),
+      desired,
       reconciliation,
-      observation: kind === "skill" ? ("missing" as const) : ("recorded_unverified" as const),
+      observation:
+        kind === "plugin"
+          ? ("recorded_unverified" as const)
+          : reconciliation === "pending_remove"
+            ? ("verified" as const)
+            : ("missing" as const),
       lastAttempt: { state: "none" as const },
     })),
     variants: [
@@ -491,6 +498,82 @@ describe("KitDeployPage — reviewed deploy acceptance", () => {
     expect(deployCalls).toBe(0);
     await click(host.querySelector('[data-testid="kit-deploy-confirm"]'));
     expect(deployCalls).toBe(1);
+  });
+
+  test("eligible bundle actions use the normal Deploy diff without manual banners", async () => {
+    const archify = row("bundle", "pending_add");
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      if (path === "/api/kit/overview") {
+        return json(
+          overview({
+            rows: [archify],
+            diff: { entries: [{ kind: "bundle", name: "archify", change: "added" }] },
+          }),
+        );
+      }
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+
+    expect(host.querySelector('[data-testid="kit-manual-install"]')).toBeNull();
+    expect(host.querySelector('[data-testid="kit-manual-removal"]')).toBeNull();
+    expect(host.textContent).toContain("archify");
+    expect((host.querySelector('[data-testid="kit-deploy"]') as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  test("eligible bundle removal uses destructive confirmation", async () => {
+    const archify = row("bundle", "pending_remove");
+    let deployCalls = 0;
+    globalThis.fetch = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      if (path === "/api/kit/overview") {
+        return json(
+          overview({
+            rows: [archify],
+            diff: { entries: [{ kind: "bundle", name: "archify", change: "removed" }] },
+          }),
+        );
+      }
+      if (path === "/api/kit/deploy" && init?.method === "POST") {
+        deployCalls += 1;
+        return json({ operationId: "remove-archify" }, 202);
+      }
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+
+    await click(host.querySelector('[data-testid="kit-deploy"]'));
+    expect(deployCalls).toBe(0);
+    await click(host.querySelector('[data-testid="kit-deploy-confirm"]'));
+    expect(deployCalls).toBe(1);
+  });
+
+  test("unsupported bundle installers retain the manual banner", async () => {
+    const legacy = row("bundle", "manual_install_required");
+    globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw).pathname;
+      if (path === "/api/developer") return json({ allowRealHomeDeploy: false });
+      if (path === "/api/kit/overview") {
+        return json(overview({ rows: [legacy], diff: { entries: [] } }));
+      }
+      return json({});
+    }) as typeof fetch;
+    const host = await renderPage();
+
+    expect(host.querySelector('[data-testid="kit-manual-install"]')?.textContent).toContain(
+      "lack durable metadata",
+    );
   });
 
   test("plugin deselection says manual removal required and never makes Deploy an uninstall action", async () => {

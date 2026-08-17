@@ -8,6 +8,8 @@ import { mirrorContentSha } from "./content-sha.ts";
 import {
   backupIfExists,
   type DeployFsExec,
+  execInstaller,
+  probeBinary,
   readSkillSource,
   removeDir,
   removeFile,
@@ -24,6 +26,11 @@ import {
   hashSkillFiles,
   sha256,
 } from "./deploy/artifact-hash.ts";
+import {
+  managedNpxBundleHash,
+  managedNpxBundleMeta,
+  probeManagedNpxBundle,
+} from "./deploy/npx-bundle.ts";
 import {
   agentSourceDir,
   bundleMeta,
@@ -479,10 +486,10 @@ export function stageDeployPlan(
   const kindOrder = ["skill", "agent", "plugin", "bundle"] as const;
   for (const kind of kindOrder) {
     for (const action of plan.actions.filter((candidate) => candidate.key.kind === kind)) {
-      if (action.action === "remove") {
-        if (action.key.kind !== "skill" && action.key.kind !== "agent") {
-          throw new PlanStaleError();
-        }
+      if (
+        action.action === "remove" &&
+        (action.key.kind === "skill" || action.key.kind === "agent")
+      ) {
         tasks.push({
           type: "remove",
           action: "remove",
@@ -494,9 +501,13 @@ export function stageDeployPlan(
         });
         continue;
       }
+      if (action.action === "remove" && action.key.kind !== "bundle") {
+        throw new PlanStaleError();
+      }
       const { sourceId, contentSha } = requiredActionSource(action);
       assertContentSha(targets, sourceId, action.key, contentSha);
       if (action.key.kind === "skill") {
+        if (action.action === "remove") throw new PlanStaleError();
         const source = skillSourceDir(targets.mirrorRoot(sourceId), action.key.name);
         if (!source || !action.renderedHash) throw new PlanStaleError();
         const rendered = transformSkill(
@@ -525,6 +536,7 @@ export function stageDeployPlan(
         continue;
       }
       if (action.key.kind === "agent") {
+        if (action.action === "remove") throw new PlanStaleError();
         const source = agentSourceDir(targets.mirrorRoot(sourceId), action.key.name);
         if (!source || !action.renderedHash) throw new PlanStaleError();
         const rendered = transformAgent(
@@ -552,7 +564,23 @@ export function stageDeployPlan(
       }
       const metadata = bundleMeta(targets.mirrorRoot(sourceId), action.key.name);
       if (!metadata) throw new PlanStaleError();
-      throw new ImmutableInstallerStagingError();
+      const managed = managedNpxBundleMeta(metadata, action.target, targets);
+      if (!managed || managedNpxBundleHash(managed, action.target) !== action.renderedHash) {
+        throw new ImmutableInstallerStagingError();
+      }
+      tasks.push({
+        type: "npx-bundle",
+        action: action.action,
+        key: { kind: "bundle", name: action.key.name },
+        target: action.target,
+        package: managed.package,
+        skills: managed.skills,
+        verifyPaths: managed.verifyPaths,
+        pin: managed.package,
+        sourceId,
+        contentSha,
+        renderedHash: action.renderedHash,
+      });
     }
   }
   return { tasks, metadata: {} };
@@ -588,6 +616,68 @@ function taskActions(task: StagedDeployTask): Array<{
   return [{ action: task.action, key: task.key, target: task.target }];
 }
 
+class InstallerTaskError extends Error {
+  constructor(
+    readonly code: "missing_binary" | "installer_failed",
+    readonly detail: string,
+  ) {
+    super(code);
+    this.name = "InstallerTaskError";
+  }
+}
+
+function boundedInstallerDetail(value: string): string {
+  return value
+    .replace(/\bbearer\s+[^\s,;]+/gi, "bearer <redacted>")
+    .replace(
+      /\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi,
+      "$1=<redacted>",
+    )
+    .slice(0, 512);
+}
+
+function expectedBundleProbe(task: Extract<StagedDeployTask, { type: "npx-bundle" }>) {
+  return task.action === "remove" ? "all-absent" : "all-present";
+}
+
+function applyManagedNpxBundle(
+  fx: DeployFsExec,
+  task: Extract<StagedDeployTask, { type: "npx-bundle" }>,
+): void {
+  if (probeManagedNpxBundle(task) === expectedBundleProbe(task)) return;
+  if (!probeBinary(fx, "npx")) {
+    throw new InstallerTaskError("missing_binary", "npx is not available on PATH");
+  }
+  const agent = task.target === "claude" ? "claude-code" : "codex";
+  const args =
+    task.action === "remove"
+      ? ["-y", "skills", "remove", ...task.skills, "--global", "--agent", agent, "--yes"]
+      : [
+          "-y",
+          "skills",
+          "add",
+          task.package,
+          "--global",
+          "--agent",
+          agent,
+          ...task.skills.flatMap((skill) => ["--skill", skill]),
+          "--yes",
+        ];
+  const result = execInstaller(fx, { command: "npx", args }, "npx");
+  if (result.status !== 0) {
+    throw new InstallerTaskError(
+      "installer_failed",
+      boundedInstallerDetail(result.stderr || result.stdout || `npx exited ${result.status}`),
+    );
+  }
+  if (probeManagedNpxBundle(task) !== expectedBundleProbe(task)) {
+    throw new InstallerTaskError(
+      "installer_failed",
+      `npx completed without satisfying ${task.action} postcondition`,
+    );
+  }
+}
+
 function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
   switch (task.type) {
     case "instruction": {
@@ -617,16 +707,20 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
     case "plugin": {
       throw new ImmutableInstallerStagingError();
     }
+    case "npx-bundle":
+      applyManagedNpxBundle(fx, task);
+      return;
     case "bundle": {
       throw new ImmutableInstallerStagingError();
     }
   }
 }
 
-function errorCode(error: unknown): string {
-  if (error instanceof Error && error.message === "missing_binary") return "missing_binary";
-  if (error instanceof Error && error.message === "installer_failed") return "installer_failed";
-  return "io";
+function failureFor(error: unknown): { code: string; detail?: string } {
+  if (error instanceof InstallerTaskError) {
+    return { code: error.code, ...(error.detail ? { detail: error.detail } : {}) };
+  }
+  return { code: "io" };
 }
 
 export async function executeStagedDeploy(
@@ -645,17 +739,17 @@ export async function executeStagedDeploy(
     async () => {
       for (const task of operation.staged.tasks) {
         const actions = taskActions(task);
-        let failureCode: string | undefined;
+        let failure: { code: string; detail?: string } | undefined;
         try {
           applyStagedTask(options.fx, task);
         } catch (error) {
-          failureCode = errorCode(error);
+          failure = failureFor(error);
         }
         const outcomes = actions.map((action) => ({
           ...action,
-          outcome: failureCode ? ("failed" as const) : ("succeeded" as const),
+          outcome: failure ? ("failed" as const) : ("succeeded" as const),
           attemptedAt: now(),
-          ...(failureCode ? { code: failureCode } : {}),
+          ...(failure ? failure : {}),
         }));
         provisional.push(...outcomes);
         if ("provisional" in journal) await journal.provisional(outcomes);
@@ -698,6 +792,8 @@ function stagedTaskStillApplied(fx: DeployFsExec, task: StagedDeployTask): boole
         return task.key.kind === "skill"
           ? hashDeployedSkill(fx.targets, task.key.name, task.target) === null
           : hashDeployedAgent(fx.targets, task.key.name, task.target) === null;
+      case "npx-bundle":
+        return probeManagedNpxBundle(task) === expectedBundleProbe(task);
       case "plugin":
       case "bundle":
         return false;
@@ -747,6 +843,7 @@ function commitProvisionalLedger(
   const prunedSkills = new Set<string>();
   const prunedAgents = new Set<string>();
   const prunedInstructions = new Set<string>();
+  const prunedBundles = new Set<string>();
   for (const action of operation.plan.actions) {
     if (
       action.action !== "remove" ||
@@ -769,6 +866,7 @@ function commitProvisionalLedger(
     if (action.key.kind === "skill") prunedSkills.add(action.key.name);
     if (action.key.kind === "agent") prunedAgents.add(action.key.name);
     if (action.key.kind === "instruction") prunedInstructions.add(action.key.name);
+    if (action.key.kind === "bundle") prunedBundles.add(action.key.name);
   }
   const instructions = new Set<string>();
   const skills = new Set<string>();
@@ -788,6 +886,8 @@ function commitProvisionalLedger(
       plugins.add(task.key.name);
     } else if (task.type === "bundle") {
       bundles.set(task.key.name, task.pin);
+    } else if (task.type === "npx-bundle" && task.action !== "remove") {
+      bundles.set(task.key.name, task.pin);
     }
   }
   const commit = ledgerLocked ? mergeLedgerWithinLock : mergeLedger;
@@ -801,6 +901,7 @@ function commitProvisionalLedger(
       instructions: [...instructions],
       plugins: [...plugins],
       bundles: [...bundles].map(([name, pin]) => ({ name, pin })),
+      prunedBundles: [...prunedBundles],
     },
     [...prunedSkills],
     [...prunedAgents],
@@ -833,7 +934,7 @@ function finalizeCommittedDeployment(
             {
               action: action.action,
               code: outcome?.code ?? "unknown",
-              detail: "deploy action failed",
+              detail: outcome?.detail ?? "deploy action failed",
             },
             operation.operationId,
           );
@@ -859,6 +960,22 @@ function finalizeCommittedDeployment(
         }
       } else if (task.type === "remove") {
         options.deploymentState.recordRemoval(task.key, task.target, operation.operationId);
+      } else if (task.type === "npx-bundle") {
+        if (task.action === "remove") {
+          options.deploymentState.recordRemoval(task.key, task.target, operation.operationId);
+        } else {
+          options.deploymentState.recordSuccess(
+            task.key,
+            task.target,
+            {
+              sourceId: task.sourceId,
+              contentSha: task.contentSha,
+              renderedHash: task.renderedHash,
+              appliedAt: now(),
+            },
+            operation.operationId,
+          );
+        }
       } else if (task.type === "plugin" || task.type === "bundle") {
         throw new ImmutableInstallerStagingError();
       } else {
@@ -888,6 +1005,10 @@ export async function resumeStagedDeploy(
 ): Promise<void> {
   let phase = operation.executionPhase;
   let recovered = operation;
+  if (phase === "applying") {
+    await executeStagedDeploy(options, operation, journal);
+    return;
+  }
   if (phase === "ledger_pending") {
     const lockOptions = options.ledgerWriteOptions ?? {};
     await withCooperativeFileLockAsync(

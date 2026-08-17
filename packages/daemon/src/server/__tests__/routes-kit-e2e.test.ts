@@ -18,7 +18,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,7 @@ import {
   redirectHomeEnv,
   type TarFixtureEntry,
 } from "../../kit/__tests__/helpers.ts";
+import type { BinaryProbe, ExecPort } from "../../kit/deploy/adapter.ts";
 import type { HttpFetch } from "../../kit/sync.ts";
 import { failSafeDeployTargets } from "../../kit/targets.ts";
 import { createServer, type ServerHandles } from "../index.ts";
@@ -154,6 +155,10 @@ function installerEntries(): TarFixtureEntry[] {
       path: `${top}/capabilities/bundles/mybundle.bundle.md`,
       content:
         "---\ndescription: b\nsource: https://example.com/x.git\npinned_commit: abc123\ninstaller:\n  command: ./setup\n  flags: []\n---\nbundle\n",
+    },
+    {
+      path: `${top}/capabilities/bundles/archify.bundle.md`,
+      content: `---\ndescription: Archify\ninstaller:\n  kind: npx-skills\n  package: https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}\n  skills: [archify]\nverify_paths:\n  claude: ~/.claude/skills/archify\n  codex: ~/.agents/skills/archify\n---\narchify\n`,
     },
   ];
 }
@@ -370,8 +375,11 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
     if (existsSync(tmpRoot)) rmSync(tmpRoot, { recursive: true, force: true });
   });
 
-  async function serverWith(fetch: HttpFetch): Promise<ServerHandles> {
-    return createServer({ mode: "memory", token: TOKEN, fetch });
+  async function serverWith(
+    fetch: HttpFetch,
+    installers: { exec: ExecPort; probe: BinaryProbe } | undefined = undefined,
+  ): Promise<ServerHandles> {
+    return createServer({ mode: "memory", token: TOKEN, fetch, ...installers });
   }
 
   test("durable selection GET/PATCH revision contract and one refs-only audit event", async () => {
@@ -942,6 +950,58 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
     }
   });
 
+  test("managed Archify installs, becomes in sync, and removes one target through fake npx", async () => {
+    const requests: Array<{ command: string; args: string[] }> = [];
+    const server = await serverWith(installerFetch(), {
+      probe: (name) => name === "npx",
+      exec: (request) => {
+        requests.push(request);
+        const agentIndex = request.args.indexOf("--agent");
+        const agent = request.args[agentIndex + 1];
+        const path =
+          agent === "claude-code"
+            ? join(homes.claudeHome, "skills", "archify")
+            : join(homes.agentsHome, "skills", "archify");
+        if (request.args.includes("add")) mkdirSync(path, { recursive: true });
+        if (request.args.includes("remove")) rmSync(path, { recursive: true, force: true });
+        return { status: 0, stdout: "ok", stderr: "" };
+      },
+    });
+    try {
+      expect((await postOrigin(server, ORIGIN_INSTALLERS)).status).toBe(201);
+      const installed = await acceptSelection(server, {
+        bundles: ["archify"],
+        targets: ["claude", "codex"],
+      });
+      const installedRow = installed.rows.find(
+        (row) => row.key.kind === "bundle" && row.key.name === "archify",
+      );
+      expect(installed.lastOperation?.state).toBe("completed");
+      expect(installedRow?.reconciliation).toBe("in_sync");
+      expect(installedRow?.targets).toMatchObject([
+        { target: "claude", reconciliation: "in_sync", observation: "verified" },
+        { target: "codex", reconciliation: "in_sync", observation: "verified" },
+      ]);
+      expect(existsSync(join(homes.claudeHome, "skills", "archify"))).toBe(true);
+      expect(existsSync(join(homes.agentsHome, "skills", "archify"))).toBe(true);
+
+      const oneTarget = await acceptSelection(server, {
+        bundles: ["archify"],
+        targets: ["codex"],
+      });
+      expect(oneTarget.lastOperation?.state).toBe("completed");
+      expect(existsSync(join(homes.claudeHome, "skills", "archify"))).toBe(false);
+      expect(existsSync(join(homes.agentsHome, "skills", "archify"))).toBe(true);
+      expect(requests.map((request) => request.args.slice(1, 4))).toEqual([
+        ["skills", "add", `https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}`],
+        ["skills", "add", `https://github.com/tt-a1i/archify/tree/${"e".repeat(40)}`],
+        ["skills", "remove", "archify"],
+      ]);
+    } finally {
+      await server.dispose();
+    }
+  });
+
   test("environment hatches cannot turn installer selections into durable Deploy actions", async () => {
     process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL = "1";
     process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL = "1";
@@ -975,7 +1035,7 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
       expect(overview.diff.entries).toEqual([]);
       expect(
         overview.rows
-          .filter((row) => row.key.kind === "plugin" || row.key.kind === "bundle")
+          .filter((row) => ["myplugin", "mybundle"].includes(row.key.name))
           .map((row) => row.reconciliation),
       ).toEqual(["manual_install_required", "manual_install_required"]);
       expect(existsSync(homes.ledgerPath)).toBe(false);

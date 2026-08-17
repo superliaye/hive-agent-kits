@@ -40,8 +40,20 @@ const NpxSkillsInstaller = z
   .object({
     kind: z.literal("npx-skills"),
     package: z.string().min(1),
+    skills: z
+      .array(z.string().min(1))
+      .min(1)
+      .refine((skills) => new Set(skills).size === skills.length, "skill names must be unique")
+      .optional(),
   })
   .passthrough();
+
+const VerifyPaths = z
+  .record(
+    z.enum(["claude", "codex"]),
+    z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
+  )
+  .optional();
 
 // Inject `kind ?? "setup-script"` on the raw installer object before the
 // discriminated union runs, WITHOUT any/casts: narrow `unknown` via typeof to a
@@ -67,6 +79,7 @@ export const BundleFrontmatter = z
     source: z.string().min(1).optional(),
     pinned_commit: z.string().min(1).optional(),
     installer: Installer,
+    verify_paths: VerifyPaths,
   })
   .passthrough()
   .superRefine((bundle, ctx) => {
