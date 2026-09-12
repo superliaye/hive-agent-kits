@@ -362,7 +362,7 @@ export const api = {
   // The authoritative Source list, INCLUDING inactive sources (state.sync is
   // active-only). Drives the per-Source toggle rows in the Capabilities header.
   listSources: (cfg: ApiConfig) => call<SourceSummary[]>(cfg, "/api/sources"),
-  // Register a Source by repository or GitHub folder URL. The daemon onboards it
+  // Register a Source by repository URL, GitHub folder URL, or Daemon path. The daemon onboards it
   // (sync + validate the mirror) and returns a 201 AddSourceResult even for a
   // non-conformant or empty repo — the add is never rejected for that. Unlike
   // `call<T>`, this reads the error body so the control can surface the server's
@@ -397,7 +397,7 @@ export const api = {
 
 async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResult> {
   const path = "/api/sources";
-  const input = sourceInputFromUrl(origin);
+  const input = sourceInputFromValue(origin);
   const res = await request(cfg, path, {
     method: "POST",
     headers: {
@@ -431,9 +431,7 @@ async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResul
     throw new AddSourceError({ kind: "invalid", status: 400, issues }, "invalid source");
   }
   if (res.status === 409) {
-    const carriedOrigin = isRecord(body)
-      ? (asString(body.origin) ?? input.locator.repoUrl)
-      : input.locator.repoUrl;
+    const carriedOrigin = isRecord(body) ? (asString(body.origin) ?? origin) : origin;
     throw new AddSourceError(
       { kind: "duplicate", status: 409, origin: carriedOrigin },
       "duplicate origin",
@@ -449,7 +447,13 @@ async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResul
 
 type GitSourceLocator = Extract<AddSourceInput["locator"], { kind: "git" }>;
 
-export function sourceInputFromUrl(origin: string): { label: string; locator: GitSourceLocator } {
+export function sourceInputFromValue(origin: string): AddSourceInput {
+  if (absoluteDaemonPath(origin)) {
+    return {
+      label: origin.split(/[\\/]/).filter(Boolean).at(-1) ?? origin,
+      locator: { kind: "working-tree", repoRoot: origin, subpath: "." },
+    };
+  }
   const locator = githubTreeLocator(origin) ?? {
     kind: "git" as const,
     repoUrl: origin,
@@ -457,6 +461,10 @@ export function sourceInputFromUrl(origin: string): { label: string; locator: Gi
     subpath: ".",
   };
   return { label: sourceLabel(locator.repoUrl), locator };
+}
+
+function absoluteDaemonPath(value: string): boolean {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
 }
 
 function githubTreeLocator(origin: string): GitSourceLocator | undefined {

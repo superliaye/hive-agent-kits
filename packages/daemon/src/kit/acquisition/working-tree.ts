@@ -489,7 +489,7 @@ async function verifyWorkingTree(
     throw new WorkingTreeAcquireError("invalid_subpath", "working tree subpath is invalid");
   }
   const selectedRoot = canonicalPath(
-    resolve(topLevel, locator.subpath),
+    requireCanonicalTopLevel ? resolve(topLevel, locator.subpath) : locatorRoot,
     "invalid_subpath",
     "working tree subpath is unavailable",
   );
@@ -501,8 +501,12 @@ async function verifyWorkingTree(
   } catch {
     throw new WorkingTreeAcquireError("invalid_subpath", "working tree subpath is unavailable");
   }
+  const canonicalSubpath = relative(topLevel, selectedRoot).split(sep).join("/") || ".";
+  if (!safeRelativePath(canonicalSubpath)) {
+    throw new WorkingTreeAcquireError("invalid_subpath", "working tree subpath is invalid");
+  }
   return {
-    locator: { ...locator, repoRoot: topLevel },
+    locator: { ...locator, repoRoot: topLevel, subpath: canonicalSubpath },
     topLevel,
     selectedRoot,
   };
@@ -512,7 +516,7 @@ export async function canonicalizeWorkingTreeLocator(
   locator: WorkingTreeLocator,
   options: Pick<WorkingTreeAcquireOptions, "allowedRoots" | "process" | "limits">,
 ): Promise<WorkingTreeLocator> {
-  return (await verifyWorkingTree(locator, options, true)).locator;
+  return (await verifyWorkingTree(locator, options, locator.subpath !== ".")).locator;
 }
 
 export async function acquireWorkingTree(

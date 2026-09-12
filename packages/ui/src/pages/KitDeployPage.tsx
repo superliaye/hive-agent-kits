@@ -831,13 +831,13 @@ function AddSourceForm({
         <input
           ref={inputRef}
           type="text"
-          placeholder="https://github.com/owner/repo/tree/main/path"
+          placeholder="Repository URL or absolute Daemon path"
           disabled={addSource.isPending || disabled}
           onInput={(event) => {
             setEmpty(event.currentTarget.value.trim().length === 0);
             if (!addSource.isPending && (addSource.isError || addSource.data)) addSource.reset();
           }}
-          aria-label="Repository or GitHub folder URL of a Source to add"
+          aria-label="Repository URL, GitHub folder URL, or absolute Daemon path of a Source to add"
           data-testid="add-source-input"
         />
         <button

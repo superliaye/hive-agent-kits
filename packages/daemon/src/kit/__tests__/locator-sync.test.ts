@@ -252,6 +252,41 @@ describe("locator-native Source sync", () => {
     }
   });
 
+  test("server resolves an absolute Source path into its working-tree root and subpath", async () => {
+    const repo = workingTree();
+    const server = await createServer({ mode: "memory", token: "locator-sync" });
+    try {
+      await server.config.set("sources", { workingTreeRoots: [repo] });
+      const response = await server.app.fetch(
+        new Request("http://localhost/api/sources", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer locator-sync",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            label: "plain",
+            locator: {
+              kind: "working-tree",
+              repoRoot: join(repo, "plain"),
+              subpath: ".",
+            },
+          }),
+        }),
+      );
+
+      expect(response.status).toBe(201);
+      const added = AddSourceResult.parse(await response.json());
+      expect(added.sync.state).toBe("up_to_date");
+      expect(added.validation.capabilityCount).toBe(0);
+      expect((await Effect.runPromise(server.kit.sync())).sources).toEqual([
+        { sourceId: added.source.id, status: "synced" },
+      ]);
+    } finally {
+      await server.dispose();
+    }
+  });
+
   test("canonicalizes working-tree aliases before duplicate identity is persisted", async () => {
     const repo = workingTree();
     const alias = join(root, "working-tree-alias");
