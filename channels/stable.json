@@ -2,41 +2,41 @@
   "schemaVersion": 1,
   "channel": "stable",
   "release": {
-    "releaseId": "gd7674ad9295dfa3469fab6f951fa698a70b4ad7b",
-    "buildVersion": "0.0.0-gd7674ad9295d",
+    "releaseId": "g6a1c1d3c39a2727b8cdc47dda57ac2a42122ce95",
+    "buildVersion": "0.0.0-g6a1c1d3c39a2",
     "source": {
       "repository": "https://github.com/superliaye/hive-agent-kits.git",
-      "commit": "d7674ad9295dfa3469fab6f951fa698a70b4ad7b"
+      "commit": "6a1c1d3c39a2727b8cdc47dda57ac2a42122ce95"
     },
     "protocolRange": "1",
-    "publishedAt": "2026-09-12T19:08:56Z",
+    "publishedAt": "2026-09-12T22:43:06Z",
     "artifacts": [
       {
         "kind": "shell",
         "platform": "darwin",
         "architecture": "arm64",
         "format": "tar.gz",
-        "url": "https://github.com/superliaye/hive-agent-kits/releases/download/hive-gd7674ad9295dfa3469fab6f951fa698a70b4ad7b/Hive-darwin-arm64.tar.gz",
-        "sha256": "eb176ffc0bbbd7444a9d305f6c146358f15d713425c2404891f0e625d8ba0564",
-        "sizeBytes": 120320872
+        "url": "https://github.com/superliaye/hive-agent-kits/releases/download/hive-g6a1c1d3c39a2727b8cdc47dda57ac2a42122ce95/Hive-darwin-arm64.tar.gz",
+        "sha256": "8c0dabb4cdf632007f4e4b2cdd7c261dcc0662df213fa5be44cea62e4f84652c",
+        "sizeBytes": 120320880
       },
       {
         "kind": "shell",
         "platform": "darwin",
         "architecture": "x64",
         "format": "tar.gz",
-        "url": "https://github.com/superliaye/hive-agent-kits/releases/download/hive-gd7674ad9295dfa3469fab6f951fa698a70b4ad7b/Hive-darwin-x64.tar.gz",
-        "sha256": "1af9a62df77136dc2dc4e9fe2191a5a04343b38b818c75839c7fb00a58207f05",
-        "sizeBytes": 127489647
+        "url": "https://github.com/superliaye/hive-agent-kits/releases/download/hive-g6a1c1d3c39a2727b8cdc47dda57ac2a42122ce95/Hive-darwin-x64.tar.gz",
+        "sha256": "2b50330a2f77bc33ebc0e9943edb88ba7acc8c1255bb526a5fed6fc7501179e1",
+        "sizeBytes": 127489737
       },
       {
         "kind": "daemon",
         "platform": "linux",
         "architecture": "x64",
         "format": "executable",
-        "url": "https://github.com/superliaye/hive-agent-kits/releases/download/hive-gd7674ad9295dfa3469fab6f951fa698a70b4ad7b/hive-daemon-linux-x64",
-        "sha256": "0d36ee772e57910e14f95ec5e62a2f3db84ee00d0994cdb8d8b2e155b2b1776b",
-        "sizeBytes": 102086009
+        "url": "https://github.com/superliaye/hive-agent-kits/releases/download/hive-g6a1c1d3c39a2727b8cdc47dda57ac2a42122ce95/hive-daemon-linux-x64",
+        "sha256": "a6b5a8f05c47337ded3889d44b77c24f76a74dddcc550517db764730381f5706",
+        "sizeBytes": 102086328
       }
     ]
   }
