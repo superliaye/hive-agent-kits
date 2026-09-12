@@ -8,6 +8,7 @@
 import type {
   AcceptedDeployRequest,
   AcceptedDeployResponse,
+  AddSourceInput,
   AddSourceResult,
   BackendReadiness,
   BackendStatus,
@@ -361,11 +362,12 @@ export const api = {
   // The authoritative Source list, INCLUDING inactive sources (state.sync is
   // active-only). Drives the per-Source toggle rows in the Capabilities header.
   listSources: (cfg: ApiConfig) => call<SourceSummary[]>(cfg, "/api/sources"),
-  // Register a Source by git URL. The daemon onboards it (sync + validate the
-  // mirror) and returns a 201 AddSourceResult even for a non-conformant or empty
-  // repo — the add is never rejected for that. Unlike `call<T>`, this reads the
-  // error body so the control can surface the server's structured 400 issues /
-  // 409 duplicate; on any non-201 it throws a typed `AddSourceError`.
+  // Register a Source by repository or GitHub folder URL. The daemon onboards it
+  // (sync + validate the mirror) and returns a 201 AddSourceResult even for a
+  // non-conformant or empty repo — the add is never rejected for that. Unlike
+  // `call<T>`, this reads the error body so the control can surface the server's
+  // structured 400 issues / 409 duplicate; on any non-201 it throws a typed
+  // `AddSourceError`.
   addSource: (cfg: ApiConfig, origin: string) => addSource(cfg, origin),
   // Flip a Source on/off. Activate/deactivate only change `active` (no sync) and
   // emit the source.activated/deactivated audit event server-side; the catalog is
@@ -395,20 +397,13 @@ export const api = {
 
 async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResult> {
   const path = "/api/sources";
+  const input = sourceInputFromUrl(origin);
   const res = await request(cfg, path, {
     method: "POST",
     headers: {
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      label: sourceLabel(origin),
-      locator: {
-        kind: "git",
-        repoUrl: origin,
-        revision: { mode: "track", ref: "refs/heads/main" },
-        subpath: ".",
-      },
-    }),
+    body: JSON.stringify(input),
   });
   let body: unknown;
   try {
@@ -436,7 +431,9 @@ async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResul
     throw new AddSourceError({ kind: "invalid", status: 400, issues }, "invalid source");
   }
   if (res.status === 409) {
-    const carriedOrigin = isRecord(body) ? (asString(body.origin) ?? origin) : origin;
+    const carriedOrigin = isRecord(body)
+      ? (asString(body.origin) ?? input.locator.repoUrl)
+      : input.locator.repoUrl;
     throw new AddSourceError(
       { kind: "duplicate", status: 409, origin: carriedOrigin },
       "duplicate origin",
@@ -448,6 +445,59 @@ async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResul
   const message =
     (isRecord(body) ? asString(body.message) : undefined) ?? `${res.status} ${res.statusText}`;
   throw new AddSourceError({ kind: "other", status: res.status, message }, message);
+}
+
+type GitSourceLocator = Extract<AddSourceInput["locator"], { kind: "git" }>;
+
+export function sourceInputFromUrl(origin: string): { label: string; locator: GitSourceLocator } {
+  const locator = githubTreeLocator(origin) ?? {
+    kind: "git" as const,
+    repoUrl: origin,
+    revision: { mode: "track" as const, ref: "refs/heads/main" },
+    subpath: ".",
+  };
+  return { label: sourceLabel(locator.repoUrl), locator };
+}
+
+function githubTreeLocator(origin: string): GitSourceLocator | undefined {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return undefined;
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.hostname.toLowerCase() !== "github.com" ||
+    url.port !== "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    return undefined;
+  }
+
+  let segments: string[];
+  try {
+    segments = url.pathname
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => decodeURIComponent(segment));
+  } catch {
+    return undefined;
+  }
+  const [owner, repository, marker, branch, ...subpath] = segments;
+  if (!owner || !repository || marker !== "tree" || !branch || subpath.length === 0) {
+    return undefined;
+  }
+
+  return {
+    kind: "git",
+    repoUrl: `https://github.com/${owner}/${repository}`,
+    revision: { mode: "track", ref: `refs/heads/${branch}` },
+    subpath: subpath.join("/"),
+  };
 }
 
 function sourceLabel(origin: string): string {

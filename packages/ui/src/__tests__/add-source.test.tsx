@@ -49,6 +49,7 @@ const STARTER_ID = "starter-local";
 const STARTER_ORIGIN = "https://github.com/superliaye/my-agent-kits";
 const ADDED_ID = "added-git";
 const ADDED_ORIGIN = "https://github.com/owner/repo";
+const ADDED_FOLDER_URL = "https://github.com/owner/repo/tree/master/experimental/owner/source";
 
 type Call = { method: string; path: string; body: string | undefined };
 let calls: Call[];
@@ -286,7 +287,7 @@ describe("KitDeployPage — Add-Source UI", () => {
     ).not.toBeNull();
   });
 
-  test("(b) add → appears: POSTs { origin }, success banner, new Source row + capability row appear after refetch", async () => {
+  test("(b) add → appears: POSTs a GitHub folder locator, success banner, new Source row + capability row appear after refetch", async () => {
     installStubs();
     const host = await render();
 
@@ -295,7 +296,7 @@ describe("KitDeployPage — Add-Source UI", () => {
     expect(host.querySelector(`[data-testid="kit-source-${ADDED_ID}"]`)).toBeNull();
 
     const input = host.querySelector('[data-testid="add-source-input"]') as HTMLInputElement;
-    await typeUrl(input, ADDED_ORIGIN);
+    await typeUrl(input, ADDED_FOLDER_URL);
     await submitForm(host.querySelector('[data-testid="add-source-form"]') as HTMLFormElement);
 
     // The request uses the locator-native Source contract.
@@ -306,8 +307,8 @@ describe("KitDeployPage — Add-Source UI", () => {
       locator: {
         kind: "git",
         repoUrl: ADDED_ORIGIN,
-        revision: { mode: "track", ref: "refs/heads/main" },
-        subpath: ".",
+        revision: { mode: "track", ref: "refs/heads/master" },
+        subpath: "experimental/owner/source",
       },
     });
 
