@@ -74,6 +74,17 @@ export type DeployTargetsOptions = {
 
 // Normalize a path for a Windows-tolerant home comparison: lowercase (NTFS is
 // case-insensitive), backslashes → forward slashes, and drop a trailing slash.
+// Per-user CLIs (Claude Code's native installer, pipx, uv) install into
+// ~/.local/bin, which shell startup files add to PATH but a daemon started by
+// systemd never sees. Appended last, so a binary already on PATH still wins.
+// Windows keeps its own PATH handling.
+function withUserBinDir(path: string | undefined): string | undefined {
+  if (process.platform === "win32") return path;
+  const userBin = join(homedir(), ".local", "bin");
+  if (!path) return userBin;
+  return path.split(":").includes(userBin) ? path : `${path}:${userBin}`;
+}
+
 function normalizeHome(p: string): string {
   return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
@@ -156,7 +167,7 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
     starterRoot,
     isChildEnvRedirected,
     childEnv: (base) => {
-      const env: NodeJS.ProcessEnv = { ...base };
+      const env: NodeJS.ProcessEnv = { ...base, PATH: withUserBinDir(base.PATH) };
       // Claude / its plugins resolve config from CLAUDE_CONFIG_DIR; pin it to the
       // resolved claude home (real ~/.claude in production, the sandbox/temp home
       // otherwise — the same tree the deploy engine writes).

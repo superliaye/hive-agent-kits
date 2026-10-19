@@ -122,6 +122,16 @@ describe("childEnv sandbox reconciliation (B2a)", () => {
     expect(env.CLAUDE_CONFIG_DIR).toBe(REAL_CLAUDE);
   });
 
+  test("appends the real ~/.local/bin to PATH once, after the inherited entries", () => {
+    const t = packaged();
+    const userBin = join(homedir(), ".local", "bin");
+    expect(t.childEnv({ PATH: "/usr/local/bin:/usr/bin" }).PATH).toBe(
+      `/usr/local/bin:/usr/bin:${userBin}`,
+    );
+    expect(t.childEnv({ PATH: `${userBin}:/usr/bin` }).PATH).toBe(`${userBin}:/usr/bin`);
+    expect(t.childEnv({}).PATH).toBe(userBin);
+  });
+
   test("packaged installer env leaves npm registry resolution to the user's npm config", () => {
     const t = packaged();
     const inherited = t.childEnv({ HOME: "/real/home" });
