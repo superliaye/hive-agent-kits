@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DeployTarget } from "@hive/contract";
 import { withCooperativeFileLock } from "../../lib/durable-file.ts";
+import { materializeMarketplacePlugins } from "../acquisition/marketplace.ts";
 import { mirrorContentSha } from "../content-sha.ts";
 import type { DeployFsExec } from "../deploy/adapter.ts";
 import { hashSkillFiles } from "../deploy/artifact-hash.ts";
@@ -88,6 +89,7 @@ function snapshot(deployPlan = plan()): DeploymentSnapshot {
     sourceRegistryRevision: deployPlan.sourceRegistryRevision,
     mirrors: deployPlan.mirrors,
     catalog: { entries: [], presets: [], problems: [] },
+    plugins: new Map(),
     selection: {
       revision: deployPlan.selectionRevision,
       enabled: [],
@@ -1026,6 +1028,231 @@ plugin
     expect(() => stageDeployPlan(targets, snapshot(deployPlan), deployPlan)).toThrow(
       expect.objectContaining({ code: "immutable_installer_unavailable" }),
     );
+  });
+
+  test("stages a managed marketplace plugin as one task per declared target", () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-marketplace-stage-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const mirror = targets.mirrorRoot("source-a");
+    mkdirSync(join(mirror, ".claude-plugin"), { recursive: true });
+    writeFileSync(
+      join(mirror, ".claude-plugin", "marketplace.json"),
+      JSON.stringify({ name: "yestack", plugins: [{ name: "ye", source: "./plugins/ye" }] }),
+    );
+    materializeMarketplacePlugins(mirror, "https://github.com/superliaye/yestack", "c".repeat(40));
+    const contentSha = mirrorContentSha(mirror, "plugin", "ye");
+    if (!contentSha) throw new Error("missing plugin ContentSha");
+    const action = (target: DeployTarget): DeployPlan["actions"][number] => ({
+      action: "add",
+      key: { kind: "plugin", name: "ye" },
+      target,
+      sourceId: "source-a",
+      contentSha,
+      renderedHash: null,
+      artifact: { existence: "missing", hash: null },
+    });
+    const mirrors = [{ sourceId: "source-a", precedence: 1, identity: readMirrorIdentity(mirror) }];
+
+    const claudePlan = plan({ mirrors, actions: [action("claude")] });
+    expect(stageDeployPlan(targets, snapshot(claudePlan), claudePlan).tasks).toEqual([
+      {
+        type: "marketplace-plugin",
+        action: "add",
+        key: { kind: "plugin", name: "ye" },
+        target: "claude",
+        marketplaceSource: "https://github.com/superliaye/yestack",
+        marketplaceName: "yestack",
+        pluginName: "ye",
+        sourceId: "source-a",
+        contentSha,
+      },
+    ]);
+    // The Claude marketplace file alone lists the plugin, so Codex is not a target.
+    const codexPlan = plan({ mirrors, actions: [action("codex")] });
+    expect(() => stageDeployPlan(targets, snapshot(codexPlan), codexPlan)).toThrow(PlanStaleError);
+  });
+
+  test("runs each CLI's refresh sequence and records the installed plugin", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-marketplace-exec-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const task = (target: DeployTarget): StagedDeployTask => ({
+      type: "marketplace-plugin",
+      action: "add",
+      key: { kind: "plugin", name: "ye" },
+      target,
+      marketplaceSource: "https://github.com/superliaye/yestack",
+      marketplaceName: "yestack",
+      pluginName: "ye",
+      sourceId: "source-a",
+      contentSha: "d".repeat(64),
+    });
+    const action = (target: DeployTarget): DeployPlan["actions"][number] => ({
+      action: "add",
+      key: { kind: "plugin", name: "ye" },
+      target,
+      sourceId: "source-a",
+      contentSha: "d".repeat(64),
+      renderedHash: null,
+      artifact: { existence: "missing", hash: null },
+    });
+    const deployPlan = plan({ mirrors: [], actions: [action("claude"), action("codex")] });
+    const store = openDeployOperationStore(operationPath());
+    store.createQueued({
+      operationId: "marketplace-add",
+      acceptedAt: 1,
+      selectionRevision: deployPlan.selectionRevision,
+      planToken: "token",
+      plan: deployPlan,
+      staged: { tasks: [task("claude"), task("codex")], metadata: {} },
+    });
+    const argv: string[] = [];
+    let outcomes: DeployOperationOutcome[] = [];
+
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: (name) => name === "claude" || name === "codex",
+          exec: (request) => {
+            argv.push([request.command, ...request.args].join(" "));
+            if (request.command === "claude" && request.args[1] === "install") {
+              mkdirSync(join(homes.claudeHome, "plugins"), { recursive: true });
+              writeFileSync(
+                join(homes.claudeHome, "plugins", "installed_plugins.json"),
+                JSON.stringify({ version: 2, plugins: { "ye@yestack": [{ scope: "user" }] } }),
+              );
+            }
+            if (request.command === "codex" && request.args[1] === "add") {
+              mkdirSync(homes.codexHome, { recursive: true });
+              writeFileSync(
+                join(homes.codexHome, "config.toml"),
+                '[plugins."ye@yestack"]\nenabled = true\n',
+              );
+            }
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+        deploymentState,
+        now: () => 20,
+      },
+      store.markRunning("marketplace-add"),
+      async (recorded) => {
+        outcomes = [...recorded];
+      },
+    );
+
+    expect(argv).toEqual([
+      "claude plugin marketplace add https://github.com/superliaye/yestack",
+      "claude plugin marketplace update yestack",
+      "claude plugin install ye@yestack --scope user",
+      "claude plugin update ye@yestack",
+      "codex plugin marketplace add https://github.com/superliaye/yestack",
+      "codex plugin marketplace upgrade yestack",
+      "codex plugin add ye@yestack",
+    ]);
+    expect(outcomes.map((outcome) => [outcome.target, outcome.outcome])).toEqual([
+      ["claude", "succeeded"],
+      ["codex", "succeeded"],
+    ]);
+    expect(readLedger(targets)?.plugins.map((entry) => entry.name)).toEqual(["ye"]);
+    for (const target of ["claude", "codex"] as const) {
+      expect(deploymentState.read({ kind: "plugin", name: "ye" }, target)?.applied).toMatchObject({
+        sourceId: "source-a",
+        contentSha: "d".repeat(64),
+      });
+    }
+  });
+
+  test("fails a marketplace plugin on a missing CLI, a nonzero exit, or no install record", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-marketplace-failures-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const run = async (
+      id: string,
+      fx: Pick<DeployFsExec, "exec" | "probe">,
+    ): Promise<DeployOperationOutcome> => {
+      const action: DeployPlan["actions"][number] = {
+        action: "add",
+        key: { kind: "plugin", name: "ye" },
+        target: "codex",
+        sourceId: "source-a",
+        contentSha: "d".repeat(64),
+        renderedHash: null,
+        artifact: { existence: "missing", hash: null },
+      };
+      const deployPlan = plan({ actions: [action], mirrors: [] }, action);
+      const store = openDeployOperationStore(operationPath());
+      store.createQueued({
+        operationId: id,
+        acceptedAt: 1,
+        selectionRevision: deployPlan.selectionRevision,
+        planToken: id,
+        plan: deployPlan,
+        staged: {
+          tasks: [
+            {
+              type: "marketplace-plugin",
+              action: "add",
+              key: { kind: "plugin", name: "ye" },
+              target: "codex",
+              marketplaceSource: "https://github.com/superliaye/yestack",
+              marketplaceName: "yestack",
+              pluginName: "ye",
+              sourceId: "source-a",
+              contentSha: "d".repeat(64),
+            },
+          ],
+          metadata: {},
+        },
+      });
+      let observed: DeployOperationOutcome[] = [];
+      await executeStagedDeploy(
+        { fx: { targets, ...fx }, deploymentState, now: () => 20 },
+        store.markRunning(id),
+        async (outcomes) => {
+          observed = [...outcomes];
+        },
+      );
+      const outcome = observed[0];
+      if (!outcome) throw new Error("missing outcome");
+      return outcome;
+    };
+
+    let execCalls = 0;
+    const missing = await run("missing-codex", {
+      probe: () => false,
+      exec: () => {
+        execCalls += 1;
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    expect(missing).toMatchObject({ outcome: "failed", code: "missing_binary" });
+    expect(execCalls).toBe(0);
+
+    const nonzero = await run("nonzero-codex", {
+      probe: () => true,
+      exec: () => ({ status: 1, stdout: "", stderr: "Error: marketplace not found" }),
+    });
+    expect(nonzero).toMatchObject({ outcome: "failed", code: "installer_failed" });
+    expect(nonzero.detail).toContain("marketplace not found");
+
+    const unrecorded = await run("unrecorded-codex", {
+      probe: () => true,
+      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+    });
+    expect(unrecorded).toMatchObject({ outcome: "failed", code: "installer_failed" });
+    expect(unrecorded.detail).toContain("without recording ye@yestack");
   });
 
   test("rejects a mutable npx package instead of resolving it after acceptance", () => {

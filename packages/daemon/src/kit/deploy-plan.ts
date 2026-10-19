@@ -9,7 +9,7 @@ import type {
   OverviewSource,
   SelectionSnapshot,
 } from "@hive/contract";
-import { applicableTargets } from "./capability-targets.ts";
+import { applicableTargets, type PluginTargets } from "./capability-targets.ts";
 import type { DeploymentStateFile } from "./deployment-state.ts";
 
 export { applicableTargets } from "./capability-targets.ts";
@@ -37,11 +37,19 @@ export type LedgerSnapshot = {
   value: Ledger | null;
 };
 
+// Deploy facts of each winning plugin pointer: the CLIs its marketplace lists, and
+// whether Hive installs it itself (ADR-0031).
+export type PluginDeployInfo = {
+  targets: DeployTarget[];
+  managedInstall: boolean;
+};
+
 export type DeploymentSnapshot = {
   sources: OverviewSource[];
   sourceRegistryRevision: number;
   mirrors: OverviewMirror[];
   catalog: Catalog;
+  plugins: ReadonlyMap<string, PluginDeployInfo>;
   selection: SelectionSnapshot;
   ledger: LedgerSnapshot;
   deploymentState: DeploymentStateFile;
@@ -127,6 +135,10 @@ function ledgerCapabilityKeys(ledger: Ledger | null): CapabilityKey[] {
   ];
 }
 
+// A Ledger plugin name carries no target, and agent-kit installs plugins through
+// the Claude CLI only.
+const LEDGER_PLUGIN_TARGETS: PluginTargets = new Map();
+
 export function ledgerOwnershipByKey(
   ledger: Ledger | null,
 ): ReadonlyMap<string, ReadonlySet<DeployTarget>> {
@@ -136,7 +148,7 @@ export function ledgerOwnershipByKey(
     (target): target is DeployTarget => target === "claude" || target === "codex",
   );
   for (const key of ledgerCapabilityKeys(ledger)) {
-    const applicable = new Set(applicableTargets(key));
+    const applicable = new Set(applicableTargets(key, LEDGER_PLUGIN_TARGETS));
     ownership.set(
       serializeCapabilityKey(key),
       new Set(ledgerTargets.filter((target) => applicable.has(target))),
@@ -280,7 +292,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
   for (const selected of snapshot.selection.enabled) {
     if (selected.key.kind !== "instruction") continue;
     for (const target of selected.targets) {
-      if (!applicableTargets(selected.key).includes(target)) continue;
+      if (!applicableTargets(selected.key, snapshot.plugins).includes(target)) continue;
       const entries = selectedInstructions.get(target) ?? [];
       entries.push({
         key: { kind: "instruction", name: selected.key.name },
@@ -293,7 +305,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
   for (const intent of snapshot.selection.removalIntents) {
     if (intent.key.kind !== "instruction") continue;
     for (const target of intent.targets) {
-      if (!applicableTargets(intent.key).includes(target)) continue;
+      if (!applicableTargets(intent.key, snapshot.plugins).includes(target)) continue;
       const names = removalInstructions.get(target) ?? new Set<string>();
       names.add(intent.key.name);
       removalInstructions.set(target, names);
@@ -362,7 +374,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     const selectedWinner = winner.get(serializeCapabilityKey(selected.key));
     if (!selectedWinner) continue;
     for (const target of selected.targets) {
-      if (!applicableTargets(selected.key).includes(target)) continue;
+      if (!applicableTargets(selected.key, snapshot.plugins).includes(target)) continue;
       if (selected.key.kind === "instruction" && blockedByTarget.has(target)) continue;
       const id = pairId(selected.key, target);
       const deployment = records.get(id);
@@ -415,10 +427,34 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     }
   }
 
+  // A managed plugin installs from its repository whenever its pointer changes. The
+  // pointer carries the synced commit, so every newly synced commit is an update.
+  for (const selected of snapshot.selection.enabled) {
+    if (selected.key.kind !== "plugin") continue;
+    if (!snapshot.plugins.get(selected.key.name)?.managedInstall) continue;
+    const selectedWinner = winner.get(serializeCapabilityKey(selected.key));
+    const sourceId = selectedWinner?.sourceIds[0];
+    if (!selectedWinner || !sourceId) continue;
+    for (const target of selected.targets) {
+      if (!applicableTargets(selected.key, snapshot.plugins).includes(target)) continue;
+      const applied = records.get(pairId(selected.key, target))?.applied;
+      if (applied?.contentSha === selectedWinner.contentSha) continue;
+      actions.push({
+        action: applied ? "update" : "add",
+        key: selected.key,
+        target,
+        sourceId,
+        contentSha: selectedWinner.contentSha,
+        renderedHash: null,
+        artifact: artifactFor(snapshot.artifacts, selected.key, target),
+      });
+    }
+  }
+
   for (const intent of snapshot.selection.removalIntents) {
     if (intent.key.kind === "plugin") continue;
     for (const target of intent.targets) {
-      if (!applicableTargets(intent.key).includes(target)) continue;
+      if (!applicableTargets(intent.key, snapshot.plugins).includes(target)) continue;
       if (intent.key.kind === "instruction" && blockedByTarget.has(target)) continue;
       const renderedBundle =
         intent.key.kind === "bundle" ? wouldDeploy.get(pairId(intent.key, target)) : undefined;

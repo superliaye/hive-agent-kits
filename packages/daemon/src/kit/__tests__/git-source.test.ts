@@ -666,6 +666,48 @@ while :; do sleep 1; done
     expect(repositoryLockCountForTest()).toBe(0);
   });
 
+  test("projects a whole-repo plugin marketplace into plugin pointers", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hive-git-marketplace-"));
+    roots.push(root);
+    runGit(root, "init", "-b", "main");
+    runGit(root, "config", "user.email", "hive@example.invalid");
+    runGit(root, "config", "user.name", "Hive Test");
+    mkdirSync(join(root, ".claude-plugin"), { recursive: true });
+    writeFileSync(
+      join(root, ".claude-plugin", "marketplace.json"),
+      JSON.stringify({ name: "stack", plugins: [{ name: "ye", source: "./plugins/ye" }] }),
+    );
+    runGit(root, "add", ".");
+    runGit(root, "commit", "-m", "marketplace");
+    const commit = runGit(root, "rev-parse", "HEAD");
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const destination = join(work, "mirror");
+
+    await acquireGitSource(
+      {
+        kind: "git",
+        repoUrl: FIXTURE_REPOSITORY_URL,
+        revision: { mode: "pin", commit },
+        subpath: ".",
+      },
+      destination,
+      {
+        cacheRoot: join(work, "cache"),
+        tmpRoot: join(work, "tmp"),
+        process: localGitProcess(root),
+      },
+    );
+
+    const pointer = readFileSync(
+      join(destination, "capabilities", "plugins", "ye.plugin.md"),
+      "utf8",
+    );
+    expect(pointer).toContain(`marketplace_source: ${FIXTURE_REPOSITORY_URL}`);
+    expect(pointer).toContain(`source_commit: ${commit}`);
+    expect(readProvenance(destination)?.resolvedCommit).toBe(commit);
+  });
+
   test("materializes the selected subpath as the Mirror root with modes and safe links", async () => {
     const repo = fixtureRepository();
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));

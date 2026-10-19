@@ -21,6 +21,7 @@ function fixture(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapsho
     sourceRegistryRevision: 1,
     mirrors: [],
     catalog: { entries: [], presets: [], problems: [] },
+    plugins: new Map(),
     selection: { revision: 1, enabled: [], removalIntents: [] },
     ledger: {
       revision: null,
@@ -438,6 +439,30 @@ describe("authoritative Overview union and state matrix", () => {
     expect(row(overview, plugin).targets.map((value) => value.target)).toEqual(["claude"]);
     expect(target(row(overview, dual), "claude").reconciliation).toBe("pending_update");
     expect(target(row(overview, dual), "codex").reconciliation).toBe("in_sync");
+  });
+
+  test("offers a managed plugin on its declared targets and plans its install", () => {
+    const plugin = key("plugin", "ye");
+    const overview = buildOverview(
+      fixture({
+        catalog: { entries: [variant(plugin)], presets: [], problems: [] },
+        plugins: new Map([["ye", { targets: ["claude", "codex"], managedInstall: true }]]),
+        selection: {
+          revision: 2,
+          enabled: [{ key: plugin, targets: ["claude", "codex"] }],
+          removalIntents: [],
+        },
+        deploymentState: {
+          schemaVersion: 1,
+          revision: 1,
+          legacyInstructionFingerprints: [],
+          records: [applied(plugin, "ye-sha", "claude")],
+        },
+      }),
+    );
+    expect(row(overview, plugin).applicableTargets).toEqual(["claude", "codex"]);
+    expect(target(row(overview, plugin), "claude").reconciliation).toBe("in_sync");
+    expect(target(row(overview, plugin), "codex").reconciliation).toBe("pending_add");
   });
 
   test("keeps targetless Ledger-only ownership unmanaged without claiming target ownership", () => {

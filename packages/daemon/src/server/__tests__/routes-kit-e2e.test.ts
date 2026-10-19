@@ -417,24 +417,6 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
       expect(conflict.status).toBe(409);
       expect(await conflict.json()).toEqual({ error: "selection_conflict", currentRevision: 3 });
 
-      const invalidTarget = await server.app.fetch(
-        authed("/api/kit/selection", {
-          method: "PATCH",
-          body: JSON.stringify({
-            expectedRevision: 3,
-            changes: [
-              {
-                key: { kind: "plugin", name: "claude-only" },
-                enabled: true,
-                targets: ["codex"],
-              },
-            ],
-          }),
-        }),
-      );
-      expect(invalidTarget.status).toBe(400);
-      expect(await invalidTarget.json()).toEqual({ error: "selection_target_not_applicable" });
-
       const audit = await server.app.fetch(authed("/api/audit?source=deploy"));
       const rows = (await audit.json()) as {
         event_type: string;

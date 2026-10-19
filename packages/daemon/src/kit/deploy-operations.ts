@@ -139,6 +139,18 @@ const StagedManagedNpxBundleTask = z.object({
   renderedHash: z.string(),
 });
 
+const StagedMarketplacePluginTask = z.object({
+  type: z.literal("marketplace-plugin"),
+  action: z.enum(["add", "update"]),
+  key: z.object({ kind: z.literal("plugin"), name: z.string() }),
+  target: DeployTarget,
+  marketplaceSource: z.string().min(1),
+  marketplaceName: z.string().min(1),
+  pluginName: z.string().min(1),
+  sourceId: z.string(),
+  contentSha: z.string(),
+});
+
 const StagedRemovalTask = z.object({
   type: z.literal("remove"),
   action: z.literal("remove"),
@@ -158,6 +170,7 @@ export const StagedDeployPayloadSchema = z.object({
       StagedPluginTask,
       StagedBundleTask,
       StagedManagedNpxBundleTask,
+      StagedMarketplacePluginTask,
       StagedRemovalTask,
     ]),
   ),

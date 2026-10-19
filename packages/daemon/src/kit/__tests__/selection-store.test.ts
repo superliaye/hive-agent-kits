@@ -29,32 +29,34 @@ afterEach(() => {
 });
 
 describe("SelectionStore", () => {
-  test("seeds only applicable Ledger targets and rejects new ghost target pairs", () => {
+  test("seeds Ledger plugins on Claude only and accepts a plugin Codex target", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     const store = openSelectionStore(path());
     const seeded = store.seedOnce({
       ...ledger,
-      plugins: [{ name: "claude-only" }],
+      plugins: [{ name: "listed-on-both" }],
     });
     expect(seeded.enabled).toContainEqual({
-      key: { kind: "plugin", name: "claude-only" },
+      key: { kind: "plugin", name: "listed-on-both" },
       targets: ["claude"],
     });
-    expect(() =>
-      store.mutate({
-        expectedRevision: seeded.revision,
-        changes: [
-          {
-            key: { kind: "plugin", name: "claude-only" },
-            enabled: true,
-            targets: ["codex"],
-          },
-        ],
-      }),
-    ).toThrow("selection_target_not_applicable");
+    const mutated = store.mutate({
+      expectedRevision: seeded.revision,
+      changes: [
+        {
+          key: { kind: "plugin", name: "listed-on-both" },
+          enabled: true,
+          targets: ["codex"],
+        },
+      ],
+    });
+    expect(mutated.enabled).toContainEqual({
+      key: { kind: "plugin", name: "listed-on-both" },
+      targets: ["claude", "codex"],
+    });
   });
 
-  test("migrates persisted ghost target pairs out of Selection", () => {
+  test("migrates a v2 Selection without dropping plugin targets", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     writeFileSync(
       path(),
@@ -66,20 +68,14 @@ describe("SelectionStore", () => {
           { key: { kind: "plugin", name: "plug" }, targets: ["claude", "codex"] },
           { key: { kind: "skill", name: "skill" }, targets: ["codex"] },
         ],
-        removalIntents: [
-          {
-            key: { kind: "plugin", name: "plug" },
-            targets: ["codex"],
-            generation: "ghost",
-          },
-        ],
+        removalIntents: [],
       }),
     );
 
     expect(openSelectionStore(path()).read()).toEqual({
       revision: 9,
       enabled: [
-        { key: { kind: "plugin", name: "plug" }, targets: ["claude"] },
+        { key: { kind: "plugin", name: "plug" }, targets: ["claude", "codex"] },
         { key: { kind: "skill", name: "skill" }, targets: ["codex"] },
       ],
       removalIntents: [],

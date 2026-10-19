@@ -1,6 +1,7 @@
 # Plugin capability schema (per-kind ratification)
 
-status: accepted
+status: Superseded-in-part by ADR-0031 — a pointer may now declare `targets` and
+`managed_install`, and Codex is a deploy target
 relates-to: ADR-0024, ADR-0023
 
 ## What this ADR records

@@ -27,6 +27,7 @@ function snapshot(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapsh
       presets: [],
       problems: [],
     },
+    plugins: new Map(),
     selection: { revision: 8, enabled: [{ key, targets: ["claude"] }], removalIntents: [] },
     ledger: {
       revision: null,
@@ -688,6 +689,101 @@ describe("buildDeployPlan", () => {
         artifact: { existence: "present", hash: wholeHash },
       },
     ]);
+  });
+
+  test("plans a managed plugin on its declared targets until the synced pointer is applied", () => {
+    const plugin: CapabilityKey = { kind: "plugin", name: "ye" };
+    const entry = {
+      ...plugin,
+      description: "ye",
+      group: "",
+      deployable: true,
+      shadowed: false,
+      sourceIds: ["source-a"],
+      contentSha: "pointer-at-commit-2",
+    };
+    const applied = (contentSha: string) => ({
+      key: plugin,
+      target: "claude" as const,
+      applied: {
+        sourceId: "source-a",
+        contentSha,
+        renderedHash: contentSha,
+        appliedAt: 1,
+        operationId: "op-1",
+      },
+      lastAttempt: {
+        action: "add" as const,
+        outcome: "succeeded" as const,
+        attemptedAt: 1,
+        operationId: "op-1",
+      },
+    });
+    const managed = (records: ReturnType<typeof applied>[], managedInstall = true) =>
+      buildDeployPlan(
+        snapshot({
+          catalog: { entries: [entry], presets: [], problems: [] },
+          plugins: new Map([["ye", { targets: ["claude", "codex"], managedInstall }]]),
+          selection: {
+            revision: 3,
+            enabled: [{ key: plugin, targets: ["claude", "codex"] }],
+            removalIntents: [],
+          },
+          deploymentState: {
+            schemaVersion: 1,
+            revision: 1,
+            records,
+            legacyInstructionFingerprints: [],
+          },
+          wouldDeploy: [],
+          artifacts: [],
+        }),
+      ).actions.map((action) => [action.action, action.target, action.contentSha]);
+
+    expect(managed([])).toEqual([
+      ["add", "claude", "pointer-at-commit-2"],
+      ["add", "codex", "pointer-at-commit-2"],
+    ]);
+    expect(managed([applied("pointer-at-commit-1")])).toEqual([
+      ["update", "claude", "pointer-at-commit-2"],
+      ["add", "codex", "pointer-at-commit-2"],
+    ]);
+    expect(managed([applied("pointer-at-commit-2")])).toEqual([
+      ["add", "codex", "pointer-at-commit-2"],
+    ]);
+    expect(managed([], false)).toEqual([]);
+  });
+
+  test("never plans a plugin on a target its marketplace does not list", () => {
+    const plugin: CapabilityKey = { kind: "plugin", name: "claude-side" };
+    const plan = buildDeployPlan(
+      snapshot({
+        catalog: {
+          entries: [
+            {
+              ...plugin,
+              description: "",
+              group: "",
+              deployable: true,
+              shadowed: false,
+              sourceIds: ["source-a"],
+              contentSha: "pointer",
+            },
+          ],
+          presets: [],
+          problems: [],
+        },
+        plugins: new Map([["claude-side", { targets: ["claude"], managedInstall: true }]]),
+        selection: {
+          revision: 3,
+          enabled: [{ key: plugin, targets: ["codex"] }],
+          removalIntents: [],
+        },
+        wouldDeploy: [],
+        artifacts: [],
+      }),
+    );
+    expect(plan.actions).toEqual([]);
   });
 
   test("Ledger ownership is target-scoped when planning a missing target", () => {

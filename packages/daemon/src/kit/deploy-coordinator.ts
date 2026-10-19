@@ -29,6 +29,10 @@ import {
   sha256,
 } from "./deploy/artifact-hash.ts";
 import {
+  marketplacePluginCommands,
+  marketplacePluginInstalled,
+} from "./deploy/marketplace-plugin.ts";
+import {
   immutableNpxBundleSource,
   managedNpxBundleHash,
   managedNpxBundleMeta,
@@ -562,8 +566,28 @@ export function stageDeployPlan(
       }
       if (action.key.kind === "plugin") {
         const metadata = pluginMeta(targets.mirrorRoot(sourceId), action.key.name);
-        if (!metadata || action.target !== "claude") throw new PlanStaleError();
-        throw new ImmutableInstallerStagingError();
+        if (metadata && !metadata.managedInstall) throw new ImmutableInstallerStagingError();
+        if (
+          action.action === "remove" ||
+          !metadata ||
+          !metadata.targets.includes(action.target) ||
+          !metadata.source ||
+          !metadata.market
+        ) {
+          throw new PlanStaleError();
+        }
+        tasks.push({
+          type: "marketplace-plugin",
+          action: action.action,
+          key: { kind: "plugin", name: action.key.name },
+          target: action.target,
+          marketplaceSource: metadata.source,
+          marketplaceName: metadata.market,
+          pluginName: metadata.pluginName,
+          sourceId,
+          contentSha,
+        });
+        continue;
       }
       const metadata = bundleMeta(targets.mirrorRoot(sourceId), action.key.name);
       if (!metadata) throw new PlanStaleError();
@@ -750,6 +774,33 @@ function applyManagedNpxBundle(
   }
 }
 
+function applyMarketplacePlugin(
+  fx: DeployFsExec,
+  task: Extract<StagedDeployTask, { type: "marketplace-plugin" }>,
+): void {
+  if (!probeBinary(fx, task.target)) {
+    throw new InstallerTaskError("missing_binary", `${task.target} is not available on PATH`);
+  }
+  for (const request of marketplacePluginCommands(task)) {
+    const result = execInstaller(fx, request, request.command);
+    if (result.status !== 0) {
+      throw new InstallerTaskError(
+        "installer_failed",
+        boundedInstallerDetail(
+          [result.stdout, result.stderr].filter(Boolean).join("\n") ||
+            `${request.command} exited ${result.status}`,
+        ),
+      );
+    }
+  }
+  if (!marketplacePluginInstalled(fx.targets, task)) {
+    throw new InstallerTaskError(
+      "installer_failed",
+      `${task.target} completed without recording ${task.pluginName}@${task.marketplaceName}`,
+    );
+  }
+}
+
 function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
   switch (task.type) {
     case "instruction": {
@@ -781,6 +832,9 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
     }
     case "npx-bundle":
       applyManagedNpxBundle(fx, task);
+      return;
+    case "marketplace-plugin":
+      applyMarketplacePlugin(fx, task);
       return;
     case "bundle": {
       throw new ImmutableInstallerStagingError();
@@ -866,6 +920,8 @@ function stagedTaskStillApplied(fx: DeployFsExec, task: StagedDeployTask): boole
           : hashDeployedAgent(fx.targets, task.key.name, task.target) === null;
       case "npx-bundle":
         return probeManagedNpxBundle(task) === expectedBundleProbe(task);
+      case "marketplace-plugin":
+        return marketplacePluginInstalled(fx.targets, task);
       case "plugin":
       case "bundle":
         return false;
@@ -954,7 +1010,7 @@ function commitProvisionalLedger(
       skills.add(task.key.name);
     } else if (task.type === "agent") {
       agents.add(task.key.name);
-    } else if (task.type === "plugin") {
+    } else if (task.type === "plugin" || task.type === "marketplace-plugin") {
       plugins.add(task.key.name);
     } else if (task.type === "bundle") {
       bundles.set(task.key.name, task.pin);
@@ -1048,6 +1104,18 @@ function finalizeCommittedDeployment(
             operation.operationId,
           );
         }
+      } else if (task.type === "marketplace-plugin") {
+        options.deploymentState.recordSuccess(
+          task.key,
+          task.target,
+          {
+            sourceId: task.sourceId,
+            contentSha: task.contentSha,
+            renderedHash: task.contentSha,
+            appliedAt: now(),
+          },
+          operation.operationId,
+        );
       } else if (task.type === "plugin" || task.type === "bundle") {
         throw new ImmutableInstallerStagingError();
       } else {

@@ -37,7 +37,7 @@ import {
   managedNpxBundleMeta,
   probeManagedNpxBundle,
 } from "./deploy/npx-bundle.ts";
-import { bundleMeta, loadSnippets } from "./deploy/sources.ts";
+import { bundleMeta, loadSnippets, pluginMeta } from "./deploy/sources.ts";
 import {
   type ArtifactObservation,
   applicableTargets,
@@ -45,6 +45,7 @@ import {
   type DeploymentSnapshot,
   identityForLedger,
   ledgerOwnershipByKey,
+  type PluginDeployInfo,
   stableJson,
   tokenForPlan,
   type WouldDeployArtifact,
@@ -239,53 +240,55 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
         (record) => serializeCapabilityKey(record.key) === id,
       );
       const isLedgerKey = owned.has(id);
-      const targets: OverviewTargetState[] = applicableTargets(key).map((target) => {
-        const record = recordsByPair.get(pairId(key, target));
-        const selectedOnTarget = selected?.targets.includes(target) ?? false;
-        const intentOnTarget = intentTargets?.has(target) ?? false;
-        const ledgerOwned = ownership.get(id)?.has(target) ?? false;
-        const action = actionByPair.get(pairId(key, target));
-        let reconciliation: ReconciliationState = "in_sync";
-        if (action) {
-          reconciliation =
-            action.action === "add"
-              ? "pending_add"
-              : action.action === "update"
-                ? "pending_update"
-                : "pending_remove";
-        } else if (
-          key.kind === "instruction" &&
-          unmanagedInstructionTargets.has(target) &&
-          (selectedOnTarget || ledgerOwned)
-        ) {
-          reconciliation = "unmanaged_owned";
-        } else if (intentOnTarget && (key.kind === "plugin" || key.kind === "bundle")) {
-          reconciliation = "manual_removal_required";
-        } else if (
-          selectedOnTarget &&
-          winner &&
-          (key.kind === "plugin" || key.kind === "bundle") &&
-          ((!record?.applied && !ledgerOwned) ||
-            (record?.applied && record.applied.contentSha !== winner.contentSha))
-        ) {
-          reconciliation = "manual_install_required";
-        } else if (selectedOnTarget && !winner) {
-          reconciliation = record?.applied || ledgerOwned ? "orphaned" : "waiting_for_source";
-        } else if (ledgerOwned && !record) {
-          reconciliation = "unmanaged_owned";
-        } else if (selectedOnTarget && wouldByPair.get(pairId(key, target))?.error) {
-          reconciliation = "waiting_for_source";
-        } else if (!selectedOnTarget && !intentOnTarget && record?.applied && !winner) {
-          reconciliation = "orphaned";
-        }
-        return {
-          target,
-          desired: selectedOnTarget ? "on" : "off",
-          reconciliation,
-          observation: targetObservation(snapshot, key, target, record, ledgerOwned),
-          lastAttempt: attempt(record),
-        };
-      });
+      const targets: OverviewTargetState[] = applicableTargets(key, snapshot.plugins).map(
+        (target) => {
+          const record = recordsByPair.get(pairId(key, target));
+          const selectedOnTarget = selected?.targets.includes(target) ?? false;
+          const intentOnTarget = intentTargets?.has(target) ?? false;
+          const ledgerOwned = ownership.get(id)?.has(target) ?? false;
+          const action = actionByPair.get(pairId(key, target));
+          let reconciliation: ReconciliationState = "in_sync";
+          if (action) {
+            reconciliation =
+              action.action === "add"
+                ? "pending_add"
+                : action.action === "update"
+                  ? "pending_update"
+                  : "pending_remove";
+          } else if (
+            key.kind === "instruction" &&
+            unmanagedInstructionTargets.has(target) &&
+            (selectedOnTarget || ledgerOwned)
+          ) {
+            reconciliation = "unmanaged_owned";
+          } else if (intentOnTarget && (key.kind === "plugin" || key.kind === "bundle")) {
+            reconciliation = "manual_removal_required";
+          } else if (
+            selectedOnTarget &&
+            winner &&
+            (key.kind === "plugin" || key.kind === "bundle") &&
+            ((!record?.applied && !ledgerOwned) ||
+              (record?.applied && record.applied.contentSha !== winner.contentSha))
+          ) {
+            reconciliation = "manual_install_required";
+          } else if (selectedOnTarget && !winner) {
+            reconciliation = record?.applied || ledgerOwned ? "orphaned" : "waiting_for_source";
+          } else if (ledgerOwned && !record) {
+            reconciliation = "unmanaged_owned";
+          } else if (selectedOnTarget && wouldByPair.get(pairId(key, target))?.error) {
+            reconciliation = "waiting_for_source";
+          } else if (!selectedOnTarget && !intentOnTarget && record?.applied && !winner) {
+            reconciliation = "orphaned";
+          }
+          return {
+            target,
+            desired: selectedOnTarget ? "on" : "off",
+            reconciliation,
+            observation: targetObservation(snapshot, key, target, record, ledgerOwned),
+            lastAttempt: attempt(record),
+          };
+        },
+      );
       const reconciliation = aggregateReconciliation(targets);
       return {
         key,
@@ -296,7 +299,7 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
             ? "unmanaged_owned"
             : reconciliation,
         lastAttempt: latestAttempt(keyRecords),
-        applicableTargets: applicableTargets(key),
+        applicableTargets: applicableTargets(key, snapshot.plugins),
         targets,
         variants: variants.map((entry) => ({
           ...entry,
@@ -480,10 +483,26 @@ function snapshotKeys(input: CaptureDeploymentSnapshotInput): CapabilityKey[] {
   );
 }
 
+function pluginDeployInfo(
+  targets: DeployTargets,
+  catalog: Catalog,
+): ReadonlyMap<string, PluginDeployInfo> {
+  const plugins = new Map<string, PluginDeployInfo>();
+  for (const entry of catalog.entries) {
+    const sourceId = entry.sourceIds[0];
+    if (entry.kind !== "plugin" || !entry.deployable || !sourceId) continue;
+    const meta = pluginMeta(targets.mirrorRoot(sourceId), entry.name);
+    if (meta)
+      plugins.set(entry.name, { targets: meta.targets, managedInstall: meta.managedInstall });
+  }
+  return plugins;
+}
+
 function wouldDeployArtifacts(
   targets: DeployTargets,
   input: CaptureDeploymentSnapshotInput,
   activeSources: readonly Source[],
+  plugins: ReadonlyMap<string, PluginDeployInfo>,
 ): WouldDeployArtifact[] {
   const winner = new Map(
     input.catalog.entries
@@ -502,7 +521,7 @@ function wouldDeployArtifacts(
   for (const selection of [...input.selection.enabled, ...input.selection.removalIntents]) {
     if (selection.key.kind === "instruction") continue;
     for (const target of selection.targets) {
-      if (!applicableTargets(selection.key).includes(target)) continue;
+      if (!applicableTargets(selection.key, plugins).includes(target)) continue;
       requested.set(pairId(selection.key, target), { key: selection.key, target });
     }
   }
@@ -643,7 +662,8 @@ export function captureDeploymentSnapshot(
       .filter((record) => record.applied)
       .map((record) => pairId(record.key, record.target)),
   );
-  const wouldDeploy = wouldDeployArtifacts(targets, input, activeSources);
+  const plugins = pluginDeployInfo(targets, input.catalog);
+  const wouldDeploy = wouldDeployArtifacts(targets, input, activeSources, plugins);
   const wouldByPair = new Map(
     wouldDeploy.map((item) => [pairId(item.key, item.target), item] as const),
   );
@@ -653,7 +673,7 @@ export function captureDeploymentSnapshot(
       .map((entry) => [serializeCapabilityKey(entry), entry] as const),
   );
   const artifacts = snapshotKeys(input).flatMap((key) =>
-    applicableTargets(key).map((target) => {
+    applicableTargets(key, plugins).map((target) => {
       if (key.kind !== "plugin" && key.kind !== "bundle") {
         return probeArtifact(targets, key, target);
       }
@@ -690,6 +710,7 @@ export function captureDeploymentSnapshot(
     sourceRegistryRevision: input.sourceRegistry.revision,
     mirrors,
     catalog: input.catalog,
+    plugins,
     selection: input.selection,
     ledger: {
       revision: null,

@@ -19,6 +19,7 @@ import {
   type GitProcessResult,
   productionGitProcess,
 } from "./git-process.ts";
+import { materializeMarketplacePlugins } from "./marketplace.ts";
 import { DEFAULT_TREE_LIMITS, type TreeLimits } from "./tree-guard.ts";
 
 type GitLocator = Extract<SourceLocator, { kind: "git" }>;
@@ -544,6 +545,11 @@ export async function acquireGitSource(
       remainingMs();
       stage = createOwnedMirrorStage(options.tmpRoot);
       await materializeRawTree(git, cache, treeIdentity, stage, limits, deadlineMs, daemonEnv);
+      // The CLIs read a marketplace from the repository root, so only a whole-repo
+      // Source can stand for one.
+      if (locator.subpath === ".") {
+        materializeMarketplacePlugins(stage, locator.repoUrl, resolvedCommit);
+      }
       const provenance: MirrorProvenance = {
         sha: resolvedCommit,
         fetchedAt: Date.now(),

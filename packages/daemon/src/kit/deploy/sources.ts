@@ -6,6 +6,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse as yamlParse } from "yaml";
 import { DeployError } from "../effect/errors.ts";
+import type { DeployTarget } from "../targets.ts";
 
 function readDirSafe(p: string): string[] {
   try {
@@ -143,20 +144,29 @@ export function instructionBody(mirrorRoot: string, name: string): string | null
   return readFileSync(p, "utf8");
 }
 
-// Plugin frontmatter (marketplace_source / marketplace_name / plugin_name) from
-// the winner's Mirror.
-export function pluginMeta(
-  mirrorRoot: string,
-  name: string,
-): { source: string; market: string; pluginName: string } | null {
+export type PluginMeta = {
+  source: string;
+  market: string;
+  pluginName: string;
+  // The CLIs whose marketplace lists the plugin; Claude only when undeclared.
+  targets: DeployTarget[];
+  managedInstall: boolean;
+};
+
+// Plugin frontmatter from the winner's Mirror.
+export function pluginMeta(mirrorRoot: string, name: string): PluginMeta | null {
   const p = capabilityFilePath(mirrorRoot, "plugin", name);
   if (!existsSync(p)) return null;
-  const content = readFileSync(p, "utf8");
-  const fm = parseFlatFrontmatter(content);
+  const fm = parseYamlFrontmatter(readFileSync(p, "utf8"));
+  const declared = Array.isArray(fm.targets)
+    ? fm.targets.filter((x): x is DeployTarget => x === "claude" || x === "codex")
+    : [];
   return {
-    source: fm.marketplace_source ?? "",
-    market: fm.marketplace_name ?? "",
-    pluginName: fm.plugin_name ?? name,
+    source: typeof fm.marketplace_source === "string" ? fm.marketplace_source : "",
+    market: typeof fm.marketplace_name === "string" ? fm.marketplace_name : "",
+    pluginName: typeof fm.plugin_name === "string" ? fm.plugin_name : name,
+    targets: declared.length > 0 ? [...new Set(declared)] : ["claude"],
+    managedInstall: fm.managed_install === true,
   };
 }
 
@@ -232,18 +242,6 @@ function normalizeHostFlagMap(v: unknown): Record<string, string[]> {
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
       if (Array.isArray(val)) out[k] = val.filter((x): x is string => typeof x === "string");
     }
-  }
-  return out;
-}
-
-function parseFlatFrontmatter(content: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!content.startsWith("---")) return out;
-  const end = content.indexOf("\n---", 3);
-  if (end < 0) return out;
-  for (const line of content.slice(3, end).split(/\r?\n/)) {
-    const m = /^([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (m?.[1]) out[m[1]] = (m[2] ?? "").replace(/^["']|["']$/g, "").trim();
   }
   return out;
 }

@@ -23,7 +23,6 @@ import {
 } from "@hive/contract";
 import { z } from "zod";
 import { syncDirectoryForDurability } from "../lib/durable-file.ts";
-import { applicableTargetSet } from "./capability-targets.ts";
 
 const SelectionEntry = z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) });
 const RemovalIntent = z.object({
@@ -79,15 +78,6 @@ export class SelectionConflictError extends Error {
   }
 }
 
-export class SelectionTargetNotApplicableError extends Error {
-  readonly code = "selection_target_not_applicable";
-
-  constructor() {
-    super("selection_target_not_applicable");
-    this.name = "SelectionTargetNotApplicableError";
-  }
-}
-
 export type SelectionStoreOptions = {
   rename?: (oldPath: string, newPath: string) => void;
   fsyncDirectory?: (directory: string) => void;
@@ -134,9 +124,7 @@ function canonical(entries: Iterable<SelectionEntry>): SelectionEntry[] {
   return [...entries]
     .map((entry) => ({
       key: CapabilityKey.parse(entry.key),
-      targets: uniqueTargets(entry.targets).filter((target) =>
-        applicableTargetSet(entry.key).has(target),
-      ),
+      targets: uniqueTargets(entry.targets),
     }))
     .filter((entry) => entry.targets.length > 0)
     .sort((a, b) => serializeCapabilityKey(a.key).localeCompare(serializeCapabilityKey(b.key)));
@@ -148,7 +136,6 @@ function intentId(key: SelectionEntry["key"], target: DeployTarget): string {
 
 function canonicalIntents(entries: Iterable<RemovalIntent>): RemovalIntent[] {
   return [...entries]
-    .filter((entry) => applicableTargetSet(entry.key).has(entry.targets[0]))
     .map((entry) => RemovalIntent.parse(entry))
     .sort((left, right) =>
       intentId(left.key, left.targets[0]).localeCompare(intentId(right.key, right.targets[0])),
@@ -184,10 +171,14 @@ function seedFile(ledger: Ledger | null): SelectionFile {
       key: { kind: "agent" as const, name: entry.name },
       targets,
     })),
-    ...ledger.plugins.map((entry) => ({
-      key: { kind: "plugin" as const, name: entry.name },
-      targets,
-    })),
+    // A Ledger records no per-plugin target, and an imported plugin was installed
+    // through the Claude CLI.
+    ...(targets.includes("claude")
+      ? ledger.plugins.map((entry) => ({
+          key: { kind: "plugin" as const, name: entry.name },
+          targets: ["claude" as const],
+        }))
+      : []),
     ...ledger.bundles.map((entry) => ({
       key: { kind: "bundle" as const, name: entry.name },
       targets,
@@ -352,10 +343,6 @@ export function openSelectionStore(
     for (const change of mutation.changes) {
       const id = serializeCapabilityKey(change.key);
       const targets = uniqueTargets(change.targets);
-      const applicable = applicableTargetSet(change.key);
-      if (targets.some((target) => !applicable.has(target))) {
-        throw new SelectionTargetNotApplicableError();
-      }
       if (change.enabled) {
         const old = enabled.get(id);
         enabled.set(id, {

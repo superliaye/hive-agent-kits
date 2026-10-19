@@ -63,6 +63,13 @@ describe("PluginFrontmatter — valid fixtures (lenient superset)", () => {
     ).toBe(true);
   });
 
+  test("declared targets and managed_install pass", () => {
+    expect(
+      PluginFrontmatter.safeParse({ ...VALID, targets: ["claude", "codex"], managed_install: true })
+        .success,
+    ).toBe(true);
+  });
+
   test("unknown keys are PRESERVED on the parsed object (passthrough, not stripped)", () => {
     const result = PluginFrontmatter.safeParse({ ...VALID, added_in: "0.1.0", upstream: "x" });
     expect(result.success).toBe(true);
@@ -112,5 +119,13 @@ describe("PluginFrontmatter — one invalid case per rule", () => {
 
   test("empty plugin_name (declared but blank)", () => {
     expect(reject({ ...VALID, plugin_name: "" })).not.toBeNull();
+  });
+
+  test("unknown target", () => {
+    expect(reject({ ...VALID, targets: ["cursor"] })).not.toBeNull();
+  });
+
+  test("empty targets", () => {
+    expect(reject({ ...VALID, targets: [] })).not.toBeNull();
   });
 });

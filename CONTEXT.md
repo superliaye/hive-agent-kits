@@ -13,7 +13,8 @@ that section below, which keeps (does not delete) the agent vocabulary.
 
 **Source**:
 A tracked collection of **Capabilities** — a *kit* of capabilities — that conforms
-to Hive's capability format. A Source has a **Source Locator**: a git repository
+to Hive's capability format, or a plugin marketplace repository whose listed plugins
+Sync projects into that format (a **marketplace Source**). A Source has a **Source Locator**: a git repository
 plus revision and subpath, a working-tree root plus subpath on the Daemon machine, or
 the bundled **Starter Source**. Hive manages one or more Sources; each is synced
 independently into its own **Mirror**. A Source can be activated, deactivated, and
@@ -53,7 +54,9 @@ A deployable unit in a **Source**. Five kinds, the upstream taxonomy:
   share a word and nothing else — `agent` here is a deployable Capability a
   Source ships; **Agent** there is a Hive entity that does not exist in #1. When the
   word matters, say "the `agent` capability" vs "the Hive **Agent**".
-- **plugin** — a Claude Code plugin, installed via the Claude CLI (Claude-only).
+- **plugin** — a Claude Code or Codex plugin, installed from a marketplace via
+  each target CLI. Hive installs only a marketplace Source's plugins on Deploy; a
+  hand-written plugin pointer stays a manual install.
 - **bundle** — a wrapper around an external installer that vends its own skills.
 
 A **snippet** is a build-time *include* shared across Capabilities, not a deploy
