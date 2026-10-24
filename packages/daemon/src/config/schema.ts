@@ -42,7 +42,7 @@ export const DeveloperConfigSchema = z.object({
   allowRealHomeDeploy: z.boolean(),
 });
 
-// Theme/font preferences — what CONTEXT.md calls "UI theme". The appearance
+// Theme/font preferences — what GLOSSARY.md calls "UI theme". The appearance
 // schema + defaults are owned by `@hive/theming/schema` (ADR-0022); the daemon
 // consumes them here and folds them into the deployment-wide config. The strict
 // `AppearanceConfigSchema` governs both directions of /api/appearance.

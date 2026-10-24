@@ -2,7 +2,7 @@
 
 A desktop control surface for syncing capability Sources and deploying selected
 Capabilities into Claude Code and Codex CLI homes. Full vocabulary in
-[CONTEXT.md](CONTEXT.md).
+[GLOSSARY.md](GLOSSARY.md).
 
 ## Prerequisites
 
@@ -38,6 +38,6 @@ Produces a runnable app folder at `packages/shell/release/Hive-<platform>-<arch>
 
 ## Learn more
 
-- [CONTEXT.md](CONTEXT.md) — domain vocabulary (use these terms exactly).
+- [GLOSSARY.md](GLOSSARY.md) — domain vocabulary (use these terms exactly).
 - [AGENTS.md](AGENTS.md) — conventions for AI coding agents.
 - [docs/adr/](docs/adr/) — architectural decisions, numbered chronologically.

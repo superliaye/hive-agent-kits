@@ -38,7 +38,7 @@ Same approach as `~/.hive/.token` (ADR-0002 §"User data location"). Threat mode
 
 Rejected:
 
-- **OS keychain (macOS Keychain / Windows Credential Manager / libsecret).** Breaks the unified `~/.hive/` story (ADR-0002 line 178). Three per-platform code paths. Secrets become un-syncable across machines for a user who runs Hive on a desktop and a server. The portability mission (CONTEXT.md → "portable personal AI") loses.
+- **OS keychain (macOS Keychain / Windows Credential Manager / libsecret).** Breaks the unified `~/.hive/` story (ADR-0002 line 178). Three per-platform code paths. Secrets become un-syncable across machines for a user who runs Hive on a desktop and a server. The portability mission (GLOSSARY.md → "portable personal AI") loses.
 - **File-encrypted with a master key.** Master-key derivation is itself a secret-storage problem (password? machine ID? TPM?). For a single-user personal-scale system that the user already has full-disk encryption around, the layering is net-negative.
 
 `chmod 0600` is best-effort on Windows (the call succeeds but the ACL is not narrowed; per-user home is the boundary). Documented in the file.

@@ -44,5 +44,5 @@ The Worker-only gate predated the projecting spawn and the parity work; it was a
 ## Consequences
 
 - Root and every Worker can pick `native` or a CLI backend per conversation, promotable to the Agent default; the Agent Manager cannot.
-- The `isWorker` daemon DTO field and the `worker_only` 409 reason are gone; the role primitive `isWorkerAgent` survives as the canonical "Worker Agent" derivation (CONTEXT.md).
+- The `isWorker` daemon DTO field and the `worker_only` 409 reason are gone; the role primitive `isWorkerAgent` survives as the canonical "Worker Agent" derivation (GLOSSARY.md).
 - Opaque CLI sub-tasking and the half-governed-vs-native dimensions are accepted v1 trade-offs, to be revisited if/when dispatch projection and the Memory contract are built.

@@ -12,7 +12,7 @@ resolves: ADR-0018
 Hive's Run runtime is now **one deep module that drives the vendor Agent SDKs
 directly** — `@anthropic-ai/claude-agent-sdk` (`claude-code`) and
 `@openai/codex-sdk` (`codex`) — behind the unchanged Run seam
-`startRun(thread, agent) → AsyncIterable<RunEvent>` ([CONTEXT.md](../../CONTEXT.md)).
+`startRun(thread, agent) → AsyncIterable<RunEvent>` ([GLOSSARY.md](../../GLOSSARY.md)).
 The **native in-process tool-loop, the ModelGateway, and pi-ai (both as the LLM
 completion transport AND as the OAuth-login + model-catalog source) are
 deleted**; the **Permission module is deleted** (governance deliberately

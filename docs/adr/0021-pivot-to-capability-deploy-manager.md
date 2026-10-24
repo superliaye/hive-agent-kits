@@ -17,7 +17,7 @@ control, visibility, and easy reconfigure on top.
 Priority #1 (this change): manage + deploy my-agent-kits Capabilities at scale.
 Priority #2 (deferred, rebuilds from zero): Hive's own AI conversations whose
 Harness is composed from these Capabilities. The agent-running stack is **deleted**,
-not migrated — parked as #2 in `CONTEXT.md`'s deferred section.
+not migrated — parked as #2 in `GLOSSARY.md`'s deferred section.
 
 ## The deploy-manager design
 

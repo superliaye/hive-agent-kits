@@ -19,7 +19,7 @@ Hive recognizes exactly five Capability kinds. Each carries an **origin** tag (P
 | **MCP Server** | External process speaking Model Context Protocol | Hive daemon (as MCP client) | While ref-counted by Harness bindings |
 | **Agent Harness** | Frozen prompt + identity + bound Capabilities | Hive daemon (Run setup) | At Run start |
 
-Prompt Snippet is new in this ADR. The other four were already named in CONTEXT.md; this ADR pins their internals.
+Prompt Snippet is new in this ADR. The other four were already named in GLOSSARY.md; this ADR pins their internals.
 
 ## Agent Harness is a frozen artifact (resolves ADR-0001 #6)
 

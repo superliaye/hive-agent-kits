@@ -4,12 +4,12 @@ Repo conventions for AI coding agents working in this repo.
 
 ## Read first (in this order)
 
-1. [CONTEXT.md](CONTEXT.md) — domain vocabulary. Every term used in design discussion is defined there. **Use these terms exactly.** Don't substitute "AI assistant", "service", "boundary", etc.
+1. [GLOSSARY.md](GLOSSARY.md) — domain vocabulary. Every term used in design discussion is defined there. **Use these terms exactly.** Don't substitute "AI assistant", "service", "boundary", etc.
 2. [docs/adr/](docs/adr/) — architectural decisions, numbered chronologically. Read the highest-numbered ones first.
 
 ## What Hive is
 
-A capability deploy-manager over **N user-added Sources**: git repositories of Capabilities that conform to Hive's capability format (ADR-0024). The user adds a Source by URL, toggles it on/off, or deletes it; Hive syncs each active Source at runtime and deploys selected Capabilities into the CLI homes of Claude Code and Codex (`~/.claude/`, `~/.codex/`, `~/.agents/`), with control + visibility on top (ADR-0023). The capability **format** SSOT is the `capability-schema` package (ADR-0024) — not a single library. The deploy **contract** (how bytes land in those homes) still matches `agent-kit`, validated against a pinned reference clone. Hive's own AI-conversation scenarios are deferred (#2 — ADR-0021). Full vocabulary in CONTEXT.md.
+A capability deploy-manager over **N user-added Sources**: git repositories of Capabilities that conform to Hive's capability format (ADR-0024). The user adds a Source by URL, toggles it on/off, or deletes it; Hive syncs each active Source at runtime and deploys selected Capabilities into the CLI homes of Claude Code and Codex (`~/.claude/`, `~/.codex/`, `~/.agents/`), with control + visibility on top (ADR-0023). The capability **format** SSOT is the `capability-schema` package (ADR-0024) — not a single library. The deploy **contract** (how bytes land in those homes) still matches `agent-kit`, validated against a pinned reference clone. Hive's own AI-conversation scenarios are deferred (#2 — ADR-0021). Full vocabulary in GLOSSARY.md.
 
 ## Repo layout
 
@@ -60,13 +60,13 @@ Apply without asking when writing or reviewing daemon code; deviations need a st
 - **Ports-and-adapters with deep modules.** Narrow, *consumer-owned* ports shaped to the consumer's need; the providing module / Config / external system is the adapter. Configuration is infrastructure behind a port — not a wide dependency, not a global.
 - **Modular monolith, functional core.** Vertical slices under `packages/daemon/src/<module>/`; hexagonal layers are *roles* (domain / application / adapter / infrastructure), not folders. A data record plus its module's factory verbs is a healthy functional core.
 - **Skip tactical-DDD ceremony.** No aggregates-with-methods, no four-folder layering for its own sake, no abstraction for a single forever-adapter. Add a value object / domain service only where it earns its place.
-- **Keep strategic DDD.** Ubiquitous language (`CONTEXT.md`), bounded contexts, the typed relationships between them. Spend modeling effort on **Core** subdomains; build **Supporting** plainly; buy/wrap **Generic** ones.
+- **Keep strategic DDD.** Ubiquitous language (`GLOSSARY.md`), bounded contexts, the typed relationships between them. Spend modeling effort on **Core** subdomains; build **Supporting** plainly; buy/wrap **Generic** ones.
 
 LLM transport stays on pi-ai wrapped in Effect at the adapter; `@effect/ai` is deferred. See [ADR-0010](docs/adr/0010-llm-transport-pi-ai-retained.md).
 
 ### Vocabulary discipline
 
-When introducing or sharpening a domain term during design discussion, update `CONTEXT.md` immediately — don't batch. Don't couple `CONTEXT.md` to implementation details (file paths, schemas). Domain-meaningful terms only.
+When introducing or sharpening a domain term during design discussion, update `GLOSSARY.md` immediately — don't batch. Don't couple `GLOSSARY.md` to implementation details (file paths, schemas). Domain-meaningful terms only.
 
 ### ADR discipline
 
@@ -88,7 +88,7 @@ Why these invocations, failure modes, and internals: the **`run-app` skill** ([.
 
 | Kind | Where |
 |---|---|
-| Domain vocabulary | `CONTEXT.md` |
+| Domain vocabulary | `GLOSSARY.md` |
 | Hard-to-reverse architectural | `docs/adr/NNNN-*.md` |
 | Repo conventions (this file) | `AGENTS.md` |
 | Subtree-specific conventions | `packages/daemon/src/<module>/AGENTS.md` (lazily, when warranted) |

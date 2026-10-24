@@ -16,8 +16,8 @@ The model tiers (1), (3), (4) predate this ADR; it adds the per-agent model and 
 
 The Settings UI lets a user pick a model AND a thinking effort when chatting with an Agent. Each pick must (a) run the current message with that choice and (b) persist as the Agent's default so the next message reuses it without re-picking. The two are independent — picking one must not disturb the other. Three plausible homes for the persisted defaults, two rejected:
 
-- **The Agent Harness (`config.model` / `config.thinkingEffort`).** Rejected. The Harness is a bundled, version-controlled artifact (`bundled/agents/*/HARNESS.md`); a user's pick written there would be clobbered on the next ship/update, and it conflates *authored* agent design with *user* preference. CONTEXT.md already states per-Run UI overrides never persist to the Harness — extending that to sticky defaults must not change it.
-- **The Config module (`~/.hive/config.yaml`).** Rejected. Config is a single deployment-wide *closed* Zod schema typed by domain (ADR-0006), read by every component. An open-ended `agentId → {model, effort}` map is per-Agent state, not deployment-wide settings, and does not fit a closed schema. CONTEXT.md's boundary rule: Agent-specific things stay with the Agent, not in Config.
+- **The Agent Harness (`config.model` / `config.thinkingEffort`).** Rejected. The Harness is a bundled, version-controlled artifact (`bundled/agents/*/HARNESS.md`); a user's pick written there would be clobbered on the next ship/update, and it conflates *authored* agent design with *user* preference. GLOSSARY.md already states per-Run UI overrides never persist to the Harness — extending that to sticky defaults must not change it.
+- **The Config module (`~/.hive/config.yaml`).** Rejected. Config is a single deployment-wide *closed* Zod schema typed by domain (ADR-0006), read by every component. An open-ended `agentId → {model, effort}` map is per-Agent state, not deployment-wide settings, and does not fit a closed schema. GLOSSARY.md's boundary rule: Agent-specific things stay with the Agent, not in Config.
 - **A dedicated per-agent preference store.** Chosen.
 
 ## Decision

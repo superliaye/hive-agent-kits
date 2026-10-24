@@ -279,7 +279,7 @@ pre,
   background: #f0e8d8;
   color: #6a4a2a;
 }
-/* Origin badges — load-bearing per CONTEXT.md. Bolder than other
+/* Origin badges — load-bearing per GLOSSARY.md. Bolder than other
  * badges so they read as the categorical answer ("is this Capability
  * Personal or Workplace?"), not as a stylistic chip. */
 .badge-personal {
@@ -294,7 +294,7 @@ pre,
 }
 /* Source = where a capability came from (e.g. "heygen-com/hyperframes").
  * Informational, not categorical — render demoted so the load-bearing
- * origin badges (PERSONAL / WORKPLACE per CONTEXT.md) read primary. */
+ * origin badges (PERSONAL / WORKPLACE per GLOSSARY.md) read primary. */
 .badge-source {
   background: transparent;
   color: var(--color-fg-muted);

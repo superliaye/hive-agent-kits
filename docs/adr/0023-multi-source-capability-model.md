@@ -15,10 +15,10 @@ containers/remote/harness targets were considered and explicitly ruled out. This
 the "manage everyone's capabilities, compose from many sources, maintain durably via
 git" goal made concrete.
 
-Most terms below are **product decisions** parked here, not in `CONTEXT.md` —
+Most terms below are **product decisions** parked here, not in `GLOSSARY.md` —
 they graduate into the glossary only once they settle. The **Starter Source** has
 now **settled** (it ships — see "Starter Source implementation" below), so it is
-promoted into `CONTEXT.md` alongside **Source**; the rest stay parked.
+promoted into `GLOSSARY.md` alongside **Source**; the rest stay parked.
 
 ## The model
 

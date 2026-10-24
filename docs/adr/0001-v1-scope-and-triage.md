@@ -30,7 +30,7 @@ These are the only things the architecture has to serve. Any choice that doesn't
 
 ## v1 in scope (kernel commitments)
 
-- The architecture vocabulary from `CONTEXT.md`: Agent, Agent Harness, Memory (per-Agent), Capability Registry (Personal/Workplace origin), Thread, Run, Agent Catalog, Root Agent + Agent Manager
+- The architecture vocabulary from `GLOSSARY.md`: Agent, Agent Harness, Memory (per-Agent), Capability Registry (Personal/Workplace origin), Thread, Run, Agent Catalog, Root Agent + Agent Manager
 - Tauri shell with embedded daemon
 - One LLM provider adapter (Anthropic SDK first; provider abstraction allows others later)
 - Local data store with per-Agent Memory partitions

@@ -2,7 +2,7 @@
 
 ## What this ADR records
 
-How **Audit** works in Hive v1: its purpose, how events get into it, what events get in, where they're stored, how secrets stay out, what happens when it fails, and how it ages out. Sharpens the **Audit Log** term in CONTEXT.md and constrains every module's event-emission surface.
+How **Audit** works in Hive v1: its purpose, how events get into it, what events get in, where they're stored, how secrets stay out, what happens when it fails, and how it ages out. Sharpens the **Audit Log** term in GLOSSARY.md and constrains every module's event-emission surface.
 
 Primary purpose: **the record of what users and agents did** — answering "what happened, who triggered it, and when?" Tamper-evidence is a v1.1 concern (hooks reserved in the schema, no migration needed to add later). Replay-as-executable-history is an explicit non-goal for v1.
 

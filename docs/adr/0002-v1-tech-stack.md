@@ -155,7 +155,7 @@ hive/
 
 ## User data location: unified `~/.hive/` across platforms
 
-Hive stores all user-facing runtime data under a single directory: `~/.hive/` on every OS. Aligns with **OpenClaw** (`~/.openclaw/`) and **Hermes** (`~/.hermes/`); see CONTEXT.md → "Reference projects".
+Hive stores all user-facing runtime data under a single directory: `~/.hive/` on every OS. Aligns with **OpenClaw** (`~/.openclaw/`) and **Hermes** (`~/.hermes/`); see GLOSSARY.md → "Reference projects".
 
 ```
 ~/.hive/
@@ -251,7 +251,7 @@ Trade-off: no installer in v1. Users get `shell/release/Hive-win32-x64/Hive.exe`
 
 ## Deferred decisions (open)
 
-- **Memory format details** (events vs prose, tiering, INDEX shape, promotion rules). Storage layer absorbs either. Hermes Agent's memory subsystem (`plugins/memory/`, agent-curated, FTS5 session search, Honcho dialectic user modeling) is the leading public reference design to evaluate against — see CONTEXT.md "Reference projects".
+- **Memory format details** (events vs prose, tiering, INDEX shape, promotion rules). Storage layer absorbs either. Hermes Agent's memory subsystem (`plugins/memory/`, agent-curated, FTS5 session search, Honcho dialectic user modeling) is the leading public reference design to evaluate against — see GLOSSARY.md "Reference projects".
 - **Capability manifest schema** — particularly the shape of `providerHints` for per-provider Tool concessions (Gemini schema subset, OpenAI strict mode, Anthropic cache_control placement).
 - **Secrets / auth profiles** — Hive must build its own Secrets primitive. pi-ai is stateless on disk for credentials: it reads provider env vars (`OPENAI_API_KEY` etc.) at call time, accepts `apiKey` overrides per call, and exposes OAuth primitives (`getOAuthApiKey(providerId, credentials)`) where the *caller* persists the `{refresh, access, expires}` triple. pi-ai's own CLI saves to `auth.json` in CWD, but that's a CLI convention, not a library surface. (Earlier draft of this ADR described an "auth-profiles" surface in pi-ai — that was inaccurate; no such system exists. See ADR-0003 G1.)
 - ~~**Per-Agent vs per-Run model selection policy.**~~ Resolved: three-layer resolution at Run start — (1) per-Run override (transient, picked in UI), (2) Harness `config.model` + `config.modelFallback` (per-Agent default, edited via Agent Manager), (3) global deployment default. No per-Thread sticky model in v1. Backend-specific config (model name, effort, thinking budget, permission flags) lives in `harness.config` and is validated against a per-backend Zod schema. See ADR-0003 "Harness config is backend-specific and schema-driven".
