@@ -1,18 +1,19 @@
-// Local Sync: copy the bundled Starter content into a Mirror with no
-// network, the atomic stage→swap reuse, no provenance, the typed
-// missing_starter_root failure, and the kind-branching sync dispatch (fetch is
-// never called for a local Source). Redirected temp homes only.
+// Local Sync: the bundled Starter content reaches a Mirror through the one Sync
+// path with no network, keeps the last good Mirror on failure, fails a missing
+// root as missing_starter_root, and never calls fetch for a local Source.
+// Redirected temp homes only.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Source } from "@hive/contract";
 import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect";
 import { SourceRegistry, SourceRegistryLive } from "../../sources/effect/sources-live.ts";
 import { SyncError } from "../effect/errors.ts";
 import { Kit, KitLive } from "../effect/kit-live.ts";
-import { localSyncMirror, mirrorExists } from "../mirror.ts";
-import { type HttpFetch, localSyncSource } from "../sync.ts";
+import { readMirrorRecord } from "../mirror.ts";
+import { type HttpFetch, syncLocatorSource } from "../sync.ts";
 import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
@@ -54,43 +55,44 @@ afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-describe("localSyncMirror / localSyncSource", () => {
-  test("copies capabilities + presets into the mirror; writes NO .hive-mirror.json", () => {
-    const targets = failSafeDeployTargets();
-    const mirror = targets.mirrorRoot("starter");
-    localSyncMirror(mirror, targets.kitTmpRoot(), starterFixture);
+const STARTER: Source = {
+  id: "starter",
+  label: "Starter",
+  locator: { kind: "starter" },
+  origin: "local:starter",
+  kind: "local",
+  active: true,
+  createdAt: 0,
+  rank: 0,
+};
 
-    expect(mirrorExists(mirror)).toBe(true);
+const syncStarter = () => syncLocatorSource(STARTER, failSafeDeployTargets());
+
+describe("Starter Sync", () => {
+  test("copies capabilities + presets into the mirror with a bundled record", async () => {
+    const mirror = failSafeDeployTargets().mirrorRoot("starter");
+    await Effect.runPromise(syncStarter());
+
     expect(existsSync(join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md"))).toBe(true);
     expect(existsSync(join(mirror, "presets", "demo.yaml"))).toBe(true);
-    // No provenance file — a local mirror has no sha.
-    expect(existsSync(join(mirror, ".hive-mirror.json"))).toBe(false);
+    expect(readMirrorRecord(mirror)).toMatchObject({
+      origin: { transport: "bundled" },
+      recipe: { id: "capability-kit" },
+    });
   });
 
-  test("reuses the atomic stage→swap: an interrupted stage leaves the prior mirror intact", () => {
-    const targets = failSafeDeployTargets();
-    const mirror = targets.mirrorRoot("starter");
-    // Seed a good mirror first.
-    localSyncMirror(mirror, targets.kitTmpRoot(), starterFixture);
-    expect(mirrorExists(mirror)).toBe(true);
+  test("a failed sync leaves the prior mirror intact", async () => {
+    const mirror = failSafeDeployTargets().mirrorRoot("starter");
+    await Effect.runPromise(syncStarter());
 
-    // Now a sync from a bad root throws BEFORE the swap — the prior mirror survives.
-    expect(() =>
-      localSyncMirror(mirror, targets.kitTmpRoot(), join(tmpRoot, "does-not-exist")),
-    ).toThrow();
-    expect(mirrorExists(mirror)).toBe(true);
+    process.env.HIVE_STARTER_ROOT = join(tmpRoot, "does-not-exist");
+    expect(Exit.isFailure(await Effect.runPromiseExit(syncStarter()))).toBe(true);
     expect(existsSync(join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md"))).toBe(true);
   });
 
   test("a non-existent starterRoot yields a typed missing_starter_root SyncError (no throw out)", async () => {
-    const targets = failSafeDeployTargets();
-    const exit = await Effect.runPromiseExit(
-      localSyncSource(
-        targets.mirrorRoot("starter"),
-        targets.kitTmpRoot(),
-        join(tmpRoot, "missing"),
-      ),
-    );
+    process.env.HIVE_STARTER_ROOT = join(tmpRoot, "missing");
+    const exit = await Effect.runPromiseExit(syncStarter());
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
       const err = Cause.squash(exit.cause);
@@ -99,19 +101,16 @@ describe("localSyncMirror / localSyncSource", () => {
     }
   });
 
-  test("re-copy on every run (no sha short-circuit) — content refreshes", () => {
-    const targets = failSafeDeployTargets();
-    const mirror = targets.mirrorRoot("starter");
+  test("every run re-reads the content root — content refreshes", async () => {
+    const mirror = failSafeDeployTargets().mirrorRoot("starter");
     const mirrored = join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md");
-    localSyncMirror(mirror, targets.kitTmpRoot(), starterFixture);
+    await Effect.runPromise(syncStarter());
 
-    // Mutate the source, re-sync, and observe the change propagated (no sha to
-    // short-circuit on — a local mirror always re-copies).
     writeFileSync(
       join(starterFixture, "capabilities", "skills", "demo-skill", "SKILL.md"),
       "---\nname: demo-skill\ndescription: UPDATED description\n---\nbody\n",
     );
-    localSyncMirror(mirror, targets.kitTmpRoot(), starterFixture);
+    expect((await Effect.runPromise(syncStarter())).status).toBe("synced");
     expect(readFileSync(mirrored, "utf8")).toContain("UPDATED description");
   });
 });
@@ -157,7 +156,7 @@ describe("Kit.sync — local kind dispatch", () => {
 
     const mirror = failSafeDeployTargets().mirrorRoot("starter");
     expect(existsSync(join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md"))).toBe(true);
-    expect(existsSync(join(mirror, ".hive-mirror.json"))).toBe(false);
+    expect(readMirrorRecord(mirror)?.origin).toEqual({ transport: "bundled" });
 
     const cat = kit.catalog();
     expect(cat.entries.some((e) => e.kind === "skill" && e.name === "demo-skill")).toBe(true);

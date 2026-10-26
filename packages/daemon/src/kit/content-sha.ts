@@ -17,25 +17,28 @@
 // the Sources context (sources/aggregation.ts). A full relocation rides with the
 // deferred KitSvc catalog()/sync() split.
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { CapabilityKind } from "@hive/contract";
 import { hashSkillFiles } from "./deploy/artifact-hash.ts";
 import { agentSourceDir, capabilityFilePath, skillSourceDir } from "./deploy/sources.ts";
+import { type SkillFile, skillFileMode } from "./deploy/transforms.ts";
 
 // Collect every file under a folder, rel paths RELATIVE TO that folder (so an
 // @group/ placement of an identical skill hashes equal to a flat one). Returns
 // null when the folder is absent.
-function folderFileSet(dir: string): { rel: string; content: string }[] | null {
+function folderFileSet(dir: string): SkillFile[] | null {
   if (!existsSync(dir)) return null;
-  const files: { rel: string; content: string }[] = [];
+  const files: SkillFile[] = [];
   const walk = (d: string, base: string): void => {
     for (const ent of readdirSync(d, { withFileTypes: true })) {
       const full = join(d, ent.name);
       const rel = base ? `${base}/${ent.name}` : ent.name;
       try {
         if (ent.isDirectory()) walk(full, rel);
-        else if (ent.isFile()) files.push({ rel, content: readFileSync(full, "utf8") });
+        else if (ent.isFile()) {
+          files.push({ rel, mode: skillFileMode(lstatSync(full).mode), bytes: readFileSync(full) });
+        }
       } catch {
         // unreadable child — skip; a vanished file mid-walk must not throw here.
       }
@@ -69,14 +72,14 @@ export function mirrorContentSha(
   }
   const path = capabilityFilePath(mirrorRoot, kind, name);
   if (!existsSync(path)) return null;
-  let content: string;
+  let bytes: Uint8Array;
   try {
     if (!statSync(path).isFile()) return null;
-    content = readFileSync(path, "utf8");
+    bytes = readFileSync(path);
   } catch {
     return null;
   }
   // `rel` is the bare filename, never the mirror-rooted path — the merge-equality
   // invariant (two Mirrors of identical content hash equal).
-  return hashSkillFiles([{ rel: basename(path), content }]);
+  return hashSkillFiles([{ rel: basename(path), mode: 0o644, bytes }]);
 }

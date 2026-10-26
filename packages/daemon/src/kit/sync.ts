@@ -1,37 +1,36 @@
-// Sync — fetch the latest Kit tree into the Mirror.
-//
-// Resolve the latest SHA via the commits API, download the tarball BY FULL SHA
-// (codeload .../tar.gz/<full-sha>, never /main — keeps recorded SHA and tree
-// byte-identical), extract atomically into the Mirror. Typed SyncError variants
-// distinguish offline / rate_limited / parse / io. Keeps last-good on any
-// failure; short-circuits when the resolved SHA equals the recorded one.
+// Sync — the one path that turns any Source into its Mirror: open a listed
+// snapshot of the Source tree, recognize it with a Recipe, materialize only what
+// the Recipe projects, confirm the snapshot held still, and swap the Mirror in.
+// Any failure keeps the last good Mirror; re-syncing an unchanged tree writes a
+// byte-identical Mirror with the same identity.
 
 import { Buffer } from "node:buffer";
 import { dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import type { Source } from "@hive/contract";
-import { Effect } from "effect";
+import { Effect, type Scope } from "effect";
 import { log } from "../lib/log.ts";
-import { type GitProcess } from "./acquisition/git-process.ts";
-import { acquireGitSource, GitAcquireError } from "./acquisition/git-source.ts";
-import { acquireWorkingTree, WorkingTreeAcquireError } from "./acquisition/working-tree.ts";
+import type { GitProcess } from "./acquisition/git-process.ts";
+import { gitSnapshot } from "./acquisition/git-source.ts";
+import {
+  directorySnapshot,
+  missingStarterRoot,
+  type TreeSnapshot,
+  tarSnapshot,
+} from "./acquisition/snapshot.ts";
+import { DEFAULT_TREE_LIMITS } from "./acquisition/tree-guard.ts";
+import { workingTreeSnapshot } from "./acquisition/working-tree.ts";
 import { SyncError } from "./effect/errors.ts";
 import { localSourceRootFor } from "./local-source-roots.ts";
-import {
-  localSyncMirror,
-  MissingStarterRoot,
-  mirrorExists,
-  readProvenance,
-  writeMirror,
-} from "./mirror.ts";
+import { commitMirror, materialize } from "./mirror.ts";
+import { recipeTree, recognizeSource } from "./recipes/recipe.ts";
 import type { DeployTargets } from "./targets.ts";
-import type { MirrorProvenance } from "./types.ts";
 
 // Parse a normalized https GitHub origin into owner/repo. The Source registry
 // already strips a trailing `/` / `.git` and lowercases scheme+host, so we
 // only validate host + extract the two path segments. Any non-GitHub host, or a
-// path that isn't exactly `<owner>/<repo>`, yields `null` (the caller maps that
-// to a typed parse SyncError — this slice is GitHub-only).
+// path that isn't exactly `<owner>/<repo>`, yields `null`, and the locator takes
+// the Git path even when the HTTP fixture is installed.
 export function parseGithubOrigin(origin: string): { owner: string; repo: string } | null {
   let url: URL;
   try {
@@ -53,12 +52,6 @@ export function parseGithubOrigin(origin: string): { owner: string; repo: string
 // Injectable HTTP port so tests drive offline / 403 / fixture-tarball without
 // real network.
 export type HttpFetch = (url: string, init?: RequestInit) => Promise<Response>;
-
-export type SyncOutcome = {
-  // "synced" — a new SHA landed; "unchanged" — already at the resolved SHA.
-  status: "synced" | "unchanged";
-  provenance: MirrorProvenance;
-};
 
 export type LocatorSyncOptions = {
   // The daemon-owned Git process port. Production leaves this undefined and
@@ -140,159 +133,97 @@ function downloadTar(
   });
 }
 
-// Sync one Source into its own Mirror. Derives the GitHub commits-API +
-// codeload-tarball URLs from the Source origin (GitHub-only this slice; a
-// non-GitHub origin is a typed parse SyncError, never a throw). Short-circuits
-// when the resolved SHA matches the recorded mirror. On extraction failure the
-// prior Mirror is retained (writeMirror is atomic), surfaced as a typed
-// SyncError — never thrown out of the daemon.
-export function syncSource(
-  mirrorRoot: string,
-  tmpRoot: string,
-  origin: string,
+// The memory-mode fixture: resolve main's SHA, then download the codeload
+// tarball BY FULL SHA (never /main), so the recorded commit and the tree match.
+function legacyGithubSnapshot(
+  owner: string,
+  repo: string,
+  repoUrl: string,
   fetchImpl: HttpFetch,
-): Effect.Effect<SyncOutcome, SyncError> {
+): Effect.Effect<TreeSnapshot, SyncError> {
   return Effect.gen(function* () {
-    const parsed = parseGithubOrigin(origin);
-    if (!parsed) {
-      return yield* Effect.fail(
-        new SyncError({ reason: "parse", message: "unsupported origin (only https GitHub)" }),
-      );
-    }
-    const { owner, repo } = parsed;
-    const commitsUrl = `https://api.github.com/repos/${owner}/${repo}/commits/main`;
-    const sha = yield* resolveSha(fetchImpl, commitsUrl);
-    const prior = readProvenance(mirrorRoot);
-    if (prior && prior.sha === sha && mirrorExists(mirrorRoot)) {
-      return { status: "unchanged", provenance: prior } as const;
-    }
-    const codeloadUrl = `https://codeload.github.com/${owner}/${repo}/tar.gz/${sha}`;
-    const tarBuf = yield* downloadTar(fetchImpl, codeloadUrl);
-    const provenance = yield* Effect.try({
-      try: () => writeMirror(mirrorRoot, tmpRoot, tarBuf, sha),
-      catch: (err) =>
-        new SyncError({ reason: "io", message: `mirror write failed: ${String(err)}` }),
-    });
-    log().info(
-      { module: "kit/sync", origin, sha, fetchedAt: provenance.fetchedAt },
-      "source mirror synced",
+    const sha = yield* resolveSha(
+      fetchImpl,
+      `https://api.github.com/repos/${owner}/${repo}/commits/main`,
     );
-    return { status: "synced", provenance } as const;
+    const tar = yield* downloadTar(
+      fetchImpl,
+      `https://codeload.github.com/${owner}/${repo}/tar.gz/${sha}`,
+    );
+    return yield* tarSnapshot(tar, repoUrl, sha);
   });
 }
 
-// Sync a local (bundled) Source into its Mirror by copying the Starter content
-// root — no network, no fetch, no provenance. A missing/absent `starterRoot` (bad
-// override or a packaging miss) is a typed `missing_starter_root` SyncError, never
-// a raw throw; any other copy/swap fault maps to `io`. Returns only a status —
-// unlike `syncSource` there is no MirrorProvenance (the sync-status derives
-// "local" from Source.locator.kind, never a synthetic sha). Always `synced` (re-copies
-// every run — a local mirror has no sha to short-circuit on).
-export function localSyncSource(
-  mirrorRoot: string,
-  tmpRoot: string,
-  starterRoot: string,
-): Effect.Effect<{ status: "synced" }, SyncError> {
-  return Effect.try({
-    try: () => {
-      localSyncMirror(mirrorRoot, tmpRoot, starterRoot);
-      return { status: "synced" } as const;
-    },
-    catch: (err) =>
-      err instanceof MissingStarterRoot
-        ? new SyncError({ reason: "missing_starter_root", message: err.message })
-        : new SyncError({ reason: "io", message: `local mirror write failed: ${String(err)}` }),
-  });
-}
-
-const ACQUISITION_DETAILS = {
-  offline: "repository fetch failed",
-  auth_or_repository_unavailable: "repository access failed",
-  invalid_locator: "source locator is invalid",
-  missing_ref: "requested revision is unavailable",
-  invalid_subpath: "selected subpath is unavailable",
-  timeout: "source acquisition timed out",
-  budget_exceeded: "selected tree exceeds acquisition limits",
-  unsafe_tree: "selected tree is unsafe",
-  working_tree_not_allowed: "working tree is not allowed",
-  working_tree_changed: "working tree changed during capture",
-  io: "source acquisition failed",
-} as const;
-
-function acquisitionSyncError(error: unknown): SyncError {
-  if (error instanceof GitAcquireError || error instanceof WorkingTreeAcquireError) {
-    const detail = ACQUISITION_DETAILS[error.code];
-    return new SyncError({ reason: error.code, message: detail, detail });
-  }
-  return new SyncError({
-    reason: "io",
-    message: ACQUISITION_DETAILS.io,
-    detail: ACQUISITION_DETAILS.io,
-  });
-}
-
-// Transport dispatch for persisted Sources. The locator is authoritative: the
-// legacy `origin` and `kind` fields are display-only compatibility data. Each
-// acquisition writes directly to the Source-id scoped mirror through its atomic
-// stage/swap implementation, so an error leaves the exact prior provenance and
-// tree intact.
-export function syncLocatorSource(
+function openSnapshot(
   source: Source,
   targets: DeployTargets,
-  options: LocatorSyncOptions = {},
-): Effect.Effect<{ status: "synced" }, SyncError> {
-  const mirrorRoot = targets.mirrorRoot(source.id);
+  options: LocatorSyncOptions,
+): Effect.Effect<TreeSnapshot, SyncError, Scope.Scope> {
   const locator = source.locator;
   switch (locator.kind) {
     case "starter": {
       const root = localSourceRootFor(source, targets);
-      return root
-        ? localSyncSource(mirrorRoot, targets.kitTmpRoot(), root)
-        : Effect.fail(
-            new SyncError({
-              reason: "missing_starter_root",
-              message: "starter content root is unavailable",
-              detail: "starter content root is unavailable",
-            }),
-          );
+      return root ? directorySnapshot(root) : Effect.fail(missingStarterRoot());
     }
-    case "git":
+    case "git": {
+      const github = parseGithubOrigin(locator.repoUrl);
       if (
         options.legacyGithubFixtureFetch &&
-        parseGithubOrigin(locator.repoUrl) !== null &&
+        github !== null &&
         locator.revision.mode === "track" &&
         locator.revision.ref === "refs/heads/main" &&
         locator.subpath === "."
       ) {
-        return syncSource(
-          mirrorRoot,
-          targets.kitTmpRoot(),
+        return legacyGithubSnapshot(
+          github.owner,
+          github.repo,
           locator.repoUrl,
           options.legacyGithubFixtureFetch,
-        ).pipe(Effect.map(() => ({ status: "synced" }) as const));
+        );
       }
-      return Effect.tryPromise({
-        try: async () => {
-          await acquireGitSource(locator, mirrorRoot, {
-            cacheRoot: join(dirname(targets.kitTmpRoot()), "git-cache"),
-            tmpRoot: targets.kitTmpRoot(),
-            ...(options.gitProcess ? { process: options.gitProcess } : {}),
-          });
-          return { status: "synced" } as const;
-        },
-        catch: acquisitionSyncError,
+      return gitSnapshot(locator, {
+        cacheRoot: join(dirname(targets.kitTmpRoot()), "git-cache"),
+        limits: DEFAULT_TREE_LIMITS,
+        ...(options.gitProcess ? { process: options.gitProcess } : {}),
       });
+    }
     case "working-tree":
-      return Effect.tryPromise({
-        try: async () => {
-          await acquireWorkingTree(locator, mirrorRoot, {
-            allowedRoots: options.workingTreeRoots ?? [],
-            tmpRoot: targets.kitTmpRoot(),
-            ...(options.gitProcess ? { process: options.gitProcess } : {}),
-          });
-          return { status: "synced" } as const;
-        },
-        catch: acquisitionSyncError,
+      return workingTreeSnapshot(locator, {
+        allowedRoots: options.workingTreeRoots ?? [],
+        limits: DEFAULT_TREE_LIMITS,
+        ...(options.gitProcess ? { process: options.gitProcess } : {}),
       });
   }
+}
+
+// The locator is the transport authority; the legacy `origin` and `kind` fields
+// are display-only compatibility data. A working tree that changed under the
+// capture is re-captured once from a fresh snapshot.
+export function syncLocatorSource(
+  source: Source,
+  targets: DeployTargets,
+  options: LocatorSyncOptions = {},
+): Effect.Effect<{ status: "synced" | "unchanged" }, SyncError> {
+  const once = Effect.scoped(
+    Effect.gen(function* () {
+      const snapshot = yield* openSnapshot(source, targets, options);
+      const recognition = yield* recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS));
+      const staged = yield* materialize(
+        snapshot,
+        recognition,
+        targets.kitTmpRoot(),
+        DEFAULT_TREE_LIMITS,
+      );
+      yield* snapshot.confirm();
+      const outcome = yield* commitMirror(targets.mirrorRoot(source.id), staged);
+      log().info(
+        { module: "kit/sync", sourceId: source.id, recipe: recognition.recipe.id, ...outcome },
+        "source mirror synced",
+      );
+      return outcome;
+    }),
+  );
+  return once.pipe(
+    Effect.retry({ times: 1, while: (error) => error.reason === "working_tree_changed" }),
+  );
 }

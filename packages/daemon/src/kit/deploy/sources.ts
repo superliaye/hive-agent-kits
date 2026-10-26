@@ -6,7 +6,11 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse as yamlParse } from "yaml";
 import { DeployError } from "../effect/errors.ts";
+import { readMirrorRecord } from "../mirror.ts";
+import { CAPABILITY_KIT_RECIPE_ID } from "../recipes/recipe.ts";
 import type { DeployTarget } from "../targets.ts";
+import { readSkillSource } from "./adapter.ts";
+import { type SkillFile, transformSkill } from "./transforms.ts";
 
 function readDirSafe(p: string): string[] {
   try {
@@ -68,6 +72,33 @@ export function skillSourceDir(mirrorRoot: string, name: string): string | null 
   return (
     resolveFolderSources(join(mirrorRoot, "capabilities", "skills"), "SKILL.md").get(name) ?? null
   );
+}
+
+// The files Deploy writes for a skill under `target`, or null when the Mirror
+// lacks it. A capability kit's skill renders by the kit contract (includes,
+// maintainer-file drops, the Codex sidecar); a skill from any other Recipe
+// deploys exactly as its upstream ships it. A Mirror without a record predates
+// Recipes and so was a kit. Staging and the Overview's rendered hash both come
+// here, so the plan and the staged bytes cannot disagree. Throws on an unknown
+// include in a kit SKILL.md.
+export function renderedSkillFiles(
+  mirrorRoot: string,
+  name: string,
+  target: DeployTarget,
+  snippets: Map<string, string>,
+): SkillFile[] | null {
+  const source = skillSourceDir(mirrorRoot, name);
+  if (!source) return null;
+  const files = readSkillSource(source);
+  const recipe = readMirrorRecord(mirrorRoot)?.recipe.id ?? CAPABILITY_KIT_RECIPE_ID;
+  if (recipe !== CAPABILITY_KIT_RECIPE_ID) return files;
+  const rendered = transformSkill(
+    { name, files, disableModelInvocation: skillDisablesModelInvocation(source) },
+    snippets,
+  );
+  return rendered.sidecar && target === "codex"
+    ? [...rendered.files, rendered.sidecar]
+    : rendered.files;
 }
 
 // The winner Mirror's source dir for an agent leaf name, or null when absent.

@@ -378,14 +378,26 @@ describe("server routes — sources", () => {
     }
   });
 
-  test("reachable + zero capabilities → 201, capabilityCount === 0", async () => {
-    // An empty tarball (top folder only — no capabilities/).
+  test("reachable but not recognized → 201, Source kept, not_recognized banner", async () => {
+    // An empty tarball (top folder only — no capabilities/, no marketplace).
     const server = await serverWith(stubFetch([{ path: `repo-${SHA.slice(0, 7)}/` }]));
     try {
       const res = await postOrigin(server, "https://github.com/a/b");
       expect(res.status).toBe(201);
       const body = AddSourceResult.parse(await res.json());
       expect(body.validation.capabilityCount).toBe(0);
+      expect(body.sync).toMatchObject({
+        state: "check_failed",
+        errorReason: "not_recognized",
+        errorDetail:
+          "No Recipe matched: no capabilities/ folder; no marketplace for both CLIs; no published skills; no plugin marketplace",
+      });
+      const listed = await server.app.fetch(
+        new Request("http://localhost/api/sources", {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        }),
+      );
+      expect(await listed.json()).toContainEqual(expect.objectContaining({ id: body.source.id }));
     } finally {
       await server.dispose();
     }

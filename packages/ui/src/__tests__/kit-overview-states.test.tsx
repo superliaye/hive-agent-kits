@@ -38,7 +38,7 @@ function row(over: Partial<OverviewRow> & Pick<OverviewRow, "key">): OverviewRow
 
 function overview(rows: OverviewRow[]): DeploymentOverview {
   return {
-    sources: [{ id: "src", label: "Arca", kind: "git", active: true, rank: 0 }],
+    sources: [{ id: "src", label: "Arca", kind: "git", active: true, rank: 0, recipe: null }],
     sourceRegistryRevision: 3,
     mirrors: [{ sourceId: "src", precedence: 0, identity: "abc" }],
     selectionRevision: 7,
@@ -590,8 +590,15 @@ describe("KitDeployPage — daemon Overview states", () => {
     const current = {
       ...overview([selected]),
       sources: [
-        { id: "src", label: "Arca", kind: "git" as const, active: true, rank: 1 },
-        { id: "backup", label: "Backup", kind: "git" as const, active: true, rank: 0 },
+        { id: "src", label: "Arca", kind: "git" as const, active: true, rank: 1, recipe: null },
+        {
+          id: "backup",
+          label: "Backup",
+          kind: "git" as const,
+          active: true,
+          rank: 0,
+          recipe: null,
+        },
       ],
       diff: {
         entries: [{ kind: "skill" as const, name: "remote-skill", change: "added" as const }],

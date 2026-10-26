@@ -15,7 +15,7 @@ import { Cause, Effect, Exit } from "effect";
 import { createServer, legacyGithubFixtureFetchForMode } from "../../server/index.ts";
 import { type GitProcess, GitProcessFailure } from "../acquisition/git-process.ts";
 import { SyncError } from "../effect/errors.ts";
-import { readProvenance } from "../mirror.ts";
+import { readMirrorRecord } from "../mirror.ts";
 import { syncLocatorSource } from "../sync.ts";
 import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
@@ -157,7 +157,7 @@ describe("locator-native Source sync", () => {
         join(targets.mirrorRoot("git-b"), "capabilities", "skills", "fixture", "SKILL.md"),
       ),
     ).toBe(true);
-    expect(readProvenance(targets.mirrorRoot("git-a"))?.transport).toBe("git");
+    expect(readMirrorRecord(targets.mirrorRoot("git-a"))?.origin.transport).toBe("git");
   });
 
   test("a failed Git locator sync retains that Source's exact last-good mirror and redacts credentials", async () => {
@@ -169,7 +169,7 @@ describe("locator-native Source sync", () => {
       subpath: ".",
     });
     await Effect.runPromise(syncLocatorSource(git, targets, { gitProcess: gitFixture() }));
-    const good = readProvenance(targets.mirrorRoot(git.id));
+    const good = readMirrorRecord(targets.mirrorRoot(git.id));
 
     const exit = await Effect.runPromiseExit(
       syncLocatorSource(git, targets, { gitProcess: gitFixture(true) }),
@@ -181,7 +181,8 @@ describe("locator-native Source sync", () => {
       expect(error.detail).toBe("repository fetch failed");
       expect(error.detail).not.toContain("secret");
     }
-    expect(readProvenance(targets.mirrorRoot(git.id))).toEqual(good);
+    expect(good).not.toBeNull();
+    expect(readMirrorRecord(targets.mirrorRoot(git.id))).toEqual(good);
     expect(
       readFileSync(
         join(targets.mirrorRoot(git.id), "capabilities", "skills", "fixture", "SKILL.md"),
@@ -213,10 +214,12 @@ describe("locator-native Source sync", () => {
     );
     expect(outcome.status).toBe("synced");
     expect(legacyCalls).toBe(0);
-    expect(readProvenance(failSafeDeployTargets().mirrorRoot(nonGithub.id))?.transport).toBe("git");
+    expect(
+      readMirrorRecord(failSafeDeployTargets().mirrorRoot(nonGithub.id))?.origin.transport,
+    ).toBe("git");
   });
 
-  test("server config reaches working-tree onboarding and an existing non-kit subpath remains an explicit empty Source", async () => {
+  test("server config reaches working-tree onboarding and a non-kit subpath stays added but not recognized", async () => {
     const repo = workingTree();
     const server = await createServer({ mode: "memory", token: "locator-sync" });
     try {
@@ -238,7 +241,12 @@ describe("locator-native Source sync", () => {
       const responseText = await response.text();
       expect(responseText).not.toContain(repo);
       const added = AddSourceResult.parse(JSON.parse(responseText));
-      expect(added.sync.state).toBe("up_to_date");
+      expect(added.sync).toMatchObject({
+        state: "check_failed",
+        errorReason: "not_recognized",
+        errorDetail:
+          "No Recipe matched: no capabilities/ folder; not a whole git repository; no published skills",
+      });
       expect(added.validation.capabilityCount).toBe(0);
       expect(added.validation.conformant).toBe(true);
       expect(
@@ -246,7 +254,15 @@ describe("locator-native Source sync", () => {
       ).toBe(false);
 
       const rerun = await Effect.runPromise(server.kit.sync());
-      expect(rerun.sources).toEqual([{ sourceId: added.source.id, status: "synced" }]);
+      expect(rerun.sources).toEqual([
+        {
+          sourceId: added.source.id,
+          status: "failed",
+          errorReason: "not_recognized",
+          errorDetail:
+            "No Recipe matched: no capabilities/ folder; not a whole git repository; no published skills",
+        },
+      ]);
     } finally {
       await server.dispose();
     }
@@ -277,10 +293,10 @@ describe("locator-native Source sync", () => {
 
       expect(response.status).toBe(201);
       const added = AddSourceResult.parse(await response.json());
-      expect(added.sync.state).toBe("up_to_date");
+      expect(added.sync).toMatchObject({ state: "check_failed", errorReason: "not_recognized" });
       expect(added.validation.capabilityCount).toBe(0);
-      expect((await Effect.runPromise(server.kit.sync())).sources).toEqual([
-        { sourceId: added.source.id, status: "synced" },
+      expect((await Effect.runPromise(server.kit.sync())).sources).toMatchObject([
+        { sourceId: added.source.id, status: "failed", errorReason: "not_recognized" },
       ]);
     } finally {
       await server.dispose();

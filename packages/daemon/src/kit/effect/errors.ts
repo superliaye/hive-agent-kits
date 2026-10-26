@@ -14,7 +14,8 @@ import { Data } from "effect";
 // HIVE_STARTER_ROOT override or a packaging miss); isolated to that Source.
 // `timeout` is the add-time bounded-sync abort: a sync that outruns the
 // request budget folds into the Source's freshness as `check_failed`, so the add
-// can never hang the HTTP request.
+// can never hang the HTTP request. `not_recognized`: no Recipe recognized the
+// tree; its `detail` names what was tried.
 export type SyncFailureReason =
   | "offline"
   | "rate_limited"
@@ -29,7 +30,8 @@ export type SyncFailureReason =
   | "budget_exceeded"
   | "unsafe_tree"
   | "working_tree_not_allowed"
-  | "working_tree_changed";
+  | "working_tree_changed"
+  | "not_recognized";
 
 export class SyncError extends Data.TaggedError("SyncError")<{
   readonly reason: SyncFailureReason;

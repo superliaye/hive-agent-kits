@@ -13,8 +13,9 @@ that section below, which keeps (does not delete) the agent vocabulary.
 
 **Source**:
 A tracked collection of **Capabilities** — a *kit* of capabilities — that conforms
-to Hive's capability format, or a plugin marketplace repository whose listed plugins
-Sync projects into that format (a **marketplace Source**). A Source has a **Source Locator**: a git repository
+to Hive's capability format, or any repository a **Recipe** recognizes and Sync
+projects into that format (a plugin marketplace, a repository of published skills).
+A Source has a **Source Locator**: a git repository
 plus revision and subpath, a working-tree root plus subpath on the Daemon machine, or
 the bundled **Starter Source**. Hive manages one or more Sources; each is synced
 independently into its own **Mirror**. A Source can be activated, deactivated, and
@@ -42,6 +43,29 @@ it works fully offline. Deleting it sticks (a fresh install seeds it once, never
 re-seeds).
 _Avoid_: implying it is fetched or versioned like a remote Source — it is the
 in-app bundle.
+
+**Recipe**:
+How Hive recognizes a **Source** and installs and uninstalls its **Capabilities**
+on each CLI, the way the repository's own documentation tells a user to. A
+**generic pattern** recognizes a common repository shape (a capability kit, a plugin
+marketplace, a repository of published skills) and applies to any Source, including
+a pasted link. A **repo-specific recipe** covers one repository no pattern fits, and
+may run that repository's own setup; only a **Tile** carries one. A Recipe also sets
+the **Selection** unit: pick individual Capabilities, or install the Source whole.
+_Avoid_: "installer" for the whole Recipe — an installer is the external tool a
+Recipe may call.
+
+**Tile**:
+A curated **Source** Hive ships on its shelf: a **Source Locator**, a label, and the
+**Recipe** that **Onboarding** verified for it. Selecting a Tile adds the Source; the
+Recipe decides whether the user then picks Capabilities or the Source installs
+whole. A pasted link behaves like a Tile without the curation.
+
+**Onboarding**:
+The Hive development step that investigates a new repository, finds its
+recommended install and uninstall for each CLI, matches it to a generic pattern or
+writes a repo-specific **Recipe**, verifies both directions, and adds the **Tile**.
+A pattern found while onboarding one repository is generalized for every Source.
 
 **Capability**:
 A deployable unit in a **Source**. Five kinds, the upstream taxonomy:

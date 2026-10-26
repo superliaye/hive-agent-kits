@@ -3,6 +3,8 @@
 // the upstream agent-kit contract (lib/deploy.js) verified against the pinned
 // my-agent-kits SHA in AGENTS.md.
 
+import { Buffer } from "node:buffer";
+
 // ---- snippet include expansion ----
 
 const INCLUDE_RE = /^[ \t]*<!--\s*include:\s*([A-Za-z0-9_-]+)\s*-->[ \t]*$/gm;
@@ -25,8 +27,14 @@ export function expandIncludes(
 
 // ---- skill transform ----
 
-// One file destined for a skill's deployed folder, path relative to the skill root.
-export type SkillFile = { rel: string; content: string };
+// One file destined for a skill's deployed folder, path relative to the skill
+// root. Bytes, so a binary file deploys unchanged.
+export type SkillFile = { rel: string; mode: 0o644 | 0o755; bytes: Uint8Array };
+
+// Mirrors and deployed folders keep only the exec bit.
+export function skillFileMode(statMode: number): SkillFile["mode"] {
+  return (statMode & 0o111) !== 0 ? 0o755 : 0o644;
+}
 
 export type SkillSource = {
   name: string;
@@ -45,7 +53,8 @@ export type SkillTransformOutput = {
 };
 
 // Filter maintainer-only assets (_unshipped/ dirs, SOURCE.md), expand includes
-// in every .md (SKILL.md strict, others lenient).
+// in every .md (SKILL.md strict, others lenient). Only a .md file that holds an
+// include marker is decoded; every other file passes through as bytes.
 export function transformSkill(
   src: SkillSource,
   snippets: Map<string, string>,
@@ -55,12 +64,11 @@ export function transformSkill(
     const parts = f.rel.split("/");
     if (parts.includes("_unshipped")) continue;
     if (f.rel === "SOURCE.md") continue;
-    if (f.rel.endsWith(".md") && f.content.includes("<!--")) {
+    if (f.rel.endsWith(".md") && Buffer.from(f.bytes).includes("<!--")) {
       const strict = parts[parts.length - 1] === "SKILL.md";
-      shipped.push({
-        rel: f.rel,
-        content: expandIncludes(f.content, snippets, strict, `Skill '${src.name}' (${f.rel})`),
-      });
+      const text = new TextDecoder("utf-8", { ignoreBOM: true }).decode(f.bytes);
+      const expanded = expandIncludes(text, snippets, strict, `Skill '${src.name}' (${f.rel})`);
+      shipped.push(expanded === text ? f : { ...f, bytes: new TextEncoder().encode(expanded) });
     } else {
       shipped.push(f);
     }
@@ -69,7 +77,8 @@ export function transformSkill(
   if (src.disableModelInvocation) {
     out.sidecar = {
       rel: "agents/openai.yaml",
-      content: "policy:\n  allow_implicit_invocation: false\n",
+      mode: 0o644,
+      bytes: new TextEncoder().encode("policy:\n  allow_implicit_invocation: false\n"),
     };
   }
   return out;

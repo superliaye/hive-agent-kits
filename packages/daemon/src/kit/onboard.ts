@@ -78,7 +78,7 @@ export function onboardSource(
     const sync: SourceSyncStatus = buildSourceSyncStatus(source, mirrorRoot, lastError);
 
     // Validation (one tree, two reads). A failed sync on a brand-new Source leaves
-    // NO Mirror dir (writeMirror is atomic — stage→swap retains last-good), so
+    // NO Mirror dir (commitMirror swaps atomically and keeps last-good), so
     // capabilitiesRoot yields an empty tree → conformant:true, capabilityCount:0:
     // the report is always well-formed.
     const tree = capabilitiesRoot(mirrorRoot);

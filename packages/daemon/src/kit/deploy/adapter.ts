@@ -4,8 +4,10 @@
 // adapter ran.
 
 import {
+  chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -16,7 +18,7 @@ import { homedir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { DeployError } from "../effect/errors.ts";
 import type { DeployTargets } from "../targets.ts";
-import type { SkillFile } from "./transforms.ts";
+import { type SkillFile, skillFileMode } from "./transforms.ts";
 
 export type ExecResult = { status: number; stdout: string; stderr: string };
 export type ExecRequest = { command: string; args: string[]; cwd?: string };
@@ -36,13 +38,14 @@ export type DeployFsExec = {
 
 // ---- filesystem ----
 
-export function writeSkillFolder(dest: string, files: SkillFile[]): void {
+export function writeSkillFolder(dest: string, files: readonly SkillFile[]): void {
   if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
   mkdirSync(dest, { recursive: true });
   for (const f of files) {
     const full = join(dest, f.rel);
     mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, f.content);
+    writeFileSync(full, f.bytes);
+    chmodSync(full, f.mode);
   }
 }
 
@@ -86,7 +89,8 @@ export function readSkillSource(srcDir: string): SkillFile[] {
       else if (ent.isFile()) {
         out.push({
           rel: relative(srcDir, full).replace(/\\/g, "/"),
-          content: readFileSync(full, "utf8"),
+          mode: skillFileMode(lstatSync(full).mode),
+          bytes: readFileSync(full),
         });
       }
     }

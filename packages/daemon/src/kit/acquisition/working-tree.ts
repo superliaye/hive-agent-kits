@@ -1,31 +1,31 @@
 import { createHash } from "node:crypto";
 import {
-  chmodSync,
   closeSync,
   constants,
   existsSync,
   fstatSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readlinkSync,
   realpathSync,
-  rmSync,
   statSync,
-  symlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceLocator } from "@hive/contract";
-import { commitStagedMirror, createOwnedMirrorStage } from "../mirror.ts";
-import type { MirrorProvenance } from "../types.ts";
+import { Effect } from "effect";
+import type { SyncError } from "../effect/errors.ts";
 import { type GitProcess, GitProcessFailure, productionGitProcess } from "./git-process.ts";
+import {
+  acquisitionError,
+  type ListedEntry,
+  resolveListing,
+  type TreePath,
+  type TreeSnapshot,
+} from "./snapshot.ts";
 import { DEFAULT_TREE_LIMITS, type TreeLimits } from "./tree-guard.ts";
 
 type WorkingTreeLocator = Extract<SourceLocator, { kind: "working-tree" }>;
-
-export type WorkingTreeProvenance = MirrorProvenance;
 
 export type WorkingTreeAcquireCode =
   | "working_tree_not_allowed"
@@ -46,11 +46,10 @@ export class WorkingTreeAcquireError extends Error {
   }
 }
 
-export type WorkingTreeAcquireOptions = {
+export type WorkingTreeSnapshotOptions = {
   allowedRoots: readonly string[];
-  tmpRoot: string;
   process?: GitProcess;
-  limits?: TreeLimits;
+  limits: TreeLimits;
 };
 
 function containedBy(path: string, root: string): boolean {
@@ -65,17 +64,6 @@ function safeRelativePath(path: string): boolean {
       !path.includes("\\") &&
       path.split("/").every((segment) => segment.length > 0 && segment !== "." && segment !== ".."))
   );
-}
-
-function safeDestination(stage: string, relativePath: string): string {
-  if (!safeRelativePath(relativePath) || relativePath === ".") {
-    throw new WorkingTreeAcquireError("unsafe_tree", "working tree contains an unsafe path");
-  }
-  const destination = resolve(stage, relativePath);
-  if (!containedBy(destination, resolve(stage))) {
-    throw new WorkingTreeAcquireError("unsafe_tree", "working tree path escapes the selected tree");
-  }
-  return destination;
 }
 
 function checkDeadline(deadlineMs: number): void {
@@ -139,21 +127,6 @@ function canonicalPath(path: string, code: WorkingTreeAcquireCode, message: stri
     return realpathSync(path);
   } catch {
     throw new WorkingTreeAcquireError(code, message);
-  }
-}
-
-function safelyResolvesWithin(source: string, target: string, selectedRoot: string): boolean {
-  if (isAbsolute(target) || /^[A-Za-z]:/.test(target) || target.includes("\\")) return false;
-  const lexicalTarget = resolve(dirname(source), target);
-  if (!containedBy(lexicalTarget, selectedRoot)) return false;
-  try {
-    return containedBy(realpathSync(lexicalTarget), selectedRoot);
-  } catch (error: unknown) {
-    // A dangling but lexically-internal link is safe to preserve. Other
-    // resolution failures (loops, permissions, non-directory components) are not.
-    return (
-      typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT"
-    );
   }
 }
 
@@ -248,46 +221,69 @@ function unchangedParent(
   }
 }
 
-type SourceEntry =
-  | {
-      selectedRelative: string;
-      kind: "file";
-      mode: number;
-      data: Buffer;
-      fingerprint: string;
-    }
-  | {
-      selectedRelative: string;
-      kind: "link";
-      mode: number;
-      target: string;
-      fingerprint: string;
-    };
-
-function fingerprintEntry(
-  selectedRelative: string,
-  mode: number,
-  kind: SourceEntry["kind"],
-  content: string | Buffer,
-): string {
+function fingerprintFile(selectedRelative: string, mode: number, data: Buffer): string {
   return createHash("sha256")
     .update(selectedRelative)
     .update("\0")
     .update(String(mode))
     .update("\0")
-    .update(kind)
-    .update("\0")
-    .update(content)
+    .update(data)
     .digest("hex");
 }
 
-function readSourceEntry(
+// Lists one path without reading file bytes: lstat for the mode, readlink for a
+// link. Link targets are resolved later against the listing, never the disk.
+function listSourceEntry(
+  repoRoot: string,
+  selectedRoot: string,
+  repoRelative: string,
+  pinnedParents: Map<string, DirectoryIdentity>,
+): { selectedRelative: string; entry: ListedEntry } {
+  const { source, selectedRelative, parentIdentity } = validateSourcePath(
+    repoRoot,
+    selectedRoot,
+    repoRelative,
+    pinnedParents,
+  );
+  let sourceStat: ReturnType<typeof lstatSync>;
+  try {
+    sourceStat = lstatSync(source);
+  } catch {
+    throw new WorkingTreeRaceError("working tree entry changed before it could be listed");
+  }
+  if (sourceStat.isSymbolicLink()) {
+    let text: string;
+    let after: ReturnType<typeof lstatSync>;
+    try {
+      text = readlinkSync(source);
+      after = lstatSync(source);
+    } catch {
+      throw new WorkingTreeRaceError("working tree link changed while it was read");
+    }
+    if (
+      !sameInode(sourceStat, after) ||
+      !after.isSymbolicLink() ||
+      !unchangedParent(dirname(source), parentIdentity, selectedRoot)
+    ) {
+      throw new WorkingTreeRaceError("working tree link changed while it was read");
+    }
+    return { selectedRelative, entry: { mode: "link", text } };
+  }
+  if (!sourceStat.isFile()) {
+    throw new WorkingTreeAcquireError("unsafe_tree", "working tree contains a special file");
+  }
+  return { selectedRelative, entry: { mode: (sourceStat.mode & 0o111) !== 0 ? "exec" : "file" } };
+}
+
+// Reads one listed regular file through a no-follow descriptor whose inode and
+// parent directory must stay put for the whole read.
+function readListedFile(
   repoRoot: string,
   selectedRoot: string,
   repoRelative: string,
   pinnedParents: Map<string, DirectoryIdentity>,
   maxFileBytes: number,
-): SourceEntry {
+): { data: Buffer; fingerprint: string } {
   const { source, selectedRelative, parentIdentity } = validateSourcePath(
     repoRoot,
     selectedRoot,
@@ -300,36 +296,8 @@ function readSourceEntry(
   } catch {
     throw new WorkingTreeRaceError("working tree entry changed before it could be read");
   }
-  const mode = sourceStat.mode & 0o777;
-  if (sourceStat.isSymbolicLink()) {
-    let target: string;
-    let after: ReturnType<typeof lstatSync>;
-    try {
-      target = readlinkSync(source);
-      after = lstatSync(source);
-    } catch {
-      throw new WorkingTreeRaceError("working tree link changed while it was read");
-    }
-    if (
-      !sameInode(sourceStat, after) ||
-      !after.isSymbolicLink() ||
-      !unchangedParent(dirname(source), parentIdentity, selectedRoot)
-    ) {
-      throw new WorkingTreeRaceError("working tree link changed while it was read");
-    }
-    if (!safelyResolvesWithin(source, target, selectedRoot)) {
-      throw new WorkingTreeAcquireError("unsafe_tree", "working tree link escapes selected tree");
-    }
-    return {
-      selectedRelative,
-      kind: "link",
-      mode,
-      target,
-      fingerprint: fingerprintEntry(selectedRelative, mode, "link", target),
-    };
-  }
   if (!sourceStat.isFile()) {
-    throw new WorkingTreeAcquireError("unsafe_tree", "working tree contains a special file");
+    throw new WorkingTreeRaceError("working tree file changed before it could be read");
   }
   const noFollow = "O_NOFOLLOW" in constants ? constants.O_NOFOLLOW : 0;
   let fd: number;
@@ -369,23 +337,7 @@ function readSourceEntry(
   } finally {
     closeSync(fd);
   }
-  return {
-    selectedRelative,
-    kind: "file",
-    mode,
-    data,
-    fingerprint: fingerprintEntry(selectedRelative, mode, "file", data),
-  };
-}
-
-function fingerprintsMatch(
-  before: ReadonlyMap<string, string>,
-  after: ReadonlyMap<string, string>,
-): boolean {
-  return (
-    before.size === after.size &&
-    [...before].every(([path, fingerprint]) => after.get(path) === fingerprint)
-  );
+  return { data, fingerprint: fingerprintFile(selectedRelative, sourceStat.mode & 0o777, data) };
 }
 
 async function listedWorkingTreePaths(
@@ -428,7 +380,7 @@ type VerifiedWorkingTree = {
 
 async function verifyWorkingTree(
   locator: WorkingTreeLocator,
-  options: Pick<WorkingTreeAcquireOptions, "allowedRoots" | "process" | "limits">,
+  options: Pick<WorkingTreeSnapshotOptions, "allowedRoots" | "process"> & { limits?: TreeLimits },
   requireCanonicalTopLevel: boolean,
 ): Promise<VerifiedWorkingTree> {
   const git = options.process ?? productionGitProcess();
@@ -514,160 +466,134 @@ async function verifyWorkingTree(
 
 export async function canonicalizeWorkingTreeLocator(
   locator: WorkingTreeLocator,
-  options: Pick<WorkingTreeAcquireOptions, "allowedRoots" | "process" | "limits">,
+  options: Pick<WorkingTreeSnapshotOptions, "allowedRoots" | "process"> & { limits?: TreeLimits },
 ): Promise<WorkingTreeLocator> {
   return (await verifyWorkingTree(locator, options, locator.subpath !== ".")).locator;
 }
 
-export async function acquireWorkingTree(
+function syncErrorOf(error: unknown): SyncError {
+  if (error instanceof WorkingTreeRaceError) return acquisitionError("working_tree_changed");
+  return acquisitionError(error instanceof WorkingTreeAcquireError ? error.code : "io");
+}
+
+// Lists tracked and non-ignored untracked files below the selected subpath and
+// reads them from disk on demand. `confirm` re-runs the HEAD and status marker
+// and the listing, and re-reads every file read so far: any difference fails
+// `working_tree_changed`, which the Sync retries once from a fresh snapshot.
+export function workingTreeSnapshot(
   locator: WorkingTreeLocator,
-  destination: string,
-  options: WorkingTreeAcquireOptions,
-): Promise<WorkingTreeProvenance> {
+  options: WorkingTreeSnapshotOptions,
+): Effect.Effect<TreeSnapshot, SyncError> {
   const git = options.process ?? productionGitProcess();
-  const limits = options.limits ?? DEFAULT_TREE_LIMITS;
+  const { limits } = options;
   const deadlineMs = Date.now() + limits.timeoutMs;
-  const verified = await verifyWorkingTree(locator, options, true);
-  const { topLevel, selectedRoot } = verified;
   const pinnedParents = new Map<string, DirectoryIdentity>();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let stage: string | undefined;
-    try {
+  const fingerprints = new Map<TreePath, string>();
+  let bytesRead = 0;
+  return Effect.tryPromise({
+    try: async () => {
+      const verified = await verifyWorkingTree(locator, options, true);
+      const { topLevel, selectedRoot } = verified;
       const before = await snapshotMarker(git, topLevel, locator.subpath, deadlineMs);
+      if (!/^[0-9a-f]{40}$/.test(before.head)) {
+        throw new WorkingTreeAcquireError("io", "working tree HEAD is invalid");
+      }
       const paths = await listedWorkingTreePaths(git, topLevel, locator.subpath, deadlineMs);
-      checkDeadline(deadlineMs);
-      stage = createOwnedMirrorStage(options.tmpRoot);
-      const identity = createHash("sha256");
-      const seen = new Set<string>();
-      const capturedFingerprints = new Map<string, string>();
-      let files = 0;
-      let bytes = 0;
+      if (paths.length > limits.maxListedEntries) {
+        throw new WorkingTreeAcquireError("budget_exceeded", "selected tree exceeds listing limit");
+      }
+      const listed = new Map<TreePath, ListedEntry>();
+      const repoRelativeOf = new Map<TreePath, string>();
       for (const repoRelative of paths) {
         checkDeadline(deadlineMs);
-        const entry = readSourceEntry(
+        const { selectedRelative, entry } = listSourceEntry(
           topLevel,
           selectedRoot,
           repoRelative,
           pinnedParents,
-          limits.maxBytes - bytes,
         );
-        if (seen.has(entry.selectedRelative)) {
+        const path = selectedRelative.split(sep).join("/") as TreePath;
+        if (listed.has(path)) {
           throw new WorkingTreeAcquireError(
             "unsafe_tree",
             "Git listed duplicate working tree paths",
           );
         }
-        seen.add(entry.selectedRelative);
-        capturedFingerprints.set(entry.selectedRelative, entry.fingerprint);
-        const output = safeDestination(stage, entry.selectedRelative);
-        files++;
-        if (files > limits.maxFiles) {
-          throw new WorkingTreeAcquireError("budget_exceeded", "selected tree exceeds file limit");
-        }
-        mkdirSync(dirname(output), { recursive: true });
-        identity.update(entry.selectedRelative).update("\0").update(String(entry.mode));
-        if (entry.kind === "link") {
-          identity.update("link\0").update(entry.target).update("\0");
-          symlinkSync(entry.target, output);
-          continue;
-        }
-        bytes += entry.data.byteLength;
-        if (bytes > limits.maxBytes) {
-          throw new WorkingTreeAcquireError("budget_exceeded", "selected tree exceeds byte limit");
-        }
-        identity.update("file\0").update(entry.data).update("\0");
-        writeFileSync(output, entry.data);
-        chmodSync(output, entry.mode);
+        listed.set(path, entry);
+        repoRelativeOf.set(path, repoRelative);
       }
-      const after = await snapshotMarker(git, topLevel, locator.subpath, deadlineMs);
-      const afterPaths = await listedWorkingTreePaths(git, topLevel, locator.subpath, deadlineMs);
-      const afterFingerprints = new Map<string, string>();
-      let afterFiles = 0;
-      let afterBytes = 0;
-      for (const repoRelative of afterPaths) {
-        checkDeadline(deadlineMs);
-        let entry: SourceEntry;
-        try {
-          entry = readSourceEntry(
-            topLevel,
-            selectedRoot,
-            repoRelative,
-            pinnedParents,
-            limits.maxBytes - afterBytes,
-          );
-        } catch (error) {
-          if (error instanceof WorkingTreeAcquireError && error.code === "budget_exceeded") {
-            throw error;
-          }
-          throw new WorkingTreeRaceError("working tree entry changed during verification");
+      const read = (path: TreePath, maxFileBytes: number) => {
+        const repoRelative = repoRelativeOf.get(path);
+        if (repoRelative === undefined || listed.get(path)?.mode === "link") {
+          throw new WorkingTreeAcquireError("io", "working tree entry is unavailable");
         }
-        afterFiles++;
-        if (afterFiles > limits.maxFiles) {
-          throw new WorkingTreeAcquireError("budget_exceeded", "selected tree exceeds file limit");
-        }
-        if (entry.kind === "file") {
-          afterBytes += entry.data.byteLength;
-          if (afterBytes > limits.maxBytes) {
-            throw new WorkingTreeAcquireError(
-              "budget_exceeded",
-              "selected tree exceeds byte limit",
-            );
-          }
-        }
-        afterFingerprints.set(entry.selectedRelative, entry.fingerprint);
-      }
-      if (
-        before.head !== after.head ||
-        before.status !== after.status ||
-        !pathsMatch(paths, afterPaths) ||
-        !fingerprintsMatch(capturedFingerprints, afterFingerprints)
-      ) {
-        if (attempt === 0) {
-          rmSync(stage, { recursive: true, force: true });
-          stage = undefined;
-          continue;
-        }
-        throw new WorkingTreeAcquireError(
-          "working_tree_changed",
-          "working tree changed during capture",
-        );
-      }
-      if (!/^[0-9a-f]{40}$/.test(after.head)) {
-        throw new WorkingTreeAcquireError("io", "working tree HEAD is invalid");
-      }
-      checkDeadline(deadlineMs);
-      const provenance: WorkingTreeProvenance = {
-        sha: after.head,
-        fetchedAt: Date.now(),
-        transport: "working-tree",
-        repoRoot: topLevel,
-        resolvedCommit: after.head,
-        subpath: locator.subpath,
-        treeIdentity: identity.digest("hex"),
-        dirty: after.status.length > 0,
+        return readListedFile(topLevel, selectedRoot, repoRelative, pinnedParents, maxFileBytes);
       };
-      const cleanup = commitStagedMirror(destination, stage, provenance);
-      stage = undefined;
-      cleanup();
-      return provenance;
-    } catch (error) {
-      if (stage) {
-        try {
-          rmSync(stage, { recursive: true, force: true });
-        } catch {
-          // Keep the original stable acquisition error at the caller boundary.
-        }
-      }
-      if (error instanceof WorkingTreeRaceError) {
-        if (attempt === 0) continue;
-        throw new WorkingTreeAcquireError(
-          "working_tree_changed",
-          "working tree changed during capture",
-        );
-      }
-      if (error instanceof WorkingTreeAcquireError) throw error;
-      throw new WorkingTreeAcquireError("io", "working tree could not be captured");
-    }
-  }
-  throw new WorkingTreeAcquireError("working_tree_changed", "working tree changed during capture");
+      const snapshot: TreeSnapshot = {
+        origin: {
+          transport: "working-tree",
+          repoRoot: topLevel,
+          subpath: verified.locator.subpath,
+          head: before.head,
+          dirty: before.status.length > 0,
+        },
+        entries: resolveListing(listed),
+        read: (requested) =>
+          Effect.try({
+            try: () => {
+              const out = new Map<TreePath, Uint8Array>();
+              for (const path of requested) {
+                checkDeadline(deadlineMs);
+                const file = read(path, limits.maxBytes - bytesRead);
+                bytesRead += file.data.byteLength;
+                fingerprints.set(path, file.fingerprint);
+                out.set(path, file.data);
+              }
+              return out;
+            },
+            catch: syncErrorOf,
+          }),
+        confirm: () =>
+          Effect.tryPromise({
+            try: async () => {
+              const after = await snapshotMarker(git, topLevel, locator.subpath, deadlineMs);
+              const afterPaths = await listedWorkingTreePaths(
+                git,
+                topLevel,
+                locator.subpath,
+                deadlineMs,
+              );
+              if (
+                before.head !== after.head ||
+                before.status !== after.status ||
+                !pathsMatch(paths, afterPaths)
+              ) {
+                throw new WorkingTreeRaceError("working tree changed during capture");
+              }
+              for (const [path, fingerprint] of fingerprints) {
+                checkDeadline(deadlineMs);
+                let current: string;
+                try {
+                  current = read(path, limits.maxBytes).fingerprint;
+                } catch (error) {
+                  if (
+                    error instanceof WorkingTreeAcquireError &&
+                    error.code === "budget_exceeded"
+                  ) {
+                    throw error;
+                  }
+                  throw new WorkingTreeRaceError("working tree entry changed during verification");
+                }
+                if (current !== fingerprint) {
+                  throw new WorkingTreeRaceError("working tree changed during capture");
+                }
+              }
+            },
+            catch: syncErrorOf,
+          }),
+      };
+      return snapshot;
+    },
+    catch: syncErrorOf,
+  });
 }

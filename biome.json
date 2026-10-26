@@ -4,6 +4,7 @@
   "files": {
     "includes": [
       "packages/daemon/src/**",
+      "packages/daemon/scripts/**",
       "packages/contract/src/**",
       "packages/shell/src/**",
       "scripts/**",

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -727,12 +728,23 @@ function coherentReaders(onCatalog: () => void) {
   };
 }
 
+// Swaps in a new Mirror generation the way commitMirror does: bytes and record
+// land together, and the record's digest names the generation.
 function swapMirrorGeneration(root: string, content: string, generation: number): void {
   const stage = `${root}.stage-${generation}`;
   const previous = `${root}.previous-${generation}`;
   const marker = join(stage, "capabilities", "skills", "alpha", "SKILL.md");
   mkdirSync(join(marker, ".."), { recursive: true });
   writeFileSync(marker, content);
+  writeFileSync(
+    join(stage, ".hive-mirror.json"),
+    JSON.stringify({
+      origin: { transport: "bundled" },
+      fetchedAt: generation,
+      recipe: { id: "capability-kit", label: "Capability kit", unit: "pick" },
+      contentDigest: createHash("sha256").update(content).digest("hex"),
+    }),
+  );
   renameSync(root, previous);
   renameSync(stage, root);
   rmSync(previous, { recursive: true });

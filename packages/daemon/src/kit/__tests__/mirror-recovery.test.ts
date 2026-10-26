@@ -1,6 +1,6 @@
 // Regression: mirror crash-recovery + .prev backup sweep (regression).
 //
-// writeMirror swaps in two renames (mirror -> .prev, stage -> mirror). A crash
+// commitMirror swaps in two renames (mirror -> .prev, stage -> mirror). A crash
 // between them leaves the only copy under a `.prev-*` name and mirrorRoot gone.
 // recoverMirror (run on startup) must restore the newest backup and sweep the rest.
 
@@ -10,21 +10,19 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  commitStagedMirror,
-  localSyncMirror,
-  mirrorExists,
-  recoverMirror,
-  sweepStaleTmp,
-} from "../mirror.ts";
+import { Effect } from "effect";
+import { DEFAULT_TREE_LIMITS } from "../acquisition/tree-guard.ts";
+import { commitMirror, materialize, recoverMirror, sweepStaleTmp } from "../mirror.ts";
+import { recipeTree, recognizeSource } from "../recipes/recipe.ts";
 import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
-import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
+import { clearHomeEnv, memorySnapshot, redirectHomeEnv } from "./helpers.ts";
 
 const SOURCE_ID = "src-1";
 
@@ -43,6 +41,26 @@ afterEach(() => {
   clearHomeEnv();
   rmSync(tmpRoot, { recursive: true, force: true });
 });
+
+const mirrorExists = (root: string) => existsSync(join(root, "capabilities"));
+
+function syncKit(marker: string): Promise<unknown> {
+  const { snapshot } = memorySnapshot({ "capabilities/marker": marker });
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const recognition = yield* recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS));
+        const staged = yield* materialize(
+          snapshot,
+          recognition,
+          targets.kitTmpRoot(),
+          DEFAULT_TREE_LIMITS,
+        );
+        return yield* commitMirror(mirrorRoot, staged);
+      }),
+    ),
+  );
+}
 
 // Simulate a crash mid-swap: a good mirror was renamed to `.prev-<ts>` and the
 // process died before stage->mirror, so mirrorRoot is absent.
@@ -80,14 +98,12 @@ describe("recoverMirror", () => {
     expect(mirrorExists(mirrorRoot)).toBe(true);
   });
 
-  test("a Source sync never sweeps another acquisition's active temp directory", () => {
+  test("a Source sync never sweeps another acquisition's active temp directory", async () => {
     const active = join(targets.kitTmpRoot(), "extract-working-tree-active");
     mkdirSync(active, { recursive: true });
     writeFileSync(join(active, "owned"), "still active");
-    const starter = join(tmpRoot, "starter");
-    mkdirSync(join(starter, "capabilities"), { recursive: true });
 
-    localSyncMirror(mirrorRoot, targets.kitTmpRoot(), starter);
+    await syncKit("new");
 
     expect(existsSync(join(active, "owned"))).toBe(true);
   });
@@ -117,27 +133,11 @@ describe("recoverMirror", () => {
     }
   });
 
-  test("commits the staged rename before running prior-Mirror cleanup", () => {
-    mkdirSync(join(mirrorRoot, "capabilities"), { recursive: true });
-    writeFileSync(join(mirrorRoot, "capabilities", "old"), "old");
-    const stage = join(targets.kitTmpRoot(), "extract-working-tree-commit");
-    mkdirSync(join(stage, "capabilities"), { recursive: true });
-    writeFileSync(join(stage, "capabilities", "new"), "new");
+  test("a commit replaces the prior Mirror and leaves no backup behind", async () => {
+    await syncKit("old");
+    await syncKit("new");
 
-    const cleanup = commitStagedMirror(mirrorRoot, stage, {
-      sha: "a".repeat(40),
-      fetchedAt: 0,
-      transport: "working-tree",
-      repoRoot: "/verified/repository",
-      resolvedCommit: "a".repeat(40),
-      subpath: ".",
-      treeIdentity: "tree",
-      dirty: false,
-    });
-
-    expect(existsSync(join(mirrorRoot, "capabilities", "new"))).toBe(true);
-    expect(readdirSync(dirname(mirrorRoot)).some((entry) => entry.includes(".prev-"))).toBe(true);
-    cleanup();
+    expect(readFileSync(join(mirrorRoot, "capabilities", "marker"), "utf8")).toBe("new");
     expect(readdirSync(dirname(mirrorRoot)).some((entry) => entry.includes(".prev-"))).toBe(false);
   });
 });

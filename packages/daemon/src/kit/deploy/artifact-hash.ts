@@ -5,25 +5,36 @@
 //
 // Each function hashes what deploy ACTUALLY wrote to disk for a kind under a
 // target, matching Deploy's write semantics exactly:
-//   skill       — stable hash over the deployed file-set (sorted relative paths +
-//                 bytes); the on-disk folder already includes the Codex sidecar.
+//   skill       — stable hash over the deployed file-set (sorted relative paths,
+//                 exec bits, and bytes); the on-disk folder already includes the
+//                 Codex sidecar.
 //   agent       — hash of the rendered .md (claude) / .toml (codex) file bytes.
 //   instruction — hash of the written whole-file body (CLAUDE.md / AGENTS.md).
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DeployTarget, DeployTargets } from "../targets.ts";
+import { type SkillFile, skillFileMode } from "./transforms.ts";
 
 export function sha256(s: string): string {
   return createHash("sha256").update(s).digest("hex");
 }
 
-// Stable hash of a skill file-set: sort by relative path, join `${rel}\n${content}`
-// with a NUL separator. Rendered and deployed skill hashes both go through here.
-export function hashSkillFiles(files: { rel: string; content: string }[]): string {
+// Stable hash of a skill file-set: sort by relative path, join `${rel}\n` + bytes
+// with a NUL separator. That is the encoding text-only skills always hashed
+// with, so their hashes held when files became bytes; an executable adds a mode
+// marker (a path holds no NUL), so an exec bit change is a change. Rendered and
+// deployed skill hashes both go through here.
+export function hashSkillFiles(files: readonly SkillFile[]): string {
   const sorted = [...files].sort((a, b) => a.rel.localeCompare(b.rel));
-  return sha256(sorted.map((f) => `${f.rel}\n${f.content}`).join("\0"));
+  const hash = createHash("sha256");
+  sorted.forEach((f, index) => {
+    if (index > 0) hash.update("\0");
+    hash.update(f.mode === 0o755 ? `${f.rel}\u0000755\n` : `${f.rel}\n`);
+    hash.update(f.bytes);
+  });
+  return hash.digest("hex");
 }
 
 // The on-disk skills root for a target: claude skills live under claudeHome/skills,
@@ -68,13 +79,15 @@ export function hashDeployedSkill(
 ): string | null {
   const dir = deployedSkillDir(targets, name, target);
   if (!existsSync(dir)) return null;
-  const files: { rel: string; content: string }[] = [];
+  const files: SkillFile[] = [];
   const walk = (d: string, base: string): void => {
     for (const ent of readdirSync(d, { withFileTypes: true })) {
       const full = join(d, ent.name);
       const rel = base ? `${base}/${ent.name}` : ent.name;
       if (ent.isDirectory()) walk(full, rel);
-      else if (ent.isFile()) files.push({ rel, content: readFileSync(full, "utf8") });
+      else if (ent.isFile()) {
+        files.push({ rel, mode: skillFileMode(lstatSync(full).mode), bytes: readFileSync(full) });
+      }
     }
   };
   walk(dir, "");

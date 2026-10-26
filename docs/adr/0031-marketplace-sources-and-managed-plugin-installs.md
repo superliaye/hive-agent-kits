@@ -1,7 +1,8 @@
 # Marketplace Sources and managed plugin installs
 
 status: proposed; superseded-in-part by ADR-0032 — hand-written pointers install
-too, and removal uninstalls
+too, and removal uninstalls; and by ADR-0033 — marketplace ingestion is one Recipe
+in an ordered list
 relates-to: ADR-0025, ADR-0029, ADR-0023
 
 ## What this ADR records

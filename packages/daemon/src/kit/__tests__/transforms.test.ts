@@ -23,32 +23,39 @@ describe("expandIncludes", () => {
   });
 });
 
+const text = (rel: string, content: string): SkillFile => ({
+  rel,
+  mode: 0o644,
+  bytes: new TextEncoder().encode(content),
+});
+const decoded = (file: SkillFile | undefined) => new TextDecoder().decode(file?.bytes);
+
 describe("transformSkill", () => {
   const snippets = new Map([["body-snip", "EXPANDED BODY"]]);
 
   test("filters _unshipped/ and SOURCE.md, expands includes in SKILL.md", () => {
     const files: SkillFile[] = [
-      { rel: "SKILL.md", content: "---\ndescription: x\n---\n<!-- include: body-snip -->" },
-      { rel: "SOURCE.md", content: "maintainer notes" },
-      { rel: "_unshipped/notes.md", content: "draft" },
-      { rel: "ref/keep.md", content: "kept reference" },
+      text("SKILL.md", "---\ndescription: x\n---\n<!-- include: body-snip -->"),
+      text("SOURCE.md", "maintainer notes"),
+      text("_unshipped/notes.md", "draft"),
+      text("ref/keep.md", "kept reference"),
     ];
     const out = transformSkill({ name: "demo", files, disableModelInvocation: false }, snippets);
 
     const rels = out.files.map((f) => f.rel).sort();
     expect(rels).toEqual(["SKILL.md", "ref/keep.md"]);
     const skill = out.files.find((f) => f.rel === "SKILL.md");
-    expect(skill?.content).toContain("EXPANDED BODY");
-    expect(skill?.content).not.toContain("<!-- include:");
+    expect(decoded(skill)).toContain("EXPANDED BODY");
+    expect(decoded(skill)).not.toContain("<!-- include:");
     expect(out.sidecar).toBeUndefined();
   });
 
   test("emits agents/openai.yaml sidecar (allow_implicit_invocation:false) when disableModelInvocation", () => {
-    const files: SkillFile[] = [{ rel: "SKILL.md", content: "---\ndescription: x\n---\nbody" }];
+    const files: SkillFile[] = [text("SKILL.md", "---\ndescription: x\n---\nbody")];
     const out = transformSkill({ name: "demo", files, disableModelInvocation: true }, snippets);
     expect(out.sidecar).toBeDefined();
     expect(out.sidecar?.rel).toBe("agents/openai.yaml");
-    expect(out.sidecar?.content).toContain("allow_implicit_invocation: false");
+    expect(decoded(out.sidecar)).toContain("allow_implicit_invocation: false");
   });
 });
 
