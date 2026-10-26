@@ -416,15 +416,13 @@ describe("KitDeployPage — Remove on a Source card", () => {
 });
 
 describe("KitDeployPage — added Source cards", () => {
-  test("a SHA-less Source (the bundled Starter) renders a labeled 'no identity', not a bare dash", async () => {
+  test("the Added badge's title names the Mirror identity, or just Ready when it has none", async () => {
     installStubs();
     const host = await render();
-    const sha = host.querySelector(`[data-testid="kit-sha-${GIT_ID}"]`);
-    expect(sha?.textContent).toBe("abc1234");
-    expect(sha?.className).not.toContain("kit-sha-empty");
-    const starterSha = host.querySelector(`[data-testid="kit-sha-${STARTER_ID}"]`);
-    expect(starterSha?.textContent).toBe("no identity");
-    expect(starterSha?.className).toContain("kit-sha-empty");
+    const title = (id: string) =>
+      host.querySelector(`[data-testid="kit-source-added-${id}"]`)?.getAttribute("title");
+    expect(title(GIT_ID)).toBe("Ready · abc1234");
+    expect(title(STARTER_ID)).toBe("Ready");
   });
 
   test("per-capability target observations coexist with global target controls", async () => {

@@ -412,37 +412,13 @@ async function addTiles(daemon: Daemon, ids: readonly string[]): Promise<Map<str
     try {
       const tile = shelf.find((entry) => entry.id === id);
       if (!tile) throw new Error(`GET /api/tiles does not list ${id}`);
-      let sourceId: string;
-      let sync: string;
-      let caps: number | null = null;
-      let syncOk: boolean;
-      let retried = false;
-      const reply =
-        id === "starter" ? await daemon.call("POST", "/api/sources", { tile: id }) : null;
-      if (reply && reply.status === 409) {
-        // The Starter is present from the first launch; adding it again is a duplicate.
-        const present = (await daemon.read(TileShelf, "/api/tiles")).find((t) => t.id === id);
-        if (!present?.sourceId) throw new Error("Starter answered 409 but has no Source");
-        sourceId = present.sourceId;
-        const state = (await daemon.read(KitState, "/api/kit/state")).sync.find(
-          (entry) => entry.sourceId === sourceId,
-        );
-        sync = `sync=${state?.state ?? "?"} (present at launch, add answers 409)`;
-        syncOk = state?.state === "local";
-      } else {
-        const added = reply
-          ? {
-              result: expectBody(AddSourceResult, reply, 201, "POST /api/sources starter"),
-              retried: false,
-            }
-          : await addSource(daemon, { tile: id }, id);
-        const result = added.result;
-        sourceId = result.source.id;
-        sync = syncText(result);
-        syncOk = result.sync.state === "up_to_date" || result.sync.state === "local";
-        caps = result.validation.capabilityCount;
-        retried = added.retried;
-      }
+      const added = await addSource(daemon, { tile: id }, id);
+      const result = added.result;
+      const sourceId = result.source.id;
+      const sync = syncText(result);
+      const syncOk = result.sync.state === "up_to_date";
+      let caps: number | null = result.validation.capabilityCount;
+      const retried = added.retried;
       sourceByTile.set(id, sourceId);
       const view = await overview(daemon);
       const recipe = view.sources.find((source) => source.id === sourceId)?.recipe ?? null;

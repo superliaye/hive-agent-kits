@@ -22,8 +22,8 @@ export type SourcesWriter = { write(file: SourcesFile): void };
 export type AddResult = { ok: true; source: Source } | { ok: false; reason: "duplicate" };
 export type MutateResult = { ok: true; source: Source } | { ok: false; reason: "not-found" };
 export type DeleteResult = { ok: true } | { ok: false; reason: "not-found" };
-// Seeding a local Source is idempotent: a duplicate fixed id no-ops (the Starter
-// is the sole minter of its well-known id).
+// Seeding a local Source is idempotent: a duplicate fixed id no-ops (each dev
+// fixture Source has a fixed, well-known id).
 export type SeedLocalResult = { ok: true; source: Source } | { ok: false; reason: "duplicate-id" };
 export type PreparedSourceMutation<Result> = {
   result: Result;

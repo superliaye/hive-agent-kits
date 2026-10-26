@@ -53,6 +53,8 @@ const TrackedGitRef = z
     "tracked ref must be a safe fully-qualified branch or tag ref",
   );
 
+// `starter`: a kit bundled inside Hive's repository, which only the dev fixture
+// Sources use. Users add git and working-tree Sources.
 export const SourceLocator = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("starter") }).strict(),
   z
@@ -81,10 +83,8 @@ export type SourceLocator = z.infer<typeof SourceLocator>;
 // participates in sync/aggregation. `locator.kind` selects the authoritative
 // transport; the legacy `kind` field remains a display compatibility seam.
 // `rank` is the stored precedence signal (ADR-0023): higher wins a cross-Source
-// collision. It is a FREE total order — the user may re-rank any Source above any
-// other (the Starter above a git Source is allowed). The default SEED reproduces
-// "user-added git > local Starter, newest-first" (Starter lowest, each add the new
-// highest) without a runtime kind-band. `createdAt` is NOT the precedence signal.
+// collision. Each add takes the new highest rank, so the newest Source wins,
+// without a runtime kind-band. `createdAt` is NOT the precedence signal.
 export const Source = z.object({
   id: z.string(),
   label: z.string().min(1).max(160),
@@ -115,7 +115,7 @@ const PastedSourceBody = z
   .object({
     label: z.string().min(1).max(160),
     locator: SourceLocator.refine((locator) => locator.kind !== "starter", {
-      message: "the built-in Starter cannot be added",
+      message: "a bundled Source cannot be added",
     }),
   })
   .strict();
@@ -132,12 +132,14 @@ export type AddSourceInput = {
   locator: Exclude<SourceLocator, { kind: "starter" }>;
 };
 
-// One shelf entry for GET /api/tiles. `sourceId` is the Source whose locator is
-// this Tile's, or null.
+// One shelf entry for GET /api/tiles. `url` is the repository's web page at the
+// Tile's ref and subpath. `sourceId` is the Source whose locator is this Tile's,
+// or null.
 export const TileSummary = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
   description: z.string(),
+  url: z.string().url(),
   recipe: RecipeSummary,
   sourceId: z.string().nullable(),
 });

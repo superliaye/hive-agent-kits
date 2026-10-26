@@ -38,8 +38,8 @@ export function buildSourceSyncStatus(
 ): SourceSyncStatus {
   const base = { sourceId: source.id };
   // A local (bundled) Source short-circuits: it has no commit to report. But a
-  // local sync can still FAIL (a bad HIVE_STARTER_ROOT / packaging miss →
-  // missing_starter_root): when an error is
+  // local sync can still FAIL (a bad HIVE_FIXTURE_SOURCES_ROOT →
+  // missing_local_root): when an error is
   // recorded for it, surface `check_failed` like any other failed Source — never
   // mask a failure as the healthy `local` state. A clean local sync → `local`,
   // null sha/fetchedAt (derived from kind, never a synthetic sha).

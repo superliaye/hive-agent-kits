@@ -9,9 +9,9 @@ import { gstackRecipe, uiUxProMaxRecipe } from "./repo-recipes.ts";
 
 type GitLocator = Extract<SourceLocator, { kind: "git" }>;
 // A Tile names its ref, because SourceLocator has no default-branch mode.
-export type TileLocator =
-  | Extract<SourceLocator, { kind: "starter" }>
-  | (GitLocator & { readonly revision: Extract<GitLocator["revision"], { mode: "track" }> });
+export type TileLocator = GitLocator & {
+  readonly revision: Extract<GitLocator["revision"], { mode: "track" }>;
+};
 
 declare const tileBrand: unique symbol;
 export type Tile = {
@@ -56,14 +56,6 @@ function tracking(repoUrl: string, ref: string, subpath = "."): TileLocator {
 // pasted link, recognition, and the source.added audit event all read this one
 // list.
 export const TILES: readonly Tile[] = [
-  defineTile({
-    id: "starter",
-    label: "Starter",
-    description: "The capability kit bundled with Hive.",
-    locator: { kind: "starter" },
-    recipe: capabilityKit,
-    unit: "pick",
-  }),
   defineTile({
     id: "my-agent-kits",
     label: "my-agent-kits",
@@ -155,11 +147,20 @@ export function tileForLocator(locator: SourceLocator): Tile | null {
   return TILES.find((tile) => locatorIdentity(tile.locator) === identity) ?? null;
 }
 
+// The repository's GitHub page, at the Tile's ref and subpath for a subpath Tile.
+function tileUrl(locator: TileLocator): string {
+  const repository = locator.repoUrl.replace(/\.git$/, "");
+  if (locator.subpath === ".") return repository;
+  const ref = locator.revision.ref.replace(/^refs\/(heads|tags)\//, "");
+  return `${repository}/tree/${ref}/${locator.subpath}`;
+}
+
 export function tileShelf(sources: readonly Pick<Source, "id" | "locator">[]): TileSummary[] {
   return TILES.map((tile) => ({
     id: tile.id,
     label: tile.label,
     description: tile.description,
+    url: tileUrl(tile.locator),
     recipe: { id: tile.recipe.id, label: tile.recipe.label, unit: tile.recipe.unit },
     sourceId: sources.find((source) => tileForLocator(source.locator) === tile)?.id ?? null,
   }));

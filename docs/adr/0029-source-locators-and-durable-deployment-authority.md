@@ -15,7 +15,7 @@ Deploy.
 
 A Source has one explicit locator:
 
-- `starter` copies the bundled Starter Source;
+- `starter` copies a kit bundled inside Hive's repository (the dev fixture Sources);
 - `git` names a credential-free HTTPS repository, a tracked ref or pinned full
   commit, and a subpath; or
 - `working-tree` names an allowlisted absolute Git root on the Daemon machine and

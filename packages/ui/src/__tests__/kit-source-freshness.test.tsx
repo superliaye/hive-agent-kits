@@ -85,13 +85,15 @@ async function render(unavailable = false): Promise<HTMLElement> {
 }
 
 describe("KitDeployPage — Source observations from Overview", () => {
-  test("renders the Source label and mirror identity", async () => {
+  test("renders the Source label, and a healthy Mirror only in the Added badge's title", async () => {
     const host = await render();
     expect(host.querySelector('[data-testid="kit-source-src"]')?.textContent).toContain(
       "owner/arca",
     );
-    expect(host.querySelector('[data-testid="kit-sha-src"]')?.textContent).toBe("f799d5f");
-    expect(host.querySelector('[data-testid="kit-freshness-src"]')?.textContent).toBe("Ready");
+    expect(host.querySelector('[data-testid="kit-source-added-src"]')?.getAttribute("title")).toBe(
+      "Ready · f799d5f",
+    );
+    expect(host.querySelector('[data-testid="kit-freshness-src"]')).toBeNull();
   });
 
   test("renders an unavailable mirror as an error fact", async () => {

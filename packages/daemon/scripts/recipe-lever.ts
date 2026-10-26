@@ -9,9 +9,9 @@
 //
 //   bun run recipe-lever <tile-id | https-url> [--ref <ref>] [--record] [--compare-npx]
 //
-// A Tile id uses the Tile's locator, ref and subpath included; the Starter Tile
-// reads the bundled Starter. A URL is a whole repository at --ref (default
-// main), and is a Tile's Source when it equals that Tile's locator, as at Sync.
+// A Tile id uses the Tile's locator, ref and subpath included. A URL is a whole
+// repository at --ref (default main), and is a Tile's Source when it equals that
+// Tile's locator, as at Sync.
 
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -21,9 +21,8 @@ import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { Cause, Effect, Exit, type Scope } from "effect";
 import pino from "pino";
 import { gitSnapshot } from "../src/kit/acquisition/git-source.ts";
-import { directorySnapshot, type TreeSnapshot } from "../src/kit/acquisition/snapshot.ts";
+import type { TreeSnapshot } from "../src/kit/acquisition/snapshot.ts";
 import { DEFAULT_TREE_LIMITS } from "../src/kit/acquisition/tree-guard.ts";
-import { bundledStarterRoot } from "../src/kit/bundled-starter.ts";
 import { SyncError } from "../src/kit/effect/errors.ts";
 import { materialize } from "../src/kit/mirror.ts";
 import {
@@ -97,9 +96,7 @@ function openSnapshot(
   locator: TileLocator,
   work: string,
 ): Effect.Effect<TreeSnapshot, SyncError, Scope.Scope> {
-  return locator.kind === "starter"
-    ? Effect.suspend(() => directorySnapshot(bundledStarterRoot(work)))
-    : gitSnapshot(locator, { cacheRoot: join(work, "git-cache"), limits: DEFAULT_TREE_LIMITS });
+  return gitSnapshot(locator, { cacheRoot: join(work, "git-cache"), limits: DEFAULT_TREE_LIMITS });
 }
 
 type MirrorFile = { rel: string; size: number };
@@ -181,7 +178,7 @@ function inspect(target: Target, work: string): Effect.Effect<Report, SyncError>
 
 // The skill names `skills add --list` prints: clack indents a name two spaces
 // past the gutter and its description four.
-function npxSkillNames(locator: Extract<TileLocator, { kind: "git" }>): string[] | string {
+function npxSkillNames(locator: TileLocator): string[] | string {
   const branch = locator.revision.ref.replace(/^refs\/(heads|tags)\//, "");
   const subpath = locator.subpath === "." ? "" : `/${locator.subpath}`;
   const target =
@@ -278,9 +275,7 @@ async function main(argv: readonly string[]): Promise<number> {
     const exit = await Effect.runPromiseExit(inspect(target, work));
     const { locator } = target;
     console.log(
-      locator.kind === "git"
-        ? `Repository  ${locator.repoUrl} @ ${locator.revision.ref}${locator.subpath === "." ? "" : `, subpath ${locator.subpath}`}`
-        : "Repository  the bundled Starter",
+      `Repository  ${locator.repoUrl} @ ${locator.revision.ref}${locator.subpath === "." ? "" : `, subpath ${locator.subpath}`}`,
     );
     if (Exit.isFailure(exit)) {
       const error = Cause.squash(exit.cause);

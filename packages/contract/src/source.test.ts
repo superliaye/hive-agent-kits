@@ -6,9 +6,9 @@ describe("SourceLocator", () => {
     expect(
       SourceLocator.safeParse({
         kind: "git",
-        repoUrl: "https://github.com/databricks-eng/universe",
+        repoUrl: "https://github.com/example-org/monorepo",
         revision: { mode: "track", ref: "refs/heads/master" },
-        subpath: "experimental/leon-ye_data/agent-kits",
+        subpath: "tools/agent-kits",
       }).success,
     ).toBe(true);
     expect(
@@ -73,8 +73,8 @@ describe("SourceLocator", () => {
     expect(
       SourceLocator.safeParse({
         kind: "working-tree",
-        repoRoot: "/home/leon.ye/universe",
-        subpath: "experimental/leon-ye_data/agent-kits",
+        repoRoot: "/home/dev/monorepo",
+        subpath: "tools/agent-kits",
       }).success,
     ).toBe(true);
   });
@@ -146,12 +146,12 @@ describe("AddSourceBody", () => {
   test("accepts a labeled locator", () => {
     expect(
       AddSourceBody.safeParse({
-        label: "Universe personal kit",
+        label: "Monorepo personal kit",
         locator: {
           kind: "git",
-          repoUrl: "https://github.com/databricks-eng/universe",
+          repoUrl: "https://github.com/example-org/monorepo",
           revision: { mode: "track", ref: "refs/heads/master" },
-          subpath: "experimental/leon-ye_data/agent-kits",
+          subpath: "tools/agent-kits",
         },
       }).success,
     ).toBe(true);

@@ -23,9 +23,9 @@ describe("AppConfigSchema", () => {
     expect(
       AppConfigSchema.parse({
         ...APP_CONFIG_DEFAULTS,
-        sources: { workingTreeRoots: ["/home/leon.ye/universe"] },
+        sources: { workingTreeRoots: ["/home/dev/monorepo"] },
       }).sources.workingTreeRoots,
-    ).toEqual(["/home/leon.ye/universe"]);
+    ).toEqual(["/home/dev/monorepo"]);
   });
 
   // Forward-compat: an existing on-disk config written before `developer`

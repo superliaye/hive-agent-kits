@@ -110,7 +110,6 @@ describe("dev fixture Sources mode", () => {
     try {
       const sources = await getSources(server);
       expect(sources.map((source) => source.id)).toEqual([
-        "starter",
         "fixture-alpha",
         "fixture-beta",
         "fixture-gamma",
@@ -198,8 +197,7 @@ describe("dev fixture Sources mode", () => {
     });
     try {
       const sources = await getSources(server);
-      expect(sources.map((source) => source.id)).toEqual(["starter"]);
-      expect(sources.some((source) => FIXTURE_IDS.some((id) => id === source.id))).toBe(false);
+      expect(sources).toEqual([]);
     } finally {
       await server.dispose();
     }

@@ -205,11 +205,11 @@ git commit -m "test: verify managed npx bundles end to end"
 ### Task 5: Refresh `my-agent-kits` metadata and upstream content
 
 **Files:**
-- Modify: `/home/leon.ye/my-agent-kits/capabilities/bundles/{archify,hyperframes,slidev,gstack}.bundle.md`
+- Modify: `~/my-agent-kits/capabilities/bundles/{archify,hyperframes,slidev,gstack}.bundle.md`
 - Modify: upstream-tracked `SKILL.md`/`SOURCE.md` files whose recorded revision differs from current upstream.
-- Modify: `/home/leon.ye/my-agent-kits/package.json`
-- Modify: `/home/leon.ye/my-agent-kits/CHANGELOG.md`
-- Test: `/home/leon.ye/my-agent-kits/test/cases/{archify,hyperframes,slidev,gstack}-bundle.sh`
+- Modify: `~/my-agent-kits/package.json`
+- Modify: `~/my-agent-kits/CHANGELOG.md`
+- Test: `~/my-agent-kits/test/cases/{archify,hyperframes,slidev,gstack}-bundle.sh`
 
 **Interfaces:**
 - Produces: pinned current upstream references and explicit `installer.skills`/list-valued `verify_paths` consumed by Hive.

@@ -605,7 +605,6 @@ function testTargets(
     mirrorRoot: (sourceId) => join(root, "mirrors", sourceId),
     deploymentStatePath: () => join(root, "deployment-state.json"),
     kitTmpRoot: () => join(root, "tmp"),
-    starterRoot: () => join(root, "starter"),
     childEnv: (base) => ({ ...base }),
     isChildEnvRedirected: () => true,
     withHomes: (fixed) => testTargets(root, fixed),

@@ -34,14 +34,13 @@ export const SourcesFileVersionProbe = z.object({ version: z.number() });
 //
 // Source add/activate/deactivate/delete are user actions, so each emits one
 // audit event. Payloads are refs-only — the opaque SourceId and locator kind,
-// plus a credential-free git origin and the Tile id on add. Re-adding the Starter from its Tile is a user add; first-run seeding
-// is not. A registry mutation has neither a Run nor an Agent, so run_id/agent_id
-// are null at the normalizer.
+// plus a credential-free git origin and the Tile id on add. Seeding the dev
+// fixture Sources is not a user action. A registry mutation has neither a Run
+// nor an Agent, so run_id/agent_id are null at the normalizer.
 export type SourcesAuditEvents = {
   "source.added":
     | { id: string; kind: "git"; origin: string; tile: string | null }
-    | { id: string; kind: "working-tree"; tile: string | null }
-    | { id: string; kind: "starter"; tile: string | null };
+    | { id: string; kind: "working-tree"; tile: string | null };
   "source.activated": { id: string };
   "source.deactivated": { id: string };
   "source.removed": { id: string };

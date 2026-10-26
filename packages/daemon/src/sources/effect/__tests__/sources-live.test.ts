@@ -5,10 +5,9 @@ import { join } from "node:path";
 import { Effect, ManagedRuntime } from "effect";
 import { SOURCES_FILE_VERSION, type SourcesAuditEvents } from "../../types.ts";
 import { DuplicateOrigin, SourceNotFound } from "../errors.ts";
-import { SourceRegistry, SourceRegistryLive } from "../sources-live.ts";
+import { DEV_FIXTURE_SOURCES, SourceRegistry, SourceRegistryLive } from "../sources-live.ts";
 
-const STARTER_ID = "starter";
-const STARTER_ORIGIN = "local:starter";
+const FIXTURE_IDS = DEV_FIXTURE_SOURCES.map((seed) => seed.id);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -163,7 +162,7 @@ describe("SourceRegistryLive — file mode lifecycle", () => {
   });
 });
 
-describe("SourceRegistryLive — first-run Starter seeding", () => {
+describe("SourceRegistryLive — first run", () => {
   let root: string;
   let path: string;
 
@@ -176,50 +175,40 @@ describe("SourceRegistryLive — first-run Starter seeding", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  function svc() {
-    const rt = ManagedRuntime.make(SourceRegistryLive({ mode: "file", path }));
+  function svc(seedFixtureSources = false) {
+    const rt = ManagedRuntime.make(SourceRegistryLive({ mode: "file", path, seedFixtureSources }));
     return { svc: rt.runSync(SourceRegistry), rt };
   }
 
-  test("missing file → seeds exactly the local Starter (id 'starter', kind 'local', active, origin 'local:starter'); NOT my-agent-kits", async () => {
+  test("a fresh install starts with no Sources: no Starter and no my-agent-kits", async () => {
     expect(existsSync(path)).toBe(false);
     const { svc: s, rt } = svc();
-    const list = await Effect.runPromise(s.list());
-    expect(list).toHaveLength(1);
-    expect(list[0]?.id).toBe(STARTER_ID);
-    expect(list[0]?.origin).toBe(STARTER_ORIGIN);
-    expect(list[0]?.kind).toBe("local");
-    expect(list[0]?.active).toBe(true);
-    // No remote my-agent-kits seed anymore.
-    expect(list.some((x) => x.origin.includes("my-agent-kits"))).toBe(false);
-    // currentSources() returns the in-memory list synchronously, matching list().
-    expect(s.currentSources().map((x) => x.id)).toEqual(list.map((x) => x.id));
-    expect(existsSync(path)).toBe(true); // seeded + persisted
+    expect(await Effect.runPromise(s.list())).toEqual([]);
+    expect(s.currentSources()).toEqual([]);
     rt.dispose();
   });
 
-  test("first-run seed emits NO source.added audit event; a real user add still does", async () => {
+  test("dev fixture mode seeds the fixture Sources with NO source.added event; a user add still emits", async () => {
     const seen: SourcesAuditEvents["source.added"][] = [];
-    const { svc: s, rt } = svc();
+    const { svc: s, rt } = svc(true);
     s.events.on("source.added", (e) => {
       seen.push(e);
     });
-    // The Starter was seeded during the Layer build via the store-level seedLocal,
-    // which is OFF the audited service `add()` path — so no event fired then, and
-    // none fires on a subsequent read.
+    // Seeded during the Layer build via the store-level seedLocal, which is OFF
+    // the audited service `add()` path — so no event fired then, and none fires
+    // on a subsequent read.
     const list = await Effect.runPromise(s.list());
-    expect(list[0]?.id).toBe(STARTER_ID);
+    expect(list.map((x) => [x.id, x.kind, x.active])).toEqual(
+      FIXTURE_IDS.map((id) => [id, "local", true]),
+    );
+    expect(existsSync(path)).toBe(true);
     expect(seen).toHaveLength(0);
     // A genuine user add DOES emit — proving the spy is wired and the zero above is
     // meaningful, not a dead listener.
     await Effect.runPromise(s.add(gitInput("https://github.com/owner/added")));
-    expect(seen).toHaveLength(1);
-    expect(seen[0]).toEqual({
-      id: expect.any(String),
-      kind: "git",
-      origin: "https://github.com/owner/added",
-      tile: null,
-    });
+    expect(seen).toEqual([
+      { id: expect.any(String), kind: "git", origin: "https://github.com/owner/added", tile: null },
+    ]);
     rt.dispose();
   });
 
@@ -229,14 +218,14 @@ describe("SourceRegistryLive — first-run Starter seeding", () => {
       JSON.stringify({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] }),
       "utf8",
     );
-    const { svc: s, rt } = svc();
+    const { svc: s, rt } = svc(true);
     expect(await Effect.runPromise(s.list())).toHaveLength(0);
     rt.dispose();
   });
 
-  test("a STALE-version file (discarded as EMPTY) RE-SEEDS the Starter — no empty-registry boot", async () => {
+  test("a STALE-version file (discarded as EMPTY) re-seeds the fixtures — no empty fixture boot", async () => {
     // A prior-schema v1 file present on disk: read() discards it as EMPTY, and the
-    // seed gate (isCurrentVersion, not bare exists) must still re-seed the Starter.
+    // seed gate (isCurrentVersion, not bare exists) must still re-seed.
     writeFileSync(
       path,
       JSON.stringify({
@@ -245,49 +234,24 @@ describe("SourceRegistryLive — first-run Starter seeding", () => {
       }),
       "utf8",
     );
-    const { svc: s, rt } = svc();
-    const list = await Effect.runPromise(s.list());
-    expect(list).toHaveLength(1);
-    expect(list[0]?.id).toBe(STARTER_ID);
-    expect(list[0]?.kind).toBe("local");
+    const { svc: s, rt } = svc(true);
+    expect((await Effect.runPromise(s.list())).map((x) => x.id)).toEqual([...FIXTURE_IDS]);
     rt.dispose();
   });
 
-  test("deleting the Starter then re-constructing does NOT re-seed", async () => {
-    // First run seeds.
-    const first = svc();
-    const list = await Effect.runPromise(first.svc.list());
-    const seeded = list[0];
-    expect(seeded).toBeDefined();
-    if (!seeded) throw new Error("setup failed");
-    await Effect.runPromise(first.svc.delete(seeded.id));
+  test("deleting the fixtures then re-constructing does NOT re-seed", async () => {
+    const first = svc(true);
+    for (const id of FIXTURE_IDS) await Effect.runPromise(first.svc.delete(id));
     first.rt.dispose();
 
     // The file now exists with sources:[] — a re-construct must NOT re-seed.
-    const second = svc();
+    const second = svc(true);
     expect(await Effect.runPromise(second.svc.list())).toHaveLength(0);
     second.rt.dispose();
   });
 
-  test("restoring the deleted Starter is an audited add of the Starter Tile", async () => {
-    const { svc: s, rt } = svc();
-    const seen: SourcesAuditEvents["source.added"][] = [];
-    s.events.on("source.added", (e) => {
-      seen.push(e);
-    });
-    await Effect.runPromise(s.delete(STARTER_ID));
-
-    const restored = await Effect.runPromise(s.restoreStarter());
-    expect(restored).toMatchObject({ id: STARTER_ID, origin: STARTER_ORIGIN });
-    expect(seen).toEqual([{ id: STARTER_ID, kind: "starter", tile: "starter" }]);
-    expect(await Effect.runPromise(Effect.flip(s.restoreStarter()))).toBeInstanceOf(
-      DuplicateOrigin,
-    );
-    rt.dispose();
-  });
-
   test("currentSources() returns the in-memory list synchronously", async () => {
-    const { svc: s, rt } = svc();
+    const { svc: s, rt } = svc(true);
     const fromList = await Effect.runPromise(s.list());
     expect(s.currentSources()).toEqual(fromList);
     rt.dispose();

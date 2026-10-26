@@ -16,12 +16,11 @@ A tracked collection of **Capabilities** — a *kit* of capabilities — that co
 to Hive's capability format, or any repository a **Recipe** recognizes and Sync
 projects into that format (a plugin marketplace, a repository of published skills).
 A Source has a **Source Locator**: a git repository
-plus revision and subpath, a working-tree root plus subpath on the Daemon machine, or
-the bundled **Starter Source**. Hive manages one or more Sources; each is synced
-independently into its own **Mirror**. A Source can be activated, deactivated, and
-deleted. How multiple active Sources reconcile (the default Starter Source,
-ordering, duplicate handling) is a product decision recorded in the multi-source
-ADR, not here.
+plus revision and subpath, or a working-tree root plus subpath on the Daemon machine.
+Hive manages one or more Sources; each is synced independently into its own
+**Mirror**. A Source can be activated, deactivated, and deleted. How multiple active
+Sources reconcile (ordering, duplicate handling) is a product decision recorded in
+the multi-source ADR, not here.
 _Avoid_: "the repo", "the package" (a Source may select only a subpath, or may not
 be backed by git at all). "Kit" stays fine informally — a Source is a kit of
 Capabilities — but "Source" is the precise term once more than one is in play.
@@ -33,16 +32,6 @@ and a subpath. A working-tree locator names an absolute repository root on the
 **Daemon** machine and a subpath. The Daemon resolves the locator and records the
 exact revision or snapshot identity; the **Shell** never acquires Source
 credentials or reads Source files.
-
-**Starter Source**:
-The bundled **Source** shipped with Hive itself — the default, enabled on a fresh
-install so a new user has deployable Capabilities out of the box, and
-deactivatable to start from scratch. Unlike a remote Source it is **local**: its
-Capabilities are copied from the bundle rather than fetched over the network, so
-it works fully offline. Deleting it sticks (a fresh install seeds it once, never
-re-seeds).
-_Avoid_: implying it is fetched or versioned like a remote Source — it is the
-in-app bundle.
 
 **Recipe**:
 How Hive recognizes a **Source** and installs and uninstalls its **Capabilities**
@@ -114,8 +103,7 @@ Refreshing a **Source Locator** into that Source's private **Mirror** — a runt
 refresh with no rebuild. A git Sync uses the Daemon machine's ambient git
 credentials and records the requested revision plus resolved commit. A working-tree
 Sync snapshots the selected tree and records its HEAD, dirty state, and content
-identity. The local **Starter Source** copies bundled content without a network
-revision. Every kind recognizes its tree with a **Recipe** and copies only what the
+identity. Every kind recognizes its tree with a **Recipe** and copies only what the
 Recipe projects. Each active Source keeps its previous Mirror until the replacement is
 fully in place. A failed Sync keeps the last good Mirror and is surfaced as a
 distinct freshness state — never as "up to date".

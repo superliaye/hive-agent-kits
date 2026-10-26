@@ -9,9 +9,9 @@ import { Data } from "effect";
 
 // Sync failures. `offline` and `rate_limited` are distinct so the UI never
 // reports "up to date" on a network failure. `rate_limited` surfaces the GitHub
-// X-RateLimit-Reset epoch when present. `missing_starter_root` is the local-sync
-// equivalent of a bad config — the bundled Starter content root is absent (a bad
-// HIVE_STARTER_ROOT override or a packaging miss); isolated to that Source.
+// X-RateLimit-Reset epoch when present. `missing_local_root` is the local-sync
+// equivalent of a bad config — a fixture Source's content root is absent (a bad
+// HIVE_FIXTURE_SOURCES_ROOT override); isolated to that Source.
 // `timeout` is the add-time bounded-sync abort: a sync that outruns the
 // request budget folds into the Source's freshness as `check_failed`, so the add
 // can never hang the HTTP request. `not_recognized`: no Recipe recognized the
@@ -21,7 +21,7 @@ export type SyncFailureReason =
   | "rate_limited"
   | "parse"
   | "io"
-  | "missing_starter_root"
+  | "missing_local_root"
   | "timeout"
   | "auth_or_repository_unavailable"
   | "invalid_locator"

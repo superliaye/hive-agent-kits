@@ -14,7 +14,7 @@ import type { GitProcess } from "./acquisition/git-process.ts";
 import { gitSnapshot } from "./acquisition/git-source.ts";
 import {
   directorySnapshot,
-  missingStarterRoot,
+  missingLocalRoot,
   type TreeSnapshot,
   tarSnapshot,
 } from "./acquisition/snapshot.ts";
@@ -163,8 +163,8 @@ function openSnapshot(
   const locator = source.locator;
   switch (locator.kind) {
     case "starter": {
-      const root = localSourceRootFor(source, targets);
-      return root ? directorySnapshot(root) : Effect.fail(missingStarterRoot());
+      const root = localSourceRootFor(source);
+      return root ? directorySnapshot(root) : Effect.fail(missingLocalRoot());
     }
     case "git": {
       const github = parseGithubOrigin(locator.repoUrl);

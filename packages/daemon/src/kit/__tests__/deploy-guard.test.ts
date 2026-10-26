@@ -43,7 +43,6 @@ function fakeTargets(
     mirrorRoot: (sourceId: string) => `/tmp/m/${sourceId}`,
     deploymentStatePath: () => "/tmp/deployment-state.json",
     kitTmpRoot: () => "/tmp/t",
-    starterRoot: () => "/tmp/starter",
     childEnv: (base) => ({ ...base }),
     isChildEnvRedirected: () => redirected,
     withHomes: (fixed) => fakeTargets(redirected, fixed),

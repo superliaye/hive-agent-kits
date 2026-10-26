@@ -98,14 +98,6 @@ function gitLocator(repoUrl: string) {
   } as const;
 }
 
-function writeSkill(dir: string, name: string): void {
-  mkdirSync(join(dir, name), { recursive: true });
-  writeFileSync(
-    join(dir, name, "SKILL.md"),
-    `---\nname: ${name}\ndescription: the ${name} skill\n---\nbody\n`,
-  );
-}
-
 async function fetchJson(server: ServerHandles, path: string, init: RequestInit = {}) {
   const res = await server.app.fetch(authed(path, init));
   return { status: res.status, body: await res.json() };
@@ -124,7 +116,6 @@ describe("Tiles over HTTP", () => {
     await server?.dispose();
     server = undefined;
     clearHomeEnv();
-    delete process.env.HIVE_STARTER_ROOT;
     if (existsSync(tmpRoot)) rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -192,7 +183,7 @@ describe("Tiles over HTTP", () => {
   test("GET /api/tiles lists every Tile unadded, then the Source a Tile add created", async () => {
     const api = await start(new Map([["slidevjs/slidev", skillsRepo(["slidev"])]]));
     const shelf = await api.tiles();
-    expect(shelf[0]?.id).toBe("starter");
+    expect(shelf[0]?.id).toBe("my-agent-kits");
     expect(shelf.find((tile) => tile.id === "hyperframes")?.recipe).toEqual({
       id: "published-skills",
       label: "Published skills",
@@ -264,26 +255,6 @@ describe("Tiles over HTTP", () => {
       body: { error: "duplicate source", origin: "https://github.com/slidevjs/slidev" },
     });
     expect((await api.add({ tile: "no-such-tile" })).status).toBe(400);
-  });
-
-  test("the Starter Tile re-adds the Starter Source once", async () => {
-    const starter = join(tmpRoot, "starter");
-    mkdirSync(join(starter, "capabilities", "skills", "hello"), { recursive: true });
-    writeFileSync(
-      join(starter, "capabilities", "skills", "hello", "SKILL.md"),
-      "---\nname: hello\ndescription: says hello\n---\nbody\n",
-    );
-    process.env.HIVE_STARTER_ROOT = starter;
-    const api = await start(new Map());
-    const result = await api.added({ tile: "starter" });
-    expect(result.source.id).toBe("starter");
-    expect(await api.tileSource("starter")).toBe("starter");
-    expect((await api.overview()).sources[0]?.recipe?.id).toBe("capability-kit");
-    expect((await api.add({ tile: "starter" })).status).toBe(409);
-    const rows = await api.audit.query({ source: "sources" });
-    expect(rows.map((row) => row.payload)).toEqual([
-      { id: "starter", kind: "starter", tile: "starter" },
-    ]);
   });
 
   test("a Tile Source whose tree no longer matches fails Sync with the Tile reason", async () => {
@@ -389,23 +360,27 @@ describe("Tiles over HTTP", () => {
 describe("Tiles over HTTP with a sources.json registry", () => {
   let tmpRoot: string;
   let runtimeRoot: string;
-  let starterRoot: string;
   let server: ServerHandles | undefined;
 
   beforeEach(() => {
     tmpRoot = mkdtempSync(join(tmpdir(), "hive-tiles-file-"));
     runtimeRoot = redirectHomeEnv(tmpRoot).runtimeRoot;
-    starterRoot = join(tmpRoot, "starter");
-    process.env.HIVE_STARTER_ROOT = starterRoot;
   });
 
   afterEach(async () => {
     await server?.dispose();
     server = undefined;
     clearHomeEnv();
-    delete process.env.HIVE_STARTER_ROOT;
     rmSync(tmpRoot, { recursive: true, force: true });
   });
+
+  function writeRegistry(rows: Source[]): void {
+    mkdirSync(runtimeRoot, { recursive: true });
+    writeFileSync(
+      join(runtimeRoot, "sources.json"),
+      JSON.stringify({ version: SOURCES_FILE_VERSION, revision: rows.length, sources: rows }),
+    );
+  }
 
   async function boot() {
     const booted = await createServer({ mode: "file", token: TOKEN });
@@ -423,19 +398,9 @@ describe("Tiles over HTTP with a sources.json registry", () => {
     };
   }
 
-  test("a row written with no Tile is its locator's Tile Source on the shelf, at Sync, and on add", async () => {
+  test("a row written with no Tile is its locator's Tile Source on the shelf and on add", async () => {
     const kit = gitLocator("https://github.com/superliaye/my-agent-kits");
-    const rows: Source[] = [
-      {
-        id: "starter",
-        label: "local:starter",
-        locator: { kind: "starter" },
-        origin: "local:starter",
-        kind: "local",
-        active: true,
-        createdAt: 0,
-        rank: 0,
-      },
+    writeRegistry([
       // Inactive, so no Sync reaches the network.
       {
         id: "old-kit",
@@ -447,46 +412,41 @@ describe("Tiles over HTTP with a sources.json registry", () => {
         createdAt: 1,
         rank: 1,
       },
-    ];
-    mkdirSync(runtimeRoot, { recursive: true });
-    writeFileSync(
-      join(runtimeRoot, "sources.json"),
-      JSON.stringify({ version: SOURCES_FILE_VERSION, revision: 2, sources: rows }),
-    );
-    // Published skills with no capabilities/ folder: a generic pattern takes
-    // this tree, the Starter Tile's Recipe does not.
-    writeSkill(join(starterRoot, "skills"), "hello");
+    ]);
     const api = await boot();
 
-    const shelf = await api.shelf();
-    expect(shelf.get("starter")).toBe("starter");
-    expect(shelf.get("my-agent-kits")).toBe("old-kit");
+    expect((await api.shelf()).get("my-agent-kits")).toBe("old-kit");
+    expect(await api.add({ tile: "my-agent-kits" })).toEqual({
+      status: 409,
+      body: { error: "duplicate source", origin: kit.repoUrl },
+    });
+    expect([...(await api.shelf()).values()].filter((id) => id !== null)).toEqual(["old-kit"]);
+  });
 
+  test("a Starter row left by an older Hive is no Tile's Source and fails Sync as missing_local_root", async () => {
+    writeRegistry([
+      {
+        id: "starter",
+        label: "local:starter",
+        locator: { kind: "starter" },
+        origin: "local:starter",
+        kind: "local",
+        active: true,
+        createdAt: 0,
+        rank: 0,
+      },
+    ]);
+    const api = await boot();
+
+    expect([...(await api.shelf()).values()].filter((id) => id !== null)).toEqual([]);
     const sync = SyncRunResult.parse((await api.json("/api/kit/sync", { method: "POST" })).body);
     expect(sync.sources).toEqual([
       {
         sourceId: "starter",
         status: "failed",
-        errorReason: "not_recognized",
-        errorDetail: "no longer matches the Starter Tile: no capabilities/ folder",
+        errorReason: "missing_local_root",
+        errorDetail: "local content root is unavailable",
       },
     ]);
-
-    expect(await api.add({ tile: "my-agent-kits" })).toEqual({
-      status: 409,
-      body: { error: "duplicate source", origin: kit.repoUrl },
-    });
-    expect((await api.add({ tile: "starter" })).status).toBe(409);
-    expect([...(await api.shelf()).values()].filter((id) => id !== null)).toEqual([
-      "starter",
-      "old-kit",
-    ]);
-  });
-
-  test("the seeded Starter is the Starter Tile's Source", async () => {
-    writeSkill(join(starterRoot, "capabilities", "skills"), "hello");
-    const api = await boot();
-    expect((await api.shelf()).get("starter")).toBe("starter");
-    expect((await api.add({ tile: "starter" })).status).toBe(409);
   });
 });

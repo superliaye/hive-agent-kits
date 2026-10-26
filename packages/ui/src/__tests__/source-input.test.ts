@@ -17,27 +17,25 @@ describe("sourceInputFromValue", () => {
   test("converts a GitHub folder URL into its repository, branch, and subpath", () => {
     expect(
       sourceInputFromValue(
-        "https://github.com/databricks-eng/universe/tree/master/experimental/leon-ye_data/dbx-agent-kits",
+        "https://github.com/example-org/monorepo/tree/master/tools/team-agent-kits",
       ),
     ).toEqual({
-      label: "databricks-eng/universe",
+      label: "example-org/monorepo",
       locator: {
         kind: "git",
-        repoUrl: "https://github.com/databricks-eng/universe",
+        repoUrl: "https://github.com/example-org/monorepo",
         revision: { mode: "track", ref: "refs/heads/master" },
-        subpath: "experimental/leon-ye_data/dbx-agent-kits",
+        subpath: "tools/team-agent-kits",
       },
     });
   });
 
   test("converts an absolute Daemon path into a working-tree Source input", () => {
-    expect(
-      sourceInputFromValue("/home/leon.ye/universe/experimental/leon-ye_data/dbx-agent-kits"),
-    ).toEqual({
-      label: "dbx-agent-kits",
+    expect(sourceInputFromValue("/home/dev/monorepo/tools/team-agent-kits")).toEqual({
+      label: "team-agent-kits",
       locator: {
         kind: "working-tree",
-        repoRoot: "/home/leon.ye/universe/experimental/leon-ye_data/dbx-agent-kits",
+        repoRoot: "/home/dev/monorepo/tools/team-agent-kits",
         subpath: ".",
       },
     });

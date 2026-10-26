@@ -23,13 +23,6 @@
         "@hive/capability-schema-tools": "workspace:*",
       },
     },
-    "packages/agent-kit-starter-template": {
-      "name": "@hive/agent-kit-starter-template",
-      "version": "0.0.0",
-      "devDependencies": {
-        "@hive/capability-schema-tools": "workspace:*",
-      },
-    },
     "packages/capability-schema": {
       "name": "@hive/capability-schema",
       "version": "0.0.0",
@@ -285,7 +278,6 @@
 
     "@hive/agent-kit-fixture-sources": ["@hive/agent-kit-fixture-sources@workspace:packages/agent-kit-fixture-sources"],
 
-    "@hive/agent-kit-starter-template": ["@hive/agent-kit-starter-template@workspace:packages/agent-kit-starter-template"],
 
     "@hive/capability-schema": ["@hive/capability-schema@workspace:packages/capability-schema"],
 
