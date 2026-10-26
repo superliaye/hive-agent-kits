@@ -691,7 +691,7 @@ describe("buildDeployPlan", () => {
     ]);
   });
 
-  test("plans a managed plugin on its declared targets until the synced pointer is applied", () => {
+  test("plans a plugin on its declared targets until the synced pointer is applied", () => {
     const plugin: CapabilityKey = { kind: "plugin", name: "ye" };
     const entry = {
       ...plugin,
@@ -719,11 +719,11 @@ describe("buildDeployPlan", () => {
         operationId: "op-1",
       },
     });
-    const managed = (records: ReturnType<typeof applied>[], managedInstall = true) =>
+    const managed = (records: ReturnType<typeof applied>[]) =>
       buildDeployPlan(
         snapshot({
           catalog: { entries: [entry], presets: [], problems: [] },
-          plugins: new Map([["ye", { targets: ["claude", "codex"], managedInstall }]]),
+          plugins: new Map([["ye", { targets: ["claude", "codex"] }]]),
           selection: {
             revision: 3,
             enabled: [{ key: plugin, targets: ["claude", "codex"] }],
@@ -751,7 +751,6 @@ describe("buildDeployPlan", () => {
     expect(managed([applied("pointer-at-commit-2")])).toEqual([
       ["add", "codex", "pointer-at-commit-2"],
     ]);
-    expect(managed([], false)).toEqual([]);
   });
 
   test("never plans a plugin on a target its marketplace does not list", () => {
@@ -773,7 +772,7 @@ describe("buildDeployPlan", () => {
           presets: [],
           problems: [],
         },
-        plugins: new Map([["claude-side", { targets: ["claude"], managedInstall: true }]]),
+        plugins: new Map([["claude-side", { targets: ["claude"] }]]),
         selection: {
           revision: 3,
           enabled: [{ key: plugin, targets: ["codex"] }],
@@ -784,6 +783,161 @@ describe("buildDeployPlan", () => {
       }),
     );
     expect(plan.actions).toEqual([]);
+  });
+
+  test("plans an owned plugin's removal from its install record or its pointer", () => {
+    const plugin: CapabilityKey = { kind: "plugin", name: "ye" };
+    const record = (installedVia?: {
+      installer: "marketplace-plugin";
+      marketplaceName: string;
+      pluginName: string;
+    }) => ({
+      key: plugin,
+      target: "codex" as const,
+      applied: {
+        sourceId: "source-a",
+        contentSha: "pointer",
+        renderedHash: "pointer",
+        appliedAt: 1,
+        operationId: "op-1",
+        ...(installedVia ? { installedVia } : {}),
+      },
+      lastAttempt: {
+        action: "add" as const,
+        outcome: "succeeded" as const,
+        attemptedAt: 1,
+        operationId: "op-1",
+      },
+    });
+    const removal = (overrides: Partial<DeploymentSnapshot>) =>
+      buildDeployPlan(
+        snapshot({
+          catalog: { entries: [], presets: [], problems: [] },
+          selection: {
+            revision: 4,
+            enabled: [],
+            removalIntents: [{ key: plugin, targets: ["codex"], generation: "remove-ye" }],
+          },
+          wouldDeploy: [],
+          artifacts: [],
+          ...overrides,
+        }),
+      ).actions;
+    const pointer = {
+      catalog: {
+        entries: [
+          {
+            ...plugin,
+            description: "ye",
+            group: "",
+            deployable: true,
+            shadowed: false,
+            sourceIds: ["source-a"],
+            contentSha: "pointer",
+          },
+        ],
+        presets: [],
+        problems: [],
+      },
+      plugins: new Map([["ye", { targets: ["claude" as const, "codex" as const] }]]),
+    };
+    const state = (records: ReturnType<typeof record>[]) => ({
+      deploymentState: {
+        schemaVersion: 1 as const,
+        revision: 2,
+        records,
+        legacyInstructionFingerprints: [],
+      },
+    });
+
+    // The Source is gone, but the install record still names the plugin, and it
+    // proves Codex even though no pointer declares a Codex target any more.
+    expect(
+      removal(
+        state([
+          record({ installer: "marketplace-plugin", marketplaceName: "yestack", pluginName: "ye" }),
+        ]),
+      ),
+    ).toEqual([
+      {
+        action: "remove",
+        key: plugin,
+        target: "codex",
+        removalIntentGeneration: "remove-ye",
+        artifact: { existence: "missing", hash: null },
+      },
+    ]);
+    // A record without installer coordinates uninstalls through the current pointer.
+    expect(removal({ ...pointer, ...state([record()]) })).toEqual([
+      {
+        action: "remove",
+        key: plugin,
+        target: "codex",
+        sourceId: "source-a",
+        contentSha: "pointer",
+        removalIntentGeneration: "remove-ye",
+        artifact: { existence: "missing", hash: null },
+      },
+    ]);
+    // Without a record or a pointer Hive cannot name what to uninstall.
+    expect(removal(state([record()]))).toEqual([]);
+    // Nothing Hive installed, so nothing to uninstall.
+    expect(removal(pointer)).toEqual([]);
+  });
+
+  test("plans a recorded npx bundle's removal after its pointer is gone", () => {
+    const archify = bundle("archify");
+    const plan = buildDeployPlan(
+      snapshot({
+        catalog: { entries: [], presets: [], problems: [] },
+        selection: {
+          revision: 4,
+          enabled: [],
+          removalIntents: [{ key: archify, targets: ["codex"], generation: "remove-archify" }],
+        },
+        deploymentState: {
+          schemaVersion: 1,
+          revision: 2,
+          records: [
+            {
+              key: archify,
+              target: "codex",
+              applied: {
+                sourceId: "source-a",
+                contentSha: "archify-content",
+                renderedHash: "rendered",
+                appliedAt: 1,
+                operationId: "op-1",
+                installedVia: {
+                  installer: "npx-skills",
+                  package: "https://github.com/tt-a1i/archify/tree/x",
+                  skills: ["archify"],
+                  verifyPaths: ["/home/u/.agents/skills/archify"],
+                },
+              },
+              lastAttempt: {
+                action: "add",
+                outcome: "succeeded",
+                attemptedAt: 1,
+                operationId: "op-1",
+              },
+            },
+          ],
+          legacyInstructionFingerprints: [],
+        },
+        wouldDeploy: [],
+        artifacts: [],
+      }),
+    );
+    expect(plan.actions).toEqual([
+      {
+        action: "remove",
+        key: archify,
+        target: "codex",
+        removalIntentGeneration: "remove-archify",
+        artifact: { existence: "missing", hash: null },
+      },
+    ]);
   });
 
   test("Ledger ownership is target-scoped when planning a missing target", () => {

@@ -54,7 +54,6 @@ describe("marketplace Source ingestion", () => {
       marketplace_name: "stack",
       plugin_name: "ye",
       targets: ["claude", "codex"],
-      managed_install: true,
       source_commit: COMMIT,
     });
   });

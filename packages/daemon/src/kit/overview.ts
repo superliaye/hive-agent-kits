@@ -492,8 +492,7 @@ function pluginDeployInfo(
     const sourceId = entry.sourceIds[0];
     if (entry.kind !== "plugin" || !entry.deployable || !sourceId) continue;
     const meta = pluginMeta(targets.mirrorRoot(sourceId), entry.name);
-    if (meta)
-      plugins.set(entry.name, { targets: meta.targets, managedInstall: meta.managedInstall });
+    if (meta) plugins.set(entry.name, { targets: meta.targets });
   }
   return plugins;
 }

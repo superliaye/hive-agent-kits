@@ -102,8 +102,8 @@ const StagedAgentTask = z.object({
 });
 
 // Kept only to recover an operation accepted by an older build. Current staging
-// rejects installer-owned work before persistence, and execution rejects these
-// legacy skipped tasks rather than turning them into success.
+// never writes these types, and execution rejects these legacy skipped tasks
+// rather than turning them into success.
 const StagedPluginTask = z.object({
   type: z.literal("plugin"),
   action: z.enum(["add", "update"]),
@@ -125,6 +125,16 @@ const StagedBundleTask = z.object({
   pin: z.string().nullable(),
 });
 
+// A target that keeps the bundle while another target removes it. The skills CLI
+// can only uninstall a skill from every agent at once, so a removal reinstalls
+// each kept target afterwards.
+const NpxBundleKeep = z.object({
+  target: DeployTarget,
+  package: z.string(),
+  skills: z.array(z.string()).min(1),
+  verifyPaths: z.array(z.string()).min(1),
+});
+
 const StagedManagedNpxBundleTask = z.object({
   type: z.literal("npx-bundle"),
   action: z.enum(["add", "update", "remove"]),
@@ -137,6 +147,7 @@ const StagedManagedNpxBundleTask = z.object({
   sourceId: z.string().nullable(),
   contentSha: z.string().nullable(),
   renderedHash: z.string(),
+  keep: z.array(NpxBundleKeep).default([]),
 });
 
 const StagedMarketplacePluginTask = z.object({
@@ -149,6 +160,15 @@ const StagedMarketplacePluginTask = z.object({
   pluginName: z.string().min(1),
   sourceId: z.string(),
   contentSha: z.string(),
+});
+
+const StagedMarketplacePluginRemovalTask = z.object({
+  type: z.literal("marketplace-plugin-remove"),
+  action: z.literal("remove"),
+  key: z.object({ kind: z.literal("plugin"), name: z.string() }),
+  target: DeployTarget,
+  marketplaceName: z.string().min(1),
+  pluginName: z.string().min(1),
 });
 
 const StagedRemovalTask = z.object({
@@ -171,6 +191,7 @@ export const StagedDeployPayloadSchema = z.object({
       StagedBundleTask,
       StagedManagedNpxBundleTask,
       StagedMarketplacePluginTask,
+      StagedMarketplacePluginRemovalTask,
       StagedRemovalTask,
     ]),
   ),

@@ -92,6 +92,7 @@ export type LedgerMergeInput = {
   instructions: string[];
   plugins: string[];
   bundles: { name: string; pin: string | null }[];
+  prunedPlugins?: string[];
   prunedBundles?: string[];
 };
 
@@ -158,6 +159,7 @@ export function mergeLedgerWithinLock(
   const dropSkill = new Set(prunedSkills);
   const dropAgent = new Set(prunedAgents);
   const dropInstruction = new Set(prunedInstructions);
+  const dropPlugin = new Set(input.prunedPlugins ?? []);
   const dropBundle = new Set(input.prunedBundles ?? []);
 
   const mergeNames = (existing: { name: string }[], add: string[], drop: Set<string>) => {
@@ -188,7 +190,7 @@ export function mergeLedgerWithinLock(
       skills: mergeNames(current.skills, input.skills, dropSkill),
       agentDefs: mergeNames(current.agentDefs, input.agents, dropAgent),
       instructions: mergeNames(current.instructions, input.instructions, dropInstruction),
-      plugins: mergeNames(current.plugins, input.plugins, new Set()),
+      plugins: mergeNames(current.plugins, input.plugins, dropPlugin),
       bundles: mergeBundles(current.bundles, input.bundles, dropBundle),
     };
     options.beforeCommit?.(attempt);

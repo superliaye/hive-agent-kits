@@ -105,7 +105,6 @@ export function materializeMarketplacePlugins(root: string, repoUrl: string, com
       marketplace_name: marketplaceName,
       plugin_name: name,
       targets: plugin.targets,
-      managed_install: true,
       source_commit: commit,
     });
     writeFileSync(join(pluginsDir, `${name}.plugin.md`), `---\n${frontmatter}---\n`);

@@ -133,6 +133,7 @@ function managedNpxTask(
     sourceId: "source-a",
     contentSha: "b".repeat(64),
     renderedHash: "c".repeat(64),
+    keep: [],
     ...overrides,
   };
 }
@@ -989,7 +990,7 @@ setup
     );
   });
 
-  test("rejects a plugin even when its mutable descriptor claims a pinned commit", () => {
+  test("stages a hand-written plugin pointer like a generated one", () => {
     const root = mkdtempSync(join(tmpdir(), "deploy-plugin-stage-"));
     roots.push(root);
     redirectHomeEnv(root);
@@ -1025,9 +1026,19 @@ plugin
       actions: [action],
     });
 
-    expect(() => stageDeployPlan(targets, snapshot(deployPlan), deployPlan)).toThrow(
-      expect.objectContaining({ code: "immutable_installer_unavailable" }),
-    );
+    expect(stageDeployPlan(targets, snapshot(deployPlan), deployPlan).tasks).toEqual([
+      {
+        type: "marketplace-plugin",
+        action: "add",
+        key: { kind: "plugin", name: "plug" },
+        target: "claude",
+        marketplaceSource: "owner/market",
+        marketplaceName: "market",
+        pluginName: "plug",
+        sourceId: "source-a",
+        contentSha,
+      },
+    ]);
   });
 
   test("stages a managed marketplace plugin as one task per declared target", () => {
@@ -1166,6 +1177,11 @@ plugin
       expect(deploymentState.read({ kind: "plugin", name: "ye" }, target)?.applied).toMatchObject({
         sourceId: "source-a",
         contentSha: "d".repeat(64),
+        installedVia: {
+          installer: "marketplace-plugin",
+          marketplaceName: "yestack",
+          pluginName: "ye",
+        },
       });
     }
   });
@@ -1253,6 +1269,329 @@ plugin
     });
     expect(unrecorded).toMatchObject({ outcome: "failed", code: "installer_failed" });
     expect(unrecorded.detail).toContain("without recording ye@yestack");
+  });
+
+  test("stages a plugin removal from its install record, or from its pointer for an older record", () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-plugin-remove-stage-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const mirror = targets.mirrorRoot("source-a");
+    const descriptor = join(mirror, "capabilities", "plugins", "plug.plugin.md");
+    mkdirSync(join(descriptor, ".."), { recursive: true });
+    writeFileSync(
+      descriptor,
+      "---\ndescription: plugin\nmarketplace_source: owner/market\nmarketplace_name: market\nplugin_name: plug\n---\n",
+    );
+    const contentSha = mirrorContentSha(mirror, "plugin", "plug");
+    if (!contentSha) throw new Error("missing plugin ContentSha");
+    const key = { kind: "plugin" as const, name: "plug" };
+    const record = (installedVia?: {
+      installer: "marketplace-plugin";
+      marketplaceName: string;
+      pluginName: string;
+    }) => ({
+      key,
+      target: "claude" as const,
+      applied: {
+        sourceId: "source-a",
+        contentSha,
+        renderedHash: contentSha,
+        appliedAt: 1,
+        operationId: "op-1",
+        ...(installedVia ? { installedVia } : {}),
+      },
+      lastAttempt: {
+        action: "add" as const,
+        outcome: "succeeded" as const,
+        attemptedAt: 1,
+        operationId: "op-1",
+      },
+    });
+    const stage = (action: DeployPlan["actions"][number], records: ReturnType<typeof record>[]) => {
+      const deployPlan = plan({
+        mirrors: [{ sourceId: "source-a", precedence: 1, identity: readMirrorIdentity(mirror) }],
+        actions: [action],
+      });
+      const captured = snapshot(deployPlan);
+      return stageDeployPlan(
+        targets,
+        { ...captured, deploymentState: { ...captured.deploymentState, records } },
+        deployPlan,
+      ).tasks;
+    };
+    const removal = {
+      type: "marketplace-plugin-remove",
+      action: "remove",
+      key,
+      target: "claude",
+    } as const;
+
+    // The record wins over a pointer that now names another marketplace.
+    expect(
+      stage(
+        {
+          action: "remove",
+          key,
+          target: "claude",
+          artifact: { existence: "missing", hash: null },
+        },
+        [
+          record({
+            installer: "marketplace-plugin",
+            marketplaceName: "old-market",
+            pluginName: "plug",
+          }),
+        ],
+      ),
+    ).toEqual([{ ...removal, marketplaceName: "old-market", pluginName: "plug" }]);
+    expect(
+      stage(
+        {
+          action: "remove",
+          key,
+          target: "claude",
+          sourceId: "source-a",
+          contentSha,
+          artifact: { existence: "missing", hash: null },
+        },
+        [record()],
+      ),
+    ).toEqual([{ ...removal, marketplaceName: "market", pluginName: "plug" }]);
+  });
+
+  test("uninstalls a plugin through each CLI, records the removal, and prunes the Ledger", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-marketplace-remove-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const key = { kind: "plugin" as const, name: "ye" };
+    for (const target of ["claude", "codex"] as const) {
+      deploymentState.recordSuccess(
+        key,
+        target,
+        {
+          sourceId: "source-a",
+          contentSha: "d".repeat(64),
+          renderedHash: "d".repeat(64),
+          appliedAt: 10,
+          installedVia: {
+            installer: "marketplace-plugin",
+            marketplaceName: "yestack",
+            pluginName: "ye",
+          },
+        },
+        "op-install",
+      );
+    }
+    mergeLedger(
+      targets,
+      {
+        kitVersion: "",
+        targets: ["claude", "codex"],
+        skills: [],
+        agents: [],
+        instructions: [],
+        plugins: ["ye"],
+        bundles: [],
+      },
+      [],
+      [],
+    );
+    const installedPlugins = join(homes.claudeHome, "plugins", "installed_plugins.json");
+    const codexConfig = join(homes.codexHome, "config.toml");
+    mkdirSync(dirname(installedPlugins), { recursive: true });
+    writeFileSync(installedPlugins, JSON.stringify({ plugins: { "ye@yestack": [{}] } }));
+    mkdirSync(homes.codexHome, { recursive: true });
+    writeFileSync(codexConfig, '[plugins."ye@yestack"]\nenabled = true\n');
+
+    const action = (target: DeployTarget): DeployPlan["actions"][number] => ({
+      action: "remove",
+      key,
+      target,
+      artifact: { existence: "missing", hash: null },
+    });
+    const task = (target: DeployTarget): StagedDeployTask => ({
+      type: "marketplace-plugin-remove",
+      action: "remove",
+      key,
+      target,
+      marketplaceName: "yestack",
+      pluginName: "ye",
+    });
+    const deployPlan = plan({ mirrors: [], actions: [action("claude"), action("codex")] });
+    const store = openDeployOperationStore(operationPath());
+    store.createQueued({
+      operationId: "marketplace-remove",
+      acceptedAt: 1,
+      selectionRevision: deployPlan.selectionRevision,
+      planToken: "token",
+      plan: deployPlan,
+      staged: { tasks: [task("claude"), task("codex")], metadata: {} },
+    });
+    const argv: string[] = [];
+    let outcomes: DeployOperationOutcome[] = [];
+
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: (name) => name === "claude" || name === "codex",
+          exec: (request) => {
+            argv.push([request.command, ...request.args].join(" "));
+            if (request.command === "claude") writeFileSync(installedPlugins, '{"plugins":{}}');
+            if (request.command === "codex") writeFileSync(codexConfig, "");
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+        deploymentState,
+        now: () => 20,
+      },
+      store.markRunning("marketplace-remove"),
+      async (recorded) => {
+        outcomes = [...recorded];
+      },
+    );
+
+    expect(argv).toEqual([
+      "claude plugin uninstall ye@yestack --scope user",
+      "codex plugin remove ye@yestack",
+    ]);
+    expect(outcomes.map((outcome) => [outcome.target, outcome.outcome])).toEqual([
+      ["claude", "succeeded"],
+      ["codex", "succeeded"],
+    ]);
+    for (const target of ["claude", "codex"] as const) {
+      expect(deploymentState.read(key, target)?.applied).toBeUndefined();
+    }
+    expect(readLedger(targets)?.plugins).toEqual([]);
+
+    // A plugin the CLI no longer records is already uninstalled.
+    argv.length = 0;
+    const again = openDeployOperationStore(operationPath());
+    again.createQueued({
+      operationId: "marketplace-remove-again",
+      acceptedAt: 2,
+      selectionRevision: deployPlan.selectionRevision,
+      planToken: "token-again",
+      plan: deployPlan,
+      staged: { tasks: [task("claude")], metadata: {} },
+    });
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: () => true,
+          exec: (request) => {
+            argv.push(request.command);
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+        deploymentState,
+        now: () => 30,
+      },
+      again.markRunning("marketplace-remove-again"),
+      async () => {},
+    );
+    expect(argv).toEqual([]);
+  });
+
+  test("an npx bundle removal runs the full uninstall, then reinstalls each kept target", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-managed-npx-keep-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const packageCommit = "b".repeat(40);
+    const packageRef = `https://github.com/tt-a1i/archify/tree/${packageCommit}`;
+    const claudePath = join(homes.claudeHome, "skills", "archify");
+    const codexPath = join(targets.agentsHome(), "skills", "archify");
+    mkdirSync(claudePath, { recursive: true });
+    mkdirSync(codexPath, { recursive: true });
+    const task = managedNpxTask(codexPath, {
+      action: "remove",
+      target: "codex",
+      package: packageRef,
+      pin: packageRef,
+      keep: [
+        { target: "claude", package: packageRef, skills: ["archify"], verifyPaths: [claudePath] },
+      ],
+    });
+    const action: DeployPlan["actions"][number] = {
+      action: "remove",
+      key: task.key,
+      target: "codex",
+      artifact: { existence: "missing", hash: null },
+    };
+    const deployPlan = plan({ actions: [action], mirrors: [] }, action);
+    const store = openDeployOperationStore(operationPath());
+    store.createQueued({
+      operationId: "managed-npx-keep",
+      acceptedAt: 1,
+      selectionRevision: deployPlan.selectionRevision,
+      planToken: "token",
+      plan: deployPlan,
+      staged: { tasks: [task], metadata: {} },
+    });
+    const npx: string[][] = [];
+    let outcomes: DeployOperationOutcome[] = [];
+
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: () => true,
+          exec: (request) => {
+            if (request.command === "npx") {
+              npx.push(request.args);
+              // The CLI's full uninstall clears every agent; the reinstall restores Claude.
+              if (request.args[2] === "remove") {
+                rmSync(claudePath, { recursive: true, force: true });
+                rmSync(codexPath, { recursive: true, force: true });
+              } else {
+                mkdirSync(claudePath, { recursive: true });
+              }
+            }
+            return {
+              status: 0,
+              stdout: request.args.includes("rev-parse") ? `${packageCommit}\n` : "",
+              stderr: "",
+            };
+          },
+        },
+        deploymentState,
+        now: () => 20,
+      },
+      store.markRunning("managed-npx-keep"),
+      async (recorded) => {
+        outcomes = [...recorded];
+      },
+    );
+
+    expect(npx).toEqual([
+      ["-y", "skills", "remove", "archify", "--global", "--yes"],
+      [
+        "-y",
+        "skills",
+        "add",
+        ".",
+        "--global",
+        "--agent",
+        "claude-code",
+        "--copy",
+        "--skill",
+        "archify",
+        "--yes",
+      ],
+    ]);
+    expect(outcomes).toMatchObject([{ target: "codex", outcome: "succeeded" }]);
+    expect(existsSync(claudePath)).toBe(true);
+    expect(existsSync(codexPath)).toBe(false);
   });
 
   test("rejects a mutable npx package instead of resolving it after acceptance", () => {
@@ -1351,6 +1690,7 @@ npx
         sourceId: "source-a",
         contentSha,
         renderedHash: managedNpxBundleHash(claudeMeta, "claude"),
+        keep: [],
       },
       {
         type: "npx-bundle",
@@ -1364,6 +1704,15 @@ npx
         sourceId: "source-a",
         contentSha,
         renderedHash: managedNpxBundleHash(codexMeta, "codex"),
+        // Claude is added in the same Deploy, so the full uninstall reinstalls it.
+        keep: [
+          {
+            target: "claude",
+            package: packageRef,
+            skills: ["archify"],
+            verifyPaths: [join(targets.claudeHome(), "skills", "archify")],
+          },
+        ],
       },
     ]);
 
@@ -1478,6 +1827,7 @@ npx
         "--global",
         "--agent",
         "claude-code",
+        "--copy",
         "--skill",
         "archify",
         "--yes",
@@ -1490,6 +1840,12 @@ npx
       sourceId: "source-a",
       contentSha: "d".repeat(64),
       renderedHash,
+      installedVia: {
+        installer: "npx-skills",
+        package: packageRef,
+        skills: ["archify"],
+        verifyPaths: [verifyPath],
+      },
     });
     expect(readLedger(targets)?.bundles).toEqual([{ name: "archify", pin: packageRef }]);
 
@@ -1550,16 +1906,7 @@ npx
       removeStore.markRunning("managed-npx-remove"),
       async () => {},
     );
-    expect(requests[0]?.args).toEqual([
-      "-y",
-      "skills",
-      "remove",
-      "archify",
-      "--global",
-      "--agent",
-      "claude-code",
-      "--yes",
-    ]);
+    expect(requests[0]?.args).toEqual(["-y", "skills", "remove", "archify", "--global", "--yes"]);
     expect(deploymentState.read(removeAction.key, "claude")?.applied).toBeUndefined();
     expect(readLedger(targets)?.bundles).toEqual([]);
   });

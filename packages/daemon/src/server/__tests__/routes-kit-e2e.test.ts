@@ -18,7 +18,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -905,28 +905,48 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
     }
   });
 
-  test("installer selections stay manual without blocking staged capability Deploys", async () => {
+  test("a hand-written plugin pointer installs and uninstalls through the Claude CLI", async () => {
     delete process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL;
     delete process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL;
-    const server = await serverWith(installerFetch());
+    const argv: string[] = [];
+    const installedPlugins = join(homes.claudeHome, "plugins", "installed_plugins.json");
+    const server = await serverWith(installerFetch(), {
+      probe: (name) => name === "claude",
+      exec: (request) => {
+        argv.push([request.command, ...request.args].join(" "));
+        if (request.args[1] === "install") {
+          mkdirSync(join(homes.claudeHome, "plugins"), { recursive: true });
+          writeFileSync(installedPlugins, JSON.stringify({ plugins: { "myplugin@market": [{}] } }));
+        }
+        if (request.args[1] === "uninstall") writeFileSync(installedPlugins, '{"plugins":{}}');
+        return { status: 0, stdout: "", stderr: "" };
+      },
+    });
+    const pluginRow = (overview: DeploymentOverview) =>
+      overview.rows.find((row) => row.key.kind === "plugin" && row.key.name === "myplugin");
     try {
       const add = await postOrigin(server, ORIGIN_INSTALLERS);
       expect(add.status).toBe(201);
-      const overview = await acceptSelection(server, {
+      const installed = await acceptSelection(server, {
         skills: ["regular"],
         plugins: ["myplugin"],
         targets: ["claude"],
       });
-      expect(overview.lastOperation?.state).toBe("completed");
+      expect(installed.lastOperation?.state).toBe("completed");
+      expect(pluginRow(installed)?.reconciliation).toBe("in_sync");
       expect(
-        overview.rows.find((row) => row.key.kind === "plugin" && row.key.name === "myplugin")
-          ?.reconciliation,
-      ).toBe("manual_install_required");
-      expect(
-        overview.rows.find((row) => row.key.kind === "skill" && row.key.name === "regular")
+        installed.rows.find((row) => row.key.kind === "skill" && row.key.name === "regular")
           ?.reconciliation,
       ).toBe("in_sync");
       expect(existsSync(join(homes.claudeHome, "skills", "regular", "SKILL.md"))).toBe(true);
+      expect(argv).toContain("claude plugin install myplugin@market --scope user");
+
+      const removed = await acceptSelection(server, { skills: ["regular"], targets: ["claude"] });
+      expect(removed.lastOperation?.state).toBe("completed");
+      expect(pluginRow(removed)?.reconciliation).toBe("in_sync");
+      expect(argv.at(-1)).toBe("claude plugin uninstall myplugin@market --scope user");
+      const ledger = JSON.parse(readFileSync(homes.ledgerPath, "utf8")) as Ledger;
+      expect(ledger.plugins).toEqual([]);
     } finally {
       await server.dispose();
     }
@@ -945,14 +965,17 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
             stderr: "",
           };
         }
-        const agentIndex = request.args.indexOf("--agent");
-        const agent = request.args[agentIndex + 1];
-        const path =
-          agent === "claude-code"
-            ? join(homes.claudeHome, "skills", "archify")
-            : join(homes.agentsHome, "skills", "archify");
-        if (request.args.includes("add")) mkdirSync(path, { recursive: true });
-        if (request.args.includes("remove")) rmSync(path, { recursive: true, force: true });
+        const claudePath = join(homes.claudeHome, "skills", "archify");
+        const codexPath = join(homes.agentsHome, "skills", "archify");
+        if (request.args.includes("add")) {
+          const agent = request.args[request.args.indexOf("--agent") + 1];
+          mkdirSync(agent === "claude-code" ? claudePath : codexPath, { recursive: true });
+        }
+        // Like the skills CLI, a remove without --agent clears every agent.
+        if (request.args.includes("remove")) {
+          rmSync(claudePath, { recursive: true, force: true });
+          rmSync(codexPath, { recursive: true, force: true });
+        }
         return { status: 0, stdout: "ok", stderr: "" };
       },
     });
@@ -982,19 +1005,22 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
       expect(existsSync(join(homes.claudeHome, "skills", "archify"))).toBe(false);
       expect(existsSync(join(homes.agentsHome, "skills", "archify"))).toBe(true);
       const npxRequests = requests.filter((request) => request.command === "npx");
+      // Removing Claude runs the full uninstall, then reinstalls the kept Codex target.
       expect(npxRequests.map((request) => request.args.slice(1, 4))).toEqual([
         ["skills", "add", "."],
         ["skills", "add", "."],
         ["skills", "remove", "archify"],
+        ["skills", "add", "."],
       ]);
       expect(npxRequests[0]?.cwd).toContain("e".repeat(40));
       expect(npxRequests[1]?.cwd).toContain("e".repeat(40));
+      expect(npxRequests[3]?.args).toContain("codex");
     } finally {
       await server.dispose();
     }
   });
 
-  test("environment hatches cannot turn installer selections into durable Deploy actions", async () => {
+  test("environment hatches do not change what a Deploy plans for installer selections", async () => {
     process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL = "1";
     process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL = "1";
     // Re-use a Source carrying a plugin + bundle capability.
@@ -1024,12 +1050,19 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
       const overview = (await (
         await server.app.fetch(authed("/api/kit/overview"))
       ).json()) as DeploymentOverview;
-      expect(overview.diff.entries).toEqual([]);
+      // The plugin installs as it would without the hatches; the setup-script bundle
+      // has no Hive-run installer, so it stays manual.
+      expect(overview.diff.entries).toEqual([
+        { kind: "plugin", name: "myplugin", change: "added" },
+      ]);
       expect(
         overview.rows
           .filter((row) => ["myplugin", "mybundle"].includes(row.key.name))
-          .map((row) => row.reconciliation),
-      ).toEqual(["manual_install_required", "manual_install_required"]);
+          .map((row) => [row.key.name, row.reconciliation]),
+      ).toEqual([
+        ["mybundle", "manual_install_required"],
+        ["myplugin", "pending_add"],
+      ]);
       expect(existsSync(homes.ledgerPath)).toBe(false);
     } finally {
       await server.dispose();
