@@ -85,6 +85,23 @@ function normalizeHome(p: string): string {
   return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+// "partial" when some deploy-target homes resolve off their OS default and
+// others do not. childEnv then keeps the real $HOME, so a script that writes
+// ~/.claude by $HOME would write the real one while Deploy targets another.
+export function homeRedirection(
+  targets: Pick<DeployTargets, "claudeHome" | "codexHome" | "agentsHome">,
+): "none" | "all" | "partial" {
+  const homes: readonly (readonly [string, string])[] = [
+    [targets.claudeHome(), ".claude"],
+    [targets.codexHome(), ".codex"],
+    [targets.agentsHome(), ".agents"],
+  ];
+  const redirected = homes.filter(
+    ([home, dir]) => normalizeHome(home) !== normalizeHome(join(homedir(), dir)),
+  );
+  return redirected.length === 0 ? "none" : redirected.length === 3 ? "all" : "partial";
+}
+
 // Default adapter: each deploy-target home resolves through a three-step ladder:
 //   1. explicit HIVE_*_HOME / HIVE_LEDGER_PATH env wins (the test redirect contract);
 //   2. else if packaged OR the developer toggle is on → the real ~/.claude etc.;

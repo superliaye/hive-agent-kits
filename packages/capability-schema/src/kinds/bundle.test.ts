@@ -108,6 +108,15 @@ describe("BundleFrontmatter — valid fixtures (lenient superset)", () => {
     };
     expect(BundleFrontmatter.safeParse(fm).success).toBe(true);
   });
+
+  test("a tile installer names its Tile and may narrow its targets", () => {
+    const fm = {
+      description: "gstack, installed by its own setup",
+      installer: { kind: "tile", tile: "gstack" },
+      targets: ["codex"],
+    };
+    expect(BundleFrontmatter.safeParse(fm).success).toBe(true);
+  });
 });
 
 describe("BundleFrontmatter — one invalid case per rule", () => {
@@ -183,6 +192,14 @@ describe("BundleFrontmatter — one invalid case per rule", () => {
     expect(
       reject({ ...MINIMAL_NPX, verify_paths: { cursor: "~/.cursor/skills/archify" } }),
     ).not.toBeNull();
+  });
+
+  test("a tile installer without a Tile, or with an unknown target, is rejected", () => {
+    const tile = { description: "d", installer: { kind: "tile", tile: "gstack" } };
+    expect(reject({ ...tile, installer: { kind: "tile" } })?.msg).toContain("tile");
+    expect(reject({ ...tile, installer: { kind: "tile", tile: "" } })).not.toBeNull();
+    expect(reject({ ...tile, targets: ["cursor"] })).not.toBeNull();
+    expect(reject({ ...tile, targets: [] })).not.toBeNull();
   });
 
   test("unknown installer.kind is rejected (discriminated union)", () => {

@@ -1,0 +1,463 @@
+{
+  "tile": "ui-ux-pro-max",
+  "remote": {
+    "repoUrl": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+    "commit": "d14efff8ed1faa4187f004f79926f428c8074ec7"
+  },
+  "answers": {
+    "copy skills-cli .claude/skills/banner-design": [
+      "SKILL.md",
+      "references/banner-sizes-and-styles.md"
+    ],
+    "copy skills-cli .claude/skills/brand": [
+      "SKILL.md",
+      "references/approval-checklist.md",
+      "references/asset-organization.md",
+      "references/brand-guideline-template.md",
+      "references/color-palette-management.md",
+      "references/consistency-checklist.md",
+      "references/logo-usage-rules.md",
+      "references/messaging-framework.md",
+      "references/typography-specifications.md",
+      "references/update.md",
+      "references/visual-identity.md",
+      "references/voice-framework.md",
+      "scripts/extract-colors.cjs",
+      "scripts/inject-brand-context.cjs",
+      "scripts/sync-brand-to-tokens.cjs",
+      "scripts/tests/test_sync_brand_to_tokens.py",
+      "scripts/validate-asset.cjs",
+      "templates/brand-guidelines-starter.md"
+    ],
+    "copy skills-cli .claude/skills/design": [
+      "SKILL.md",
+      "data/cip/deliverables.csv",
+      "data/cip/industries.csv",
+      "data/cip/mockup-contexts.csv",
+      "data/cip/styles.csv",
+      "data/icon/styles.csv",
+      "data/logo/colors.csv",
+      "data/logo/industries.csv",
+      "data/logo/styles.csv",
+      "references/banner-sizes-and-styles.md",
+      "references/cip-deliverable-guide.md",
+      "references/cip-design.md",
+      "references/cip-prompt-engineering.md",
+      "references/cip-style-guide.md",
+      "references/design-routing.md",
+      "references/icon-design.md",
+      "references/logo-color-psychology.md",
+      "references/logo-design.md",
+      "references/logo-prompt-engineering.md",
+      "references/logo-style-guide.md",
+      "references/slides-copywriting-formulas.md",
+      "references/slides-create.md",
+      "references/slides-html-template.md",
+      "references/slides-layout-patterns.md",
+      "references/slides-strategies.md",
+      "references/slides.md",
+      "references/social-photos-design.md",
+      "scripts/cip/core.py",
+      "scripts/cip/generate.py",
+      "scripts/cip/render-html.py",
+      "scripts/cip/search.py",
+      "scripts/icon/generate.py",
+      "scripts/logo/core.py",
+      "scripts/logo/generate.py",
+      "scripts/logo/search.py",
+      "scripts/logo/tests/test_generate.py",
+      "scripts/tests/test_cip_generate.py",
+      "scripts/tests/test_icon_generate.py"
+    ],
+    "copy skills-cli .claude/skills/design-system": [
+      "SKILL.md",
+      "data/slide-backgrounds.csv",
+      "data/slide-charts.csv",
+      "data/slide-color-logic.csv",
+      "data/slide-copy.csv",
+      "data/slide-layout-logic.csv",
+      "data/slide-layouts.csv",
+      "data/slide-strategies.csv",
+      "data/slide-typography.csv",
+      "references/component-specs.md",
+      "references/component-tokens.md",
+      "references/primitive-tokens.md",
+      "references/semantic-tokens.md",
+      "references/states-and-variants.md",
+      "references/tailwind-integration.md",
+      "references/token-architecture.md",
+      "scripts/embed-tokens.cjs",
+      "scripts/fetch-background.py",
+      "scripts/generate-slide.py",
+      "scripts/generate-tokens.cjs",
+      "scripts/html-token-validator.py",
+      "scripts/search-slides.py",
+      "scripts/slide-token-validator.py",
+      "scripts/slide_search_core.py",
+      "scripts/tests/test_validate_tokens.py",
+      "scripts/validate-tokens.cjs",
+      "templates/design-tokens-starter.json"
+    ],
+    "copy skills-cli .claude/skills/slides": [
+      "SKILL.md",
+      "references/copywriting-formulas.md",
+      "references/create.md",
+      "references/html-template.md",
+      "references/layout-patterns.md",
+      "references/slide-strategies.md"
+    ],
+    "copy skills-cli .claude/skills/ui-styling": [
+      "LICENSE.txt",
+      "SKILL.md",
+      "canvas-fonts/ArsenalSC-OFL.txt",
+      "canvas-fonts/ArsenalSC-Regular.ttf",
+      "canvas-fonts/BigShoulders-Bold.ttf",
+      "canvas-fonts/BigShoulders-OFL.txt",
+      "canvas-fonts/BigShoulders-Regular.ttf",
+      "canvas-fonts/Boldonse-OFL.txt",
+      "canvas-fonts/Boldonse-Regular.ttf",
+      "canvas-fonts/BricolageGrotesque-Bold.ttf",
+      "canvas-fonts/BricolageGrotesque-OFL.txt",
+      "canvas-fonts/BricolageGrotesque-Regular.ttf",
+      "canvas-fonts/CrimsonPro-Bold.ttf",
+      "canvas-fonts/CrimsonPro-Italic.ttf",
+      "canvas-fonts/CrimsonPro-OFL.txt",
+      "canvas-fonts/CrimsonPro-Regular.ttf",
+      "canvas-fonts/DMMono-OFL.txt",
+      "canvas-fonts/DMMono-Regular.ttf",
+      "canvas-fonts/EricaOne-OFL.txt",
+      "canvas-fonts/EricaOne-Regular.ttf",
+      "canvas-fonts/GeistMono-Bold.ttf",
+      "canvas-fonts/GeistMono-OFL.txt",
+      "canvas-fonts/GeistMono-Regular.ttf",
+      "canvas-fonts/Gloock-OFL.txt",
+      "canvas-fonts/Gloock-Regular.ttf",
+      "canvas-fonts/IBMPlexMono-Bold.ttf",
+      "canvas-fonts/IBMPlexMono-OFL.txt",
+      "canvas-fonts/IBMPlexMono-Regular.ttf",
+      "canvas-fonts/IBMPlexSerif-Bold.ttf",
+      "canvas-fonts/IBMPlexSerif-BoldItalic.ttf",
+      "canvas-fonts/IBMPlexSerif-Italic.ttf",
+      "canvas-fonts/IBMPlexSerif-Regular.ttf",
+      "canvas-fonts/InstrumentSans-Bold.ttf",
+      "canvas-fonts/InstrumentSans-BoldItalic.ttf",
+      "canvas-fonts/InstrumentSans-Italic.ttf",
+      "canvas-fonts/InstrumentSans-OFL.txt",
+      "canvas-fonts/InstrumentSans-Regular.ttf",
+      "canvas-fonts/InstrumentSerif-Italic.ttf",
+      "canvas-fonts/InstrumentSerif-Regular.ttf",
+      "canvas-fonts/Italiana-OFL.txt",
+      "canvas-fonts/Italiana-Regular.ttf",
+      "canvas-fonts/JetBrainsMono-Bold.ttf",
+      "canvas-fonts/JetBrainsMono-OFL.txt",
+      "canvas-fonts/JetBrainsMono-Regular.ttf",
+      "canvas-fonts/Jura-Light.ttf",
+      "canvas-fonts/Jura-Medium.ttf",
+      "canvas-fonts/Jura-OFL.txt",
+      "canvas-fonts/LibreBaskerville-OFL.txt",
+      "canvas-fonts/LibreBaskerville-Regular.ttf",
+      "canvas-fonts/Lora-Bold.ttf",
+      "canvas-fonts/Lora-BoldItalic.ttf",
+      "canvas-fonts/Lora-Italic.ttf",
+      "canvas-fonts/Lora-OFL.txt",
+      "canvas-fonts/Lora-Regular.ttf",
+      "canvas-fonts/NationalPark-Bold.ttf",
+      "canvas-fonts/NationalPark-OFL.txt",
+      "canvas-fonts/NationalPark-Regular.ttf",
+      "canvas-fonts/NothingYouCouldDo-OFL.txt",
+      "canvas-fonts/NothingYouCouldDo-Regular.ttf",
+      "canvas-fonts/Outfit-Bold.ttf",
+      "canvas-fonts/Outfit-OFL.txt",
+      "canvas-fonts/Outfit-Regular.ttf",
+      "canvas-fonts/PixelifySans-Medium.ttf",
+      "canvas-fonts/PixelifySans-OFL.txt",
+      "canvas-fonts/PoiretOne-OFL.txt",
+      "canvas-fonts/PoiretOne-Regular.ttf",
+      "canvas-fonts/RedHatMono-Bold.ttf",
+      "canvas-fonts/RedHatMono-OFL.txt",
+      "canvas-fonts/RedHatMono-Regular.ttf",
+      "canvas-fonts/Silkscreen-OFL.txt",
+      "canvas-fonts/Silkscreen-Regular.ttf",
+      "canvas-fonts/SmoochSans-Medium.ttf",
+      "canvas-fonts/SmoochSans-OFL.txt",
+      "canvas-fonts/Tektur-Medium.ttf",
+      "canvas-fonts/Tektur-OFL.txt",
+      "canvas-fonts/Tektur-Regular.ttf",
+      "canvas-fonts/WorkSans-Bold.ttf",
+      "canvas-fonts/WorkSans-BoldItalic.ttf",
+      "canvas-fonts/WorkSans-Italic.ttf",
+      "canvas-fonts/WorkSans-OFL.txt",
+      "canvas-fonts/WorkSans-Regular.ttf",
+      "canvas-fonts/YoungSerif-OFL.txt",
+      "canvas-fonts/YoungSerif-Regular.ttf",
+      "references/canvas-design-system.md",
+      "references/shadcn-accessibility.md",
+      "references/shadcn-components.md",
+      "references/shadcn-theming.md",
+      "references/tailwind-customization.md",
+      "references/tailwind-responsive.md",
+      "references/tailwind-utilities.md",
+      "scripts/.coverage",
+      "scripts/requirements.txt",
+      "scripts/shadcn_add.py",
+      "scripts/tailwind_config_gen.py",
+      "scripts/tests/coverage-ui.json",
+      "scripts/tests/requirements.txt",
+      "scripts/tests/test_shadcn_add.py",
+      "scripts/tests/test_tailwind_config_gen.py"
+    ],
+    "dirs ": [
+      ".claude",
+      ".claude-plugin",
+      ".github",
+      "cli",
+      "docs",
+      "gallery",
+      "preview",
+      "projects",
+      "screenshots",
+      "scripts",
+      "src",
+      "stack"
+    ],
+    "dirs .agents/skills": [],
+    "dirs .claude/skills": [
+      "banner-design",
+      "brand",
+      "design",
+      "design-system",
+      "slides",
+      "ui-styling",
+      "ui-ux-pro-max"
+    ],
+    "dirs .cline/skills": [],
+    "dirs .codebuddy/skills": [],
+    "dirs .codex/skills": [],
+    "dirs .commandcode/skills": [],
+    "dirs .continue/skills": [],
+    "dirs .factory/skills": [],
+    "dirs .github/skills": [],
+    "dirs .goose/skills": [],
+    "dirs .grok/skills": [],
+    "dirs .iflow/skills": [],
+    "dirs .junie/skills": [],
+    "dirs .kilo/skills": [],
+    "dirs .kilocode/skills": [],
+    "dirs .kimchi/skills": [],
+    "dirs .kiro/skills": [],
+    "dirs .minimax/skills": [],
+    "dirs .mux/skills": [],
+    "dirs .neovate/skills": [],
+    "dirs .opencode/skills": [],
+    "dirs .openhands/skills": [],
+    "dirs .pi/skills": [],
+    "dirs .posit/assistant/skills": [],
+    "dirs .qoder/skills": [],
+    "dirs .roo/skills": [],
+    "dirs .trae/skills": [],
+    "dirs .windsurf/skills": [],
+    "dirs .zcode/skills": [],
+    "dirs .zencoder/skills": [],
+    "dirs skills": [],
+    "dirs skills/.curated": [],
+    "dirs skills/.experimental": [],
+    "dirs skills/.system": [],
+    "frontmatter .claude/skills/banner-design/SKILL.md": {
+      "name": "banner-design",
+      "description": "Design banners for social media, ads, website heroes, creative assets, and print. Multiple art direction options with optional generated or supplied visuals. Actions: design, create, generate banner. Platforms: Facebook, Twitter/X, LinkedIn, YouTube, Instagram, Google Display, website hero, print. Styles: minimalist, gradient, bold typography, photo-based, illustrated, geometric, retro, glassmorphism, 3D, neon, duotone, editorial, collage.",
+      "argument-hint": "[platform] [style] [dimensions]",
+      "license": "MIT",
+      "metadata": {
+        "author": "claudekit",
+        "version": "1.0.0"
+      }
+    },
+    "frontmatter .claude/skills/brand/SKILL.md": {
+      "name": "brand",
+      "description": "Brand voice, visual identity, messaging frameworks, asset management, brand consistency. Activate for branded content, tone of voice, marketing assets, brand compliance, style guides.",
+      "argument-hint": "[update|review|create] [args]",
+      "metadata": {
+        "author": "claudekit",
+        "version": "1.0.0"
+      }
+    },
+    "frontmatter .claude/skills/design-system/SKILL.md": {
+      "name": "design-system",
+      "description": "Token architecture, component specifications, and slide generation. Three-layer tokens (primitive→semantic→component), CSS variables, spacing/typography scales, component specs, strategic slide creation. Use for design tokens, systematic design, brand-compliant presentations.",
+      "argument-hint": "[component or token]",
+      "license": "MIT",
+      "metadata": {
+        "author": "claudekit",
+        "version": "1.0.0"
+      }
+    },
+    "frontmatter .claude/skills/design/SKILL.md": {
+      "name": "design",
+      "description": "Comprehensive design skill: brand identity, design tokens, UI styling, logo generation (55 styles, Gemini, Atlas Cloud, or MuAPI AI), corporate identity program (50 deliverables, CIP mockups), HTML presentations (Chart.js), banner design (22 styles, social/ads/web/print), icon design (15 styles, SVG, Gemini 3.1 Pro), social photos (HTML→screenshot, multi-platform). Actions: design logo, create CIP, generate mockups, build slides, design banner, generate icon, create social photos, social media images, brand identity, design system. Platforms: Facebook, Twitter, LinkedIn, YouTube, Instagram, Pinterest, TikTok, Threads, Google Ads.",
+      "argument-hint": "[design-type] [context]",
+      "license": "MIT",
+      "metadata": {
+        "author": "claudekit",
+        "version": "2.1.0"
+      }
+    },
+    "frontmatter .claude/skills/slides/SKILL.md": {
+      "name": "slides",
+      "description": "Create strategic HTML presentations with Chart.js, design tokens, responsive layouts, copywriting formulas, and contextual slide strategies.",
+      "argument-hint": "[topic] [slide-count]",
+      "metadata": {
+        "author": "claudekit",
+        "version": "1.0.0"
+      }
+    },
+    "frontmatter .claude/skills/ui-styling/SKILL.md": {
+      "name": "ui-styling",
+      "description": "Create beautiful, accessible user interfaces with shadcn/ui components (built on Radix UI + Tailwind), Tailwind CSS utility-first styling, and canvas-based visual designs. Use when building user interfaces, implementing design systems, creating responsive layouts, adding accessible components (dialogs, dropdowns, forms, tables), customizing themes and colors, implementing dark mode, generating visual designs and posters, or establishing consistent styling patterns across applications.",
+      "argument-hint": "[component or layout]",
+      "license": "MIT",
+      "metadata": {
+        "author": "claudekit",
+        "version": "1.0.0"
+      }
+    },
+    "frontmatter .claude/skills/ui-ux-pro-max/SKILL.md": {
+      "name": "ui-ux-pro-max",
+      "description": "UI/UX design intelligence for web, mobile, and desktop. This skill should be used when designing, building, reviewing, or fixing interfaces, including pages, components, design systems, accessibility, interaction, responsive layout, typography, color, charts, and stack-specific UI implementation. Searchable local data: 79 searchable styles (50 active), 192 product palettes and reasoning profiles, 74 font pairings, 119 UX guidelines, 105 icons, 17 GSAP presets, 25 chart types, and 22 stacks."
+    },
+    "json .agents/plugins/marketplace.json": [],
+    "json .claude-plugin/marketplace.json": [
+      {
+        "name": "ui-ux-pro-max-skill",
+        "id": "ui-ux-pro-max-skill",
+        "owner": {
+          "name": "nextlevelbuilder"
+        },
+        "metadata": {
+          "description": "UI/UX design intelligence skill with 79 styles, 192 palettes, 74 font pairings, 25 charts, and 22 stack guidelines",
+          "version": "2.15.0"
+        },
+        "plugins": [
+          {
+            "name": "ui-ux-pro-max",
+            "source": "./",
+            "description": "Professional UI/UX design intelligence for AI coding assistants. Includes searchable databases of styles, colors, typography, charts, and UX guidelines for React, Next.js, Astro, Vue, Nuxt.js, Nuxt UI, Svelte, SwiftUI, React Native, Flutter, Tailwind, shadcn/ui, Jetpack Compose, Angular, Laravel, JavaFX, and Three.js.",
+            "version": "2.15.0",
+            "author": {
+              "name": "nextlevelbuilder"
+            },
+            "keywords": [
+              "ui",
+              "ux",
+              "design",
+              "styles",
+              "typography",
+              "color-palette",
+              "accessibility",
+              "charts",
+              "components"
+            ],
+            "category": "design",
+            "strict": false
+          }
+        ]
+      }
+    ],
+    "json .claude-plugin/plugin.json": [
+      {
+        "name": "ui-ux-pro-max",
+        "description": "UI/UX design intelligence. Searchable local database with 79 styles, 192 palettes, 74 font pairings, 25 charts, and 22 stacks (React, Next.js, Vue, Nuxt.js, Nuxt UI, Svelte, Astro, SwiftUI, React Native, Flutter, Tailwind, shadcn/ui, Jetpack Compose, Angular, Laravel, JavaFX, WPF, WinUI, Avalonia, Uno Platform, UWP, Three.js). Use when designing, building, or reviewing UI: pages, components, color schemes, typography, layout, accessibility, animation, or data visualization.",
+        "version": "2.15.0",
+        "author": {
+          "name": "nextlevelbuilder"
+        },
+        "license": "MIT",
+        "keywords": [
+          "ui",
+          "ux",
+          "design",
+          "styles",
+          "typography",
+          "color-palette",
+          "accessibility",
+          "charts",
+          "components"
+        ],
+        "skills": "./.claude/skills/"
+      }
+    ],
+    "json skills-lock.json": [],
+    "kind .claude-plugin/SKILL.md": "absent",
+    "kind .claude/SKILL.md": "absent",
+    "kind .claude/skills/banner-design/SKILL.md": "file",
+    "kind .claude/skills/brand/SKILL.md": "file",
+    "kind .claude/skills/design-system/SKILL.md": "file",
+    "kind .claude/skills/design/SKILL.md": "file",
+    "kind .claude/skills/slides/SKILL.md": "file",
+    "kind .claude/skills/ui-styling/SKILL.md": "file",
+    "kind .claude/skills/ui-ux-pro-max/SKILL.md": "file",
+    "kind .github/SKILL.md": "absent",
+    "kind SKILL.md": "absent",
+    "kind cli/SKILL.md": "absent",
+    "kind docs/SKILL.md": "absent",
+    "kind gallery/SKILL.md": "absent",
+    "kind preview/SKILL.md": "absent",
+    "kind projects/SKILL.md": "absent",
+    "kind screenshots/SKILL.md": "absent",
+    "kind scripts/SKILL.md": "absent",
+    "kind src/SKILL.md": "absent",
+    "kind stack/SKILL.md": "absent",
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" .claude/skills/banner-design": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" .claude/skills/brand": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" .claude/skills/design": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" .claude/skills/design-system": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" .claude/skills/slides": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" .claude/skills/ui-styling": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" .claude/skills/ui-ux-pro-max": true
+  },
+  "expect": {
+    "tile": {
+      "recipe": "ui-ux-pro-max-plugin-and-cli",
+      "unit": "whole",
+      "capabilities": [
+        {
+          "capability": "bundle/ui-ux-pro-max",
+          "files": 1
+        },
+        {
+          "capability": "plugin/ui-ux-pro-max",
+          "files": 1
+        }
+      ]
+    },
+    "generic": {
+      "recipe": "published-skills",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "skill/banner-design",
+          "files": 2
+        },
+        {
+          "capability": "skill/brand",
+          "files": 18
+        },
+        {
+          "capability": "skill/design",
+          "files": 38
+        },
+        {
+          "capability": "skill/design-system",
+          "files": 27
+        },
+        {
+          "capability": "skill/slides",
+          "files": 6
+        },
+        {
+          "capability": "skill/ui-styling",
+          "files": 98
+        }
+      ]
+    }
+  }
+}

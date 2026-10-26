@@ -12,8 +12,12 @@
 //   json <path>                    [] when absent or not JSON, else [value]
 //   frontmatter <path>             object, or null
 //   mentions <JSON needle> <dir>   boolean
-//   copy <exclude> <from>          the copied files, relative to the copy's `to`
+//   copy <exclude> <from>          the copied files, relative to the copy's `to`;
+//                                  for a copy of the whole tree, their count and
+//                                  the sha256 of the sorted list, because a whole
+//                                  repository would not fit in a fixture
 
+import { createHash } from "node:crypto";
 import { capabilityLayout } from "@hive/capability-schema";
 import { enumerateLeaves, type SourceTree } from "@hive/capability-schema-tools";
 import { SelectionUnit } from "@hive/contract";
@@ -23,7 +27,7 @@ import type { TreePath, TreeSnapshot } from "../acquisition/snapshot.ts";
 import type { TreeLimits } from "../acquisition/tree-guard.ts";
 import type { SyncError } from "../effect/errors.ts";
 import { planIngest } from "../mirror.ts";
-import type { CopyRule } from "./projection.ts";
+import { CHECKOUT_ROOT, type CopyRule } from "./projection.ts";
 import { type RecipeTree, type Recognition, recipeTree, recognizeSource } from "./recipe.ts";
 import type { Tile } from "./tiles.ts";
 
@@ -58,6 +62,11 @@ const Names = z.array(z.string());
 const Json = z.array(z.unknown()).max(1);
 const Frontmatter = z.record(z.string(), z.unknown()).nullable();
 const Mentions = z.boolean();
+const CopySummary = z
+  .object({ files: z.number().int().positive(), digest: z.string().regex(/^[0-9a-f]{64}$/) })
+  .strict();
+const CopyAnswer = z.union([Names, CopySummary]);
+type CopyAnswer = z.infer<typeof CopyAnswer>;
 
 const mentionsKey = (dir: TreePath, needle: string) => `mentions ${JSON.stringify(needle)} ${dir}`;
 const copyKey = (copy: CopyRule) => `copy ${copy.exclude} ${copy.from}`;
@@ -131,18 +140,21 @@ export function replayTree(fixture: RecipeFixture): RecipeTree {
   };
 }
 
-type CopiedFiles = (copy: CopyRule) => Effect.Effect<readonly string[], SyncError>;
+type CopiedFiles = (copy: CopyRule) => Effect.Effect<CopyAnswer, SyncError>;
 
 // What the Mirror would hold for one copy rule, expanded by the Mirror's own
 // planner.
 function snapshotCopies(snapshot: TreeSnapshot, limits: TreeLimits): CopiedFiles {
   return (copy) =>
     planIngest(snapshot.entries, { copies: [copy], writes: [] }, limits).pipe(
-      Effect.map((plan) =>
-        plan.entries.map((entry) =>
+      Effect.map((plan) => {
+        const files = plan.entries.map((entry) =>
           entry.to === copy.to ? "" : entry.to.slice(copy.to.length + 1),
-        ),
-      ),
+        );
+        if (copy.from !== "" || files.length === 0) return files;
+        const digest = createHash("sha256").update(files.join("\n")).digest("hex");
+        return { files: files.length, digest };
+      }),
     );
 }
 
@@ -197,7 +209,11 @@ export function groupByCapability(
     const preset = /^presets\/([^/]+)\.yaml$/.exec(path)?.[1];
     const capability =
       owners.find((owner) => owner.owns(path))?.capability ??
-      (preset ? `preset/${preset}` : `other/${path.split("/").slice(0, 2).join("/")}`);
+      (preset
+        ? `preset/${preset}`
+        : path.startsWith(`${CHECKOUT_ROOT}/`)
+          ? CHECKOUT_ROOT
+          : `other/${path.split("/").slice(0, 2).join("/")}`);
     const group = groups.get(capability);
     if (group) group.push(path);
     else groups.set(capability, [path]);
@@ -217,13 +233,26 @@ function outcomeOf(
     }
     const { recipe, projection } = result.success;
     const paths: string[] = projection.writes.map((write) => write.to);
+    const summarized: { capability: string; files: number }[] = [];
     for (const copy of projection.copies) {
-      for (const rel of yield* copied(copy)) paths.push(rel ? `${copy.to}/${rel}` : copy.to);
+      const answer = yield* copied(copy);
+      if ("files" in answer) {
+        // A whole-tree copy lands in one capability folder or the checkout.
+        const [capability] = groupByCapability([`${copy.to}/SKILL.md`]).keys();
+        summarized.push({ capability: capability ?? copy.to, files: answer.files });
+        continue;
+      }
+      for (const rel of answer) paths.push(rel ? `${copy.to}/${rel}` : copy.to);
     }
-    const capabilities = [...groupByCapability(paths)].map(([capability, files]) => ({
-      capability,
-      files: files.length,
-    }));
+    const counts = new Map(
+      [...groupByCapability(paths)].map(([capability, files]) => [capability, files.length]),
+    );
+    for (const { capability, files } of summarized) {
+      counts.set(capability, (counts.get(capability) ?? 0) + files);
+    }
+    const capabilities = [...counts]
+      .sort(byKey)
+      .map(([capability, files]) => ({ capability, files }));
     return { recipe: recipe.id, unit: recipe.unit, capabilities };
   });
 }
@@ -236,7 +265,7 @@ export function recordFixture(
   return Effect.gen(function* () {
     const recording = recordingTree(recipeTree(snapshot, limits));
     const listed = snapshotCopies(snapshot, limits);
-    const copies = new Map<string, readonly string[]>();
+    const copies = new Map<string, CopyAnswer>();
     const copied: CopiedFiles = (copy) =>
       listed(copy).pipe(
         Effect.map((files) => {
@@ -264,7 +293,7 @@ export function replayOutcome(
 ): Effect.Effect<Outcome, SyncError> {
   const answer = recorded(fixture);
   return outcomeOf(recognizeSource(replayTree(fixture), tile), (copy) =>
-    Effect.sync(() => answer(copyKey(copy), Names)),
+    Effect.sync(() => answer(copyKey(copy), CopyAnswer)),
   );
 }
 

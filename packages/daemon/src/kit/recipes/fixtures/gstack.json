@@ -1,0 +1,135 @@
+{
+  "tile": "gstack",
+  "remote": {
+    "repoUrl": "https://github.com/garrytan/gstack",
+    "commit": "4814b3d8a45338853145eb93ded63736c5848ebd"
+  },
+  "answers": {
+    "copy none ": {
+      "files": 3978,
+      "digest": "68b8e683df94b07b874d471fbf8c3ff7ba164c7ea4bb65ffe81a5dfc60441959"
+    },
+    "dirs ": [
+      ".github",
+      ".gstack",
+      "agents",
+      "agents-digest",
+      "autoplan",
+      "benchmark",
+      "benchmark-models",
+      "bin",
+      "browse",
+      "browser-skills",
+      "canary",
+      "capy",
+      "careful",
+      "claude-code",
+      "codex",
+      "context-restore",
+      "context-save",
+      "contrib",
+      "cso",
+      "design",
+      "design-consultation",
+      "design-html",
+      "design-review",
+      "design-shotgun",
+      "deslop-shared-libs",
+      "devex-review",
+      "diagram",
+      "docs",
+      "document-generate",
+      "document-release",
+      "eval-plan",
+      "extension",
+      "freeze",
+      "gstack",
+      "gstack-upgrade",
+      "guard",
+      "health",
+      "hosts",
+      "investigate",
+      "ios-clean",
+      "ios-design-review",
+      "ios-fix",
+      "ios-qa",
+      "ios-sync",
+      "land-and-deploy",
+      "landing-report",
+      "learn",
+      "lib",
+      "licenses",
+      "make-pdf",
+      "model-overlays",
+      "office-hours",
+      "open-gstack-browser",
+      "openclaw",
+      "pair-agent",
+      "patches",
+      "plan-ceo-review",
+      "plan-design-review",
+      "plan-devex-review",
+      "plan-eng-review",
+      "plan-tune",
+      "qa",
+      "qa-only",
+      "retro",
+      "review",
+      "scrape",
+      "scripts",
+      "setup-browser-cookies",
+      "setup-deploy",
+      "setup-gbrain",
+      "ship",
+      "skillify",
+      "spec",
+      "supabase",
+      "sync-gbrain",
+      "test",
+      "test-audit",
+      "unfreeze"
+    ],
+    "frontmatter SKILL.md": {
+      "name": "gstack",
+      "preamble-tier": 1,
+      "version": "1.2.0",
+      "description": "Router for the gstack skill suite. (gstack)",
+      "allowed-tools": [
+        "Bash",
+        "Read",
+        "AskUserQuestion"
+      ],
+      "triggers": [
+        "gstack",
+        "which gstack skill",
+        "route this with gstack"
+      ]
+    },
+    "json .agents/plugins/marketplace.json": [],
+    "json .claude-plugin/marketplace.json": [],
+    "json skills-lock.json": [],
+    "kind SKILL.md": "file",
+    "kind bin/gstack-uninstall": "file",
+    "kind setup": "file",
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" ": true
+  },
+  "expect": {
+    "tile": {
+      "recipe": "gstack-setup",
+      "unit": "whole",
+      "capabilities": [
+        {
+          "capability": "bundle/gstack",
+          "files": 1
+        },
+        {
+          "capability": "checkout",
+          "files": 3978
+        }
+      ]
+    },
+    "generic": {
+      "notRecognized": "No Recipe matched: no capabilities/ folder; no marketplace for both CLIs; 1 published skill needs a plugin runtime; no plugin marketplace"
+    }
+  }
+}

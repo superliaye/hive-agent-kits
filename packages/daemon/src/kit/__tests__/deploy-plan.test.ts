@@ -27,7 +27,9 @@ function snapshot(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapsh
       presets: [],
       problems: [],
     },
+    sourceTiles: new Map(),
     plugins: new Map(),
+    bundles: new Map(),
     selection: { revision: 8, enabled: [{ key, targets: ["claude"] }], removalIntents: [] },
     ledger: {
       revision: null,

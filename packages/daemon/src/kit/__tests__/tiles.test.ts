@@ -11,6 +11,7 @@ const repoRecipe: RepoRecipe = {
   label: "Repo only",
   unit: "whole",
   trust: "repo",
+  installer: { checkout: null, targets: {} },
   recognize: () => Effect.succeed({ _tag: "Miss", reason: "test" }),
 };
 
@@ -31,11 +32,37 @@ describe("TILES", () => {
     expect(TILES[0]?.locator).toEqual({ kind: "starter" });
   });
 
-  test("only HyperFrames is narrowed to whole", () => {
-    expect(TILES.filter((tile) => tile.recipe.unit === "whole").map((tile) => tile.id)).toEqual([
-      "hyperframes",
-    ]);
+  test("only HyperFrames narrows a generic Recipe to whole", () => {
+    expect(
+      TILES.filter((tile) => tile.recipe.trust === "generic" && tile.recipe.unit === "whole").map(
+        (tile) => tile.id,
+      ),
+    ).toEqual(["hyperframes"]);
     expect(tileById("hyperframes")?.recipe.id).toBe(publishedSkills.id);
+  });
+
+  test("gstack and UI UX Pro Max carry the repo-specific Recipes", () => {
+    expect(TILES.filter((tile) => tile.recipe.trust === "repo").map((tile) => tile.id)).toEqual([
+      "gstack",
+      "ui-ux-pro-max",
+    ]);
+  });
+
+  test("every installer path is relative and stays inside its home", () => {
+    for (const tile of TILES) {
+      if (tile.recipe.trust !== "repo") continue;
+      const { checkout, targets } = tile.recipe.installer;
+      const paths = [
+        ...Object.values(checkout?.at ?? {}),
+        ...Object.values(targets).flatMap((installer) => installer.proofs),
+      ];
+      expect(paths.length).toBeGreaterThan(0);
+      for (const { path } of paths) {
+        expect(
+          path.split("/").every((segment) => segment && segment !== "." && segment !== ".."),
+        ).toBe(true);
+      }
+    }
   });
 });
 

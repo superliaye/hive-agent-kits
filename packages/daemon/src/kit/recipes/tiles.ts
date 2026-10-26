@@ -5,6 +5,7 @@ import type { SelectionUnit, Source, SourceLocator, TileSummary } from "@hive/co
 import { locatorIdentity } from "../../sources/types.ts";
 import { publishedSkills } from "./published-skills.ts";
 import { capabilityKit, pluginMarketplace, type Recipe } from "./recipe.ts";
+import { gstackRecipe, uiUxProMaxRecipe } from "./repo-recipes.ts";
 
 type GitLocator = Extract<SourceLocator, { kind: "git" }>;
 // A Tile names its ref, because SourceLocator has no default-branch mode.
@@ -120,6 +121,24 @@ export const TILES: readonly Tile[] = [
     locator: tracking("https://github.com/anthropics/skills", MAIN, "skills/frontend-design"),
     recipe: publishedSkills,
     unit: "pick",
+  }),
+  defineTile({
+    id: "gstack",
+    label: "gstack",
+    description:
+      "Garry Tan's gstack skills (plan reviews, QA, ship, browse), installed and removed by the repository's own setup and uninstall scripts.",
+    locator: tracking("https://github.com/garrytan/gstack", MAIN),
+    recipe: gstackRecipe,
+    unit: "whole",
+  }),
+  defineTile({
+    id: "ui-ux-pro-max",
+    label: "UI UX Pro Max",
+    description:
+      "UI/UX design guidance: the ui-ux-pro-max plugin on Claude Code, and the skills its uipro CLI installs on Codex.",
+    locator: tracking("https://github.com/nextlevelbuilder/ui-ux-pro-max-skill", MAIN),
+    recipe: uiUxProMaxRecipe,
+    unit: "whole",
   }),
 ];
 

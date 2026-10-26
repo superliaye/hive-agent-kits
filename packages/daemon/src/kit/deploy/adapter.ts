@@ -21,7 +21,7 @@ import type { DeployTargets } from "../targets.ts";
 import { type SkillFile, skillFileMode } from "./transforms.ts";
 
 export type ExecResult = { status: number; stdout: string; stderr: string };
-export type ExecRequest = { command: string; args: string[]; cwd?: string };
+export type ExecRequest = { command: string; args: string[]; cwd?: string; stdin?: string };
 
 // The exec port — injectable. Production wires `bunExec`; tests inject a mock to
 // assert what was/was not run.
@@ -129,6 +129,55 @@ export function probeBinary(fx: DeployFsExec, name: string): boolean {
   return fx.probe(name, fx.targets.childEnv(process.env));
 }
 
+const inside = (path: string, dir: string) =>
+  path === dir || path.startsWith(`${dir}/`) || path.startsWith(`${dir}\\`);
+
+// A repository's own script runs with CODEX_HOME pinned to the Codex target. When
+// the homes are redirected, no variable but PATH may point into the real home
+// outside the redirected HOME, so that HOME is the only home the script sees.
+// The dev sandbox lives inside the real home, so "outside" matters.
+export function repoCommandEnv(targets: DeployTargets, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = targets.childEnv(base);
+  env.CODEX_HOME = targets.codexHome();
+  const home = env.HOME;
+  if (!targets.isChildEnvRedirected() || !home) return env;
+  const realHome = homedir();
+  for (const [name, value] of Object.entries(env)) {
+    if (name === "PATH" || value === undefined) continue;
+    if (inside(value, realHome) && !inside(value, home)) delete env[name];
+  }
+  return env;
+}
+
+// A redirected HOME hides ~/.npmrc, so npm and bun could not reach the
+// configured registry. Copies its `registry=` lines in, never its credentials.
+function seedRegistry(home: string): void {
+  const real = join(homedir(), ".npmrc");
+  const seeded = join(home, ".npmrc");
+  if (real === seeded || !existsSync(real)) return;
+  const lines = readFileSync(real, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("registry="));
+  const existing = existsSync(seeded) ? readFileSync(seeded, "utf8") : "";
+  const missing = lines.filter((line) => !existing.split(/\r?\n/).includes(line));
+  if (missing.length === 0) return;
+  const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+  writeFileAt(seeded, `${existing}${separator}${missing.join("\n")}\n`);
+}
+
+export function execRepoCommand(fx: DeployFsExec, req: ExecRequest, tool: string): ExecResult {
+  if (isAutomatedTest() && !fx.targets.isChildEnvRedirected()) {
+    throw new DeployError({
+      reason: "not_redirected",
+      message: `refusing to run ${tool} from a repository in a test without a redirected home`,
+      tool,
+    });
+  }
+  const env = repoCommandEnv(fx.targets, process.env);
+  if (fx.targets.isChildEnvRedirected() && env.HOME) seedRegistry(env.HOME);
+  return fx.exec(req, env);
+}
+
 // ---- production wiring ----
 
 // On Windows the external CLIs are `.cmd`/`.ps1` shims (`claude.cmd`, `npx.cmd`,
@@ -139,7 +188,7 @@ export function probeBinary(fx: DeployFsExec, name: string): boolean {
 // spawn ENOENTs (the asymmetry that escaped the typed error channel).
 function spawnViaShell(
   cmd: string[],
-  opts: { cwd?: string; env: NodeJS.ProcessEnv },
+  opts: { cwd?: string; env: NodeJS.ProcessEnv; stdin?: string },
 ): { exitCode: number | null; stdout: string; stderr: string } {
   const onWindows = process.platform === "win32";
   const finalCmd = onWindows ? ["cmd", "/c", ...cmd] : cmd;
@@ -148,6 +197,7 @@ function spawnViaShell(
       cmd: finalCmd,
       cwd: opts.cwd,
       env: opts.env,
+      stdin: opts.stdin === undefined ? "ignore" : new TextEncoder().encode(opts.stdin),
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -165,7 +215,7 @@ function spawnViaShell(
 }
 
 export function bunExec(req: ExecRequest, env: NodeJS.ProcessEnv): ExecResult {
-  const r = spawnViaShell([req.command, ...req.args], { cwd: req.cwd, env });
+  const r = spawnViaShell([req.command, ...req.args], { cwd: req.cwd, env, stdin: req.stdin });
   return { status: r.exitCode ?? -1, stdout: r.stdout, stderr: r.stderr };
 }
 

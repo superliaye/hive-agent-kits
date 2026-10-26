@@ -100,7 +100,9 @@ function snapshot(deployPlan = plan()): DeploymentSnapshot {
     sourceRegistryRevision: deployPlan.sourceRegistryRevision,
     mirrors: deployPlan.mirrors,
     catalog: { entries: [], presets: [], problems: [] },
+    sourceTiles: new Map(),
     plugins: new Map(),
+    bundles: new Map(),
     selection: {
       revision: deployPlan.selectionRevision,
       enabled: [],

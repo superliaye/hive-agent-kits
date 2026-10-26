@@ -30,6 +30,14 @@ export function pluginPointer(name: CapabilityName): MirrorPath {
   return `capabilities/plugins/${name}.plugin.md` as MirrorPath;
 }
 
+export function bundlePointer(name: CapabilityName): MirrorPath {
+  return `capabilities/bundles/${name}.bundle.md` as MirrorPath;
+}
+
+// The repository tree a repo-specific Recipe's commands run in (ADR-0034).
+// Deploy copies it out to a durable checkout; nothing runs in the Mirror.
+export const CHECKOUT_ROOT = "checkout" as MirrorPath;
+
 // "skills-cli" leaves out what skills@1.7.2 copyDirectory leaves out: any entry
 // named metadata.json, and the directories .git, __pycache__, and __pypackages__.
 export type ExcludeRule = "none" | "skills-cli";

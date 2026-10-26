@@ -22,7 +22,9 @@ function fixture(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapsho
     sourceRegistryRevision: 1,
     mirrors: [],
     catalog: { entries: [], presets: [], problems: [] },
+    sourceTiles: new Map(),
     plugins: new Map(),
+    bundles: new Map(),
     selection: { revision: 1, enabled: [], removalIntents: [] },
     ledger: {
       revision: null,

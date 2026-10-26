@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { stripVTControlCharacters } from "node:util";
 import { serializeCapabilityKey } from "@hive/capability-schema";
 import type { AcceptedDeployRequest, DeployTarget } from "@hive/contract";
 import { withCooperativeFileLockAsync } from "../lib/durable-file.ts";
@@ -27,6 +26,7 @@ import {
   hashSkillFiles,
   sha256,
 } from "./deploy/artifact-hash.ts";
+import { boundedInstallerDetail, InstallerTaskError } from "./deploy/installer-error.ts";
 import {
   marketplacePluginCommands,
   marketplacePluginInstalled,
@@ -46,6 +46,15 @@ import {
   pluginMeta,
   renderedSkillFiles,
 } from "./deploy/sources.ts";
+import {
+  applyTileBundle,
+  checkoutLocation,
+  hiveCheckout,
+  installedTargets,
+  repoRecipeOf,
+  resolveTileBundle,
+  tileTaskSettled,
+} from "./deploy/tile-bundle.ts";
 import { transformAgent, transformInstructions } from "./deploy/transforms.ts";
 import {
   type DeployOperation,
@@ -66,6 +75,7 @@ import {
   readLedger,
 } from "./ledger.ts";
 import { readMirrorIdentity } from "./mirror.ts";
+import { tileById } from "./recipes/tiles.ts";
 import type { DeployTargets } from "./targets.ts";
 
 export type { StagedDeployPayload } from "./deploy-operations.ts";
@@ -483,9 +493,17 @@ export function stageDeployPlan(
     });
   }
 
+  const tileTasks: TileBundleTask[] = [];
   const kindOrder = ["skill", "agent", "plugin", "bundle"] as const;
   for (const kind of kindOrder) {
     for (const action of plan.actions.filter((candidate) => candidate.key.kind === kind)) {
+      if (action.key.kind === "bundle") {
+        const tileTask = stageTileBundle(targets, snapshot, plan, action);
+        if (tileTask) {
+          tileTasks.push(tileTask);
+          continue;
+        }
+      }
       if (
         action.action === "remove" &&
         (action.key.kind === "skill" || action.key.kind === "agent")
@@ -589,6 +607,7 @@ export function stageDeployPlan(
       });
     }
   }
+  tasks.push(...orderTileTasks(targets, snapshot, tileTasks));
   return { tasks, metadata: {} };
 }
 
@@ -600,6 +619,152 @@ function appliedRecord(snapshot: DeploymentSnapshot, key: PlanAction["key"], tar
       record.target === target &&
       serializeCapabilityKey(record.key) === serializeCapabilityKey(key),
   )?.applied;
+}
+
+type TileBundleTask = Extract<StagedDeployTask, { type: "tile-bundle" }>;
+
+const sameKey = (left: PlanAction["key"], right: PlanAction["key"]) =>
+  serializeCapabilityKey(left) === serializeCapabilityKey(right);
+
+function selectedTargets(snapshot: DeploymentSnapshot, key: PlanAction["key"]): DeployTarget[] {
+  return snapshot.selection.enabled.find((entry) => sameKey(entry.key, key))?.targets ?? [];
+}
+
+// A Tile installer pointer in the Mirror of `sourceId`, with that Source's Tile.
+function tilePointer(
+  targets: DeployTargets,
+  snapshot: DeploymentSnapshot,
+  sourceId: string | undefined,
+  name: string,
+) {
+  if (!sourceId) return null;
+  const meta = bundleMeta(targets.mirrorRoot(sourceId), name);
+  if (meta?.installerKind !== "tile") return null;
+  return { meta, tile: tileById(snapshot.sourceTiles.get(sourceId) ?? "") };
+}
+
+// Null when the action's bundle is not a Tile installer. A removal reads Hive's
+// install record first, so it still runs after the Source is gone.
+function stageTileBundle(
+  targets: DeployTargets,
+  snapshot: DeploymentSnapshot,
+  plan: DeployPlan,
+  action: PlanAction,
+): TileBundleTask | null {
+  const key = { kind: "bundle" as const, name: action.key.name };
+  const selected = selectedTargets(snapshot, action.key);
+  if (action.action !== "remove") {
+    const { sourceId, contentSha } = requiredActionSource(action);
+    const pointer = tilePointer(targets, snapshot, sourceId, key.name);
+    if (!pointer) return null;
+    assertContentSha(targets, sourceId, action.key, contentSha);
+    const resolved = resolveTileBundle(
+      pointer.meta,
+      pointer.tile,
+      action.target,
+      selected,
+      targets,
+    );
+    if (!resolved || resolved.renderedHash !== action.renderedHash) throw new PlanStaleError();
+    return {
+      type: "tile-bundle",
+      action: action.action,
+      key,
+      target: action.target,
+      tile: resolved.tile.id,
+      checkout: resolved.checkout,
+      commit: resolved.commit,
+      sourceId,
+      contentSha,
+      renderedHash: resolved.renderedHash,
+      keep: [],
+      release: null,
+    };
+  }
+
+  const record = appliedRecord(snapshot, action.key, action.target);
+  const via = record?.installedVia?.installer === "tile" ? record.installedVia : null;
+  const pointer = tilePointer(targets, snapshot, action.sourceId, key.name);
+  if (pointer && action.sourceId && action.contentSha) {
+    assertContentSha(targets, action.sourceId, action.key, action.contentSha);
+  }
+  const resolved = pointer
+    ? resolveTileBundle(
+        pointer.meta,
+        pointer.tile,
+        action.target,
+        [...selected, action.target],
+        targets,
+      )
+    : null;
+  const tileId = via?.tile ?? resolved?.tile.id;
+  const commit = via?.commit ?? resolved?.commit;
+  if (!tileId || !commit) return null;
+
+  const tile = tileById(tileId);
+  const recipe = repoRecipeOf(tile);
+  const keep: TileBundleTask["keep"] = [];
+  if (tile && recipe?.installer.targets[action.target]?.uninstall.scope === "all-targets") {
+    const desired = installedTargets(recipe, selected);
+    const checkout = checkoutLocation(tile, recipe, desired, targets);
+    for (const other of desired) {
+      if (other === action.target) continue;
+      if (
+        plan.actions.some(
+          (candidate) => candidate.target === other && sameKey(candidate.key, action.key),
+        )
+      ) {
+        continue;
+      }
+      const kept = appliedRecord(snapshot, action.key, other);
+      if (!kept) continue;
+      const keptVia = kept.installedVia?.installer === "tile" ? kept.installedVia : null;
+      const keptCommit = resolved?.commit ?? keptVia?.commit;
+      if (keptCommit) keep.push({ target: other, checkout, commit: keptCommit });
+    }
+  }
+  return {
+    type: "tile-bundle",
+    action: "remove",
+    key,
+    target: action.target,
+    tile: tileId,
+    checkout: via ? via.checkout : (resolved?.checkout ?? null),
+    commit,
+    sourceId: action.sourceId ?? null,
+    contentSha: action.contentSha ?? null,
+    renderedHash: action.renderedHash ?? record?.renderedHash ?? "",
+    keep,
+    release: null,
+  };
+}
+
+// An all-targets uninstall also removes what an earlier install task in the
+// same Deploy put down, so each bundle's removals run first. The last task of
+// a bundle releases its Hive-owned checkout when no desired target uses it.
+function orderTileTasks(
+  targets: DeployTargets,
+  snapshot: DeploymentSnapshot,
+  staged: readonly TileBundleTask[],
+): TileBundleTask[] {
+  const ordered = [
+    ...staged.filter((task) => task.action === "remove"),
+    ...staged.filter((task) => task.action !== "remove"),
+  ];
+  const last = new Map<string, number>();
+  ordered.forEach((task, index) => {
+    last.set(serializeCapabilityKey(task.key), index);
+  });
+  return ordered.map((task, index) => {
+    if (last.get(serializeCapabilityKey(task.key)) !== index) return task;
+    const tile = tileById(task.tile);
+    const recipe = repoRecipeOf(tile);
+    if (!tile || !recipe?.installer.checkout) return task;
+    const desired = installedTargets(recipe, selectedTargets(snapshot, task.key));
+    const inUse = desired.length > 0 ? checkoutLocation(tile, recipe, desired, targets) : null;
+    const owned = hiveCheckout(targets, tile.id);
+    return inUse === owned ? task : { ...task, release: owned };
+  });
 }
 
 // The managed npx installer a bundle pointer renders for one target; the plan's
@@ -739,27 +904,6 @@ function taskActions(task: StagedDeployTask): Array<{
 }> {
   if (task.type === "instruction") return task.actions;
   return [{ action: task.action, key: task.key, target: task.target }];
-}
-
-class InstallerTaskError extends Error {
-  constructor(
-    readonly code: "missing_binary" | "installer_failed",
-    readonly detail: string,
-  ) {
-    super(code);
-    this.name = "InstallerTaskError";
-  }
-}
-
-function boundedInstallerDetail(value: string): string {
-  const redacted = stripVTControlCharacters(value)
-    .replace(/\bbearer\s+[^\s,;]+/gi, "bearer <redacted>")
-    .replace(
-      /\b(token|password|secret|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+/gi,
-      "$1=<redacted>",
-    )
-    .trim();
-  return redacted.length <= 512 ? redacted : redacted.slice(-512);
 }
 
 type NpxBundleTask = Extract<StagedDeployTask, { type: "npx-bundle" }>;
@@ -979,6 +1123,9 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
     case "npx-bundle":
       applyManagedNpxBundle(fx, task);
       return;
+    case "tile-bundle":
+      applyTileBundle(fx, task);
+      return;
     case "marketplace-plugin":
       applyMarketplacePlugin(fx, task);
       return;
@@ -1066,6 +1213,8 @@ function stagedTaskStillApplied(fx: DeployFsExec, task: StagedDeployTask): boole
           : hashDeployedAgent(fx.targets, task.key.name, task.target) === null;
       case "npx-bundle":
         return npxBundleSettled(task);
+      case "tile-bundle":
+        return tileTaskSettled(fx, task);
       case "marketplace-plugin":
         return marketplacePluginInstalled(fx.targets, task);
       case "marketplace-plugin-remove":
@@ -1251,6 +1400,28 @@ function finalizeCommittedDeployment(
                 package: task.package,
                 skills: task.skills,
                 verifyPaths: task.verifyPaths,
+              },
+            },
+            operation.operationId,
+          );
+        }
+      } else if (task.type === "tile-bundle") {
+        if (task.action === "remove") {
+          options.deploymentState.recordRemoval(task.key, task.target, operation.operationId);
+        } else {
+          options.deploymentState.recordSuccess(
+            task.key,
+            task.target,
+            {
+              sourceId: task.sourceId,
+              contentSha: task.contentSha,
+              renderedHash: task.renderedHash,
+              appliedAt: now(),
+              installedVia: {
+                installer: "tile",
+                tile: task.tile,
+                checkout: task.checkout,
+                commit: task.commit,
               },
             },
             operation.operationId,

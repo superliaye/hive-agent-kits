@@ -4,15 +4,19 @@
 // suite WITHOUT blocking a real deploy.
 
 import { describe, expect, test } from "bun:test";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import {
   type DeployFsExec,
   type ExecRequest,
   type ExecResult,
   execInstaller,
+  repoCommandEnv,
 } from "../deploy/adapter.ts";
 import { DeployError } from "../effect/errors.ts";
-import { type DeployTargets, defaultDeployTargets } from "../targets.ts";
+import { type DeployTargets, defaultDeployTargets, failSafeDeployTargets } from "../targets.ts";
+import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 // Packaged port: real homes, the production deploy target.
 const packagedOpts = { devMode: false, allowRealHomeDeploy: () => false } as const;
@@ -132,6 +136,35 @@ describe("childEnv HOME redirection", () => {
     } finally {
       if (prev === undefined) delete process.env.HIVE_RUNTIME_ROOT;
       else process.env.HIVE_RUNTIME_ROOT = prev;
+    }
+  });
+});
+
+describe("repository command env", () => {
+  test("keeps the redirected homes and drops every other path into the real home", () => {
+    // The dev sandbox layout: the redirected homes live inside the real home.
+    // repoCommandEnv only computes, so this root is never created.
+    const realHome = homedir();
+    const homes = redirectHomeEnv(join(realHome, `.hive-repo-env-${process.pid}`));
+    try {
+      const env = repoCommandEnv(failSafeDeployTargets(), {
+        HOME: realHome,
+        PATH: `${join(realHome, "bin")}:/usr/bin`,
+        XDG_CACHE_HOME: join(realHome, ".cache"),
+        HIVE_RUNTIME_ROOT: homes.runtimeRoot,
+        CODEX_HOME: join(realHome, ".codex"),
+        LANG: "C.UTF-8",
+      });
+      expect(env.HOME).toBe(dirname(homes.claudeHome));
+      expect(env.CLAUDE_CONFIG_DIR).toBe(homes.claudeHome);
+      expect(env.CODEX_HOME).toBe(homes.codexHome);
+      expect(env.PATH).toStartWith(join(realHome, "bin"));
+      expect(env.XDG_CACHE_HOME).toBeUndefined();
+      expect(env.HIVE_RUNTIME_ROOT).toBeUndefined();
+      expect(env.LANG).toBe("C.UTF-8");
+      expect(existsSync(homes.root)).toBe(false);
+    } finally {
+      clearHomeEnv();
     }
   });
 });

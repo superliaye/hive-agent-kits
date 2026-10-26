@@ -199,13 +199,18 @@ export function pluginMeta(mirrorRoot: string, name: string): PluginMeta | null 
   };
 }
 
-// Bundle frontmatter (installer kind, package, skills, verify_paths).
+// Bundle frontmatter (installer kind, package, skills, verify_paths, and for a
+// tile installer the Tile it names).
 export type BundleMeta = {
   name: string;
-  installerKind: "setup-script" | "npx-skills";
+  installerKind: "setup-script" | "npx-skills" | "tile";
   pkg: string;
   skills: string[];
   verifyPaths: Partial<Record<"claude" | "codex", string[]>>;
+  tile: string | null;
+  // The declared CLIs; every CLI when undeclared.
+  targets: DeployTarget[] | null;
+  sourceCommit: string | null;
 };
 
 export function bundleMeta(mirrorRoot: string, name: string): BundleMeta | null {
@@ -216,12 +221,18 @@ export function bundleMeta(mirrorRoot: string, name: string): BundleMeta | null 
   const fm = parseYamlFrontmatter(content);
   const installer = (fm.installer ?? {}) as Record<string, unknown>;
   const kind = typeof installer.kind === "string" ? installer.kind : "setup-script";
+  const declared = Array.isArray(fm.targets)
+    ? fm.targets.filter((x): x is DeployTarget => x === "claude" || x === "codex")
+    : [];
   return {
     name,
-    installerKind: kind === "npx-skills" ? "npx-skills" : "setup-script",
+    installerKind: kind === "npx-skills" || kind === "tile" ? kind : "setup-script",
     pkg: typeof installer.package === "string" ? installer.package : "",
     skills: normalizeStringList(installer.skills),
     verifyPaths: normalizeVerifyPaths(fm.verify_paths),
+    tile: kind === "tile" && typeof installer.tile === "string" ? installer.tile : null,
+    targets: declared.length > 0 ? [...new Set(declared)] : null,
+    sourceCommit: typeof fm.source_commit === "string" ? fm.source_commit : null,
   };
 }
 

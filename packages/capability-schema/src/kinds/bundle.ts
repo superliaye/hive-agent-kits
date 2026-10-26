@@ -1,12 +1,14 @@
 // Bundle capability schema — a wrapped upstream installer (ADR-0026). A
 // `.bundle.md` frontmatter describes how to install an upstream toolkit into the
-// CLI homes via one of two installers, discriminated on `installer.kind`:
+// CLI homes via one of three installers, discriminated on `installer.kind`:
 //
 //   - "setup-script": clone `source` at `pinned_commit`, run `installer.command`
 //     (e.g. gstack). The discriminator is ABSENT in every existing fixture, so an
 //     absent `installer.kind` defaults to "setup-script" (forced — the uneditable
 //     gstack Source omits it).
 //   - "npx-skills": invoke `npx skills add installer.package` (e.g. hyperframes).
+//   - "tile": `installer.tile` names the Tile whose Recipe holds the commands
+//     (ADR-0034). The pointer carries none, so a look-alike cannot supply one.
 //
 // A LENIENT SUPERSET, strict only on the load-bearing coordinates:
 //   - `description` required on both arms.
@@ -15,6 +17,8 @@
 //     reproducibility even though the clone command consumes `source`@`pinned_commit`
 //     through the kit, not directly.
 //   - npx-skills requires `installer.package` (non-empty).
+//   - tile requires `installer.tile` (non-empty).
+//   - `targets` (optional) narrows the CLIs the bundle installs on.
 //   - everything else (`requires`, `verify_paths`, `scope`, `installer.flags`,
 //     `installer.host_flag_map`, `license`) is optional or rides through passthrough.
 //
@@ -26,6 +30,7 @@
 // silently require them on npx-skills too).
 
 import { z } from "zod";
+import { PluginTarget } from "./plugin.ts";
 
 const SetupScriptInstaller = z
   .object({
@@ -45,6 +50,13 @@ const NpxSkillsInstaller = z
       .min(1)
       .refine((skills) => new Set(skills).size === skills.length, "skill names must be unique")
       .optional(),
+  })
+  .passthrough();
+
+const TileInstaller = z
+  .object({
+    kind: z.literal("tile"),
+    tile: z.string().min(1),
   })
   .passthrough();
 
@@ -71,7 +83,7 @@ const Installer = z.preprocess((raw) => {
   const obj: Record<string, unknown> = { ...raw };
   if (obj.kind === undefined || obj.kind === null) obj.kind = "setup-script";
   return obj;
-}, z.discriminatedUnion("kind", [SetupScriptInstaller, NpxSkillsInstaller]));
+}, z.discriminatedUnion("kind", [SetupScriptInstaller, NpxSkillsInstaller, TileInstaller]));
 
 export const BundleFrontmatter = z
   .object({
@@ -80,6 +92,7 @@ export const BundleFrontmatter = z
     pinned_commit: z.string().min(1).optional(),
     installer: Installer,
     verify_paths: VerifyPaths,
+    targets: z.array(PluginTarget).min(1).optional(),
   })
   .passthrough()
   .superRefine((bundle, ctx) => {

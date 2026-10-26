@@ -9,7 +9,7 @@ import type {
   OverviewSource,
   SelectionSnapshot,
 } from "@hive/contract";
-import { applicableTargets, type PluginTargets } from "./capability-targets.ts";
+import { applicableTargets, type DeclaredTargets } from "./capability-targets.ts";
 import type { DeploymentStateFile } from "./deployment-state.ts";
 
 export { applicableTargets } from "./capability-targets.ts";
@@ -44,10 +44,14 @@ export type PluginDeployInfo = {
 
 export type DeploymentSnapshot = {
   sources: OverviewSource[];
+  // The Tile id of each Source that is a Tile's Source (tileForLocator).
+  sourceTiles: ReadonlyMap<string, string>;
   sourceRegistryRevision: number;
   mirrors: OverviewMirror[];
   catalog: Catalog;
   plugins: ReadonlyMap<string, PluginDeployInfo>;
+  // Declared targets of each winning bundle pointer that narrows them.
+  bundles: ReadonlyMap<string, PluginDeployInfo>;
   selection: SelectionSnapshot;
   ledger: LedgerSnapshot;
   deploymentState: DeploymentStateFile;
@@ -135,7 +139,7 @@ function ledgerCapabilityKeys(ledger: Ledger | null): CapabilityKey[] {
 
 // A Ledger plugin name carries no target, and agent-kit installs plugins through
 // the Claude CLI only.
-const LEDGER_PLUGIN_TARGETS: PluginTargets = new Map();
+const LEDGER_PLUGIN_TARGETS: DeclaredTargets = { plugins: new Map(), bundles: new Map() };
 
 export function ledgerOwnershipByKey(
   ledger: Ledger | null,
@@ -287,7 +291,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
   for (const selected of snapshot.selection.enabled) {
     if (selected.key.kind !== "instruction") continue;
     for (const target of selected.targets) {
-      if (!applicableTargets(selected.key, snapshot.plugins).includes(target)) continue;
+      if (!applicableTargets(selected.key, snapshot).includes(target)) continue;
       const entries = selectedInstructions.get(target) ?? [];
       entries.push({
         key: { kind: "instruction", name: selected.key.name },
@@ -300,7 +304,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
   for (const intent of snapshot.selection.removalIntents) {
     if (intent.key.kind !== "instruction") continue;
     for (const target of intent.targets) {
-      if (!applicableTargets(intent.key, snapshot.plugins).includes(target)) continue;
+      if (!applicableTargets(intent.key, snapshot).includes(target)) continue;
       const names = removalInstructions.get(target) ?? new Set<string>();
       names.add(intent.key.name);
       removalInstructions.set(target, names);
@@ -369,7 +373,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     const selectedWinner = winner.get(serializeCapabilityKey(selected.key));
     if (!selectedWinner) continue;
     for (const target of selected.targets) {
-      if (!applicableTargets(selected.key, snapshot.plugins).includes(target)) continue;
+      if (!applicableTargets(selected.key, snapshot).includes(target)) continue;
       if (selected.key.kind === "instruction" && blockedByTarget.has(target)) continue;
       const id = pairId(selected.key, target);
       const deployment = records.get(id);
@@ -417,7 +421,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     const sourceId = selectedWinner?.sourceIds[0];
     if (!selectedWinner || !sourceId) continue;
     for (const target of selected.targets) {
-      if (!applicableTargets(selected.key, snapshot.plugins).includes(target)) continue;
+      if (!applicableTargets(selected.key, snapshot).includes(target)) continue;
       const applied = records.get(pairId(selected.key, target))?.applied;
       if (applied?.contentSha === selectedWinner.contentSha) continue;
       actions.push({
@@ -439,7 +443,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       const recordedPlugin =
         intent.key.kind === "plugin" &&
         privatelyApplied?.installedVia?.installer === "marketplace-plugin";
-      if (!applicableTargets(intent.key, snapshot.plugins).includes(target) && !recordedPlugin) {
+      if (!applicableTargets(intent.key, snapshot).includes(target) && !recordedPlugin) {
         continue;
       }
       if (intent.key.kind === "instruction" && blockedByTarget.has(target)) continue;
@@ -457,7 +461,8 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
             renderedHash: rendered.renderedHash,
           };
         }
-        if (!pointer && privatelyApplied?.installedVia?.installer !== "npx-skills") continue;
+        const installer = privatelyApplied?.installedVia?.installer;
+        if (!pointer && installer !== "npx-skills" && installer !== "tile") continue;
       }
       if (intent.key.kind === "plugin") {
         const pluginWinner = winner.get(serializeCapabilityKey(intent.key));

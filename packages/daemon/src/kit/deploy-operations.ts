@@ -164,6 +164,32 @@ const StagedManagedNpxBundleTask = z.object({
   keep: z.array(NpxBundleKeep).default([]),
 });
 
+// A Tile installer bundle (ADR-0034). The task names the Tile; its commands are
+// read from the Tile's Recipe at execution, never stored. `checkout` is where
+// this target's commands run: the new location for an install, the recorded
+// one for a removal. `keep` lists the targets an all-targets uninstall must
+// reinstall, and `release` a Hive-owned checkout no target uses afterwards.
+const TileTargetInstall = z.object({
+  target: DeployTarget,
+  checkout: z.string().min(1).nullable(),
+  commit: z.string().min(1),
+});
+
+const StagedTileBundleTask = z.object({
+  type: z.literal("tile-bundle"),
+  action: z.enum(["add", "update", "remove"]),
+  key: z.object({ kind: z.literal("bundle"), name: z.string() }),
+  target: DeployTarget,
+  tile: z.string().min(1),
+  checkout: z.string().min(1).nullable(),
+  commit: z.string().min(1),
+  sourceId: z.string().nullable(),
+  contentSha: z.string().nullable(),
+  renderedHash: z.string(),
+  keep: z.array(TileTargetInstall),
+  release: z.string().min(1).nullable(),
+});
+
 const StagedMarketplacePluginTask = z.object({
   type: z.literal("marketplace-plugin"),
   action: z.enum(["add", "update"]),
@@ -202,6 +228,7 @@ export const StagedDeployPayloadSchema = z.object({
       StagedSkillTask,
       StagedAgentTask,
       StagedManagedNpxBundleTask,
+      StagedTileBundleTask,
       StagedMarketplacePluginTask,
       StagedMarketplacePluginRemovalTask,
       StagedRemovalTask,
@@ -235,6 +262,7 @@ const StoredDeployPayloadSchema = StagedDeployPayloadSchema.extend({
       StoredSkillTask,
       StagedAgentTask,
       StagedManagedNpxBundleTask,
+      StagedTileBundleTask,
       StagedMarketplacePluginTask,
       StagedMarketplacePluginRemovalTask,
       StagedRemovalTask,

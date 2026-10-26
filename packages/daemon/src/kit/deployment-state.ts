@@ -50,6 +50,14 @@ export const InstalledVia = z.discriminatedUnion("installer", [
     skills: z.array(z.string()).min(1),
     verifyPaths: z.array(z.string()).min(1),
   }),
+  // The Tile names the Recipe whose commands uninstall it; `checkout` is where
+  // they ran, null for commands that need no checkout.
+  z.object({
+    installer: z.literal("tile"),
+    tile: z.string().min(1),
+    checkout: z.string().min(1).nullable(),
+    commit: z.string().min(1),
+  }),
 ]);
 export type InstalledVia = z.infer<typeof InstalledVia>;
 
