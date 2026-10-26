@@ -244,7 +244,8 @@ describe("locator-native Source sync", () => {
       expect(added.sync).toMatchObject({
         state: "check_failed",
         errorReason: "not_recognized",
-        errorDetail: "No Recipe matched: no capabilities/ folder; not a whole git repository",
+        errorDetail:
+          "No Recipe matched: no capabilities/ folder; not a whole git repository; no published skills",
       });
       expect(added.validation.capabilityCount).toBe(0);
       expect(added.validation.conformant).toBe(true);
@@ -258,7 +259,8 @@ describe("locator-native Source sync", () => {
           sourceId: added.source.id,
           status: "failed",
           errorReason: "not_recognized",
-          errorDetail: "No Recipe matched: no capabilities/ folder; not a whole git repository",
+          errorDetail:
+            "No Recipe matched: no capabilities/ folder; not a whole git repository; no published skills",
         },
       ]);
     } finally {

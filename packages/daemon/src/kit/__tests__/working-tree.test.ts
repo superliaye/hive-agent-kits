@@ -154,7 +154,7 @@ function captureWithLimits(
           limits,
           ...(process ? { process } : {}),
         });
-        const recognition = yield* recognizeSource(recipeTree(snapshot));
+        const recognition = yield* recognizeSource(recipeTree(snapshot, limits));
         const staged = yield* materialize(snapshot, recognition, targets.kitTmpRoot(), limits);
         yield* snapshot.confirm();
         return yield* commitMirror(targets.mirrorRoot("limited"), staged);

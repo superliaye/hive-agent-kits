@@ -390,7 +390,7 @@ describe("server routes — sources", () => {
         state: "check_failed",
         errorReason: "not_recognized",
         errorDetail:
-          "No Recipe matched: no capabilities/ folder; no marketplace for both CLIs; no plugin marketplace",
+          "No Recipe matched: no capabilities/ folder; no marketplace for both CLIs; no published skills; no plugin marketplace",
       });
       const listed = await server.app.fetch(
         new Request("http://localhost/api/sources", {

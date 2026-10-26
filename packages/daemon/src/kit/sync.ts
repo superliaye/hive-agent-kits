@@ -207,7 +207,7 @@ export function syncLocatorSource(
   const once = Effect.scoped(
     Effect.gen(function* () {
       const snapshot = yield* openSnapshot(source, targets, options);
-      const recognition = yield* recognizeSource(recipeTree(snapshot));
+      const recognition = yield* recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS));
       const staged = yield* materialize(
         snapshot,
         recognition,

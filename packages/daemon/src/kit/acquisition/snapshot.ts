@@ -139,6 +139,147 @@ export function resolveListing(
   return entries;
 }
 
+type TreeDir = { readonly dirs: readonly string[]; readonly leaves: readonly string[] };
+
+// The listing as directories, each with its subdirectories and its leaves
+// (files and links) by name, sorted. A directory exists only as the ancestor of a
+// listed entry.
+export type TreeIndex = {
+  readonly entries: ReadonlyMap<TreePath, TreeEntry>;
+  readonly dirs: ReadonlyMap<string, TreeDir>;
+};
+
+export function indexTree(entries: ReadonlyMap<TreePath, TreeEntry>): TreeIndex {
+  const building = new Map<string, { dirs: Set<string>; leaves: string[] }>([
+    ["", { dirs: new Set(), leaves: [] }],
+  ]);
+  for (const path of entries.keys()) {
+    const segments = path.split("/");
+    let parent = "";
+    for (const segment of segments.slice(0, -1)) {
+      const dir = parent ? `${parent}/${segment}` : segment;
+      building.get(parent)?.dirs.add(segment);
+      if (!building.has(dir)) building.set(dir, { dirs: new Set(), leaves: [] });
+      parent = dir;
+    }
+    building.get(parent)?.leaves.push(segments[segments.length - 1] ?? "");
+  }
+  const dirs = new Map<string, TreeDir>();
+  for (const [dir, node] of building) {
+    dirs.set(dir, { dirs: [...node.dirs].sort(), leaves: node.leaves.sort() });
+  }
+  return { entries, dirs };
+}
+
+const childOf = (dir: string, name: string): TreePath =>
+  (dir ? `${dir}/${name}` : name) as TreePath;
+
+// Follows every link along `path`, as opening it would; null when one dangles or
+// leaves the tree. The result may name nothing.
+export function realPath(index: TreeIndex, path: TreePath): TreePath | null {
+  if (path === "") return path;
+  let real = "";
+  for (const segment of path.split("/")) {
+    const next = childOf(real, segment);
+    const entry = index.entries.get(next);
+    if (entry?.mode !== "link") real = next;
+    else if (entry.target === null) return null;
+    else real = entry.target;
+  }
+  return real as TreePath;
+}
+
+export function kindOf(index: TreeIndex, path: TreePath): "file" | "dir" | "absent" {
+  const real = realPath(index, path);
+  if (real === null) return "absent";
+  if (index.entries.has(real)) return "file";
+  return index.dirs.has(real) ? "dir" : "absent";
+}
+
+export type WalkItem =
+  | {
+      readonly _tag: "file";
+      // Relative to the walked root; "" when the root is itself a file.
+      readonly rel: string;
+      readonly path: TreePath;
+      readonly mode: "file" | "exec";
+    }
+  | { readonly _tag: "dropped"; readonly path: TreePath; readonly reason: string };
+
+const isAncestorOrSelf = (dir: string, of: string): boolean =>
+  dir === "" || of === dir || of.startsWith(`${dir}/`);
+
+// Every file at or under `root` as a dereferencing copy (`cp -L`) writes it: a
+// link to a file is that file, and a link to a directory is that directory's
+// files under the link's path. `exclude` sees each name the walk reaches in the
+// directories it walks itself, never under a linked directory, which is copied
+// whole. A dangling link, a link out of the tree, and a link to a directory that
+// holds the walk or the link (which would copy itself forever) are dropped.
+export function* walkFiles(
+  index: TreeIndex,
+  root: TreePath,
+  exclude: (name: string, isDirectory: boolean) => boolean,
+): Generator<WalkItem> {
+  const real = realPath(index, root);
+  if (real === null) return;
+  const entry = index.entries.get(real);
+  if (entry) {
+    if (entry.mode !== "link") yield { _tag: "file", rel: "", path: real, mode: entry.mode };
+    return;
+  }
+  if (index.dirs.has(real)) yield* walkDir(index, real, "", [real], exclude);
+}
+
+const keepAll = () => false;
+
+function* walkDir(
+  index: TreeIndex,
+  dir: string,
+  prefix: string,
+  holding: readonly string[],
+  exclude: (name: string, isDirectory: boolean) => boolean,
+): Generator<WalkItem> {
+  const node = index.dirs.get(dir);
+  if (!node) return;
+  for (const name of node.leaves) {
+    if (exclude(name, false)) continue;
+    const path = childOf(dir, name);
+    const rel = prefix ? `${prefix}/${name}` : name;
+    const entry = index.entries.get(path);
+    if (!entry) continue;
+    if (entry.mode !== "link") {
+      yield { _tag: "file", rel, path, mode: entry.mode };
+      continue;
+    }
+    const target = entry.target;
+    if (target === null) {
+      yield { _tag: "dropped", path, reason: "link dangles or leaves the tree" };
+      continue;
+    }
+    const linked = index.entries.get(target);
+    if (linked && linked.mode !== "link") {
+      yield { _tag: "file", rel, path: target, mode: linked.mode };
+    } else if (
+      isAncestorOrSelf(target, path) ||
+      holding.some((held) => isAncestorOrSelf(target, held))
+    ) {
+      yield { _tag: "dropped", path, reason: "link loops back into the copy" };
+    } else {
+      yield* walkDir(index, target, rel, [...holding, target], keepAll);
+    }
+  }
+  for (const name of node.dirs) {
+    if (exclude(name, true)) continue;
+    yield* walkDir(
+      index,
+      childOf(dir, name),
+      prefix ? `${prefix}/${name}` : name,
+      holding,
+      exclude,
+    );
+  }
+}
+
 const ACQUISITION_DETAILS = {
   offline: "repository fetch failed",
   auth_or_repository_unavailable: "repository access failed",

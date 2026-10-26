@@ -142,7 +142,7 @@ export function buildGzipTar(entries: TarFixtureEntry[]): Uint8Array {
 
 // ---- in-memory tree snapshot ----
 
-export type MemoryFile = string | { exec: string } | { link: string };
+export type MemoryFile = string | Uint8Array | { exec: string } | { link: string };
 
 export const MEMORY_GIT_ORIGIN = {
   transport: "git",
@@ -162,6 +162,11 @@ export function memorySnapshot(
   const listed = new Map<TreePath, ListedEntry>();
   const bytes = new Map<string, Uint8Array>();
   for (const [path, file] of Object.entries(files)) {
+    if (file instanceof Uint8Array) {
+      listed.set(path as TreePath, { mode: "file" });
+      bytes.set(path, file);
+      continue;
+    }
     if (typeof file === "object" && "link" in file) {
       listed.set(path as TreePath, { mode: "link", text: file.link });
       continue;

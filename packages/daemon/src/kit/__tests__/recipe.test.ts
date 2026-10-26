@@ -3,6 +3,7 @@ import { PluginFrontmatter } from "@hive/capability-schema";
 import { Cause, Effect, Exit } from "effect";
 import { parse as yamlParse } from "yaml";
 import type { TreeOrigin, TreePath } from "../acquisition/snapshot.ts";
+import { DEFAULT_TREE_LIMITS } from "../acquisition/tree-guard.ts";
 import { SyncError } from "../effect/errors.ts";
 import { type Recognition, recipeTree, recognizeSource } from "../recipes/recipe.ts";
 import { MEMORY_GIT_ORIGIN, type MemoryFile, memorySnapshot } from "./helpers.ts";
@@ -22,7 +23,9 @@ async function recognize(
   files: Record<string, MemoryFile>,
   origin: TreeOrigin = MEMORY_GIT_ORIGIN,
 ): Promise<Exit.Exit<Recognition, SyncError>> {
-  return Effect.runPromiseExit(recognizeSource(recipeTree(memorySnapshot(files, origin).snapshot)));
+  return Effect.runPromiseExit(
+    recognizeSource(recipeTree(memorySnapshot(files, origin).snapshot, DEFAULT_TREE_LIMITS)),
+  );
 }
 
 async function recognized(files: Record<string, MemoryFile>): Promise<Recognition> {
@@ -162,9 +165,9 @@ describe("Recipe recognition", () => {
     });
 
     expect(details).toEqual([
-      "No Recipe matched: no capabilities/ folder; no marketplace for both CLIs; no plugin marketplace",
-      "No Recipe matched: no capabilities/ folder; not a whole git repository",
-      "No Recipe matched: no capabilities/ folder; marketplace names differ",
+      "No Recipe matched: no capabilities/ folder; no marketplace for both CLIs; no published skills; no plugin marketplace",
+      "No Recipe matched: no capabilities/ folder; not a whole git repository; no published skills",
+      "No Recipe matched: no capabilities/ folder; marketplace names differ; no published skills",
     ]);
     for (const detail of details) expect(detail.length).toBeLessThanOrEqual(160);
   });
@@ -181,6 +184,7 @@ describe("RecipeTree", () => {
       "skills/out": { link: "../../outside" },
       "data.json": "{not json",
     }).snapshot,
+    DEFAULT_TREE_LIMITS,
   );
   const path = (raw: string) => raw as TreePath;
 

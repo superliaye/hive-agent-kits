@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
@@ -5,6 +6,7 @@ import { CapabilityKey } from "@hive/capability-schema";
 import { DeployOperationState, type DeployOperationSummary, DeployTarget } from "@hive/contract";
 import { z } from "zod";
 import { atomicWriteFile, withAdvisoryFileLock } from "../lib/durable-file.ts";
+import type { SkillFile } from "./deploy/transforms.ts";
 import type { DeployPlan, DeployPlanAction } from "./deploy-plan.ts";
 
 const ArtifactObservation = z.object({
@@ -68,7 +70,39 @@ const StagedAction = z.object({
   target: DeployTarget,
 });
 
-const StagedFile = z.object({ rel: z.string(), content: z.string() });
+// Payloads stored before skill files became bytes hold `{ rel, content }` text,
+// which the defaults read as before. Bytes that are not UTF-8 travel as base64.
+const StagedFile = z.object({
+  rel: z.string(),
+  content: z.string(),
+  encoding: z.enum(["utf8", "base64"]).default("utf8"),
+  mode: z.union([z.literal(0o644), z.literal(0o755)]).default(0o644),
+});
+type StagedFile = z.infer<typeof StagedFile>;
+
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+export function stagedFile(file: SkillFile): StagedFile {
+  try {
+    return {
+      rel: file.rel,
+      content: strictUtf8.decode(file.bytes),
+      encoding: "utf8",
+      mode: file.mode,
+    };
+  } catch {
+    const content = Buffer.from(file.bytes).toString("base64");
+    return { rel: file.rel, content, encoding: "base64", mode: file.mode };
+  }
+}
+
+export function stagedSkillFile(file: StagedFile): SkillFile {
+  const bytes =
+    file.encoding === "base64"
+      ? Buffer.from(file.content, "base64")
+      : new TextEncoder().encode(file.content);
+  return { rel: file.rel, mode: file.mode, bytes };
+}
 
 const StagedInstructionTask = z.object({
   type: z.literal("instruction"),

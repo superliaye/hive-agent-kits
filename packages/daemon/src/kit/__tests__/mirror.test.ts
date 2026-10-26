@@ -105,7 +105,9 @@ describe("Mirror materialization", () => {
     });
     const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("source-a");
-    const recognition = await Effect.runPromise(recognizeSource(recipeTree(snapshot)));
+    const recognition = await Effect.runPromise(
+      recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS)),
+    );
     const commit = (projected: typeof recognition) =>
       Effect.runPromise(
         Effect.scoped(
@@ -137,13 +139,16 @@ describe("Mirror materialization", () => {
     expect(readdirSync(targets.kitTmpRoot())).toEqual([]);
   });
 
-  test("links into the tree become files; links to directories or out of the tree are dropped", async () => {
+  test("links copy what they name; dangling, escaping, and looping links are dropped", async () => {
     const { snapshot } = memorySnapshot({
       "capabilities/skills/alpha/SKILL.md": "---\nname: alpha\ndescription: a\n---\n",
       "capabilities/skills/alpha/tool": { exec: "#!/bin/sh\n" },
       "capabilities/skills/alpha/tool-link": { link: "tool" },
-      "capabilities/skills/current": { link: "alpha" },
+      "capabilities/skills/alpha/self": { link: "." },
+      "capabilities/skills/alpha/up": { link: ".." },
       "capabilities/skills/alpha/escape": { link: "../../../../outside" },
+      "capabilities/skills/alpha/gone": { link: "missing" },
+      "capabilities/skills/current": { link: "alpha" },
     });
     const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("source-a");
@@ -151,7 +156,7 @@ describe("Mirror materialization", () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const recognition = yield* recognizeSource(recipeTree(snapshot));
+          const recognition = yield* recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS));
           const staged = yield* materialize(
             snapshot,
             recognition,
@@ -163,12 +168,21 @@ describe("Mirror materialization", () => {
       ),
     );
 
-    const link = join(mirror, "capabilities/skills/alpha/tool-link");
-    expect(lstatSync(link).isFile()).toBe(true);
-    expect(lstatSync(link).mode & 0o777).toBe(0o755);
-    expect(readFileSync(link, "utf8")).toBe("#!/bin/sh\n");
-    expect(existsSync(join(mirror, "capabilities/skills/current"))).toBe(false);
-    expect(existsSync(join(mirror, "capabilities/skills/alpha/escape"))).toBe(false);
+    const files = mirrorFiles(mirror);
+    expect(Object.keys(files).sort()).toEqual([
+      "capabilities/skills/alpha/SKILL.md",
+      "capabilities/skills/alpha/tool",
+      "capabilities/skills/alpha/tool-link",
+      "capabilities/skills/current/SKILL.md",
+      "capabilities/skills/current/tool",
+      "capabilities/skills/current/tool-link",
+    ]);
+    for (const path of ["alpha/tool-link", "current/tool", "current/tool-link"]) {
+      const file = join(mirror, "capabilities/skills", path);
+      expect(lstatSync(file).isFile()).toBe(true);
+      expect(lstatSync(file).mode & 0o777).toBe(0o755);
+      expect(readFileSync(file, "utf8")).toBe("#!/bin/sh\n");
+    }
   });
 
   test("a git listing far over the limits ingests only capabilities/ and presets/", async () => {
@@ -231,7 +245,7 @@ describe("Mirror materialization", () => {
     const exit = await Effect.runPromiseExit(
       Effect.scoped(
         Effect.gen(function* () {
-          const recognition = yield* recognizeSource(recipeTree(snapshot));
+          const recognition = yield* recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS));
           return yield* materialize(snapshot, recognition, targets.kitTmpRoot(), {
             ...DEFAULT_TREE_LIMITS,
             maxFiles: 1,

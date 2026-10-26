@@ -23,14 +23,17 @@ import { z } from "zod";
 import { log } from "../lib/log.ts";
 import {
   acquisitionError,
+  indexTree,
   type TreeEntry,
   TreeOrigin,
   type TreePath,
   type TreeSnapshot,
+  walkFiles,
 } from "./acquisition/snapshot.ts";
 import type { TreeLimits } from "./acquisition/tree-guard.ts";
 import { SyncError } from "./effect/errors.ts";
-import type { Projection, Recognition } from "./recipes/recipe.ts";
+import { excludes, type Projection } from "./recipes/projection.ts";
+import type { Recognition } from "./recipes/recipe.ts";
 
 const RECORD_FILE = ".hive-mirror.json";
 const OWNED_STAGE = /^extract-owner-([1-9]\d*)-/;
@@ -78,11 +81,9 @@ function overlaps(left: string, right: string): boolean {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
-const fileMode = (entry: TreeEntry): 0o644 | 0o755 => (entry.mode === "exec" ? 0o755 : 0o644);
-
-// Expands the projection against the listing. A link to a listed file becomes
-// that file's bytes and mode; any other link is dropped, so a Mirror holds
-// regular files only. The file limit applies here, to what is ingested.
+// Expands the projection against the listing as a dereferencing copy would
+// (walkFiles), so a Mirror holds regular files only. The file limit applies
+// here, to what is ingested.
 export function planIngest(
   entries: ReadonlyMap<TreePath, TreeEntry>,
   projection: Projection,
@@ -101,33 +102,22 @@ export function planIngest(
       }
     }
   }
+  const index = indexTree(entries);
   const planned: IngestEntry[] = [];
   const dropped: { from: TreePath; reason: string }[] = [];
   for (const copy of projection.copies) {
-    for (const [path, entry] of entries) {
-      const rel =
-        path === copy.from
-          ? ""
-          : copy.from === ""
-            ? path
-            : path.startsWith(`${copy.from}/`)
-              ? path.slice(copy.from.length + 1)
-              : null;
-      if (rel === null) continue;
-      const to = rel ? `${copy.to}/${rel}` : copy.to;
-      if (entry.mode !== "link") {
-        planned.push({ to, mode: fileMode(entry), from: path });
-        continue;
+    const walk = walkFiles(index, copy.from, (name, isDirectory) =>
+      excludes(copy.exclude, name, isDirectory),
+    );
+    for (const item of walk) {
+      if (item._tag === "dropped") dropped.push({ from: item.path, reason: item.reason });
+      else {
+        const to = item.rel ? `${copy.to}/${item.rel}` : copy.to;
+        planned.push({ to, mode: item.mode === "exec" ? 0o755 : 0o644, from: item.path });
       }
-      const target = entry.target === null ? undefined : entries.get(entry.target);
-      if (entry.target === null || !target || target.mode === "link") {
-        dropped.push({
-          from: path,
-          reason: entry.target === null ? "link dangles or leaves the tree" : "link to a directory",
-        });
-        continue;
+      if (planned.length > limits.maxFiles || dropped.length > limits.maxFiles) {
+        return Effect.fail(acquisitionError("budget_exceeded"));
       }
-      planned.push({ to, mode: fileMode(target), from: entry.target });
     }
   }
   for (const write of projection.writes)

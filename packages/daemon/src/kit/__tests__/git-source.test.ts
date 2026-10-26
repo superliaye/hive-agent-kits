@@ -165,7 +165,7 @@ function syncGitSource(
           process: options.process,
           limits,
         });
-        const recognition = yield* recognizeSource(recipeTree(snapshot));
+        const recognition = yield* recognizeSource(recipeTree(snapshot, limits));
         const staged = yield* materialize(snapshot, recognition, options.tmpRoot, limits);
         yield* commitMirror(destination, staged);
         return readMirrorRecord(destination);
@@ -766,7 +766,7 @@ while :; do sleep 1; done
     expect(record?.recipe.id).toBe("single-cli-marketplace");
   });
 
-  test("materializes the selected subpath as the Mirror root with modes, dropping a directory link", async () => {
+  test("materializes the selected subpath as the Mirror root with modes, copying a directory link", async () => {
     const repo = fixtureRepository();
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
@@ -791,11 +791,14 @@ while :; do sleep 1; done
       readFileSync(join(destination, "capabilities", "skills", "arca-smoke", "SKILL.md"), "utf8"),
     ).toContain("name: arca-smoke");
     expect(existsSync(join(destination, "nested"))).toBe(false);
-    expect(existsSync(join(destination, "capabilities", "skills", "current"))).toBe(false);
-    expect(
-      lstatSync(join(destination, "capabilities", "skills", "arca-smoke", "verify.sh")).mode &
-        0o111,
-    ).not.toBe(0);
+    const linked = join(destination, "capabilities", "skills", "current");
+    expect(lstatSync(linked).isDirectory()).toBe(true);
+    expect(readFileSync(join(linked, "SKILL.md"), "utf8")).toContain("name: arca-smoke");
+    for (const skill of ["arca-smoke", "current"]) {
+      expect(
+        lstatSync(join(destination, "capabilities", "skills", skill, "verify.sh")).mode & 0o111,
+      ).not.toBe(0);
+    }
     expect(record?.origin).toMatchObject({
       requestedRevision: { mode: "track", ref: "refs/heads/main" },
       resolvedCommit: repo.goodCommit,

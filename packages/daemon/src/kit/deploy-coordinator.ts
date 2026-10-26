@@ -12,7 +12,6 @@ import {
   ensureDir,
   execInstaller,
   probeBinary,
-  readSkillSource,
   removeDir,
   removeFile,
   writeFileAt,
@@ -45,10 +44,9 @@ import {
   instructionBody,
   loadSnippets,
   pluginMeta,
-  skillDisablesModelInvocation,
-  skillSourceDir,
+  renderedSkillFiles,
 } from "./deploy/sources.ts";
-import { transformAgent, transformInstructions, transformSkill } from "./deploy/transforms.ts";
+import { transformAgent, transformInstructions } from "./deploy/transforms.ts";
 import {
   type DeployOperation,
   type DeployOperationOutcome,
@@ -56,6 +54,8 @@ import {
   DeployOperationStoreError,
   type StagedDeployPayload,
   type StagedDeployTask,
+  stagedFile,
+  stagedSkillFile,
 } from "./deploy-operations.ts";
 import { type DeploymentSnapshot, type DeployPlan, ledgerOwnershipByKey } from "./deploy-plan.ts";
 import type { DeploymentStateStore } from "./deployment-state.ts";
@@ -513,21 +513,14 @@ export function stageDeployPlan(
       const { sourceId, contentSha } = requiredActionSource(action);
       assertContentSha(targets, sourceId, action.key, contentSha);
       if (action.key.kind === "skill") {
-        const source = skillSourceDir(targets.mirrorRoot(sourceId), action.key.name);
-        if (!source || !action.renderedHash) throw new PlanStaleError();
-        const rendered = transformSkill(
-          {
-            name: action.key.name,
-            files: readSkillSource(source),
-            disableModelInvocation: skillDisablesModelInvocation(source),
-          },
+        if (!action.renderedHash) throw new PlanStaleError();
+        const files = renderedSkillFiles(
+          targets.mirrorRoot(sourceId),
+          action.key.name,
+          action.target,
           snippets,
         );
-        const files =
-          rendered.sidecar && action.target === "codex"
-            ? [...rendered.files, rendered.sidecar]
-            : rendered.files;
-        if (hashSkillFiles(files) !== action.renderedHash) throw new PlanStaleError();
+        if (!files || hashSkillFiles(files) !== action.renderedHash) throw new PlanStaleError();
         tasks.push({
           type: "skill",
           action: action.action,
@@ -536,7 +529,7 @@ export function stageDeployPlan(
           sourceId,
           contentSha,
           renderedHash: action.renderedHash,
-          files,
+          files: files.map(stagedFile),
         });
         continue;
       }
@@ -968,7 +961,10 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
       return;
     }
     case "skill":
-      writeSkillFolder(deployedSkillDir(fx.targets, task.key.name, task.target), task.files);
+      writeSkillFolder(
+        deployedSkillDir(fx.targets, task.key.name, task.target),
+        task.files.map(stagedSkillFile),
+      );
       return;
     case "agent":
       writeFileAt(deployedAgentPath(fx.targets, task.key.name, task.target), task.content);

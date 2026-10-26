@@ -37,6 +37,7 @@ import {
   type DeployOperationOutcome,
   openDeployOperationStore,
   type StagedDeployTask,
+  stagedSkillFile,
 } from "../deploy-operations.ts";
 import type { DeploymentSnapshot, DeployPlan } from "../deploy-plan.ts";
 import { openDeploymentStateStore } from "../deployment-state.ts";
@@ -45,6 +46,13 @@ import { readMirrorIdentity } from "../mirror.ts";
 import { syncLocatorSource } from "../sync.ts";
 import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, fakeGitProcess, redirectHomeEnv } from "./helpers.ts";
+
+const stagedText = (content: string) => ({
+  rel: "SKILL.md",
+  content,
+  encoding: "utf8" as const,
+  mode: 0o644 as const,
+});
 
 const roots: string[] = [];
 
@@ -356,7 +364,7 @@ describe("persisted asynchronous Deploy coordinator", () => {
     writeFileSync(sourcePath, acceptedContent);
     const contentSha = mirrorContentSha(mirror, "skill", "alpha");
     if (!contentSha) throw new Error("missing fixture ContentSha");
-    const renderedHash = hashSkillFiles([{ rel: "SKILL.md", content: acceptedContent }]);
+    const renderedHash = hashSkillFiles([stagedText(acceptedContent)].map(stagedSkillFile));
     const action: DeployPlan["actions"][number] = {
       action: "add",
       key: { kind: "skill", name: "alpha" },
@@ -436,7 +444,7 @@ describe("persisted asynchronous Deploy coordinator", () => {
       now: () => 20,
     });
     const operations = openDeployOperationStore(operationPath(), { now: () => 20 });
-    const files = [{ rel: "SKILL.md", content: "---\ndescription: staged\n---\nstaged\n" }];
+    const files = [stagedText("---\ndescription: staged\n---\nstaged\n")];
     const action = plan().actions[0];
     if (!action) throw new Error("missing action fixture");
     const payload: StagedDeployPayload = {
@@ -448,7 +456,7 @@ describe("persisted asynchronous Deploy coordinator", () => {
           target: "claude",
           sourceId: "source-a",
           contentSha: "a".repeat(64),
-          renderedHash: hashSkillFiles(files),
+          renderedHash: hashSkillFiles(files.map(stagedSkillFile)),
           files,
         },
       ],
@@ -556,8 +564,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
     const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
       now: () => 20,
     });
-    const files = [{ rel: "SKILL.md", content: "---\ndescription: alpha\n---\nalpha\n" }];
-    const renderedHash = hashSkillFiles(files);
+    const files = [stagedText("---\ndescription: alpha\n---\nalpha\n")];
+    const renderedHash = hashSkillFiles(files.map(stagedSkillFile));
     const action = {
       action: "add",
       key: { kind: "skill", name: "alpha" },
@@ -792,8 +800,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
     const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
       now: () => 20,
     });
-    const files = [{ rel: "SKILL.md", content: "---\ndescription: alpha\n---\nalpha\n" }];
-    const renderedHash = hashSkillFiles(files);
+    const files = [stagedText("---\ndescription: alpha\n---\nalpha\n")];
+    const renderedHash = hashSkillFiles(files.map(stagedSkillFile));
     const action = {
       action: "add",
       key: { kind: "skill", name: "alpha" },
@@ -2041,7 +2049,7 @@ npx
       now: () => 20,
     });
     const npxTask = managedNpxTask(join(homes.claudeHome, "skills", "archify"));
-    const files = [{ rel: "SKILL.md", content: "---\ndescription: local\n---\nlocal\n" }];
+    const files = [stagedText("---\ndescription: local\n---\nlocal\n")];
     const skillTask: StagedSkillTask = {
       type: "skill",
       action: "add",
@@ -2049,7 +2057,7 @@ npx
       target: "claude",
       sourceId: "source-a",
       contentSha: "d".repeat(64),
-      renderedHash: hashSkillFiles(files),
+      renderedHash: hashSkillFiles(files.map(stagedSkillFile)),
       files,
     };
     const actions: DeployPlan["actions"] = [npxTask, skillTask].map((task) => ({
@@ -2201,8 +2209,8 @@ npx
     mkdirSync(join(homes.agentsHome, ".."), { recursive: true });
     writeFileSync(homes.agentsHome, "blocks the Codex skill root");
     const stagedContent = "---\ndescription: staged\n---\nstaged\n";
-    const files = [{ rel: "SKILL.md", content: stagedContent }];
-    const renderedHash = hashSkillFiles(files);
+    const files = [stagedText(stagedContent)];
+    const renderedHash = hashSkillFiles(files.map(stagedSkillFile));
     const claudeTask: StagedSkillTask = {
       type: "skill",
       action: "add",
@@ -2500,8 +2508,8 @@ npx
     const homes = redirectHomeEnv(root);
     const targets = failSafeDeployTargets();
     const stagedContent = "---\ndescription: staged\n---\nstaged\n";
-    const files = [{ rel: "SKILL.md", content: stagedContent }];
-    const renderedHash = hashSkillFiles(files);
+    const files = [stagedText(stagedContent)];
+    const renderedHash = hashSkillFiles(files.map(stagedSkillFile));
     const tasks: StagedSkillTask[] = ["alpha", "beta"].map((name) => ({
       type: "skill",
       action: "add",
@@ -2581,8 +2589,8 @@ npx
     roots.push(root);
     redirectHomeEnv(root);
     const targets = failSafeDeployTargets();
-    const files = [{ rel: "SKILL.md", content: "---\ndescription: alpha\n---\nalpha\n" }];
-    const renderedHash = hashSkillFiles(files);
+    const files = [stagedText("---\ndescription: alpha\n---\nalpha\n")];
+    const renderedHash = hashSkillFiles(files.map(stagedSkillFile));
     const action = {
       action: "add",
       key: { kind: "skill", name: "alpha" },

@@ -4,22 +4,41 @@
 // copy rules and generated files that the Mirror module alone turns into bytes.
 
 import { Buffer } from "node:buffer";
-import { NAME_PATTERN, type PluginTarget } from "@hive/capability-schema";
+import type { PluginTarget } from "@hive/capability-schema";
 import type { RecipeSummary, SelectionUnit } from "@hive/contract";
 import { Effect } from "effect";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { z } from "zod";
 import { log } from "../../lib/log.ts";
-import { type TreePath, type TreeSnapshot, treePath } from "../acquisition/snapshot.ts";
+import {
+  acquisitionError,
+  indexTree,
+  kindOf,
+  realPath,
+  type TreePath,
+  type TreeSnapshot,
+  treePath,
+  walkFiles,
+} from "../acquisition/snapshot.ts";
+import type { TreeLimits } from "../acquisition/tree-guard.ts";
 import { SyncError } from "../effect/errors.ts";
+import {
+  capabilityName,
+  type GeneratedFile,
+  kitRoot,
+  type Projection,
+  pluginPointer,
+} from "./projection.ts";
+import { publishedSkills } from "./published-skills.ts";
 
 // Semantics follow `npx skills add` where a Recipe depends on them:
-// - `kind` follows a link for its last segment.
+// - Every path follows the links along it, as opening it would.
 // - `childDirs` returns real subdirectories only, sorted.
 // - `json` is undefined when the file is absent or not JSON.
 // - `frontmatter` is {} when the file has no frontmatter block, null when the
 //   file is absent or its YAML does not parse.
-// - `mentions` is true when any file at or under `dir` contains `needle`.
+// - `mentions` is true when any file a dereferencing copy of `dir` would hold
+//   contains `needle`.
 // Reads count against the snapshot's byte budget.
 export interface RecipeTree {
   // Set only for a whole git repository, because a CLI reads a marketplace from
@@ -34,8 +53,9 @@ export interface RecipeTree {
 
 const FrontmatterObject = z.record(z.string(), z.unknown());
 
+// The block pattern is skills@1.7.2 parseFrontmatter's.
 function parseFrontmatter(text: string): Readonly<Record<string, unknown>> | null {
-  const block = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  const block = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
   if (!block) return {};
   try {
     const parsed = FrontmatterObject.safeParse(yamlParse(block[1] ?? ""));
@@ -47,18 +67,8 @@ function parseFrontmatter(text: string): Readonly<Record<string, unknown>> | nul
 
 const READ_BATCH = 128;
 
-export function recipeTree(snapshot: TreeSnapshot): RecipeTree {
-  const children = new Map<string, Set<string>>([["", new Set()]]);
-  for (const path of snapshot.entries.keys()) {
-    const segments = path.split("/");
-    let parent = "";
-    for (const segment of segments.slice(0, -1)) {
-      const dir = parent ? `${parent}/${segment}` : segment;
-      children.get(parent)?.add(segment);
-      if (!children.has(dir)) children.set(dir, new Set());
-      parent = dir;
-    }
-  }
+export function recipeTree(snapshot: TreeSnapshot, limits: TreeLimits): RecipeTree {
+  const index = indexTree(snapshot.entries);
   const origin = snapshot.origin;
   const remote =
     origin.transport === "git" && origin.subpath === "."
@@ -66,33 +76,20 @@ export function recipeTree(snapshot: TreeSnapshot): RecipeTree {
       : origin.transport === "tarball"
         ? { repoUrl: origin.repoUrl, commit: origin.resolvedCommit }
         : null;
-  const fileOf = (path: TreePath): TreePath | null => {
-    const entry = snapshot.entries.get(path);
-    if (!entry) return null;
-    if (entry.mode !== "link") return path;
-    const target = entry.target === null ? undefined : snapshot.entries.get(entry.target);
-    return target && target.mode !== "link" ? entry.target : null;
-  };
   const text = (path: TreePath): Effect.Effect<string | null, SyncError> => {
-    const file = fileOf(path);
-    if (file === null) return Effect.succeed(null);
+    const file = realPath(index, path);
+    if (file === null || !index.entries.has(file)) return Effect.succeed(null);
     return snapshot
       .read([file])
       .pipe(Effect.map((bytes) => new TextDecoder().decode(bytes.get(file) ?? new Uint8Array())));
   };
   return {
     remote,
-    kind: (path) => {
-      const entry = snapshot.entries.get(path);
-      if (entry?.mode === "link") {
-        if (entry.target === null) return "absent";
-        if (snapshot.entries.has(entry.target)) return "file";
-        return children.has(entry.target) ? "dir" : "absent";
-      }
-      if (entry) return "file";
-      return children.has(path) ? "dir" : "absent";
+    kind: (path) => kindOf(index, path),
+    childDirs: (dir) => {
+      const real = realPath(index, dir);
+      return (real === null ? undefined : index.dirs.get(real))?.dirs ?? [];
     },
-    childDirs: (dir) => [...(children.get(dir) ?? [])].sort(),
     json: (path) =>
       text(path).pipe(
         Effect.map((content) => {
@@ -111,16 +108,16 @@ export function recipeTree(snapshot: TreeSnapshot): RecipeTree {
     mentions: (dir, needle) =>
       Effect.gen(function* () {
         const pattern = Buffer.from(needle);
-        const files = [
-          ...new Set(
-            [...snapshot.entries.keys()]
-              .filter((path) => dir === "" || path === dir || path.startsWith(`${dir}/`))
-              .map(fileOf)
-              .filter((path): path is TreePath => path !== null),
-          ),
-        ];
-        for (let start = 0; start < files.length; start += READ_BATCH) {
-          const bytes = yield* snapshot.read(files.slice(start, start + READ_BATCH));
+        const files = new Set<TreePath>();
+        let walked = 0;
+        for (const item of walkFiles(index, dir, () => false)) {
+          if (++walked > limits.maxFiles)
+            return yield* Effect.fail(acquisitionError("budget_exceeded"));
+          if (item._tag === "file") files.add(item.path);
+        }
+        const paths = [...files];
+        for (let start = 0; start < paths.length; start += READ_BATCH) {
+          const bytes = yield* snapshot.read(paths.slice(start, start + READ_BATCH));
           for (const data of bytes.values()) {
             if (Buffer.from(data.buffer, data.byteOffset, data.byteLength).includes(pattern)) {
               return true;
@@ -131,39 +128,6 @@ export function recipeTree(snapshot: TreeSnapshot): RecipeTree {
       }),
   };
 }
-
-declare const capabilityNameBrand: unique symbol;
-// A leaf name that passes NAME_PATTERN and the 64-char bound.
-export type CapabilityName = string & { readonly [capabilityNameBrand]: true };
-
-export function capabilityName(raw: string): CapabilityName | null {
-  return raw.length <= 64 && NAME_PATTERN.test(raw) ? (raw as CapabilityName) : null;
-}
-
-declare const mirrorPathBrand: unique symbol;
-// A path inside a Mirror. Only the constructors below build one, so a Recipe
-// cannot write outside the folders Catalog and Deploy read, and cannot traverse.
-export type MirrorPath = string & { readonly [mirrorPathBrand]: true };
-
-export function kitRoot(root: "capabilities" | "presets"): MirrorPath {
-  return root as MirrorPath;
-}
-
-export function pluginPointer(name: CapabilityName): MirrorPath {
-  return `capabilities/plugins/${name}.plugin.md` as MirrorPath;
-}
-
-// Copies `from` (a file, or every entry under a directory) to `to`.
-export type CopyRule = { readonly from: TreePath; readonly to: MirrorPath };
-// UTF-8, mode 0644.
-export type GeneratedFile = { readonly to: MirrorPath; readonly text: string };
-
-// No two rules may write the same path or one inside another; planIngest treats
-// a violation as a Recipe defect.
-export type Projection = {
-  readonly copies: readonly CopyRule[];
-  readonly writes: readonly GeneratedFile[];
-};
 
 export type Match =
   | { readonly _tag: "Match"; readonly projection: Projection }
@@ -191,8 +155,12 @@ export type Recognition = {
 const miss = (reason: string): Match => ({ _tag: "Miss", reason });
 const ROOT = "" as TreePath;
 
+// A kit's skills keep the kit rendering at Deploy; every other Recipe's skills
+// deploy as their upstream ships them.
+export const CAPABILITY_KIT_RECIPE_ID = "capability-kit";
+
 const capabilityKit: GenericRecipe = {
-  id: "capability-kit",
+  id: CAPABILITY_KIT_RECIPE_ID,
   label: "Capability kit",
   unit: "pick",
   trust: "generic",
@@ -201,7 +169,7 @@ const capabilityKit: GenericRecipe = {
     if (!roots.includes("capabilities")) return Effect.succeed(miss("no capabilities/ folder"));
     const copies = (["capabilities", "presets"] as const)
       .filter((root) => roots.includes(root))
-      .map((root) => ({ from: root as TreePath, to: kitRoot(root) }));
+      .map((root) => ({ from: root as TreePath, to: kitRoot(root), exclude: "none" as const }));
     return Effect.succeed({ _tag: "Match", projection: { copies, writes: [] } });
   },
 };
@@ -344,12 +312,13 @@ const singleCliMarketplace: GenericRecipe = {
     }),
 };
 
-// The one ordered list of generic patterns (ADR-0033). The published-skills
-// pattern belongs between pluginMarketplace and singleCliMarketplace, so a
-// repository that ships skills and a single-CLI marketplace serves both CLIs.
+// The one ordered list of generic patterns (ADR-0033). Published skills come
+// before singleCliMarketplace, so a repository that ships skills and a
+// single-CLI marketplace serves both CLIs.
 const GENERIC_RECIPES: readonly GenericRecipe[] = [
   capabilityKit,
   pluginMarketplace,
+  publishedSkills,
   singleCliMarketplace,
 ];
 

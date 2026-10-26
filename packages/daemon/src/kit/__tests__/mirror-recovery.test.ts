@@ -49,7 +49,7 @@ function syncKit(marker: string): Promise<unknown> {
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const recognition = yield* recognizeSource(recipeTree(snapshot));
+        const recognition = yield* recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS));
         const staged = yield* materialize(
           snapshot,
           recognition,

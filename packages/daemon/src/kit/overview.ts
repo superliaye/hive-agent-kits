@@ -22,7 +22,6 @@ import {
   type Source,
   type TargetObservation,
 } from "@hive/contract";
-import { readSkillSource } from "./deploy/adapter.ts";
 import {
   deployedAgentPath,
   deployedInstructionPath,
@@ -44,10 +43,9 @@ import {
   instructionBody,
   loadSnippets,
   pluginMeta,
-  skillDisablesModelInvocation,
-  skillSourceDir,
+  renderedSkillFiles,
 } from "./deploy/sources.ts";
-import { transformAgent, transformInstructions, transformSkill } from "./deploy/transforms.ts";
+import { transformAgent, transformInstructions } from "./deploy/transforms.ts";
 import {
   type ArtifactObservation,
   applicableTargets,
@@ -450,19 +448,8 @@ function renderedNamedHash(
   target: DeployTarget,
 ): string | null {
   if (kind === "skill") {
-    const src = skillSourceDir(mirrorRoot, name);
-    if (!src) return null;
-    const out = transformSkill(
-      {
-        name,
-        files: readSkillSource(src),
-        disableModelInvocation: skillDisablesModelInvocation(src),
-      },
-      snippets,
-    );
-    // Codex also writes the manual-only sidecar; claude does not (matches staging).
-    const written = out.sidecar && target === "codex" ? [...out.files, out.sidecar] : out.files;
-    return hashSkillFiles(written);
+    const files = renderedSkillFiles(mirrorRoot, name, target, snippets);
+    return files === null ? null : hashSkillFiles(files);
   }
   const src = agentSourceDir(mirrorRoot, name);
   if (!src) return null;
