@@ -343,7 +343,6 @@ describe("locator-native Source sync", () => {
       for (const [path, method, body] of [
         [`/api/sources/${added.source.id}/deactivate`, "POST", undefined],
         [`/api/sources/${added.source.id}/activate`, "POST", undefined],
-        [`/api/sources/${added.source.id}/reorder`, "POST", JSON.stringify({ direction: "up" })],
         ["/api/kit/sync", "POST", undefined],
         ["/api/kit/state", "GET", undefined],
       ] as const) {

@@ -225,7 +225,7 @@ describe("aggregate", () => {
     expect(shadow?.shadowedBy).toBe("s2");
   });
 
-  test("(i) a reorder that RAISES the shadowed Source above the winner FLIPS deployable/shadowed/shadowedBy", () => {
+  test("(i) ranking the shadowed Source above the winner FLIPS deployable/shadowed/shadowedBy", () => {
     // Before: s2 (rank 2) wins SHA_B; s1 (rank 1) is shadowed → shadowedBy s2.
     const before = aggregate(
       [
@@ -237,7 +237,7 @@ describe("aggregate", () => {
     expect(before.find((e) => e.deployable)?.sourceIds[0]).toBe("s2");
     expect(before.find((e) => e.shadowed)?.shadowedBy).toBe("s2");
 
-    // After a reorder that swaps ranks (s1 now highest), s1's variant wins and s2
+    // With the ranks swapped (s1 now highest), s1's variant wins and s2
     // becomes shadowed → shadowedBy now points at s1.
     const after = aggregate(
       [
@@ -254,7 +254,7 @@ describe("aggregate", () => {
     expect(shadow?.shadowedBy).toBe("s1");
   });
 
-  test("(j) a FREE reorder may place the local Starter above a git Source (band-crossing allowed)", () => {
+  test("(j) the local Starter may rank above a git Source (band-crossing allowed)", () => {
     // Starter (local) carries a HIGHER rank than the git Source — a deliberate
     // re-rank across what used to be a hard kind-band. The Starter's variant wins.
     const entries = aggregate(

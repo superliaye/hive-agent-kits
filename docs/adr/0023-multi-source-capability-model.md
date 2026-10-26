@@ -77,23 +77,22 @@ called from the kit read path; the `KitSvc.catalog()/sync()` → Sources-service
 context-split is **consciously deferred**, so this upstream/downstream seam is
 half-realized by design (a functional core, not yet a new Effect service Tag).
 
-**Source precedence is a stored `rank` — a free total order.** Each Source carries
-an explicit integer `rank` (higher wins a collision); aggregation reads it as the
-**sole** precedence signal (no runtime kind-band, not registration index, not
-`createdAt`). The user **re-ranks at will** via per-Source move-up/down — the order
-is unconstrained, so the local Starter may be ranked **above** a git Source.
-
-The **default seed** reproduces "user-added git > local Starter, newest-first"
-*without* a band: the Starter seeds first at the lowest rank, and each `add` takes
-`max(rank)+1` (the new highest). So an un-reordered registry behaves exactly as
-the old derived order did, but every step of it is now overridable. `reorder(id,
-"up"|"down")` swaps a Source's rank with its adjacent neighbor in rank order and
-emits a refs-only `source.reordered` audit event. Persistence is versioned; the
-`rank` field was a greenfield discard-and-reseed (no migration).
+**Source precedence is a stored `rank`, and the newest Source wins.** Each Source
+carries an explicit integer `rank` (higher wins a collision); aggregation reads it
+as the **sole** precedence signal (no runtime kind-band, not registration index,
+not `createdAt`). The Starter seeds first at the lowest rank, and each `add` takes
+`max(rank)+1`, the new highest. So user-added Sources outrank the Starter newest
+first, and a Starter re-added from its Tile ranks above them. There is no re-rank
+control: precedence matters only for a duplicate Capability, and removing and
+re-adding a Source makes it the newest. Persistence is versioned; the `rank` field
+was a greenfield discard-and-reseed (no migration).
 
 **Toggle/delete semantics.** Deactivating or deleting a Source deactivates and
 hides its Capabilities. A *merged* Capability survives as long as ≥1 active Source
-still provides its ContentSha (only its Source-label set shrinks).
+still provides its ContentSha (only its Source-label set shrinks). Removing a
+Source from the UI first turns off the selected Capabilities only it provides, so
+the next Deploy uninstalls them rather than leaving them installed without a
+Source.
 
 **Source-winner provenance.** Which Source won a deployed name is recorded in the
 Hive-private fingerprint sidecar (`kit/targets.ts` `fingerprintPath()`), never in

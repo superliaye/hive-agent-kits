@@ -143,14 +143,6 @@ export const TileSummary = z.object({
 });
 export type TileSummary = z.infer<typeof TileSummary>;
 
-// POST /api/sources/:id/reorder body: raise ("up") or lower ("down") a Source one
-// precedence step. The only re-rank control (decision: move-up/down buttons, not
-// drag-and-drop). A free total order — the swap may cross kinds.
-export const ReorderSourceBody = z.object({
-  direction: z.enum(["up", "down"]),
-});
-export type ReorderSourceBody = z.infer<typeof ReorderSourceBody>;
-
 // The conformance report produced when a Source is synced + validated on add.
 // `conformant` is the strict-validate verdict; `errors` are the located
 // violations (the hoisted SSOT shape — @hive/capability-schema). `capabilityCount`

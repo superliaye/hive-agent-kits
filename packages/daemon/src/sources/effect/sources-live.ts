@@ -24,7 +24,7 @@ import { tileForLocator } from "../../kit/recipes/tiles.ts";
 import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { SourcesPersistence } from "../persistence.ts";
-import { createSourcesStore, type ReorderDirection, type SourcesStore } from "../store.ts";
+import { createSourcesStore, type SourcesStore } from "../store.ts";
 import { SOURCES_FILE_VERSION, type SourcesAuditEvents, type SourcesFile } from "../types.ts";
 import { DuplicateOrigin, SourceIoError, SourceNotFound } from "./errors.ts";
 
@@ -46,13 +46,6 @@ export type SourceRegistrySvc = {
   activate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   deactivate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   delete(id: string): Effect.Effect<void, SourceNotFound | SourceIoError>;
-  // Raise/lower a Source one precedence step (a free total-order swap). A swap at
-  // the requested end is a clean no-op (returns the unchanged Source); an unknown
-  // id is SourceNotFound.
-  reorder(
-    id: string,
-    direction: ReorderDirection,
-  ): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   // Audit source emitter (source: 'sources').
   events: TypedEmitter<SourcesAuditEvents>;
 };
@@ -278,31 +271,6 @@ function buildSvc(
                   Effect.asVoid,
                 )
               : Effect.fail(new SourceNotFound({ id })),
-        ),
-      ),
-
-    reorder: (id, direction) =>
-      serializeMutation(
-        coordinator,
-        Effect.flatMap(
-          ioGuard(() => store.prepareReorder(id, direction)),
-          (prepared): Effect.Effect<Source, SourceNotFound | SourceIoError> => {
-            const result = prepared.result;
-            if (!result.ok) return Effect.fail(new SourceNotFound({ id }));
-            if (!result.changed) return Effect.succeed(result.source);
-            return Effect.promise(() =>
-              events.emit("source.reordered", {
-                id,
-                rank: result.source.rank,
-              }),
-            ).pipe(
-              Effect.flatMap(() => ioGuard(() => prepared.commit())),
-              Effect.map((committed) => {
-                if (!committed.ok) throw new Error("prepared Source reorder changed result");
-                return committed.source;
-              }),
-            );
-          },
         ),
       ),
   };
