@@ -40,6 +40,7 @@ describe("Electron daemon bridge", () => {
       id: "archify",
       label: "Archify",
       description: "The archify skill.",
+      url: "https://github.com/tt-a1i/archify",
       recipe: { id: "published-skills", label: "Published skills", unit: "pick" },
       sourceId: null,
     };

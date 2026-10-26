@@ -132,12 +132,14 @@ export type AddSourceInput = {
   locator: Exclude<SourceLocator, { kind: "starter" }>;
 };
 
-// One shelf entry for GET /api/tiles. `sourceId` is the Source whose locator is
-// this Tile's, or null.
+// One shelf entry for GET /api/tiles. `url` is the repository's web page at the
+// Tile's ref and subpath. `sourceId` is the Source whose locator is this Tile's,
+// or null.
 export const TileSummary = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
   description: z.string(),
+  url: z.string().url(),
   recipe: RecipeSummary,
   sourceId: z.string().nullable(),
 });

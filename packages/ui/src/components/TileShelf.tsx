@@ -12,6 +12,7 @@ import {
   api,
   type OverviewMirror,
   type OverviewSource,
+  openUrl,
   type TileSummary,
 } from "../api.ts";
 import { AddSourceStatus } from "./AddSourceStatus.tsx";
@@ -78,20 +79,14 @@ export function TileShelf({
   const linked = tilesQuery.isLoading
     ? []
     : sources.filter((source) => !tileSourceIds.has(source.id));
-  const added = (source: OverviewSource | undefined) =>
-    source && (
-      <AddedSource
-        source={source}
-        mirror={mirrorBySource.get(source.id)}
-        removal={removal}
-        disabled={disabled}
-      />
-    );
+  const added = (source: OverviewSource | undefined): AddedSource | null =>
+    source ? { source, mirror: mirrorBySource.get(source.id), removal, disabled } : null;
   const tileCard = (tile: TileSummary) => (
     <SourceCard
       key={tile.id}
       testIds={{ card: `tile-${tile.id}`, facts: "tile", id: tile.id }}
       label={tile.label}
+      url={tile.url}
       description={tile.description}
       recipe={tile.recipe}
       added={added(tile.sourceId === null ? undefined : sourceById.get(tile.sourceId))}
@@ -135,6 +130,7 @@ export function TileShelf({
               key={source.id}
               testIds={{ card: `kit-source-${source.id}`, facts: "kit-source", id: source.id }}
               label={source.label}
+              url={null}
               description={
                 source.kind === "local"
                   ? "Added from a folder on the Daemon machine."
@@ -154,9 +150,19 @@ export function TileShelf({
   );
 }
 
+// An added Source and what removing it needs.
+type AddedSource = {
+  source: OverviewSource;
+  mirror: OverviewMirror | undefined;
+  removal: SourceRemoval;
+  disabled: boolean;
+};
+
+// Remove shows on hover or keyboard focus, and asks once before it acts.
 function SourceCard({
   testIds,
   label,
+  url,
   description,
   recipe,
   added,
@@ -165,33 +171,74 @@ function SourceCard({
   // The facts read `${facts}-added-${id}`, `${facts}-recipe-${id}`, and `${facts}-whole-${id}`.
   testIds: { card: string; facts: string; id: string };
   label: string;
+  url: string | null;
   description: string;
   recipe: Recipe | null;
-  added: ReactNode;
+  added: AddedSource | null;
   add: ReactNode;
 }): JSX.Element {
+  const [confirming, setConfirming] = useState(false);
+  const failed = added !== null && added.removal.failedId === added.source.id;
+  useEffect(() => {
+    if (failed) setConfirming(false);
+  }, [failed]);
+  const problem = added && sourceProblem(added.source, added.mirror);
   return (
     <li className={`tile-card ${added ? "tile-card-added" : ""}`} data-testid={testIds.card}>
       <div className="tile-card-head">
-        <span className="tile-card-label">{label}</span>
+        {url ? (
+          <a
+            className="tile-card-label"
+            href={url}
+            onClick={(event) => {
+              event.preventDefault();
+              void openUrl(url);
+            }}
+            data-testid={`${testIds.facts}-link-${testIds.id}`}
+          >
+            {label}
+          </a>
+        ) : (
+          <span className="tile-card-label">{label}</span>
+        )}
         {added ? (
-          <span className="tile-added" data-testid={`${testIds.facts}-added-${testIds.id}`}>
-            Added
+          <span className="tile-card-actions">
+            {!confirming && (
+              <button
+                type="button"
+                className="tile-remove"
+                onClick={() => setConfirming(true)}
+                disabled={added.disabled}
+                aria-label={`Remove ${added.source.label}`}
+                data-testid={`kit-source-delete-${added.source.id}`}
+              >
+                Remove
+              </button>
+            )}
+            <span
+              className="tile-added"
+              title={readyTitle(added.mirror)}
+              data-testid={`${testIds.facts}-added-${testIds.id}`}
+            >
+              Added
+            </span>
           </span>
         ) : (
           add
         )}
       </div>
       <p className="tile-card-desc">{description}</p>
-      {recipe && (
+      {(recipe || problem) && (
         <div className="tile-card-badges">
-          <span
-            className="badge badge-source"
-            data-testid={`${testIds.facts}-recipe-${testIds.id}`}
-          >
-            {recipe.label}
-          </span>
-          {recipe.unit === "whole" && (
+          {recipe && (
+            <span
+              className="badge badge-source"
+              data-testid={`${testIds.facts}-recipe-${testIds.id}`}
+            >
+              {recipe.label}
+            </span>
+          )}
+          {recipe?.unit === "whole" && (
             <span
               className="badge badge-whole"
               data-testid={`${testIds.facts}-whole-${testIds.id}`}
@@ -199,113 +246,73 @@ function SourceCard({
               Installs whole
             </span>
           )}
+          {added && problem && (
+            <span
+              className={`kit-fresh ${problem === "Unavailable" ? "kit-fresh-error" : "kit-fresh-off"}`}
+              data-testid={`kit-freshness-${added.source.id}`}
+            >
+              {problem}
+            </span>
+          )}
         </div>
       )}
-      {added}
+      {added && confirming && <RemoveConfirm added={added} onCancel={() => setConfirming(false)} />}
     </li>
   );
 }
 
-// An added Source's state and its Remove. Remove shows on hover or keyboard
-// focus, and asks once before it acts.
-function AddedSource({
-  source,
-  mirror,
-  removal,
-  disabled,
+// A healthy added Source needs no status line: the Added badge carries it.
+function sourceProblem(
+  source: OverviewSource,
+  mirror: OverviewMirror | undefined,
+): "Off" | "Unavailable" | null {
+  if (!source.active) return "Off";
+  return mirror?.error ? "Unavailable" : null;
+}
+
+function readyTitle(mirror: OverviewMirror | undefined): string | undefined {
+  if (!mirror || mirror.error) return undefined;
+  return mirror.identity ? `Ready · ${mirror.identity.slice(0, 7)}` : "Ready";
+}
+
+function RemoveConfirm({
+  added,
+  onCancel,
 }: {
-  source: OverviewSource;
-  mirror: OverviewMirror | undefined;
-  removal: SourceRemoval;
-  disabled: boolean;
+  added: AddedSource;
+  onCancel: () => void;
 }): JSX.Element {
-  const [confirming, setConfirming] = useState(false);
-  const failed = removal.failedId === source.id;
-  useEffect(() => {
-    if (failed) setConfirming(false);
-  }, [failed]);
+  const { source, removal, disabled } = added;
   const pending = removal.pendingId === source.id;
   const turnsOff = removal.turnsOff(source.id);
   return (
-    <div className="tile-card-source">
-      {confirming ? (
-        <div className="tile-remove-confirm" data-testid={`kit-source-delete-arm-${source.id}`}>
-          <span className="tile-remove-prompt">
-            Remove {source.label}?
-            {turnsOff > 0 &&
-              ` Its ${turnsOff} selected ${turnsOff === 1 ? "Capability turns" : "Capabilities turn"} off, and your next Deploy uninstalls ${turnsOff === 1 ? "it" : "them"}.`}
-          </span>
-          <span className="tile-remove-actions">
-            <button
-              type="button"
-              className="tile-remove-go"
-              onClick={() => removal.remove(source)}
-              disabled={pending || disabled}
-              data-testid={`kit-source-delete-confirm-${source.id}`}
-            >
-              {pending ? "Removing…" : "Remove"}
-            </button>
-            <button
-              type="button"
-              className="tile-remove-cancel"
-              onClick={() => setConfirming(false)}
-              disabled={pending}
-              data-testid={`kit-source-delete-cancel-${source.id}`}
-            >
-              Cancel
-            </button>
-          </span>
-        </div>
-      ) : (
-        <div className="tile-card-foot">
-          <MirrorState source={source} mirror={mirror} />
-          <button
-            type="button"
-            className="tile-remove"
-            onClick={() => setConfirming(true)}
-            disabled={disabled}
-            aria-label={`Remove ${source.label}`}
-            data-testid={`kit-source-delete-${source.id}`}
-          >
-            Remove
-          </button>
-        </div>
-      )}
+    <div className="tile-remove-confirm" data-testid={`kit-source-delete-arm-${source.id}`}>
+      <span className="tile-remove-prompt">
+        Remove {source.label}?
+        {turnsOff > 0 &&
+          ` Its ${turnsOff} selected ${turnsOff === 1 ? "Capability turns" : "Capabilities turn"} off, and your next Deploy uninstalls ${turnsOff === 1 ? "it" : "them"}.`}
+      </span>
+      <span className="tile-remove-actions">
+        <button
+          type="button"
+          className="tile-remove-go"
+          onClick={() => removal.remove(source)}
+          disabled={pending || disabled}
+          data-testid={`kit-source-delete-confirm-${source.id}`}
+        >
+          {pending ? "Removing…" : "Remove"}
+        </button>
+        <button
+          type="button"
+          className="tile-remove-cancel"
+          onClick={onCancel}
+          disabled={pending}
+          data-testid={`kit-source-delete-cancel-${source.id}`}
+        >
+          Cancel
+        </button>
+      </span>
     </div>
-  );
-}
-
-function MirrorState({
-  source,
-  mirror,
-}: {
-  source: OverviewSource;
-  mirror: OverviewMirror | undefined;
-}): JSX.Element | null {
-  if (!source.active) {
-    return (
-      <span className="kit-fresh kit-fresh-off" data-testid={`kit-freshness-${source.id}`}>
-        Off
-      </span>
-    );
-  }
-  if (!mirror) return null;
-  return (
-    <span className="tile-mirror-state">
-      <span
-        className={`kit-fresh ${mirror.error ? "kit-fresh-error" : "kit-fresh-ok"}`}
-        data-testid={`kit-freshness-${source.id}`}
-      >
-        {mirror.error ? "Unavailable" : "Ready"}
-      </span>
-      <span
-        className={`kit-sha ${mirror.identity ? "" : "kit-sha-empty"}`}
-        data-testid={`kit-sha-${source.id}`}
-        title={mirror.identity ?? ""}
-      >
-        {mirror.identity ? mirror.identity.slice(0, 7) : "no identity"}
-      </span>
-    </span>
   );
 }
 

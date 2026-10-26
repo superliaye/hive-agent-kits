@@ -89,7 +89,7 @@ function uiproRow(kind: "plugin" | "bundle", on: boolean): OverviewRow {
   };
 }
 
-function hfComposeWithStarterCopy(): OverviewRow {
+function hfComposeWithKitCopy(): OverviewRow {
   const row = skill("hf-compose", "hyperframes", "hyperframes");
   const [winner] = row.variants;
   if (!winner) throw new Error("skill() returns one variant");
@@ -101,7 +101,7 @@ function hfComposeWithStarterCopy(): OverviewRow {
         ...winner,
         shadowed: true,
         shadowedBy: "hyperframes",
-        sourceIds: ["starter"],
+        sourceIds: ["kit"],
         contentSha: "f".repeat(64),
         catalog: "shadowed",
       },
@@ -113,8 +113,8 @@ let calls: { method: string; path: string; body: string | undefined }[];
 let archifyAdded: boolean;
 let withRows: boolean;
 let uipro: "absent" | "off" | "on";
-// Starter also ships hf-compose, a copy HyperFrames' higher precedence shadows.
-let starterCopy: boolean;
+// my-agent-kits also ships hf-compose, a copy HyperFrames' higher precedence shadows.
+let kitCopy: boolean;
 let patchResponse: () => Response;
 
 function sources(): OverviewSource[] {
@@ -128,9 +128,9 @@ function sources(): OverviewSource[] {
       recipe: PUBLISHED_SKILLS_WHOLE,
     },
     {
-      id: "starter",
-      label: "Starter",
-      kind: "local",
+      id: "kit",
+      label: "my-agent-kits",
+      kind: "git",
       active: true,
       rank: 0,
       recipe: CAPABILITY_KIT,
@@ -162,10 +162,8 @@ function sources(): OverviewSource[] {
 function overview(): DeploymentOverview {
   const rows = withRows
     ? [
-        skill("alpha", "starter", null),
-        starterCopy
-          ? hfComposeWithStarterCopy()
-          : skill("hf-compose", "hyperframes", "hyperframes"),
+        skill("alpha", "kit", null),
+        kitCopy ? hfComposeWithKitCopy() : skill("hf-compose", "hyperframes", "hyperframes"),
         skill("hf-render", "hyperframes", "hyperframes"),
         ...(archifyAdded ? [skill("archify", "archify", null)] : []),
         ...(uipro === "absent"
@@ -194,16 +192,18 @@ function overview(): DeploymentOverview {
 function tiles(): TileSummary[] {
   return [
     {
-      id: "starter",
-      label: "Starter",
-      description: "The capability kit bundled with Hive.",
+      id: "my-agent-kits",
+      label: "my-agent-kits",
+      description: "A personal capability kit.",
+      url: "https://github.com/superliaye/my-agent-kits",
       recipe: CAPABILITY_KIT,
-      sourceId: "starter",
+      sourceId: "kit",
     },
     {
       id: "archify",
       label: "Archify",
       description: "The archify skill, deployed as its repository publishes it.",
+      url: "https://github.com/tt-a1i/archify",
       recipe: PUBLISHED_SKILLS,
       sourceId: archifyAdded ? "archify" : null,
     },
@@ -211,6 +211,7 @@ function tiles(): TileSummary[] {
       id: "hyperframes",
       label: "HyperFrames",
       description: "HeyGen's seven HyperFrames skills, installed together.",
+      url: "https://github.com/heygen-com/hyperframes",
       recipe: PUBLISHED_SKILLS_WHOLE,
       sourceId: "hyperframes",
     },
@@ -222,7 +223,7 @@ function installStubs(): void {
   archifyAdded = false;
   withRows = true;
   uipro = "absent";
-  starterCopy = false;
+  kitCopy = false;
   patchResponse = () => json({ error: "unexpected" }, 500);
   globalThis.fetch = (async (
     input: string | URL | Request,
@@ -304,7 +305,7 @@ describe("Tile shelf", () => {
     installStubs();
     const host = await render();
 
-    expect(byTestId(host, "tile-starter")?.textContent).toContain("Starter");
+    expect(byTestId(host, "tile-my-agent-kits")?.textContent).toContain("my-agent-kits");
     expect(byTestId(host, "tile-archify")?.textContent).toContain(
       "The archify skill, deployed as its repository publishes it.",
     );
@@ -312,7 +313,7 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "tile-whole-archify")).toBeNull();
     expect(byTestId(host, "tile-whole-hyperframes")?.textContent).toBe("Installs whole");
     expect(byTestId(host, "kit-source-delete-archify")).toBeNull();
-    expect(cardOrder(host)).toEqual(["tile-starter", "tile-hyperframes", "tile-archify"]);
+    expect(cardOrder(host)).toEqual(["tile-my-agent-kits", "tile-hyperframes", "tile-archify"]);
 
     await click(byTestId(host, "tile-add-archify"));
 
@@ -325,14 +326,14 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "kit-source-delete-archify")).not.toBeNull();
     expect(byTestId(host, "kit-row-skill-archify")).not.toBeNull();
     // Added, it moves in front of the Tiles not added yet.
-    expect(cardOrder(host)).toEqual(["tile-starter", "tile-archify", "tile-hyperframes"]);
+    expect(cardOrder(host)).toEqual(["tile-my-agent-kits", "tile-archify", "tile-hyperframes"]);
   });
 
   test("a Tile whose Source is already added shows Added and offers no Add", async () => {
     installStubs();
     const host = await render();
 
-    for (const id of ["starter", "hyperframes"]) {
+    for (const id of ["my-agent-kits", "hyperframes"]) {
       expect(byTestId(host, `tile-added-${id}`)?.textContent).toBe("Added");
       expect(byTestId(host, `tile-add-${id}`)).toBeNull();
     }
@@ -350,13 +351,16 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "tile-add-archify")).not.toBeNull();
   });
 
-  test("an added Tile reads as added, with its Mirror state and Remove", async () => {
+  test("an added Tile reads as added, with its Mirror state in the badge's title and Remove", async () => {
     installStubs();
     const host = await render();
 
     expect(byTestId(host, "tile-hyperframes")?.className).toContain("tile-card-added");
-    expect(byTestId(host, "kit-freshness-hyperframes")?.textContent).toBe("Ready");
-    expect(byTestId(host, "kit-source-delete-hyperframes")?.textContent).toBe("Remove");
+    expect(byTestId(host, "tile-added-hyperframes")?.getAttribute("title")).toBe("Ready · abc1234");
+    expect(byTestId(host, "kit-freshness-hyperframes")).toBeNull();
+    expect(
+      byTestId(host, "tile-hyperframes")?.querySelector(".tile-card-head")?.textContent,
+    ).toContain("Remove");
     expect(byTestId(host, "tile-archify")?.className).not.toContain("tile-card-added");
     expect(byTestId(host, "tile-archify")?.querySelector(".tile-remove")).toBeNull();
   });
@@ -367,7 +371,7 @@ describe("Tile shelf", () => {
     const host = await render();
 
     expect(cardOrder(host)).toEqual([
-      "tile-starter",
+      "tile-my-agent-kits",
       "tile-hyperframes",
       "kit-source-uipro",
       "tile-archify",
@@ -378,6 +382,28 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "kit-source-recipe-uipro")?.textContent).toBe("UI UX Pro Max");
     expect(byTestId(host, "kit-source-whole-uipro")?.textContent).toBe("Installs whole");
     expect(byTestId(host, "kit-source-delete-uipro")).not.toBeNull();
+  });
+});
+
+describe("Tile links", () => {
+  test("a Tile's title links to its repository and opens it in the browser", async () => {
+    installStubs();
+    const opened: string[] = [];
+    const previous = window.__hive;
+    window.__hive = {
+      openExternal: async (url: string) => {
+        opened.push(url);
+      },
+    };
+    try {
+      const host = await render();
+      const link = byTestId(host, "tile-link-archify");
+      expect(link?.getAttribute("href")).toBe("https://github.com/tt-a1i/archify");
+      await click(link);
+      expect(opened).toEqual(["https://github.com/tt-a1i/archify"]);
+    } finally {
+      window.__hive = previous;
+    }
   });
 });
 
@@ -405,12 +431,12 @@ describe("Whole Sources", () => {
     expect(byTestId(host, "kit-kind-plugin")).toBeNull();
     expect(byTestId(host, "kit-kind-bundle")).toBeNull();
     expect(byTestId(host, "kit-row-skill-alpha")).not.toBeNull();
-    expect(byTestId(host, "kit-unit-starter")).toBeNull();
+    expect(byTestId(host, "kit-unit-kit")).toBeNull();
   });
 
   test("a lower-precedence copy of a whole Source's Capability stays in its kind section", async () => {
     installStubs();
-    starterCopy = true;
+    kitCopy = true;
     const host = await render();
 
     expect(byTestId(host, "kit-unit-member-skill-hf-compose")).not.toBeNull();

@@ -3,7 +3,7 @@ import { SourceLocator } from "@hive/contract";
 import { locatorIdentity } from "../../sources/types.ts";
 import { publishedSkills } from "../recipes/published-skills.ts";
 import { capabilityKit, pluginMarketplace } from "../recipes/recipe.ts";
-import { TILES, tileById, tileForLocator } from "../recipes/tiles.ts";
+import { TILES, tileById, tileForLocator, tileShelf } from "../recipes/tiles.ts";
 
 describe("TILES", () => {
   test("ids and locator identities are unique", () => {
@@ -16,6 +16,15 @@ describe("TILES", () => {
       expect(SourceLocator.safeParse(tile.locator).success).toBe(true);
       expect(tile.locator.revision.ref).toBe("refs/heads/main");
     }
+  });
+
+  test("each Tile links to its repository, or the subpath's tree at its ref", () => {
+    const urls = new Map(tileShelf([]).map((tile) => [tile.id, tile.url]));
+    expect(urls.get("my-agent-kits")).toBe("https://github.com/superliaye/my-agent-kits");
+    expect(urls.get("frontend-design")).toBe(
+      "https://github.com/anthropics/skills/tree/main/skills/frontend-design",
+    );
+    expect([...urls.values()].every((url) => url.startsWith("https://github.com/"))).toBe(true);
   });
 
   test("every Tile is a git repository; Hive bundles none", () => {

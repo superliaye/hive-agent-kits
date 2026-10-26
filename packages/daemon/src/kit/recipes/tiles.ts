@@ -147,11 +147,20 @@ export function tileForLocator(locator: SourceLocator): Tile | null {
   return TILES.find((tile) => locatorIdentity(tile.locator) === identity) ?? null;
 }
 
+// The repository's GitHub page, at the Tile's ref and subpath for a subpath Tile.
+function tileUrl(locator: TileLocator): string {
+  const repository = locator.repoUrl.replace(/\.git$/, "");
+  if (locator.subpath === ".") return repository;
+  const ref = locator.revision.ref.replace(/^refs\/(heads|tags)\//, "");
+  return `${repository}/tree/${ref}/${locator.subpath}`;
+}
+
 export function tileShelf(sources: readonly Pick<Source, "id" | "locator">[]): TileSummary[] {
   return TILES.map((tile) => ({
     id: tile.id,
     label: tile.label,
     description: tile.description,
+    url: tileUrl(tile.locator),
     recipe: { id: tile.recipe.id, label: tile.recipe.label, unit: tile.recipe.unit },
     sourceId: sources.find((source) => tileForLocator(source.locator) === tile)?.id ?? null,
   }));

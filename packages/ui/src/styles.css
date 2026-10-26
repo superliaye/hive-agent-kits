@@ -1387,6 +1387,16 @@ pre.config {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-fg-default);
+  text-decoration: none;
+}
+a.tile-card-label:hover,
+a.tile-card-label:focus-visible {
+  text-decoration: underline;
+}
+.tile-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .tile-card-desc {
   flex: 1;
@@ -1420,18 +1430,6 @@ pre.config {
   border-color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-elevated));
 }
-.tile-card-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-height: 22px;
-}
-.tile-mirror-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
 .kit-fresh-off {
   background: var(--color-bg-hover);
   color: var(--color-fg-muted);
@@ -1440,7 +1438,6 @@ pre.config {
    transparent, not hidden, so the keyboard still reaches it, and always shown
    where there is no hover. */
 .tile-remove {
-  margin-left: auto;
   padding: 1px 8px;
   font-size: 11px;
   font-weight: 600;
@@ -1514,32 +1511,11 @@ pre.config {
 .tile-shelf-link .add-source-form {
   margin-top: 0;
 }
-.kit-sha {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--color-bg-hover);
-  color: var(--color-fg-muted);
-}
-/* A SHA-less Source (the bundled local Starter): a labeled, muted "no SHA"
-   rather than a bare dash — non-mono and italic so it reads as an absence, not a
-   value. */
-.kit-sha-empty {
-  font-family: inherit;
-  font-style: italic;
-  background: transparent;
-  padding: 1px 0;
-}
 .kit-fresh {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
   font-weight: 600;
-}
-.kit-fresh-ok {
-  background: color-mix(in srgb, var(--color-success) 18%, transparent);
-  color: var(--color-success);
 }
 .kit-fresh-update {
   background: color-mix(in srgb, var(--color-accent) 18%, transparent);
