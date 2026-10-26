@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { PluginFrontmatter } from "@hive/capability-schema";
 import { Cause, Effect, Exit } from "effect";
 import { parse as yamlParse } from "yaml";
-import type { TreeOrigin, TreePath } from "../acquisition/snapshot.ts";
+import type { TreeOrigin, TreePath, TreeSnapshot } from "../acquisition/snapshot.ts";
 import { DEFAULT_TREE_LIMITS } from "../acquisition/tree-guard.ts";
 import { SyncError } from "../effect/errors.ts";
 import { type Recognition, recipeTree, recognizeSource } from "../recipes/recipe.ts";
@@ -209,5 +209,45 @@ describe("RecipeTree", () => {
     expect(await run(tree.mentions(path("skills/b"), "CLAUDE_PLUGIN_ROOT"))).toBe(true);
     expect(await run(tree.mentions(path("skills/a"), "CLAUDE_PLUGIN_ROOT"))).toBe(true);
     expect(await run(tree.mentions(path("data.json"), "CLAUDE_PLUGIN_ROOT"))).toBe(false);
+  });
+
+  test("reads every file recognition may need in one batch and serves later reads from it", async () => {
+    const files: Record<string, MemoryFile> = {
+      ".claude-plugin/marketplace.json": JSON.stringify(
+        claudeMarket([{ name: "stack", source: "./plugins/stack" }]),
+      ),
+      "plugins/stack/.codex-plugin/plugin.json": JSON.stringify({ description: "Stack" }),
+      "skills-lock.json": "{}",
+      "skills/a/SKILL.md": "---\nname: a\ndescription: A\n---\n",
+      "skills/b/SKILL.md": "---\nname: b\ndescription: B\n---\n",
+      "skills/b/scripts/run.sh": "#!/bin/sh\n",
+      "README.md": "stack\n",
+    };
+    const { snapshot } = memorySnapshot(files);
+    const batches: string[][] = [];
+    const counted: TreeSnapshot = {
+      ...snapshot,
+      read: (paths) => {
+        batches.push([...paths]);
+        return snapshot.read(paths);
+      },
+    };
+
+    const recognition = await Effect.runPromise(
+      recognizeSource(recipeTree(counted, DEFAULT_TREE_LIMITS)),
+    );
+
+    expect(recognition.recipe.id).toBe("published-skills");
+    expect(recognition).toEqual(await recognized(files));
+    expect(batches.map((batch) => [...batch].sort())).toEqual([
+      [
+        ".claude-plugin/marketplace.json",
+        "plugins/stack/.codex-plugin/plugin.json",
+        "skills-lock.json",
+        "skills/a/SKILL.md",
+        "skills/b/SKILL.md",
+      ],
+      ["skills/b/scripts/run.sh"],
+    ]);
   });
 });

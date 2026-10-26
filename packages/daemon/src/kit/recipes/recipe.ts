@@ -15,6 +15,7 @@ import {
   indexTree,
   kindOf,
   realPath,
+  type TreeIndex,
   type TreePath,
   type TreeSnapshot,
   treePath,
@@ -68,8 +69,46 @@ function parseFrontmatter(text: string): Readonly<Record<string, unknown>> | nul
 
 const READ_BATCH = 128;
 
+const RECOGNITION_MANIFESTS = [
+  "skills-lock.json",
+  ".claude-plugin/marketplace.json",
+  ".claude-plugin/plugin.json",
+  ".agents/plugins/marketplace.json",
+] as TreePath[];
+
+const isNamed = (path: string, name: string) => path === name || path.endsWith(`/${name}`);
+
+// The listed files a Recipe may read for recognition: the root manifests,
+// every SKILL.md, and every Codex plugin manifest, each resolved through its links.
+function recognitionFiles(index: TreeIndex): TreePath[] {
+  const files = new Set<TreePath>();
+  const add = (path: TreePath) => {
+    const file = realPath(index, path);
+    if (file !== null && index.entries.has(file)) files.add(file);
+  };
+  for (const path of RECOGNITION_MANIFESTS) add(path);
+  for (const path of index.entries.keys()) {
+    if (isNamed(path, "SKILL.md") || isNamed(path, ".codex-plugin/plugin.json")) add(path);
+  }
+  return [...files];
+}
+
+// Each blob batch a git snapshot lacks costs a fetch, so the first content read
+// takes every file recognition may read in one batch, and later reads are
+// served from it.
 export function recipeTree(snapshot: TreeSnapshot, limits: TreeLimits): RecipeTree {
   const index = indexTree(snapshot.entries);
+  let prefetched: ReadonlyMap<TreePath, Uint8Array> | null = null;
+  const prefetch = (): Effect.Effect<ReadonlyMap<TreePath, Uint8Array>, SyncError> =>
+    prefetched
+      ? Effect.succeed(prefetched)
+      : snapshot.read(recognitionFiles(index)).pipe(
+          Effect.tap((bytes) =>
+            Effect.sync(() => {
+              prefetched = bytes;
+            }),
+          ),
+        );
   const origin = snapshot.origin;
   const remote =
     origin.transport === "git" && origin.subpath === "."
@@ -77,13 +116,13 @@ export function recipeTree(snapshot: TreeSnapshot, limits: TreeLimits): RecipeTr
       : origin.transport === "tarball"
         ? { repoUrl: origin.repoUrl, commit: origin.resolvedCommit }
         : null;
-  const text = (path: TreePath): Effect.Effect<string | null, SyncError> => {
-    const file = realPath(index, path);
-    if (file === null || !index.entries.has(file)) return Effect.succeed(null);
-    return snapshot
-      .read([file])
-      .pipe(Effect.map((bytes) => new TextDecoder().decode(bytes.get(file) ?? new Uint8Array())));
-  };
+  const text = (path: TreePath): Effect.Effect<string | null, SyncError> =>
+    Effect.gen(function* () {
+      const file = realPath(index, path);
+      if (file === null || !index.entries.has(file)) return null;
+      const bytes = (yield* prefetch()).get(file) ?? (yield* snapshot.read([file])).get(file);
+      return new TextDecoder().decode(bytes ?? new Uint8Array());
+    });
   return {
     remote,
     kind: (path) => kindOf(index, path),
@@ -116,13 +155,19 @@ export function recipeTree(snapshot: TreeSnapshot, limits: TreeLimits): RecipeTr
             return yield* Effect.fail(acquisitionError("budget_exceeded"));
           if (item._tag === "file") files.add(item.path);
         }
-        const paths = [...files];
+        const contains = (data: Uint8Array) =>
+          Buffer.from(data.buffer, data.byteOffset, data.byteLength).includes(pattern);
+        const batch = yield* prefetch();
+        const paths: TreePath[] = [];
+        for (const path of files) {
+          const data = batch.get(path);
+          if (!data) paths.push(path);
+          else if (contains(data)) return true;
+        }
         for (let start = 0; start < paths.length; start += READ_BATCH) {
           const bytes = yield* snapshot.read(paths.slice(start, start + READ_BATCH));
           for (const data of bytes.values()) {
-            if (Buffer.from(data.buffer, data.byteOffset, data.byteLength).includes(pattern)) {
-              return true;
-            }
+            if (contains(data)) return true;
           }
         }
         return false;
