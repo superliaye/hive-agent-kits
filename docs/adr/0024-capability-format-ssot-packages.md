@@ -22,7 +22,6 @@ capability-schema            zod only · types + Zod schemas + format-version   
 @hive/contract                 wire envelopes (Selection, DeployDiff, HTTP DTOs)
    ▲                            ← depends on capability-schema for the capability vocabulary
 @hive/daemon                   fs SourceTree adapter + deploy context (transforms/exec/Ledger)
-agent-kit-starter-template     content only · the Starter Source · devDep on -tools for CI self-validation
 ```
 
 1. **`capability-schema`** — pure types + Zod schemas + the format-version and the
@@ -30,8 +29,6 @@ agent-kit-starter-template     content only · the Starter Source · devDep on -
    is its only dependency. The publishable spec-in-code.
 2. **`capability-schema-tools`** (name TBD) — `parse`/`validate`/`lint` over a
    `SourceTree` read-port, plus a thin validator CLI. Depends on `capability-schema`.
-3. **`agent-kit-starter-template`** — content only (the Starter Source of ADR-0023);
-   devDepends on `-tools` to self-validate in CI.
 
 ## Boundaries (junk-drawer discipline)
 

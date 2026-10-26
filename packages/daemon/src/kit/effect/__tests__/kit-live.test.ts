@@ -201,32 +201,23 @@ describe("Kit.sync — per-Source", () => {
   });
 });
 
-describe("Kit launch-sync ordering with a file-mode local Starter seed", () => {
-  // Point the Starter content root at the real in-repo package (hermetic, no env
-  // leak between tests).
-  const STARTER_PKG = join(
-    import.meta.dir,
-    "..",
-    "..",
-    "..",
-    "..",
-    "..",
-    "agent-kit-starter-template",
-  );
-
-  test("a fresh file-mode boot seeds the LOCAL Starter and a no-fetch sync copies it into a Mirror", async () => {
-    // No sources.json under the Hive home → openStore seeds the local Starter
+describe("Kit launch-sync ordering with file-mode fixture seeds", () => {
+  test("a fresh dev fixture boot seeds the LOCAL fixtures and a no-fetch sync copies them into Mirrors", async () => {
+    // No sources.json under the Hive home → openStore seeds the fixture Sources
     // during the registry acquire (forced first because Kit depends on it), then
-    // the sync branches on kind:'local' and COPIES the bundle (never fetches).
-    process.env.HIVE_STARTER_ROOT = STARTER_PKG;
+    // the sync branches on kind:'local' and COPIES each bundle (never fetches).
     const sourcesPath = join(tmpRoot, "runtime", "sources.json");
     expect(existsSync(sourcesPath)).toBe(false);
     // A fetch that would throw if ever called — proves the local path makes no
     // network call.
     const noFetch: HttpFetch = async () => {
-      throw new Error("local Starter must not fetch");
+      throw new Error("a local fixture Source must not fetch");
     };
-    const sourcesLayer = SourceRegistryLive({ mode: "file", path: sourcesPath });
+    const sourcesLayer = SourceRegistryLive({
+      mode: "file",
+      path: sourcesPath,
+      seedFixtureSources: true,
+    });
     const rt = ManagedRuntime.make(
       Layer.merge(KitLive({ fetch: noFetch }).pipe(Layer.provide(sourcesLayer)), sourcesLayer),
     );
@@ -234,37 +225,33 @@ describe("Kit launch-sync ordering with a file-mode local Starter seed", () => {
     const kit = rt.runSync(Kit);
 
     const seeded = registry.currentSources();
-    expect(seeded).toHaveLength(1);
-    expect(seeded[0]?.id).toBe("starter");
-    expect(seeded[0]?.kind).toBe("local");
+    expect(seeded.map((source) => [source.id, source.kind])).toEqual([
+      ["fixture-alpha", "local"],
+      ["fixture-beta", "local"],
+      ["fixture-gamma", "local"],
+    ]);
 
     const result = await Effect.runPromise(kit.sync());
-    expect(result.sources).toHaveLength(1);
-    expect(result.sources[0]?.status).toBe("synced");
+    expect(result.sources.map((source) => source.status)).toEqual(["synced", "synced", "synced"]);
 
-    const mirror = failSafeDeployTargets().mirrorRoot("starter");
-    // The bundled Starter skill landed under a bundled record.
-    expect(
-      existsSync(join(mirror, "capabilities", "skills", "summarize-changes", "SKILL.md")),
-    ).toBe(true);
-    expect(readMirrorRecord(mirror)?.origin).toEqual({ transport: "bundled" });
-    expect(existsSync(join(mirror, "presets", "starter.yaml"))).toBe(true);
-
-    // Catalog lists the Starter's capabilities; sync-status is "local".
-    const cat = kit.catalog();
-    expect(cat.entries.some((e) => e.kind === "skill" && e.name === "summarize-changes")).toBe(
+    const mirror = failSafeDeployTargets().mirrorRoot("fixture-alpha");
+    expect(existsSync(join(mirror, "capabilities", "skills", "alpha-focus", "SKILL.md"))).toBe(
       true,
     );
-    expect(cat.presets.some((p) => p.name === "starter")).toBe(true);
-    expect(cat.problems).toEqual([]);
+    expect(readMirrorRecord(mirror)?.origin).toEqual({ transport: "bundled" });
+    expect(existsSync(join(mirror, "presets", "alpha-quick.yaml"))).toBe(true);
+
+    // Catalog lists the fixtures' capabilities; sync-status is "local".
+    const cat = kit.catalog();
+    expect(cat.entries.some((e) => e.kind === "skill" && e.name === "alpha-focus")).toBe(true);
+    expect(cat.presets.some((p) => p.name === "alpha-quick")).toBe(true);
 
     const state = kit.state();
-    expect(state.sync).toHaveLength(1);
-    expect(state.sync[0]?.state).toBe("local");
-    expect(state.sync[0]?.sha).toBeNull();
-    expect(state.sync[0]?.fetchedAt).toBeNull();
-
-    delete process.env.HIVE_STARTER_ROOT;
+    expect(state.sync.map((entry) => [entry.state, entry.sha, entry.fetchedAt])).toEqual([
+      ["local", null, null],
+      ["local", null, null],
+      ["local", null, null],
+    ]);
     rt.dispose();
   });
 });

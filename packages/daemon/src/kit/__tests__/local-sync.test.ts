@@ -1,6 +1,6 @@
-// Local Sync: the bundled Starter content reaches a Mirror through the one Sync
-// path with no network, keeps the last good Mirror on failure, fails a missing
-// root as missing_starter_root, and never calls fetch for a local Source.
+// Local Sync: a bundled fixture Source's content reaches a Mirror through the
+// one Sync path with no network, keeps the last good Mirror on failure, fails a
+// missing root as missing_local_root, and never calls fetch for a local Source.
 // Redirected temp homes only.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -18,15 +18,15 @@ import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 let tmpRoot: string;
-let starterFixture: string;
+let fixtureRoot: string;
 
 // A throwing fetch — any call means the local path wrongly went to the network.
 const NEVER_FETCH: HttpFetch = async () => {
   throw new Error("local Sync must not fetch");
 };
 
-// Build a minimal Starter content root (capabilities/ + presets/) in a temp dir.
-function makeStarterFixture(root: string): void {
+// Build a minimal fixture content root (capabilities/ + presets/) in a temp dir.
+function makeFixture(root: string): void {
   const skill = join(root, "capabilities", "skills", "demo-skill");
   mkdirSync(skill, { recursive: true });
   writeFileSync(
@@ -44,34 +44,34 @@ function makeStarterFixture(root: string): void {
 beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "local-sync-"));
   redirectHomeEnv(tmpRoot);
-  starterFixture = join(tmpRoot, "starter-pkg");
-  makeStarterFixture(starterFixture);
-  process.env.HIVE_STARTER_ROOT = starterFixture;
+  fixtureRoot = join(tmpRoot, "fixtures", "demo");
+  makeFixture(fixtureRoot);
+  process.env.HIVE_FIXTURE_SOURCES_ROOT = join(tmpRoot, "fixtures");
 });
 
 afterEach(() => {
-  delete process.env.HIVE_STARTER_ROOT;
+  delete process.env.HIVE_FIXTURE_SOURCES_ROOT;
   clearHomeEnv();
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-const STARTER: Source = {
-  id: "starter",
-  label: "Starter",
+const FIXTURE: Source = {
+  id: "fixture-demo",
+  label: "Fixture demo",
   locator: { kind: "starter" },
-  origin: "local:starter",
+  origin: "local:fixture-demo",
   kind: "local",
   active: true,
   createdAt: 0,
   rank: 0,
 };
 
-const syncStarter = () => syncLocatorSource(STARTER, failSafeDeployTargets());
+const syncFixture = () => syncLocatorSource(FIXTURE, failSafeDeployTargets());
 
-describe("Starter Sync", () => {
+describe("Local fixture Sync", () => {
   test("copies capabilities + presets into the mirror with a bundled record", async () => {
-    const mirror = failSafeDeployTargets().mirrorRoot("starter");
-    await Effect.runPromise(syncStarter());
+    const mirror = failSafeDeployTargets().mirrorRoot("fixture-demo");
+    await Effect.runPromise(syncFixture());
 
     expect(existsSync(join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md"))).toBe(true);
     expect(existsSync(join(mirror, "presets", "demo.yaml"))).toBe(true);
@@ -82,40 +82,40 @@ describe("Starter Sync", () => {
   });
 
   test("a failed sync leaves the prior mirror intact", async () => {
-    const mirror = failSafeDeployTargets().mirrorRoot("starter");
-    await Effect.runPromise(syncStarter());
+    const mirror = failSafeDeployTargets().mirrorRoot("fixture-demo");
+    await Effect.runPromise(syncFixture());
 
-    process.env.HIVE_STARTER_ROOT = join(tmpRoot, "does-not-exist");
-    expect(Exit.isFailure(await Effect.runPromiseExit(syncStarter()))).toBe(true);
+    process.env.HIVE_FIXTURE_SOURCES_ROOT = join(tmpRoot, "does-not-exist");
+    expect(Exit.isFailure(await Effect.runPromiseExit(syncFixture()))).toBe(true);
     expect(existsSync(join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md"))).toBe(true);
   });
 
-  test("a non-existent starterRoot yields a typed missing_starter_root SyncError (no throw out)", async () => {
-    process.env.HIVE_STARTER_ROOT = join(tmpRoot, "missing");
-    const exit = await Effect.runPromiseExit(syncStarter());
+  test("a non-existent fixture root yields a typed missing_local_root SyncError (no throw out)", async () => {
+    process.env.HIVE_FIXTURE_SOURCES_ROOT = join(tmpRoot, "missing");
+    const exit = await Effect.runPromiseExit(syncFixture());
     expect(Exit.isFailure(exit)).toBe(true);
     if (Exit.isFailure(exit)) {
       const err = Cause.squash(exit.cause);
       expect(err).toBeInstanceOf(SyncError);
-      expect((err as SyncError).reason).toBe("missing_starter_root");
+      expect((err as SyncError).reason).toBe("missing_local_root");
     }
   });
 
   test("every run re-reads the content root — content refreshes", async () => {
-    const mirror = failSafeDeployTargets().mirrorRoot("starter");
+    const mirror = failSafeDeployTargets().mirrorRoot("fixture-demo");
     const mirrored = join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md");
-    await Effect.runPromise(syncStarter());
+    await Effect.runPromise(syncFixture());
 
     writeFileSync(
-      join(starterFixture, "capabilities", "skills", "demo-skill", "SKILL.md"),
+      join(fixtureRoot, "capabilities", "skills", "demo-skill", "SKILL.md"),
       "---\nname: demo-skill\ndescription: UPDATED description\n---\nbody\n",
     );
-    expect((await Effect.runPromise(syncStarter())).status).toBe("synced");
+    expect((await Effect.runPromise(syncFixture())).status).toBe("synced");
     expect(readFileSync(mirrored, "utf8")).toContain("UPDATED description");
   });
 });
 
-// A KitLive over a memory registry seeded with one local Starter + N git sources.
+// A KitLive over a memory registry seeded with one local fixture Source + N git sources.
 function kitOver(
   sources: Array<{ id: string; origin: string; kind: "git" | "local"; active: boolean }>,
   fetchImpl: HttpFetch,
@@ -147,14 +147,14 @@ function kitOver(
 describe("Kit.sync — local kind dispatch", () => {
   test("a local Source syncs by copy; fetch is NEVER called; catalog lists it; status is local", async () => {
     const { kit, rt } = kitOver(
-      [{ id: "starter", origin: "local:starter", kind: "local", active: true }],
+      [{ id: "fixture-demo", origin: "local:fixture-demo", kind: "local", active: true }],
       NEVER_FETCH,
     );
     const result = await Effect.runPromise(kit.sync());
     expect(result.sources).toHaveLength(1);
     expect(result.sources[0]?.status).toBe("synced");
 
-    const mirror = failSafeDeployTargets().mirrorRoot("starter");
+    const mirror = failSafeDeployTargets().mirrorRoot("fixture-demo");
     expect(existsSync(join(mirror, "capabilities", "skills", "demo-skill", "SKILL.md"))).toBe(true);
     expect(readMirrorRecord(mirror)?.origin).toEqual({ transport: "bundled" });
 
@@ -169,25 +169,25 @@ describe("Kit.sync — local kind dispatch", () => {
   });
 
   test("a local-sync failure is isolated to that Source's status; the loop completes", async () => {
-    process.env.HIVE_STARTER_ROOT = join(tmpRoot, "missing-root");
+    process.env.HIVE_FIXTURE_SOURCES_ROOT = join(tmpRoot, "missing-root");
     const { kit, rt } = kitOver(
-      [{ id: "starter", origin: "local:starter", kind: "local", active: true }],
+      [{ id: "fixture-demo", origin: "local:fixture-demo", kind: "local", active: true }],
       NEVER_FETCH,
     );
     const result = await Effect.runPromise(kit.sync());
     expect(result.sources[0]?.status).toBe("failed");
-    expect(result.sources[0]?.errorReason).toBe("missing_starter_root");
+    expect(result.sources[0]?.errorReason).toBe("missing_local_root");
     // The run completed (no thrown defect) and state still has the row — AND the
     // durable freshness view must NOT mask the failure as the healthy "local"
     // state; it reports check_failed with the reason.
     const state = kit.state();
     expect(state.sync).toHaveLength(1);
     expect(state.sync[0]?.state).toBe("check_failed");
-    expect(state.sync[0]?.errorReason).toBe("missing_starter_root");
+    expect(state.sync[0]?.errorReason).toBe("missing_local_root");
     rt.dispose();
   });
 
-  test("an unknown local Source origin fails that Source instead of copying Starter bytes", async () => {
+  test("an unknown local Source origin fails that Source instead of copying fixture bytes", async () => {
     const { kit, rt } = kitOver(
       [{ id: "mystery", origin: "local:mystery", kind: "local", active: true }],
       NEVER_FETCH,
@@ -197,41 +197,41 @@ describe("Kit.sync — local kind dispatch", () => {
       {
         sourceId: "mystery",
         status: "failed",
-        errorReason: "missing_starter_root",
-        errorDetail: "starter content root is unavailable",
+        errorReason: "missing_local_root",
+        errorDetail: "local content root is unavailable",
       },
     ]);
     expect(kit.catalog().entries.some((e) => e.sourceIds.includes("mystery"))).toBe(false);
     rt.dispose();
   });
 
-  test("a deactivated Starter is excluded from catalog() and skipped by sync", async () => {
+  test("a deactivated fixture Source is excluded from catalog() and skipped by sync", async () => {
     const { kit, rt } = kitOver(
-      [{ id: "starter", origin: "local:starter", kind: "local", active: false }],
+      [{ id: "fixture-demo", origin: "local:fixture-demo", kind: "local", active: false }],
       NEVER_FETCH,
     );
     const result = await Effect.runPromise(kit.sync());
     // Inactive → not synced at all.
     expect(result.sources).toHaveLength(0);
-    const mirror = failSafeDeployTargets().mirrorRoot("starter");
+    const mirror = failSafeDeployTargets().mirrorRoot("fixture-demo");
     expect(existsSync(join(mirror, "capabilities"))).toBe(false);
-    // catalog() omits the Starter's capabilities.
+    // catalog() omits the fixture Source's capabilities.
     expect(kit.catalog().entries.some((e) => e.name === "demo-skill")).toBe(false);
     rt.dispose();
   });
 });
 
 describe("deploy from the local mirror while offline", () => {
-  test("deploying the Starter preset's skill lands files in the redirected ~/.claude with no exec", async () => {
+  test("deploying a fixture preset's skill lands files in the redirected ~/.claude with no exec", async () => {
     const execCalls: string[] = [];
     const sourcesLayer = SourceRegistryLive({
       mode: "memory",
       initial: [
         {
-          id: "starter",
-          label: "Starter",
+          id: "fixture-demo",
+          label: "Fixture demo",
           locator: { kind: "starter" },
-          origin: "local:starter",
+          origin: "local:fixture-demo",
           kind: "local",
           active: true,
           createdAt: 0,

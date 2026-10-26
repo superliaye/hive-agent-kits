@@ -22,7 +22,7 @@ Three repositories show the roles:
 ## Decision
 
 - **A Recipe turns a Source into Capabilities.** Every Source kind (git, working
-  tree, Starter) syncs through one path. Hive lists the tree, a Recipe recognizes
+  tree, bundled) syncs through one path. Hive lists the tree, a Recipe recognizes
   it through a small query interface, and Hive copies only the files the Recipe
   asks for into the Mirror. So a large repository fits when its skills are small.
   The Mirror's identity is a digest of what was written plus the Recipe. Hive tries
@@ -66,8 +66,8 @@ Three repositories show the roles:
   Capability of a whole Source applies to all of them, and every Selection read
   closes a partial unit, so the Selection API, the Overview, and Deploy agree.
 - **Tiles are curated Sources shipped with Hive.** A Tile records a Source Locator,
-  a label and description, its Recipe, and its Selection unit. The Starter Source
-  is the first Tile. Selecting a Tile adds the Source. Tiles track the
+  a label and description, its Recipe, and its Selection unit. Every Tile is a
+  git repository. Selecting a Tile adds the Source. Tiles track the
   repository's default branch, like any git Source. A Source's Tile is derived
   from its locator, never stored, so Sources added before a Tile existed match it
   too.

@@ -29,6 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.HIVE_FIXTURE_SOURCES_ROOT;
   clearHomeEnv();
   rmSync(root, { recursive: true, force: true });
 });
@@ -114,20 +115,20 @@ function workingTree(): string {
 }
 
 describe("locator-native Source sync", () => {
-  test("uses Source.locator for starter and git, isolating mirrors by Source id", async () => {
+  test("uses Source.locator for a bundled fixture and git, isolating mirrors by Source id", async () => {
     const targets = failSafeDeployTargets();
-    const starterRoot = join(root, "starter");
-    mkdirSync(join(starterRoot, "capabilities", "skills", "starter"), { recursive: true });
+    const fixtureRoot = join(root, "fixtures", "local");
+    mkdirSync(join(fixtureRoot, "capabilities", "skills", "local"), { recursive: true });
     writeFileSync(
-      join(starterRoot, "capabilities", "skills", "starter", "SKILL.md"),
-      "---\nname: starter\ndescription: starter\n---\nbody\n",
+      join(fixtureRoot, "capabilities", "skills", "local", "SKILL.md"),
+      "---\nname: local\ndescription: local\n---\nbody\n",
     );
-    process.env.HIVE_STARTER_ROOT = starterRoot;
+    process.env.HIVE_FIXTURE_SOURCES_ROOT = join(root, "fixtures");
 
-    const starter = source(
-      "starter",
+    const fixture = source(
+      "fixture-local",
       { kind: "starter" },
-      { origin: "https://bad.invalid/starter", kind: "git" },
+      { origin: "https://bad.invalid/local", kind: "git" },
     );
     const gitLocator = {
       kind: "git",
@@ -138,13 +139,13 @@ describe("locator-native Source sync", () => {
     const gitA = source("git-a", gitLocator);
     const gitB = source("git-b", gitLocator);
 
-    await Effect.runPromise(syncLocatorSource(starter, targets));
+    await Effect.runPromise(syncLocatorSource(fixture, targets));
     await Effect.runPromise(syncLocatorSource(gitA, targets, { gitProcess: gitFixture() }));
     await Effect.runPromise(syncLocatorSource(gitB, targets, { gitProcess: gitFixture() }));
 
     expect(
       existsSync(
-        join(targets.mirrorRoot("starter"), "capabilities", "skills", "starter", "SKILL.md"),
+        join(targets.mirrorRoot("fixture-local"), "capabilities", "skills", "local", "SKILL.md"),
       ),
     ).toBe(true);
     expect(

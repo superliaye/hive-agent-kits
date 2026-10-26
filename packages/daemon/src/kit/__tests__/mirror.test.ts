@@ -29,16 +29,16 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.HIVE_STARTER_ROOT;
+  delete process.env.HIVE_FIXTURE_SOURCES_ROOT;
   clearHomeEnv();
   rmSync(root, { recursive: true, force: true });
 });
 
-const starter: Source = {
-  id: "starter",
-  label: "Starter",
+const fixture: Source = {
+  id: "fixture-kit",
+  label: "Fixture kit",
   locator: { kind: "starter" },
-  origin: "local:starter",
+  origin: "local:fixture-kit",
   kind: "local",
   active: true,
   createdAt: 0,
@@ -61,21 +61,21 @@ function mirrorFiles(mirror: string): Record<string, string> {
 
 describe("Mirror materialization", () => {
   test("re-syncing an unchanged tree keeps the identity and the bytes; exec bits survive", async () => {
-    const kit = join(root, "starter-kit");
+    const kit = join(root, "fixtures", "kit");
     const skill = join(kit, "capabilities", "skills", "alpha");
     mkdirSync(skill, { recursive: true });
     writeFileSync(join(skill, "SKILL.md"), "---\nname: alpha\ndescription: a\n---\n");
     writeFileSync(join(skill, "run.sh"), "#!/bin/sh\nexit 0\n");
     chmodSync(join(skill, "run.sh"), 0o755);
     writeFileSync(join(kit, "README.md"), "not ingested\n");
-    process.env.HIVE_STARTER_ROOT = kit;
+    process.env.HIVE_FIXTURE_SOURCES_ROOT = join(root, "fixtures");
     const targets = failSafeDeployTargets();
-    const mirror = targets.mirrorRoot(starter.id);
+    const mirror = targets.mirrorRoot(fixture.id);
 
-    const first = await Effect.runPromise(syncLocatorSource(starter, targets));
+    const first = await Effect.runPromise(syncLocatorSource(fixture, targets));
     const identity = readMirrorIdentity(mirror);
     const bytes = mirrorFiles(mirror);
-    const second = await Effect.runPromise(syncLocatorSource(starter, targets));
+    const second = await Effect.runPromise(syncLocatorSource(fixture, targets));
 
     expect(first.status).toBe("synced");
     expect(second.status).toBe("unchanged");
@@ -94,7 +94,7 @@ describe("Mirror materialization", () => {
     });
 
     chmodSync(join(skill, "run.sh"), 0o644);
-    expect((await Effect.runPromise(syncLocatorSource(starter, targets))).status).toBe("synced");
+    expect((await Effect.runPromise(syncLocatorSource(fixture, targets))).status).toBe("synced");
     expect(readMirrorIdentity(mirror)).not.toBe(identity);
   });
 

@@ -321,13 +321,13 @@ function readFiles(
   });
 }
 
-export function missingStarterRoot(): SyncError {
-  const detail = "starter content root is unavailable";
-  return new SyncError({ reason: "missing_starter_root", message: detail, detail });
+export function missingLocalRoot(): SyncError {
+  const detail = "local content root is unavailable";
+  return new SyncError({ reason: "missing_local_root", message: detail, detail });
 }
 
-// A local directory listed once. Serves the Starter and `fixture-` Sources, so
-// an absent root is a missing Starter root.
+// A local directory listed once. Serves the `fixture-` Sources, so an absent
+// root is a missing local root.
 export function directorySnapshot(root: string): Effect.Effect<TreeSnapshot, SyncError> {
   return Effect.try({
     try: () => {
@@ -349,7 +349,7 @@ export function directorySnapshot(root: string): Effect.Effect<TreeSnapshot, Syn
       walk(root, "");
       return resolveListing(listed);
     },
-    catch: missingStarterRoot,
+    catch: missingLocalRoot,
   }).pipe(
     Effect.map(
       (entries): TreeSnapshot => ({

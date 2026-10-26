@@ -9,9 +9,9 @@ import { gstackRecipe, uiUxProMaxRecipe } from "./repo-recipes.ts";
 
 type GitLocator = Extract<SourceLocator, { kind: "git" }>;
 // A Tile names its ref, because SourceLocator has no default-branch mode.
-export type TileLocator =
-  | Extract<SourceLocator, { kind: "starter" }>
-  | (GitLocator & { readonly revision: Extract<GitLocator["revision"], { mode: "track" }> });
+export type TileLocator = GitLocator & {
+  readonly revision: Extract<GitLocator["revision"], { mode: "track" }>;
+};
 
 declare const tileBrand: unique symbol;
 export type Tile = {
@@ -56,14 +56,6 @@ function tracking(repoUrl: string, ref: string, subpath = "."): TileLocator {
 // pasted link, recognition, and the source.added audit event all read this one
 // list.
 export const TILES: readonly Tile[] = [
-  defineTile({
-    id: "starter",
-    label: "Starter",
-    description: "The capability kit bundled with Hive.",
-    locator: { kind: "starter" },
-    recipe: capabilityKit,
-    unit: "pick",
-  }),
   defineTile({
     id: "my-agent-kits",
     label: "my-agent-kits",

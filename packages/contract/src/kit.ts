@@ -85,7 +85,7 @@ export type Catalog = z.infer<typeof Catalog>;
 
 // Sync status surfaced by GET /api/kit/state. No `update_available` state: the
 // launch sync auto-applies the latest SHA, so a healthy git check lands on
-// `up_to_date`. `local` is the bundled Starter Source: copied from the in-repo
+// `up_to_date`. `local` is a bundled dev fixture Source: copied from the in-repo
 // package, never fetched — it has no SHA/fetchedAt and is never a network state.
 export const SyncStatusState = z.enum(["up_to_date", "check_failed", "rate_limited", "local"]);
 export type SyncStatusState = z.infer<typeof SyncStatusState>;

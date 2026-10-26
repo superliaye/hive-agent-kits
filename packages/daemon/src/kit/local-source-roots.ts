@@ -1,8 +1,6 @@
 import { dirname, join } from "node:path";
 import type { Source } from "@hive/contract";
-import type { DeployTargets } from "./targets.ts";
 
-const STARTER_SOURCE_ID = "starter";
 const FIXTURE_SOURCE_ID_PREFIX = "fixture-";
 
 function envOr(key: string, fallback: string): string {
@@ -17,11 +15,9 @@ export function fixtureSourcesRoot(): string {
   );
 }
 
-export function localSourceRootFor(source: Source, targets: DeployTargets): string | null {
+// The content root of a bundled Source: one of the dev fixture Sources.
+export function localSourceRootFor(source: Source): string | null {
   if (source.locator.kind !== "starter") return null;
-  if (source.id === STARTER_SOURCE_ID) {
-    return targets.starterRoot();
-  }
   if (source.id.startsWith(FIXTURE_SOURCE_ID_PREFIX)) {
     return join(fixtureSourcesRoot(), source.id.slice(FIXTURE_SOURCE_ID_PREFIX.length));
   }

@@ -46,15 +46,12 @@ function sourceSummary(source: Source): SourceSummary {
   };
 }
 
-// The Daemon takes a Tile's label and locator from the Tile. Only the Starter
-// Tile has the Starter locator, and adding it re-adds the deleted Starter.
+// The Daemon takes a Tile's label and locator from the Tile.
 function addFromTile(
   registry: SourceRegistrySvc,
   tile: Tile,
 ): Effect.Effect<Source, DuplicateOrigin | SourceIoError> {
-  return tile.locator.kind === "starter"
-    ? registry.restoreStarter()
-    : registry.add({ label: tile.label, locator: tile.locator });
+  return registry.add({ label: tile.label, locator: tile.locator });
 }
 
 export function buildSourcesRoutes(

@@ -14,12 +14,12 @@ describe("TILES", () => {
   test("every locator is a valid Source Locator, and every git Tile tracks main", () => {
     for (const tile of TILES) {
       expect(SourceLocator.safeParse(tile.locator).success).toBe(true);
-      if (tile.locator.kind === "git") expect(tile.locator.revision.ref).toBe("refs/heads/main");
+      expect(tile.locator.revision.ref).toBe("refs/heads/main");
     }
   });
 
-  test("the Starter is the first Tile", () => {
-    expect(TILES[0]?.locator).toEqual({ kind: "starter" });
+  test("every Tile is a git repository; Hive bundles none", () => {
+    expect(TILES.every((tile) => tile.locator.kind === "git")).toBe(true);
   });
 
   test("only HyperFrames narrows a generic Recipe to whole, and the Recipe it reuses stays pick", () => {
@@ -89,10 +89,10 @@ describe("Tile lookup", () => {
     ).toBeNull();
   });
 
-  test("the Starter locator is the Starter Tile's, and another subpath is no Tile's", () => {
-    expect(tileForLocator({ kind: "starter" })?.id).toBe("starter");
+  test("a bundled locator is no Tile's, and neither is another subpath of a Tile's repository", () => {
+    expect(tileForLocator({ kind: "starter" })).toBeNull();
     const hyperframes = tileById("hyperframes");
-    if (hyperframes?.locator.kind !== "git") throw new Error("hyperframes is a git Tile");
+    if (!hyperframes) throw new Error("hyperframes is a Tile");
     expect(tileForLocator({ ...hyperframes.locator, subpath: "skills" })).toBeNull();
   });
 });

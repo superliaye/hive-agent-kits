@@ -34,10 +34,10 @@ export class SourcesPersistence {
   // True iff a file is present AND at the CURRENT schema version. The first-run
   // seed gate uses this (not bare `exists()`): a stale-version file is discarded
   // by read() → EMPTY, but it is still PRESENT on disk, so seeding on `!exists()`
-  // alone would boot into an empty registry with no Starter. Seeding on
+  // alone would boot a dev fixture daemon with no fixtures. Seeding on
   // `!isCurrentVersion()` re-seeds both an absent file AND a discarded stale one,
   // while a present SAME-version file (even an empty `sources:[]` after the user
-  // deleted the Starter) returns true → no re-seed (delete-no-reseed holds).
+  // deleted the fixtures) returns true → no re-seed (delete-no-reseed holds).
   isCurrentVersion(): boolean {
     if (!existsSync(this.path)) return false;
     try {

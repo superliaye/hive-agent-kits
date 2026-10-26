@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TEST_PARENT="${XDG_CACHE_HOME:-$HOME/.cache}"
 mkdir -p "$TEST_PARENT"
-TEST_ROOT="$(mktemp -d "$TEST_PARENT/hive-packaged-starter-test.XXXXXX")"
+TEST_ROOT="$(mktemp -d "$TEST_PARENT/hive-packaged-daemon-test.XXXXXX")"
 DAEMON_PID=''
 
 cleanup() {
@@ -27,7 +27,7 @@ s.close()')"
 mkdir -p "$runtime" "$home"
 
 bun build --compile \
-  --define 'process.env.HIVE_BUILD_VERSION="packaged-starter-test"' \
+  --define 'process.env.HIVE_BUILD_VERSION="packaged-daemon-test"' \
   "$ROOT/packages/daemon/src/server/start.ts" \
   --outfile "$binary" >/dev/null
 
@@ -43,29 +43,21 @@ for _ in $(seq 1 100); do
   token="$(cat "$runtime/.token")"
   state="$(curl -fsS -H "Authorization: Bearer $token" \
     "http://127.0.0.1:$port/api/kit/state" 2>/dev/null || true)"
-  [[ -n "$state" ]] || {
-    sleep 0.1
-    continue
-  }
-  starter_state="$(jq -r '.sync[] | select(.sourceId == "starter") | .state' <<<"$state")"
-  [[ "$starter_state" = local ]] && break
-  [[ "$starter_state" != check_failed ]] || break
+  [[ -n "$state" ]] && break
   sleep 0.1
 done
 
-[[ "${starter_state:-}" = local ]] || {
-  printf 'packaged Starter Source did not become ready: %s\n' "${starter_state:-missing}" >&2
-  printf '%s\n' "${state:-no state response}" >&2
+[[ -n "${state:-}" ]] || {
+  printf 'packaged Daemon did not answer /api/kit/state\n' >&2
   sed -n '1,160p' "$TEST_ROOT/daemon.log" >&2
   exit 1
 }
-test -f "$runtime/kit/mirrors/starter/presets/starter.yaml"
-test -f "$runtime/kit/mirrors/starter/capabilities/skills/review-diff/SKILL.md"
-catalog="$(curl -fsS -H "Authorization: Bearer $token" \
-  "http://127.0.0.1:$port/api/kit/catalog")"
-jq -e '
-  any(.entries[]; .kind == "skill" and .name == "review-diff") and
-  any(.entries[]; .kind == "agent" and .name == "starter-explorer") and
-  any(.entries[]; .kind == "instruction" and .name == "starter-conduct")
-' <<<"$catalog" >/dev/null
-printf 'PASS: packaged Daemon materializes and syncs the Starter Source\n'
+# A fresh install starts with no Sources; the Tiles ship inside the binary.
+jq -e '.sync == []' <<<"$state" >/dev/null || {
+  printf 'packaged Daemon seeded Sources on first launch: %s\n' "$state" >&2
+  exit 1
+}
+tiles="$(curl -fsS -H "Authorization: Bearer $token" "http://127.0.0.1:$port/api/tiles")"
+jq -e 'length > 0 and all(.[]; .sourceId == null) and (map(.id) | index("my-agent-kits") != null)' \
+  <<<"$tiles" >/dev/null
+printf 'PASS: packaged Daemon boots with no Sources and serves the Tiles\n'

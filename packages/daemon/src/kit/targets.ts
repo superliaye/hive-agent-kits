@@ -14,11 +14,9 @@
 // home, and `isChildEnvRedirected()` lets the exec adapter refuse to run a real
 // installer under test unless redirection is in place.
 
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DeployTarget } from "@hive/contract";
-import { bundledStarterRoot } from "./bundled-starter.ts";
 
 // `DeployTarget` (claude | codex) is the canonical wire enum in @hive/contract —
 // distinct from the AgentBackend enum (claude-code | codex). Re-exported here so
@@ -48,12 +46,6 @@ export type DeployTargets = {
   deploymentStatePath(): string;
   // Working temp dir for sync extraction (under the Hive home, swept on start).
   kitTmpRoot(): string;
-  // Content root of the bundled Starter Source — the in-repo package dir whose
-  // `capabilities/` + `presets/` the local Sync copies into the Starter's Mirror.
-  // Env-overridable (HIVE_STARTER_ROOT): dev → the workspace package dir, shipped
-  // → the packaged resources dir. A consumer-owned member of this port (not a
-  // sibling), since the sync dispatch already holds `targets`.
-  starterRoot(): string;
   // Redirected child-process env for an external exec. Folds CLAUDE_CONFIG_DIR /
   // CODEX_HOME / HOME / USERPROFILE / npm prefix onto the resolved homes so the
   // shelled-out installer writes under the redirected home, not the real one.
@@ -132,7 +124,7 @@ export function homeRedirection(
 //      <hiveHome>/homes/ using DOTTED dir names so an installer subprocess that
 //      resolves ~/.claude from $HOME lands on the same tree (see childEnv, B2a).
 // Only the four deploy-target homes follow this ladder; the shared onboard paths
-// (mirrorRoot/kitTmpRoot/starterRoot) stay hiveHome()-derived.
+// (mirrorRoot/kitTmpRoot) stay hiveHome()-derived.
 // Fail-safe default port: dev mode, toggle off → the per-instance sandbox. The
 // safe construction for a caller with no Config to read (the Kit module's
 // no-targets fallback, and tests that rely on explicit HIVE_*_HOME env, where the
@@ -174,23 +166,10 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
   const mirrorRoot = (sourceId: string) => join(hiveHome(), "kit", "mirrors", sourceId);
   const deploymentStatePath = () => join(hiveHome(), "kit", "deployment-state.json");
   const kitTmpRoot = () => join(hiveHome(), "kit", "tmp");
-  const starterRoot = () => {
-    const configured = process.env.HIVE_STARTER_ROOT;
-    if (configured && configured.length > 0) return configured;
-    const workspace = join(
-      dirname(dirname(dirname(import.meta.dir))),
-      "agent-kit-starter-template",
-    );
-    return existsSync(join(workspace, "capabilities")) ? workspace : bundledStarterRoot(hiveHome());
-  };
-
-  return homesPort(liveHomes, { mirrorRoot, deploymentStatePath, kitTmpRoot, starterRoot });
+  return homesPort(liveHomes, { mirrorRoot, deploymentStatePath, kitTmpRoot });
 }
 
-type HiveOwnedPaths = Pick<
-  DeployTargets,
-  "mirrorRoot" | "deploymentStatePath" | "kitTmpRoot" | "starterRoot"
->;
+type HiveOwnedPaths = Pick<DeployTargets, "mirrorRoot" | "deploymentStatePath" | "kitTmpRoot">;
 
 function homesPort(homes: () => DeployHomes, owned: HiveOwnedPaths): DeployTargets {
   // Honest redirect predicate (B3): true IFF EVERY deploy-target home resolves

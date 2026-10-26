@@ -47,11 +47,9 @@ export type AggEntry = {
 };
 
 // The precedence map (higher wins) keyed by `source.id`, read STRAIGHT from each
-// Source's stored `rank` (ADR-0023). A FREE total order: the user re-ranks at
-// will, so the Starter may sit above a git Source. The default seed (Starter
-// lowest, each add the new highest) reproduces "user-added git > local Starter,
-// newest-first" WITHOUT a runtime kind-band. `createdAt` is not the signal; array
-// order is not the signal — only the stored rank.
+// Source's stored `rank` (ADR-0023). Each add takes the new highest rank, so the
+// newest Source wins, WITHOUT a runtime kind-band. `createdAt` is not the signal;
+// array order is not the signal — only the stored rank.
 export function sourcePrecedence(sources: readonly Source[]): Map<string, number> {
   const rank = new Map<string, number>();
   for (const s of sources) rank.set(s.id, s.rank);

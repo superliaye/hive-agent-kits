@@ -40,9 +40,6 @@ export type SourceRegistrySvc = {
   currentSources(): readonly Source[];
   currentSnapshot(): SourcesFile;
   add(input: AddSourceInput): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
-  // Re-adds the deleted Starter from its Tile, exactly as first-run seeding
-  // creates it. A user action, so unlike seeding it is audited.
-  restoreStarter(): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
   activate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   deactivate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   delete(id: string): Effect.Effect<void, SourceNotFound | SourceIoError>;
@@ -53,14 +50,6 @@ export type SourceRegistrySvc = {
 export class SourceRegistry extends Context.Service<SourceRegistry, SourceRegistrySvc>()(
   "sources/SourceRegistry",
 ) {}
-
-// The bundled Starter Source seeded on a truly-first file-mode run (ADR-0023):
-// the in-repo content package, local (no network Sync), active by default. It
-// REPLACES the old remote `my-agent-kits` seed — `my-agent-kits` is now just a
-// Source the user may add by URL like any other. Fixed well-known id + a non-URL
-// origin sentinel so the seed is idempotent and the add route's GitHttpsUrl never
-// applies to it. It is the Starter Tile's Source.
-const STARTER_SEED = { id: "starter", origin: "local:starter" } as const;
 
 export const DEV_FIXTURE_SOURCES = [
   { id: "fixture-alpha", origin: "local:fixture-alpha" },
@@ -83,21 +72,21 @@ function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
   // the default (leaving `{version,sources:[]}` on disk) must not see it
   // re-seeded, so only a truly-absent file seeds.
   const store = createSourcesStore(persist.read(), persist);
-  // Seed when there is no usable current-version registry: an absent file OR a
-  // stale-version file that read() discarded as EMPTY. A present same-version file
-  // (even an empty one after the user deleted the Starter) is NOT re-seeded —
-  // delete-no-reseed holds. (Plain `!exists()` would skip the re-seed for a
-  // discarded stale file and boot into an empty registry.)
-  if (!persist.isCurrentVersion()) {
-    // Seed the bundled Starter Source. A SYSTEM action, not a user `add` — it goes
-    // through the store's `seedLocal` (kind:"local"), which is OFF the audited
-    // service `add()` path, so first-run seeding emits NO `source.added` audit
-    // event (AGENTS.md "Audit vs trace": seeding is not a user action). A write
-    // fault here must NOT crash daemon boot (openStore runs inside the Layer
-    // build) — degrade to the unseeded store and trace it, matching how the route
-    // verbs ioGuard their persistence faults.
-    const seeds = [STARTER_SEED, ...(opts.seedFixtureSources ? DEV_FIXTURE_SOURCES : [])];
-    for (const seed of seeds) {
+  // A fresh install starts with no Sources; the user adds Tiles. A dev daemon
+  // with fixture Sources seeds them when there is no usable current-version
+  // registry: an absent file OR a stale-version file that read() discarded as
+  // EMPTY. A present same-version file (even an empty one after the user deleted
+  // the fixtures) is NOT re-seeded — delete-no-reseed holds. (Plain `!exists()`
+  // would skip the re-seed for a discarded stale file.)
+  if (opts.seedFixtureSources && !persist.isCurrentVersion()) {
+    // A SYSTEM action, not a user `add` — it goes through the store's
+    // `seedLocal` (kind:"local"), which is OFF the audited service `add()` path,
+    // so seeding emits NO `source.added` audit event (AGENTS.md "Audit vs trace":
+    // seeding is not a user action). A write fault here must NOT crash daemon
+    // boot (openStore runs inside the Layer build) — degrade to the unseeded
+    // store and trace it, matching how the route verbs ioGuard their persistence
+    // faults.
+    for (const seed of DEV_FIXTURE_SOURCES) {
       try {
         store.seedLocal(seed.id, seed.origin);
       } catch (err) {
@@ -188,32 +177,6 @@ function buildSvc(
               Effect.flatMap(() => ioGuard(() => prepared.commit())),
               Effect.map((committed) => {
                 if (!committed.ok) throw new Error("prepared Source add changed result");
-                return committed.source;
-              }),
-            );
-          },
-        ),
-      ),
-
-    restoreStarter: () =>
-      serializeMutation(
-        coordinator,
-        Effect.flatMap(
-          ioGuard(() => store.prepareSeedLocal(STARTER_SEED.id, STARTER_SEED.origin)),
-          (prepared): Effect.Effect<Source, DuplicateOrigin | SourceIoError> => {
-            const result = prepared.result;
-            if (!result.ok) {
-              return Effect.fail(new DuplicateOrigin({ origin: STARTER_SEED.origin }));
-            }
-            const event: SourcesAuditEvents["source.added"] = {
-              id: result.source.id,
-              kind: "starter",
-              tile: tileForLocator(result.source.locator)?.id ?? null,
-            };
-            return Effect.promise(() => events.emit("source.added", event)).pipe(
-              Effect.flatMap(() => ioGuard(() => prepared.commit())),
-              Effect.map((committed) => {
-                if (!committed.ok) throw new Error("prepared Starter restore changed result");
                 return committed.source;
               }),
             );
