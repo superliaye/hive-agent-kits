@@ -1384,6 +1384,11 @@ pre.config {
   min-height: 26px;
 }
 .tile-card-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
   font-weight: 600;
   color: var(--color-fg-default);
@@ -1393,28 +1398,42 @@ a.tile-card-label:hover,
 a.tile-card-label:focus-visible {
   text-decoration: underline;
 }
+/* Added and Remove share one cell, so revealing Remove never reflows the title. */
 .tile-card-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  display: inline-grid;
+  flex: none;
 }
+.tile-card-actions > * {
+  grid-area: 1 / 1;
+  justify-self: end;
+  align-self: center;
+}
+/* Two lines keep a row short; the title attribute holds the full text. It
+   keeps its own height so the clamp stays exact; the badges take the slack. */
 .tile-card-desc {
-  flex: 1;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
   margin: 0;
   font-size: 12px;
   line-height: 1.4;
   color: var(--color-fg-muted);
 }
 .tile-card-badges {
+  margin-top: auto;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 .button.tile-add {
+  white-space: nowrap;
   padding: 3px 12px;
   font-size: 12px;
 }
 .tile-added {
+  white-space: nowrap;
+  transition: opacity 120ms ease;
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
@@ -1425,19 +1444,20 @@ a.tile-card-label:focus-visible {
 .tile-added::before {
   content: "✓ ";
 }
-/* An added Source reads as selected, the same accent as a selected capability row. */
+/* An added Source carries the success tint of its Added badge. */
 .tile-card-added {
-  border-color: var(--color-accent);
-  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-elevated));
+  border-color: color-mix(in srgb, var(--color-success) 55%, transparent);
+  background: color-mix(in srgb, var(--color-success) 6%, var(--color-bg-elevated));
 }
 .kit-fresh-off {
   background: var(--color-bg-hover);
   color: var(--color-fg-muted);
 }
-/* Remove stays out of the way until the card is hovered or focused. It is
-   transparent, not hidden, so the keyboard still reaches it, and always shown
-   where there is no hover. */
+/* Remove stays out of the way until the card is hovered or focused, then takes
+   the Added badge's place. It is transparent, not hidden, so the keyboard still
+   reaches it, and always shown where there is no hover. */
 .tile-remove {
+  white-space: nowrap;
   padding: 1px 8px;
   font-size: 11px;
   font-weight: 600;
@@ -1453,9 +1473,16 @@ a.tile-card-label:focus-visible {
 .tile-card:focus-within .tile-remove {
   opacity: 1;
 }
+.tile-card:not(.tile-card-confirming):hover .tile-added,
+.tile-card:not(.tile-card-confirming):focus-within .tile-added {
+  opacity: 0;
+}
 @media (hover: none) {
   .tile-remove {
     opacity: 1;
+  }
+  .tile-card:not(.tile-card-confirming) .tile-added {
+    opacity: 0;
   }
 }
 .tile-remove:hover {
