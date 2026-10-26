@@ -78,7 +78,7 @@ describe("KitDeployPage — Deployment Overview states", () => {
     expect(host.querySelector('[data-testid="kit-empty"]')).not.toBeNull();
   });
 
-  test("the empty-state action focuses Source input", async () => {
+  test("the empty state points to the Sources shelf, which offers adding by link", async () => {
     globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {
       const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const path = new URL(raw).pathname;
@@ -87,7 +87,11 @@ describe("KitDeployPage — Deployment Overview states", () => {
       return json({});
     }) as typeof fetch;
     const host = await renderPage();
-    await click(host.querySelector('[data-testid="kit-empty-add-source"]'));
-    expect(document.activeElement).toBe(host.querySelector('[data-testid="add-source-input"]'));
+    expect(host.querySelector('[data-testid="kit-empty"]')?.textContent).toContain(
+      "Add a Tile above, or add any Source by its link.",
+    );
+    expect(
+      host.querySelector('[data-testid="tile-shelf"] [data-testid="add-source-input"]'),
+    ).not.toBeNull();
   });
 });

@@ -1,13 +1,9 @@
-// Per-Source delete control: the Capabilities header renders a Remove
-// affordance for EVERY Source — user-added git Sources and the bundled Starter
-// (kind:"local") alike. The Starter is deletable on the same path as a git Source
-// (ADR-0023); deletion sticks because the first-run-only seed does not re-seed an
-// already-initialised registry. Delete is destructive so it is gated by a two-step
-// inline confirm — the first Remove click only arms the confirm; the armed Confirm
-// fires DELETE /api/sources/:id. On success the page re-fetches ["sources"] (the row
-// disappears) + ["kit"] (its capabilities, built from active sources, disappear).
+// Remove on an added Source's card. Every added Source offers it: user-added git
+// Sources and the bundled Starter (kind:"local") alike (ADR-0023). The first click
+// only arms an inline confirm; the confirm turns off the selected Capabilities
+// only that Source provides, then fires DELETE /api/sources/:id. On success the
+// page refetches the Overview, so the card and its capabilities disappear.
 // Cancel dismisses the confirm with no DELETE.
-
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
@@ -42,7 +38,7 @@ const GIT_ORIGIN = "https://github.com/owner/repo";
 // The toast/label form of an origin (shortOrigin): last two path segments.
 const STARTER_LABEL = "superliaye/my-agent-kits";
 
-type Call = { method: string; path: string };
+type Call = { method: string; path: string; body: string | undefined };
 let calls: Call[];
 // Mutable set of deleted Source ids — the whole mock derives from this so a DELETE
 // is reflected by every subsequent GET (sources/catalog/state), mirroring the live
@@ -53,6 +49,12 @@ let failDelete: boolean;
 // When set, the registry holds ONLY the bundled Starter (no git Source) — so
 // deleting the Starter empties the Sources list and exercises the empty-state.
 let onlyStarter: boolean;
+// When set, the Starter also ships alpha, so alpha outlives the git Source.
+let starterShipsAlpha: boolean;
+// Selected and deployed keys ("skill:alpha"). A deployed key that is no longer
+// selected is a removal in the Deploy diff.
+let desired: Set<string>;
+let deployed: Set<string>;
 
 function sources(): Source[] {
   const all: Source[] = [
@@ -101,7 +103,7 @@ function catalog(): Catalog {
             group: "",
             deployable: true,
             shadowed: false,
-            sourceIds: [GIT_ID],
+            sourceIds: starterShipsAlpha ? [GIT_ID, STARTER_ID] : [GIT_ID],
             contentSha: "a".repeat(64),
           },
         ];
@@ -136,6 +138,9 @@ function installStubs(): void {
   deleted = new Set();
   failDelete = false;
   onlyStarter = false;
+  starterShipsAlpha = false;
+  desired = new Set();
+  deployed = new Set();
   globalThis.fetch = (async (
     input: string | URL | Request,
     init?: RequestInit,
@@ -143,12 +148,38 @@ function installStubs(): void {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     const method = (init?.method ?? "GET").toUpperCase();
-    calls.push({ method, path });
+    const body = typeof init?.body === "string" ? init.body : undefined;
+    calls.push({ method, path, body });
 
-    if (path === "/api/kit/overview")
+    if (path === "/api/kit/overview") {
+      const removed = [...deployed].filter((id) => !desired.has(id));
       return json(
-        overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: sources() }),
+        overviewFromLegacy({
+          catalog: catalog(),
+          state: kitState(),
+          sources: sources(),
+          desired,
+          diff: {
+            entries: removed.map((id) => ({
+              kind: "skill" as const,
+              name: id.slice(id.indexOf(":") + 1),
+              change: "removed" as const,
+            })),
+          },
+        }),
       );
+    }
+    if (path === "/api/kit/selection" && method === "PATCH") {
+      const mutation = JSON.parse(body ?? "{}") as {
+        changes: Array<{ key: { kind: string; name: string }; enabled: boolean }>;
+      };
+      for (const change of mutation.changes) {
+        const id = `${change.key.kind}:${change.key.name}`;
+        if (change.enabled) desired.add(id);
+        else desired.delete(id);
+      }
+      return json({ revision: 8, enabled: [], removalIntents: [] });
+    }
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/sources" && method === "GET") return json(sources());
@@ -204,7 +235,7 @@ async function click(el: Element | null): Promise<void> {
   await flush();
 }
 
-describe("KitDeployPage — Source delete control", () => {
+describe("KitDeployPage — Remove on a Source card", () => {
   test("a Remove control renders for the git Source AND for the bundled local Starter", async () => {
     installStubs();
     const host = await render();
@@ -281,11 +312,11 @@ describe("KitDeployPage — Source delete control", () => {
       calls.some((c) => c.method === "DELETE" && c.path === `/api/sources/${STARTER_ID}`),
     ).toBe(true);
 
-    // The row is gone and the now-empty Sources list renders its empty-state
-    // (the genuinely-no-sources case, not all-disabled) with no crash.
+    // The card is gone, the empty state shows (the genuinely-no-sources case, not
+    // all-off), and the shelf still offers adding a Source by its link.
     expect(host.querySelector(`[data-testid="kit-source-${STARTER_ID}"]`)).toBeNull();
     expect(host.querySelector('[data-testid="kit-empty"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="kit-empty-add-source"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="add-source-input"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="kit-empty-disabled"]')).toBeNull();
   });
 
@@ -326,5 +357,84 @@ describe("KitDeployPage — Source delete control", () => {
     // trigger is back (the user is not left stuck in an armed state).
     expect(host.querySelector(`[data-testid="kit-source-delete-confirm-${GIT_ID}"]`)).toBeNull();
     expect(host.querySelector(`[data-testid="kit-source-delete-${GIT_ID}"]`)).not.toBeNull();
+  });
+  test("Remove turns off the selected Capabilities only that Source provides, then deletes it", async () => {
+    installStubs();
+    const host = await render();
+    await click(host.querySelector('[data-testid="kit-row-skill-alpha"]'));
+
+    await click(host.querySelector(`[data-testid="kit-source-delete-${GIT_ID}"]`));
+    expect(
+      host.querySelector(`[data-testid="kit-source-delete-arm-${GIT_ID}"]`)?.textContent,
+    ).toContain("Its 1 selected Capability turns off, and your next Deploy uninstalls it.");
+    await click(host.querySelector(`[data-testid="kit-source-delete-confirm-${GIT_ID}"]`));
+
+    const mutations = calls.filter((c) => c.method !== "GET");
+    expect(mutations.map((c) => `${c.method} ${c.path}`)).toEqual([
+      "PATCH /api/kit/selection",
+      "PATCH /api/kit/selection",
+      `DELETE /api/sources/${GIT_ID}`,
+    ]);
+    expect(JSON.parse(mutations[1]?.body ?? "null").changes).toEqual([
+      { key: { kind: "skill", name: "alpha" }, enabled: false, targets: ["claude"] },
+    ]);
+  });
+
+  test("a Capability another Source also provides stays selected", async () => {
+    installStubs();
+    starterShipsAlpha = true;
+    const host = await render();
+    await click(host.querySelector('[data-testid="kit-row-skill-alpha"]'));
+
+    await click(host.querySelector(`[data-testid="kit-source-delete-${GIT_ID}"]`));
+    expect(
+      host.querySelector(`[data-testid="kit-source-delete-arm-${GIT_ID}"]`)?.textContent,
+    ).not.toContain("turns off");
+    await click(host.querySelector(`[data-testid="kit-source-delete-confirm-${GIT_ID}"]`));
+
+    expect(calls.filter((c) => c.method !== "GET").map((c) => `${c.method} ${c.path}`)).toEqual([
+      "PATCH /api/kit/selection",
+      `DELETE /api/sources/${GIT_ID}`,
+    ]);
+    expect(desired.has("skill:alpha")).toBe(true);
+  });
+
+  test("after removing a Source, Deploy warns before it deletes the deployed Capability", async () => {
+    installStubs();
+    desired = new Set(["skill:alpha"]);
+    deployed = new Set(["skill:alpha"]);
+    const host = await render();
+    expect(host.querySelector('[data-testid="kit-deploy-remove-warn"]')).toBeNull();
+
+    await click(host.querySelector(`[data-testid="kit-source-delete-${GIT_ID}"]`));
+    await click(host.querySelector(`[data-testid="kit-source-delete-confirm-${GIT_ID}"]`));
+
+    const warn = host.querySelector('[data-testid="kit-deploy-remove-warn"]');
+    expect(warn?.textContent).toContain("DELETE");
+    expect(warn?.textContent).toContain("1");
+  });
+});
+
+describe("KitDeployPage — added Source cards", () => {
+  test("a SHA-less Source (the bundled Starter) renders a labeled 'no identity', not a bare dash", async () => {
+    installStubs();
+    const host = await render();
+    const sha = host.querySelector(`[data-testid="kit-sha-${GIT_ID}"]`);
+    expect(sha?.textContent).toBe("abc1234");
+    expect(sha?.className).not.toContain("kit-sha-empty");
+    const starterSha = host.querySelector(`[data-testid="kit-sha-${STARTER_ID}"]`);
+    expect(starterSha?.textContent).toBe("no identity");
+    expect(starterSha?.className).toContain("kit-sha-empty");
+  });
+
+  test("per-capability target observations coexist with global target controls", async () => {
+    installStubs();
+    const host = await render();
+    const rail = host.querySelector('[data-testid="kit-state-skill-alpha"]');
+    expect(rail?.textContent).toContain("Claude");
+    expect(rail?.textContent).toContain("Codex");
+    expect(host.querySelector('[data-testid="kit-target-claude"]')?.className).toContain(
+      "kit-target-check",
+    );
   });
 });

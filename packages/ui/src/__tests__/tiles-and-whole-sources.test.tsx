@@ -305,7 +305,7 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "tile-recipe-archify")?.textContent).toBe("Published skills");
     expect(byTestId(host, "tile-whole-archify")).toBeNull();
     expect(byTestId(host, "tile-whole-hyperframes")?.textContent).toBe("Installs whole");
-    expect(byTestId(host, "kit-source-archify")).toBeNull();
+    expect(byTestId(host, "kit-source-delete-archify")).toBeNull();
 
     await click(byTestId(host, "tile-add-archify"));
 
@@ -315,7 +315,7 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "tile-shelf")?.textContent).toContain("Added Archify — 1 capability.");
     expect(byTestId(host, "tile-added-archify")?.textContent).toBe("Added");
     expect(byTestId(host, "tile-add-archify")).toBeNull();
-    expect(byTestId(host, "kit-source-archify")).not.toBeNull();
+    expect(byTestId(host, "kit-source-delete-archify")).not.toBeNull();
     expect(byTestId(host, "kit-row-skill-archify")).not.toBeNull();
   });
 
@@ -330,30 +330,47 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "tile-add-archify")).not.toBeNull();
   });
 
-  test("with no capabilities, the shelf is the empty state's call to action", async () => {
+  test("with no capabilities, the shelf stays above the empty state", async () => {
     installStubs();
     withRows = false;
     const host = await render();
 
     expect(host.querySelectorAll('[data-testid="tile-shelf"]')).toHaveLength(1);
-    expect(
-      host.querySelector('[data-testid="kit-empty"] [data-testid="tile-shelf"]'),
-    ).not.toBeNull();
+    expect(byTestId(host, "kit-empty")).not.toBeNull();
+    expect(host.querySelector('[data-testid="kit-empty"] [data-testid="tile-shelf"]')).toBeNull();
     expect(byTestId(host, "tile-add-archify")).not.toBeNull();
+  });
+
+  test("an added Tile reads as added, with its Mirror state and Remove", async () => {
+    installStubs();
+    const host = await render();
+
+    expect(byTestId(host, "tile-hyperframes")?.className).toContain("tile-card-added");
+    expect(byTestId(host, "kit-freshness-hyperframes")?.textContent).toBe("Ready");
+    expect(byTestId(host, "kit-source-delete-hyperframes")?.textContent).toBe("Remove");
+    expect(byTestId(host, "tile-archify")?.className).not.toContain("tile-card-added");
+    expect(byTestId(host, "tile-archify")?.querySelector(".tile-remove")).toBeNull();
+  });
+
+  test("a Source added by link gets its own card after the Tiles", async () => {
+    installStubs();
+    uipro = "off";
+    const host = await render();
+
+    const cards = [...host.querySelectorAll(".tile-grid > li")].map((card) =>
+      card.getAttribute("data-testid"),
+    );
+    expect(cards).toEqual(["tile-starter", "tile-archify", "tile-hyperframes", "kit-source-uipro"]);
+    const card = byTestId(host, "kit-source-uipro")?.textContent ?? "";
+    expect(card).toContain("UI UX Pro Max");
+    expect(card).toContain("Added from its repository link.");
+    expect(byTestId(host, "kit-source-recipe-uipro")?.textContent).toBe("UI UX Pro Max");
+    expect(byTestId(host, "kit-source-whole-uipro")?.textContent).toBe("Installs whole");
+    expect(byTestId(host, "kit-source-delete-uipro")).not.toBeNull();
   });
 });
 
 describe("Whole Sources", () => {
-  test("each Source shows its Recipe label, and Installs whole only when whole", async () => {
-    installStubs();
-    const host = await render();
-
-    expect(byTestId(host, "kit-source-recipe-starter")?.textContent).toBe("Capability kit");
-    expect(byTestId(host, "kit-source-whole-starter")).toBeNull();
-    expect(byTestId(host, "kit-source-recipe-hyperframes")?.textContent).toBe("Published skills");
-    expect(byTestId(host, "kit-source-whole-hyperframes")?.textContent).toBe("Installs whole");
-  });
-
   test("a whole Source is one row listing each Capability with its kind and CLIs", async () => {
     installStubs();
     uipro = "off";
