@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type RefObject, useEffect, useRef, useState } from "react";
 import {
-  AddSourceError,
+  type AddSourceError,
   type AddSourceResult,
   type ApiConfig,
   api,
@@ -17,10 +17,13 @@ import {
   type ReconciliationState,
   SelectionConflictError,
   type SelectionMutation,
+  SelectionUnitConflictError,
   type SyncRunResult,
   type TargetObservation,
 } from "../api.ts";
+import { AddSourceStatus } from "../components/AddSourceStatus.tsx";
 import { Skeleton, SkeletonGroup } from "../components/Skeleton.tsx";
+import { TileShelf, useAddTile } from "../components/TileShelf.tsx";
 import { ToastHost, useToasts } from "../components/Toasts.tsx";
 import { useDeveloperConfig } from "../components/useDeveloperConfig.ts";
 import { signalDeployInFlight } from "../platform/deploy-in-flight.ts";
@@ -134,6 +137,11 @@ export function syncToast(result: SyncRunResult): { kind: "success" | "error"; m
     : { kind: "success", message: "Up to date" };
 }
 
+function unitConflictMessage(error: SelectionUnitConflictError, sources: OverviewSource[]): string {
+  const label = sources.find((source) => source.id === error.sourceId)?.label ?? error.sourceId;
+  return `${label} installs whole, so its Capabilities turn on and off together. This change turned some on and some off for ${TARGET_LABEL[error.target]}, so Hive did not apply it.`;
+}
+
 export function KitDeployPage({
   apiConfig,
   connection,
@@ -220,7 +228,9 @@ export function KitDeployPage({
   const refetchKit = (): void => {
     refetchOverview();
     void queryClient.invalidateQueries({ queryKey: ["kit", "catalog"] });
+    void queryClient.invalidateQueries({ queryKey: ["tiles"] });
   };
+  const addTile = useAddTile(apiConfig, refetchKit);
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncKit(apiConfig),
@@ -473,6 +483,10 @@ export function KitDeployPage({
   const hasRows = (overview?.rows.length ?? 0) > 0;
   const allDisabled =
     overview !== undefined && sources.length > 0 && !sources.some((source) => source.active);
+  const firstRun = overview !== undefined && !hasRows && !allDisabled;
+  const tileShelf = (
+    <TileShelf apiConfig={apiConfig} addTile={addTile} disabled={authorityUnknown} />
+  );
 
   return (
     <div className="kit-page" data-testid="kit-deploy-page">
@@ -558,6 +572,7 @@ export function KitDeployPage({
           )}
         </div>
       </header>
+      {overview && !firstRun && tileShelf}
 
       {realHomeArmed && (
         <div className="banner-warn" data-testid="deploy-real-home-armed" role="alert">
@@ -607,7 +622,9 @@ export function KitDeployPage({
             ? "Selection changed on the Daemon. Waiting for a newer Overview before changing it again."
             : selectionMutation.error instanceof SelectionConflictError
               ? "Selection changed on the Daemon. Reload the Overview before changing it again."
-              : `Could not update Selection: ${selectionMutation.error?.message ?? "Unknown error"}`}
+              : selectionMutation.error instanceof SelectionUnitConflictError
+                ? unitConflictMessage(selectionMutation.error, sources)
+                : `Could not update Selection: ${selectionMutation.error?.message ?? "Unknown error"}`}
         </div>
       )}
       {(stalePlanToken !== null ||
@@ -714,15 +731,17 @@ export function KitDeployPage({
               <p className="kit-catalog-state-title">No capabilities yet.</p>
               <p className="kit-catalog-state-body">
                 Hive deploys capabilities from one or more Sources into your Claude and Codex homes.
+                Add a Tile, or add any Source by its repository link.
               </p>
+              {tileShelf}
               <button
                 type="button"
-                className="button primary"
+                className="button ghost"
                 onClick={() => addSourceInputRef.current?.focus()}
                 disabled={authorityUnknown}
                 data-testid="kit-empty-add-source"
               >
-                Add a Source
+                Paste a repository link
               </button>
             </div>
           ))}
@@ -854,69 +873,6 @@ function AddSourceForm({
   );
 }
 
-function AddSourceStatus({
-  state,
-}: {
-  state: {
-    isPending: boolean;
-    isError: boolean;
-    error: AddSourceError | null;
-    data: AddSourceResult | undefined;
-  };
-}): JSX.Element | null {
-  if (state.isPending) {
-    return (
-      <div className="add-source-status meta" data-testid="add-source-pending">
-        Adding &amp; syncing…
-      </div>
-    );
-  }
-  if (state.isError && state.error) {
-    return (
-      <div className="banner-error add-source-status" data-testid="add-source-error">
-        {addSourceErrorMessage(state.error)}
-      </div>
-    );
-  }
-  const result = state.data;
-  if (!result) return null;
-  if (!result.validation.conformant) {
-    const count = result.validation.errors.length;
-    return (
-      <div className="banner-warn add-source-status" data-testid="add-source-warning">
-        Added {result.source.label} — {count} conformance problem{count === 1 ? "" : "s"}; nothing
-        will deploy until fixed.
-      </div>
-    );
-  }
-  if (result.validation.capabilityCount === 0) {
-    return (
-      <div className="banner-info add-source-status" data-testid="add-source-empty">
-        Added {result.source.label} — no capabilities found.
-      </div>
-    );
-  }
-  return (
-    <div className="banner-success add-source-status" data-testid="add-source-success">
-      Added {result.source.label} — {result.validation.capabilityCount}{" "}
-      {result.validation.capabilityCount === 1 ? "capability" : "capabilities"}.
-    </div>
-  );
-}
-
-function addSourceErrorMessage(error: AddSourceError): string {
-  const cause = error.cause;
-  if (cause.kind === "invalid") {
-    return cause.issues.length > 0
-      ? cause.issues.map((issue) => issue.message).join("; ")
-      : "Invalid Source.";
-  }
-  if (cause.kind === "duplicate") return `Already added: ${cause.origin}`;
-  if (cause.kind === "malformed-success")
-    return "Source added, but the response could not be read — refresh to see it.";
-  return cause.message;
-}
-
 function SourceRows({
   sources,
   mirrors,
@@ -1003,6 +959,18 @@ function SourceRow({
       <span className="kit-source-origin" title={source.label}>
         {source.label}
       </span>
+      {source.recipe && (
+        <span className="kit-source-facts">
+          <span className="badge badge-source" data-testid={`kit-source-recipe-${source.id}`}>
+            {source.recipe.label}
+          </span>
+          {source.recipe.unit === "whole" && (
+            <span className="badge badge-whole" data-testid={`kit-source-whole-${source.id}`}>
+              Installs whole
+            </span>
+          )}
+        </span>
+      )}
       {source.active && mirror && (
         <span className="kit-source-facts">
           <span
@@ -1166,6 +1134,10 @@ function KindSection({
             multi && suffix
               ? `kit-row-${kind}-${row.key.name}-${suffix}`
               : `kit-row-${kind}-${row.key.name}`;
+          const wholeSourceLabel =
+            row.wholeSourceId !== null && selectable
+              ? (sourceLabels.get(row.wholeSourceId) ?? row.wholeSourceId)
+              : null;
           const selected = row.desired === "on" && !shadowed;
           const isPending = pendingKeys?.some(
             (key) => key.kind === row.key.kind && key.name === row.key.name,
@@ -1195,6 +1167,15 @@ function KindSection({
                         {sourceLabels.get(sourceId) ?? sourceId}
                       </span>
                     ))}
+                  </span>
+                )}
+                {wholeSourceLabel !== null && (
+                  <span
+                    className="kit-row-whole"
+                    data-testid={testId.replace("kit-row-", "kit-row-whole-")}
+                  >
+                    Installs with {wholeSourceLabel} as one unit: all its Capabilities turn on and
+                    off together.
                   </span>
                 )}
                 {shadowed && (
