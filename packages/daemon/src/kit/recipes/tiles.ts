@@ -26,7 +26,7 @@ export type Tile = {
 
 // The only Tile constructor. A Tile may narrow a pick Recipe to whole, never
 // widen one: `unit` must be "whole" unless the Recipe is a pick Recipe.
-export function defineTile<R extends Recipe>(spec: {
+function defineTile<R extends Recipe>(spec: {
   id: string;
   label: string;
   description: string;

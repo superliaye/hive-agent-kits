@@ -8,7 +8,7 @@ import {
 } from "../api.ts";
 import { AddSourceStatus } from "./AddSourceStatus.tsx";
 
-export type AddTileMutation = UseMutationResult<AddSourceResult, AddSourceError, string>;
+type AddTileMutation = UseMutationResult<AddSourceResult, AddSourceError, string>;
 
 // The page owns the mutation so its banner survives the shelf moving between
 // the empty state and the Sources panel after the first add.

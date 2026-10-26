@@ -191,7 +191,7 @@ type RecipeBase = {
 };
 
 // Applies to every Source, a pasted link included, and never runs repository code.
-export type GenericRecipe = RecipeBase & { readonly trust: "generic" };
+type GenericRecipe = RecipeBase & { readonly trust: "generic" };
 // A generic pattern whose Capabilities the user picks; a Tile may narrow it to whole.
 export type PickRecipe = GenericRecipe & { readonly unit: "pick" };
 // A path under a target CLI home, or under the HOME a repository's commands run
@@ -209,7 +209,7 @@ export type RepoCommand = {
   readonly stdin?: string;
 };
 
-export type RepoCommands = {
+type RepoCommands = {
   // Probed before any side effect.
   readonly requires: readonly string[];
   readonly commands: readonly RepoCommand[];

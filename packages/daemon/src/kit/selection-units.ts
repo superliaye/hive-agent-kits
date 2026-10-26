@@ -28,7 +28,7 @@ export class SelectionUnitConflictError extends Error {
   }
 }
 
-export type SelectionUnits = {
+type SelectionUnits = {
   // The changes to store: the closure of `current` first, so a deselect also
   // records removals for keys only the closure enabled, then each change on a
   // unit key applied to every key of its units. Throws

@@ -74,7 +74,7 @@ export type DeployPlanAction = {
 
 // A removal intent whose pair holds nothing Hive or the Ledger installed: there is
 // nothing left for it to remove.
-export type SatisfiedRemovalIntent = {
+type SatisfiedRemovalIntent = {
   key: CapabilityKey;
   target: DeployTarget;
   generation?: string;

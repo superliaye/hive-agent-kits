@@ -59,7 +59,6 @@ export const InstalledVia = z.discriminatedUnion("installer", [
     commit: z.string().min(1),
   }),
 ]);
-export type InstalledVia = z.infer<typeof InstalledVia>;
 
 export const DeploymentApplied = z.object({
   sourceId: z.string().nullable(),

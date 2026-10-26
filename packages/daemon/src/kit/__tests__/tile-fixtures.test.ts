@@ -38,6 +38,13 @@ describe("Tile fixtures", () => {
         const fixture = fixtureOf(tile.id);
         expect(await Effect.runPromise(replayOutcome(fixture, tile))).toEqual(fixture.expect.tile);
       });
+
+      test("replays to exactly the recorded generic outcome", async () => {
+        const fixture = fixtureOf(tile.id);
+        expect(await Effect.runPromise(replayOutcome(fixture, null))).toEqual(
+          fixture.expect.generic,
+        );
+      });
     });
   }
 });

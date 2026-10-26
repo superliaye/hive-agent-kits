@@ -1,19 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { SourceLocator } from "@hive/contract";
-import { Effect } from "effect";
 import { locatorIdentity } from "../../sources/types.ts";
 import { publishedSkills } from "../recipes/published-skills.ts";
-import { capabilityKit, type GenericRecipe, type RepoRecipe } from "../recipes/recipe.ts";
-import { defineTile, TILES, tileById, tileForLocator } from "../recipes/tiles.ts";
-
-const repoRecipe: RepoRecipe = {
-  id: "repo-only",
-  label: "Repo only",
-  unit: "whole",
-  trust: "repo",
-  installer: { checkout: null, targets: {} },
-  recognize: () => Effect.succeed({ _tag: "Miss", reason: "test" }),
-};
+import { capabilityKit, pluginMarketplace } from "../recipes/recipe.ts";
+import { TILES, tileById, tileForLocator } from "../recipes/tiles.ts";
 
 describe("TILES", () => {
   test("ids and locator identities are unique", () => {
@@ -32,13 +22,27 @@ describe("TILES", () => {
     expect(TILES[0]?.locator).toEqual({ kind: "starter" });
   });
 
-  test("only HyperFrames narrows a generic Recipe to whole", () => {
+  test("only HyperFrames narrows a generic Recipe to whole, and the Recipe it reuses stays pick", () => {
     expect(
       TILES.filter((tile) => tile.recipe.trust === "generic" && tile.recipe.unit === "whole").map(
         (tile) => tile.id,
       ),
     ).toEqual(["hyperframes"]);
     expect(tileById("hyperframes")?.recipe.id).toBe(publishedSkills.id);
+    expect(publishedSkills.unit).toBe("pick");
+  });
+
+  test("a Tile's unit is whole only where its Recipe is a repo Recipe or the Tile narrows a pick Recipe", () => {
+    const reusable = new Map(
+      [capabilityKit, pluginMarketplace, publishedSkills].map((recipe) => [recipe.id, recipe]),
+    );
+    for (const tile of TILES) {
+      if (tile.recipe.trust === "repo") {
+        expect([tile.id, tile.recipe.unit]).toEqual([tile.id, "whole"]);
+      } else {
+        expect([tile.id, reusable.get(tile.recipe.id)?.unit]).toEqual([tile.id, "pick"]);
+      }
+    }
   });
 
   test("gstack and UI UX Pro Max carry the repo-specific Recipes", () => {
@@ -63,34 +67,6 @@ describe("TILES", () => {
         ).toBe(true);
       }
     }
-  });
-});
-
-describe("defineTile", () => {
-  const base = {
-    id: "t",
-    label: "T",
-    description: "",
-    locator: { kind: "starter" },
-  } as const;
-
-  test("narrows a pick Recipe to whole without changing the Recipe it reuses", () => {
-    const tile = defineTile({ ...base, recipe: capabilityKit, unit: "whole" });
-    expect(tile.recipe.unit).toBe("whole");
-    expect(tile.recipe.id).toBe(capabilityKit.id);
-    expect(capabilityKit.unit).toBe("pick");
-  });
-
-  test("cannot widen a whole Recipe to pick", () => {
-    // @ts-expect-error a Tile may narrow a Recipe's unit, never widen it
-    defineTile({ ...base, recipe: repoRecipe, unit: "pick" });
-    expect(defineTile({ ...base, recipe: repoRecipe, unit: "whole" }).recipe).toBe(repoRecipe);
-  });
-
-  test("a repo-specific Recipe is not a generic pattern", () => {
-    // @ts-expect-error GENERIC_RECIPES holds GenericRecipe only
-    const generic: GenericRecipe = repoRecipe;
-    expect(generic.id).toBe(repoRecipe.id);
   });
 });
 

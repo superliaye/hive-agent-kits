@@ -4,7 +4,7 @@
 // suite WITHOUT blocking a real deploy.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -12,7 +12,7 @@ import {
   type ExecRequest,
   type ExecResult,
   execInstaller,
-  repoCommandEnv,
+  execRepoCommand,
 } from "../deploy/adapter.ts";
 import { DeployError } from "../effect/errors.ts";
 import {
@@ -192,20 +192,49 @@ describe("childEnv HOME redirection", () => {
 });
 
 describe("repository command env", () => {
-  test("keeps the redirected homes and drops every other path into the real home", () => {
+  async function withEnv<T>(vars: NodeJS.ProcessEnv, fn: () => Promise<T>): Promise<T> {
+    const saved = Object.keys(vars).map((name) => [name, process.env[name]] as const);
+    const assign = (name: string, value: string | undefined) => {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    };
+    for (const [name, value] of Object.entries(vars)) assign(name, value);
+    try {
+      return await fn();
+    } finally {
+      for (const [name, value] of saved) assign(name, value);
+    }
+  }
+
+  function capturingFx(targets: DeployTargets): { fx: DeployFsExec; seen: NodeJS.ProcessEnv[] } {
+    const seen: NodeJS.ProcessEnv[] = [];
+    const exec = async (_req: ExecRequest, env: NodeJS.ProcessEnv): Promise<ExecResult> => {
+      seen.push(env);
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    return { fx: { targets, exec, probe: async () => true }, seen };
+  }
+
+  const setup: ExecRequest = { command: "./setup", args: [] };
+
+  test("keeps the redirected homes and drops every other path into the real home", async () => {
     // The dev sandbox layout: the redirected homes live inside the real home.
-    // repoCommandEnv only computes, so this root is never created.
     const realHome = homedir();
     const homes = redirectHomeEnv(join(realHome, `.hive-repo-env-${process.pid}`));
     try {
-      const env = repoCommandEnv(failSafeDeployTargets(), {
-        HOME: realHome,
-        PATH: `${join(realHome, "bin")}:/usr/bin`,
-        XDG_CACHE_HOME: join(realHome, ".cache"),
-        HIVE_RUNTIME_ROOT: homes.runtimeRoot,
-        CODEX_HOME: join(realHome, ".codex"),
-        LANG: "C.UTF-8",
-      });
+      const { fx, seen } = capturingFx(failSafeDeployTargets());
+      await withEnv(
+        {
+          NODE_ENV: "test",
+          PATH: `${join(realHome, "bin")}:/usr/bin`,
+          XDG_CACHE_HOME: join(realHome, ".cache"),
+          CODEX_HOME: join(realHome, ".codex"),
+          LANG: "C.UTF-8",
+        },
+        () => execRepoCommand(fx, setup, "setup"),
+      );
+      expect(seen).toHaveLength(1);
+      const env = seen[0] ?? {};
       expect(env.HOME).toBe(dirname(homes.claudeHome));
       expect(env.CLAUDE_CONFIG_DIR).toBe(homes.claudeHome);
       expect(env.CODEX_HOME).toBe(homes.codexHome);
@@ -213,9 +242,25 @@ describe("repository command env", () => {
       expect(env.XDG_CACHE_HOME).toBeUndefined();
       expect(env.HIVE_RUNTIME_ROOT).toBeUndefined();
       expect(env.LANG).toBe("C.UTF-8");
-      expect(existsSync(homes.root)).toBe(false);
     } finally {
       clearHomeEnv();
+      rmSync(homes.root, { recursive: true, force: true });
     }
+  });
+
+  test("a test refuses to run a repository command when only some homes are redirected", async () => {
+    const { fx, seen } = capturingFx(defaultDeployTargets(packagedOpts));
+    const thrown = await withEnv(
+      {
+        NODE_ENV: "test",
+        HIVE_CLAUDE_HOME: join(tmpdir(), `hive-repo-partial-${process.pid}`, ".claude"),
+        HIVE_CODEX_HOME: undefined,
+        HIVE_AGENTS_HOME: undefined,
+      },
+      () => execRepoCommand(fx, setup, "setup").catch((error: unknown) => error),
+    );
+    expect(thrown).toBeInstanceOf(DeployError);
+    expect(thrown).toMatchObject({ reason: "not_redirected" });
+    expect(seen).toHaveLength(0);
   });
 });

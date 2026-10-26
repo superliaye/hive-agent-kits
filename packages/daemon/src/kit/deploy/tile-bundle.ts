@@ -42,7 +42,7 @@ function commandHome(targets: Pick<DeployTargets, "childEnv">): string {
   return targets.childEnv(process.env).HOME ?? homedir();
 }
 
-export function resolveInstalledPath(
+function resolveInstalledPath(
   path: InstalledPath,
   targets: Homes & Pick<DeployTargets, "childEnv">,
 ): string {
@@ -104,7 +104,7 @@ export type TileBundle = {
 };
 
 // The commit only matters when the commands run in the checkout.
-export function tileBundleHash(
+function tileBundleHash(
   target: DeployTarget,
   tile: string,
   installer: TargetInstaller,

@@ -162,7 +162,7 @@ const inside = (path: string, dir: string) =>
 // home outside the redirected HOME, so that HOME is the only home a repository's
 // own script sees. The dev sandbox lives inside the real home, so "outside"
 // matters.
-export function repoCommandEnv(targets: DeployTargets, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function repoCommandEnv(targets: DeployTargets, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = targets.childEnv(base);
   const home = env.HOME;
   if (!targets.isChildEnvRedirected() || !home) return env;

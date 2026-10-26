@@ -33,7 +33,7 @@ class GitAcquireError extends Error {
   }
 }
 
-export type GitSnapshotOptions = {
+type GitSnapshotOptions = {
   cacheRoot: string;
   process?: GitProcess;
   limits: TreeLimits;

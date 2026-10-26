@@ -67,11 +67,11 @@ export function readMirrorIdentity(mirrorRoot: string): string | null {
   return readMirrorRecord(mirrorRoot)?.contentDigest ?? null;
 }
 
-export type IngestEntry =
+type IngestEntry =
   | { readonly to: string; readonly mode: 0o644 | 0o755; readonly from: TreePath }
   | { readonly to: string; readonly mode: 0o644; readonly text: string };
 
-export type IngestPlan = {
+type IngestPlan = {
   // Sorted by `to`.
   readonly entries: readonly IngestEntry[];
   readonly dropped: readonly { readonly from: TreePath; readonly reason: string }[];
@@ -154,7 +154,7 @@ const mirrorWriteError = (err: unknown) =>
     detail: "mirror write failed",
   });
 
-export type StagedMirror = { readonly stage: string; readonly record: MirrorRecord };
+type StagedMirror = { readonly stage: string; readonly record: MirrorRecord };
 
 const READ_BATCH = 128;
 
