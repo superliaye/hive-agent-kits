@@ -37,8 +37,10 @@ commands, and where the trust boundary sits.
 - **Commands run with the installers' child environment, pinned further.** `CODEX_HOME` names
   the Codex target. When the homes are redirected (tests, dev), `HOME` is the redirected parent,
   no variable but `PATH` may point into the real home outside it, and the `registry=` line of
-  the real `~/.npmrc` is copied in, so a repository script cannot write the real home. Hive refuses
-  to run them when only some homes are redirected. stdin answers only where an uninstaller asks
+  the real `~/.npmrc` is copied in, so a repository script that finds the home through the
+  environment writes the redirected one. This is not filesystem isolation: the script still runs
+  as the user and could write the real home by an absolute path. Hive refuses to run them when
+  only some homes are redirected. stdin answers only where an uninstaller asks
   a question (`uipro uninstall`).
 - **Hive records how it installed.** Deployment State keeps the Tile, the checkout path, and the
   commit for each target, so an uninstall works after the Source is gone (ADR-0032). The
