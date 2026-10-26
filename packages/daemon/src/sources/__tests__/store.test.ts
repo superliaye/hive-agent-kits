@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { createSourcesStore, type SourcesWriter } from "../store.ts";
 import { locatorIdentity, normalizeOrigin, SOURCES_FILE_VERSION } from "../types.ts";
 
-const universeLocator = {
+const monorepoLocator = {
   kind: "git" as const,
-  repoUrl: "https://github.com/databricks-eng/universe",
+  repoUrl: "https://github.com/example-org/monorepo",
   revision: { mode: "track" as const, ref: "refs/heads/master" },
-  subpath: "experimental/leon-ye_data/agent-kits",
+  subpath: "tools/agent-kits",
 };
 
 function gitInput(repoUrl: string) {
@@ -23,12 +23,12 @@ function gitInput(repoUrl: string) {
 
 describe("locator identity", () => {
   test("allows two subpaths or revisions from the same repository", () => {
-    expect(locatorIdentity(universeLocator)).not.toBe(
-      locatorIdentity({ ...universeLocator, subpath: "experimental/another/agent-kits" }),
+    expect(locatorIdentity(monorepoLocator)).not.toBe(
+      locatorIdentity({ ...monorepoLocator, subpath: "experimental/another/agent-kits" }),
     );
-    expect(locatorIdentity(universeLocator)).not.toBe(
+    expect(locatorIdentity(monorepoLocator)).not.toBe(
       locatorIdentity({
-        ...universeLocator,
+        ...monorepoLocator,
         revision: { mode: "pin", commit: "a".repeat(40) },
       }),
     );
@@ -38,17 +38,17 @@ describe("locator identity", () => {
 describe("createSourcesStore — locator authority", () => {
   test("deduplicates the full locator and increments registry revision", () => {
     const store = createSourcesStore({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] });
-    const added = store.add({ label: "Personal kit", locator: universeLocator });
+    const added = store.add({ label: "Personal kit", locator: monorepoLocator });
     expect(added.ok).toBe(true);
     expect(store.snapshot().revision).toBe(1);
-    expect(store.add({ label: "Duplicate label", locator: universeLocator })).toEqual({
+    expect(store.add({ label: "Duplicate label", locator: monorepoLocator })).toEqual({
       ok: false,
       reason: "duplicate",
     });
     expect(
       store.add({
         label: "Other subpath",
-        locator: { ...universeLocator, subpath: "experimental/other/agent-kits" },
+        locator: { ...monorepoLocator, subpath: "experimental/other/agent-kits" },
       }).ok,
     ).toBe(true);
   });
@@ -59,9 +59,9 @@ describe("createSourcesStore — locator authority", () => {
       label: "Personal kit",
       locator: {
         kind: "git" as const,
-        repoUrl: "https://github.com/databricks-eng/universe",
+        repoUrl: "https://github.com/example-org/monorepo",
         revision: { mode: "track" as const, ref: "refs/heads/master" },
-        subpath: "experimental/leon-ye_data/agent-kits",
+        subpath: "tools/agent-kits",
       },
     };
     const added = store.add(input);
@@ -97,9 +97,9 @@ describe("createSourcesStore — locator authority", () => {
         {
           locator: {
             kind: "git",
-            repoUrl: "https://github.com/databricks-eng/universe",
+            repoUrl: "https://github.com/example-org/monorepo",
             revision: { mode: "track", ref: "refs/heads/master" },
-            subpath: "experimental/leon-ye_data/agent-kits",
+            subpath: "tools/agent-kits",
           },
         },
       ],
