@@ -2046,8 +2046,23 @@ pre.config {
   color: var(--color-text-muted);
   font-style: italic;
 }
-.kit-row-whole {
-  font-size: 11px;
+/* A whole Source's row: each Capability it installs, with its kind and CLIs. */
+.kit-unit-members {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.kit-unit-member {
+  display: flex;
+  flex-direction: column;
+}
+.kit-unit-member-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+.kit-unit-member-meta {
+  font-weight: 400;
   color: var(--color-fg-muted);
 }
 .kit-connection {

@@ -23,7 +23,7 @@ import {
 } from "../api.ts";
 import { AddSourceStatus } from "../components/AddSourceStatus.tsx";
 import { Skeleton, SkeletonGroup } from "../components/Skeleton.tsx";
-import { TileShelf, useAddTile } from "../components/TileShelf.tsx";
+import { TileShelf, useAddTile, useTiles } from "../components/TileShelf.tsx";
 import { ToastHost, useToasts } from "../components/Toasts.tsx";
 import { useDeveloperConfig } from "../components/useDeveloperConfig.ts";
 import { signalDeployInFlight } from "../platform/deploy-in-flight.ts";
@@ -188,6 +188,12 @@ export function KitDeployPage({
     queryFn: () => api.getKitCatalog(apiConfig),
   });
   const presets = catalogQuery.data?.presets ?? [];
+  const tilesQuery = useTiles(apiConfig);
+  const tileDescriptions = new Map(
+    (tilesQuery.data ?? []).flatMap((tile) =>
+      tile.sourceId === null ? [] : [[tile.sourceId, tile.description] as const],
+    ),
+  );
   const selectedRows = overview?.rows.filter((row) => row.desired === "on") ?? [];
   const selectedTargets = [...new Set(selectedRows.flatMap((row) => desiredTargets(row)))];
   const activeTargets = selectedTargets.length > 0 ? selectedTargets : targetPreference;
@@ -438,6 +444,20 @@ export function KitDeployPage({
     );
   }
 
+  function toggleRow(row: OverviewRow): void {
+    if (!overview) return;
+    selectionMutation.mutate({
+      expectedRevision: overview.selectionRevision,
+      changes: [
+        {
+          key: row.key,
+          enabled: row.desired === "off",
+          targets: row.desired === "off" ? targetsForRow(row) : enabledTargetsForRow(row),
+        },
+      ],
+    });
+  }
+
   function toggleTarget(target: DeployTarget): void {
     if (!overview || authorityUnknown || selectionMutation.isPending) return;
     const nextTargets = activeTargets.includes(target)
@@ -496,6 +516,9 @@ export function KitDeployPage({
     });
   }
 
+  const pendingKeys = selectionMutation.isPending
+    ? selectionMutation.variables?.changes.map((change) => change.key)
+    : undefined;
   const sources = overview?.sources ?? [];
   const hasRows = (overview?.rows.length ?? 0) > 0;
   const allDisabled =
@@ -762,6 +785,15 @@ export function KitDeployPage({
               </button>
             </div>
           ))}
+        {overview && (
+          <WholeSourceSection
+            overview={overview}
+            descriptions={tileDescriptions}
+            pendingKeys={pendingKeys}
+            selectionDisabled={authorityUnknown}
+            onToggle={toggleRow}
+          />
+        )}
         {overview &&
           KINDS.map((kind) => {
             const rows = overview.rows.filter((row) => row.key.kind === kind);
@@ -772,25 +804,9 @@ export function KitDeployPage({
                 kind={kind}
                 rows={rows}
                 sourceLabels={new Map(overview.sources.map((source) => [source.id, source.label]))}
-                pendingKeys={
-                  selectionMutation.isPending
-                    ? selectionMutation.variables?.changes.map((change) => change.key)
-                    : undefined
-                }
+                pendingKeys={pendingKeys}
                 selectionDisabled={authorityUnknown}
-                onToggle={(row) =>
-                  selectionMutation.mutate({
-                    expectedRevision: overview.selectionRevision,
-                    changes: [
-                      {
-                        key: row.key,
-                        enabled: row.desired === "off",
-                        targets:
-                          row.desired === "off" ? targetsForRow(row) : enabledTargetsForRow(row),
-                      },
-                    ],
-                  })
-                }
+                onToggle={toggleRow}
               />
             );
           })}
@@ -1110,6 +1126,83 @@ function CatalogSkeleton(): JSX.Element {
   );
 }
 
+// A Source that installs whole is one row: its Capabilities may differ in kind
+// and CLI, but they turn on and off together.
+function WholeSourceSection({
+  overview,
+  descriptions,
+  pendingKeys,
+  selectionDisabled,
+  onToggle,
+}: {
+  overview: DeploymentOverview;
+  descriptions: Map<string, string>;
+  pendingKeys: OverviewRow["key"][] | undefined;
+  selectionDisabled: boolean;
+  onToggle: (row: OverviewRow) => void;
+}): JSX.Element | null {
+  const units = overview.sources.flatMap((source) => {
+    const members = overview.rows.filter((row) => row.wholeSourceId === source.id);
+    const toggled = members.find((row) => row.desired === "on") ?? members[0];
+    return toggled ? [{ source, members, toggled }] : [];
+  });
+  if (units.length === 0) return null;
+  return (
+    <section className="kit-kind" data-testid="kit-kind-whole">
+      <h2 className="kit-kind-title">
+        <span>Whole Sources</span>
+        <span className="kit-kind-count">{units.length}</span>
+      </h2>
+      <div className="kit-group">
+        {units.map(({ source, members, toggled }) => {
+          const selected = toggled.desired === "on";
+          const isPending = members.some((row) =>
+            pendingKeys?.some((key) => key.kind === row.key.kind && key.name === row.key.name),
+          );
+          const description = descriptions.get(source.id);
+          return (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={selected}
+              aria-label={`${source.label} desired ${selected ? "on" : "off"}`}
+              key={source.id}
+              className={`kit-row ${selected ? "selected" : ""}`}
+              onClick={() => onToggle(toggled)}
+              disabled={isPending || selectionDisabled}
+              data-testid={`kit-unit-${source.id}`}
+            >
+              <span className={`kit-row-check ${selected ? "checked" : ""}`} aria-hidden="true" />
+              <span className="kit-row-main">
+                <span className="kit-row-name">{source.label}</span>
+                {description && <span className="kit-row-desc">{description}</span>}
+                <span className="kit-unit-members">
+                  {members.map((row) => (
+                    <span
+                      className="kit-unit-member"
+                      key={keyId(row.key)}
+                      data-testid={`kit-unit-member-${row.key.kind}-${row.key.name}`}
+                    >
+                      <span className="kit-unit-member-name">
+                        {row.key.name}{" "}
+                        <span className="kit-unit-member-meta">
+                          {row.key.kind} ·{" "}
+                          {row.applicableTargets.map((target) => TARGET_LABEL[target]).join(", ")}
+                        </span>
+                      </span>
+                      <StateRail row={row} catalog={row.catalog} />
+                    </span>
+                  ))}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function KindSection({
   kind,
   rows,
@@ -1124,13 +1217,19 @@ function KindSection({
   pendingKeys: OverviewRow["key"][] | undefined;
   selectionDisabled: boolean;
   onToggle: (row: OverviewRow) => void;
-}): JSX.Element {
+}): JSX.Element | null {
   type Displayed = { row: OverviewRow; variant: OverviewRow["variants"][number] | undefined };
   const displayed: Displayed[] = [];
   for (const row of rows) {
     if (row.variants.length === 0) displayed.push({ row, variant: undefined });
-    else for (const variant of row.variants) displayed.push({ row, variant });
+    else
+      for (const variant of row.variants) {
+        // The whole Source's row carries the winning copy; a lower-precedence copy stays here.
+        if (row.wholeSourceId !== null && variant.catalog === "deployable") continue;
+        displayed.push({ row, variant });
+      }
   }
+  if (displayed.length === 0) return null;
   const counts = new Map<string, number>();
   for (const item of displayed)
     counts.set(item.row.key.name, (counts.get(item.row.key.name) ?? 0) + 1);
@@ -1152,10 +1251,6 @@ function KindSection({
             multi && suffix
               ? `kit-row-${kind}-${row.key.name}-${suffix}`
               : `kit-row-${kind}-${row.key.name}`;
-          const wholeSourceLabel =
-            row.wholeSourceId !== null && selectable
-              ? (sourceLabels.get(row.wholeSourceId) ?? row.wholeSourceId)
-              : null;
           const selected = row.desired === "on" && !shadowed;
           const isPending = pendingKeys?.some(
             (key) => key.kind === row.key.kind && key.name === row.key.name,
@@ -1185,15 +1280,6 @@ function KindSection({
                         {sourceLabels.get(sourceId) ?? sourceId}
                       </span>
                     ))}
-                  </span>
-                )}
-                {wholeSourceLabel !== null && (
-                  <span
-                    className="kit-row-whole"
-                    data-testid={testId.replace("kit-row-", "kit-row-whole-")}
-                  >
-                    Installs with {wholeSourceLabel} as one unit: all its Capabilities turn on and
-                    off together.
                   </span>
                 )}
                 {shadowed && (

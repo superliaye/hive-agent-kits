@@ -1,5 +1,5 @@
-// The Tile shelf, Recipe badges on Sources, the whole-unit note on capability
-// rows, and the selection_unit_conflict message. The fetch stub is stateful: a
+// The Tile shelf, Recipe badges on Sources, one row per whole Source, and the
+// selection_unit_conflict message. The fetch stub is stateful: a
 // POST /api/sources {tile} flips `archifyAdded`, and only the refetch after it
 // returns the new Source, its row, and the Tile's sourceId.
 
@@ -89,10 +89,32 @@ function uiproRow(kind: "plugin" | "bundle", on: boolean): OverviewRow {
   };
 }
 
+function hfComposeWithStarterCopy(): OverviewRow {
+  const row = skill("hf-compose", "hyperframes", "hyperframes");
+  const [winner] = row.variants;
+  if (!winner) throw new Error("skill() returns one variant");
+  return {
+    ...row,
+    variants: [
+      winner,
+      {
+        ...winner,
+        shadowed: true,
+        shadowedBy: "hyperframes",
+        sourceIds: ["starter"],
+        contentSha: "f".repeat(64),
+        catalog: "shadowed",
+      },
+    ],
+  };
+}
+
 let calls: { method: string; path: string; body: string | undefined }[];
 let archifyAdded: boolean;
 let withRows: boolean;
 let uipro: "absent" | "off" | "on";
+// Starter also ships hf-compose, a copy HyperFrames' higher precedence shadows.
+let starterCopy: boolean;
 let patchResponse: () => Response;
 
 function sources(): OverviewSource[] {
@@ -141,7 +163,9 @@ function overview(): DeploymentOverview {
   const rows = withRows
     ? [
         skill("alpha", "starter", null),
-        skill("hf-compose", "hyperframes", "hyperframes"),
+        starterCopy
+          ? hfComposeWithStarterCopy()
+          : skill("hf-compose", "hyperframes", "hyperframes"),
         skill("hf-render", "hyperframes", "hyperframes"),
         ...(archifyAdded ? [skill("archify", "archify", null)] : []),
         ...(uipro === "absent"
@@ -198,6 +222,7 @@ function installStubs(): void {
   archifyAdded = false;
   withRows = true;
   uipro = "absent";
+  starterCopy = false;
   patchResponse = () => json({ error: "unexpected" }, 500);
   globalThis.fetch = (async (
     input: string | URL | Request,
@@ -329,43 +354,71 @@ describe("Whole Sources", () => {
     expect(byTestId(host, "kit-source-whole-hyperframes")?.textContent).toBe("Installs whole");
   });
 
-  test("rows of a whole Source name the Source they install with", async () => {
+  test("a whole Source is one row listing each Capability with its kind and CLIs", async () => {
     installStubs();
+    uipro = "off";
     const host = await render();
 
+    const hyperframes = byTestId(host, "kit-unit-hyperframes")?.textContent ?? "";
+    expect(hyperframes).toContain("HyperFrames");
+    expect(hyperframes).toContain("HeyGen's seven HyperFrames skills, installed together.");
     for (const name of ["hf-compose", "hf-render"]) {
-      expect(byTestId(host, `kit-row-whole-skill-${name}`)?.textContent).toContain(
-        "Installs with HyperFrames as one unit",
+      expect(byTestId(host, `kit-unit-member-skill-${name}`)?.textContent).toContain(
+        "skill · Claude, Codex",
       );
+      expect(byTestId(host, `kit-row-skill-${name}`)).toBeNull();
     }
-    expect(byTestId(host, "kit-row-whole-skill-alpha")).toBeNull();
+    expect(byTestId(host, "kit-unit-member-plugin-ui-ux-pro-max")?.textContent).toContain(
+      "plugin · Claude",
+    );
+    expect(byTestId(host, "kit-unit-member-bundle-ui-ux-pro-max")?.textContent).toContain(
+      "bundle · Codex",
+    );
+    expect(byTestId(host, "kit-kind-plugin")).toBeNull();
+    expect(byTestId(host, "kit-kind-bundle")).toBeNull();
+    expect(byTestId(host, "kit-row-skill-alpha")).not.toBeNull();
+    expect(byTestId(host, "kit-unit-starter")).toBeNull();
   });
 
-  test("a row of a unit spanning both CLIs turns the whole unit on for the targeted CLIs", async () => {
+  test("a lower-precedence copy of a whole Source's Capability stays in its kind section", async () => {
+    installStubs();
+    starterCopy = true;
+    const host = await render();
+
+    expect(byTestId(host, "kit-unit-member-skill-hf-compose")).not.toBeNull();
+    const shadowed = host.querySelector('[data-testid^="kit-row-shadow-hf-compose-"]');
+    expect(shadowed?.textContent).toContain("HyperFrames has higher Source precedence.");
+  });
+
+  test("a whole Source spanning both CLIs turns on for the targeted CLIs", async () => {
     installStubs();
     uipro = "off";
     patchResponse = () => json({ revision: 4, enabled: [], removalIntents: [] });
     const host = await render();
 
     await click(byTestId(host, "kit-target-codex"));
-    await click(byTestId(host, "kit-row-plugin-ui-ux-pro-max"));
-    await click(byTestId(host, "kit-row-bundle-ui-ux-pro-max"));
+    await click(byTestId(host, "kit-unit-uipro"));
 
     const patches = calls.filter((call) => call.method === "PATCH");
-    expect(patches.map((call) => JSON.parse(call.body ?? "null").changes)).toEqual(
-      (["plugin", "bundle"] as const).map((kind) => [
-        { key: { kind, name: "ui-ux-pro-max" }, enabled: true, targets: ["claude", "codex"] },
-      ]),
-    );
+    expect(patches.map((call) => JSON.parse(call.body ?? "null").changes)).toEqual([
+      [
+        {
+          key: { kind: "plugin", name: "ui-ux-pro-max" },
+          enabled: true,
+          targets: ["claude", "codex"],
+        },
+      ],
+    ]);
   });
 
-  test("a row of a unit spanning both CLIs turns the whole unit off", async () => {
+  test("a whole Source spanning both CLIs turns off", async () => {
     installStubs();
     uipro = "on";
     patchResponse = () => json({ revision: 4, enabled: [], removalIntents: [] });
     const host = await render();
 
-    await click(byTestId(host, "kit-row-plugin-ui-ux-pro-max"));
+    expect(byTestId(host, "kit-unit-uipro")?.getAttribute("aria-checked")).toBe("true");
+    await click(byTestId(host, "kit-unit-uipro"));
 
     const patches = calls.filter((call) => call.method === "PATCH");
     expect(patches.map((call) => JSON.parse(call.body ?? "null").changes)).toEqual([
@@ -385,7 +438,7 @@ describe("Whole Sources", () => {
       json({ error: "selection_unit_conflict", sourceId: "hyperframes", target: "codex" }, 409);
     const host = await render();
 
-    await click(byTestId(host, "kit-row-skill-hf-compose"));
+    await click(byTestId(host, "kit-unit-hyperframes"));
 
     expect(calls.some((call) => call.method === "PATCH")).toBe(true);
     const banner = byTestId(host, "kit-selection-error")?.textContent ?? "";

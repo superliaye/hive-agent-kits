@@ -1,4 +1,9 @@
-import { type UseMutationResult, useMutation, useQuery } from "@tanstack/react-query";
+import {
+  type UseMutationResult,
+  type UseQueryResult,
+  useMutation,
+  useQuery,
+} from "@tanstack/react-query";
 import {
   type AddSourceError,
   type AddSourceResult,
@@ -26,6 +31,13 @@ export function useAddTile(apiConfig: ApiConfig, onChanged: () => void): AddTile
   });
 }
 
+export function useTiles(apiConfig: ApiConfig): UseQueryResult<TileSummary[]> {
+  return useQuery({
+    queryKey: ["tiles"],
+    queryFn: () => api.listTiles(apiConfig),
+  });
+}
+
 export function TileShelf({
   apiConfig,
   addTile,
@@ -35,10 +47,7 @@ export function TileShelf({
   addTile: AddTileMutation;
   disabled: boolean;
 }): JSX.Element | null {
-  const tilesQuery = useQuery({
-    queryKey: ["tiles"],
-    queryFn: () => api.listTiles(apiConfig),
-  });
+  const tilesQuery = useTiles(apiConfig);
   const tiles = tilesQuery.data ?? [];
   if (tilesQuery.isSuccess && tiles.length === 0) return null;
   return (
