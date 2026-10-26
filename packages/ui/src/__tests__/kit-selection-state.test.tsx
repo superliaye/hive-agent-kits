@@ -23,6 +23,7 @@ function skill(name: string, desired: "on" | "off"): OverviewRow {
     reconciliation: desired === "on" ? "in_sync" : "pending_remove",
     lastAttempt: { state: "none" },
     applicableTargets: ["claude", "codex"],
+    wholeSourceId: null,
     targets: ["claude", "codex"].map((target) => ({
       target: target as "claude" | "codex",
       desired,

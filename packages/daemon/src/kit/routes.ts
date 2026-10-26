@@ -14,6 +14,7 @@ import {
 import type { KitSvc } from "./effect/kit-live.ts";
 import { DeploymentSnapshotChangedError } from "./overview.ts";
 import { SelectionConflictError } from "./selection-store.ts";
+import { SelectionUnitConflictError } from "./selection-units.ts";
 
 // Discharge a Kit Effect off the root runtime. Returns a Promise<Either>-like.
 export type RunKit = <A, E>(
@@ -71,6 +72,12 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
     } catch (error) {
       if (error instanceof SelectionConflictError) {
         return c.json({ error: "selection_conflict", currentRevision: error.currentRevision }, 409);
+      }
+      if (error instanceof SelectionUnitConflictError) {
+        return c.json(
+          { error: "selection_unit_conflict", sourceId: error.sourceId, target: error.target },
+          409,
+        );
       }
       log().error(
         { module: "kit/routes", route: "selection.mutate", err: String(error) },

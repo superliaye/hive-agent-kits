@@ -24,6 +24,7 @@ import { SyncError } from "./effect/errors.ts";
 import { localSourceRootFor } from "./local-source-roots.ts";
 import { commitMirror, materialize } from "./mirror.ts";
 import { recipeTree, recognizeSource } from "./recipes/recipe.ts";
+import { tileForLocator } from "./recipes/tiles.ts";
 import type { DeployTargets } from "./targets.ts";
 
 // Parse a normalized https GitHub origin into owner/repo. The Source registry
@@ -207,7 +208,10 @@ export function syncLocatorSource(
   const once = Effect.scoped(
     Effect.gen(function* () {
       const snapshot = yield* openSnapshot(source, targets, options);
-      const recognition = yield* recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS));
+      const recognition = yield* recognizeSource(
+        recipeTree(snapshot, DEFAULT_TREE_LIMITS),
+        tileForLocator(source.locator),
+      );
       const staged = yield* materialize(
         snapshot,
         recognition,

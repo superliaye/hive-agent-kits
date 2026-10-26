@@ -32,6 +32,7 @@ function row(over: Partial<OverviewRow> & Pick<OverviewRow, "key">): OverviewRow
       lastAttempt: { state: "none" },
     })),
     variants: [],
+    wholeSourceId: null,
     ...over,
   };
 }

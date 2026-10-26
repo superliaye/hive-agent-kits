@@ -43,9 +43,10 @@ import { openDeployOperationStore } from "../deploy-operations.ts";
 import { buildDeployPlan, tokenForPlan } from "../deploy-plan.ts";
 import { openDeploymentStateStore } from "../deployment-state.ts";
 import { readLedger } from "../ledger.ts";
-import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
+import { readMirrorRecord, recoverMirror, sweepStaleTmp } from "../mirror.ts";
 import { buildOverview, captureCoherentDeploymentSnapshot } from "../overview.ts";
 import { openSelectionStore } from "../selection-store.ts";
+import { selectionUnits } from "../selection-units.ts";
 import { type HttpFetch, syncLocatorSource } from "../sync.ts";
 import { buildSourceSyncStatus, type LastSyncError } from "../sync-status.ts";
 import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
@@ -180,18 +181,35 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
       }),
   });
 
+  const currentUnits = () => {
+    const active = activeSources(registry);
+    return selectionUnits(
+      readCatalog(targets, active),
+      active.map((source) => ({
+        id: source.id,
+        active: source.active,
+        recipe: readMirrorRecord(targets.mirrorRoot(source.id))?.recipe ?? null,
+      })),
+    );
+  };
+
   return {
     events,
     catalog: () => readCatalog(targets, activeSources(registry)),
-    selection: () => selectionStore.read(),
+    selection: () => currentUnits().close(selectionStore.read()),
     mutateSelection: (mutation) =>
       mutationCoordinator.runExclusive(async () => {
-        const prepared = selectionStore.prepareMutation(mutation, readLedger(targets));
+        const units = currentUnits();
+        const changes = units.expand(selectionStore.read(), mutation.changes);
+        const prepared = selectionStore.prepareMutation(
+          { ...mutation, changes },
+          readLedger(targets),
+        );
         await events.emit(
           "selection.changed",
           selectionAuditEvent(prepared.before, prepared.after),
         );
-        return prepared.commit();
+        return units.close(prepared.commit());
       }),
     acceptDeploy: (request) => deployCoordinator.accept(request),
     state: () => ({

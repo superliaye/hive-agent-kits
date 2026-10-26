@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, ManagedRuntime } from "effect";
-import { SOURCES_FILE_VERSION } from "../../types.ts";
+import { SOURCES_FILE_VERSION, type SourcesAuditEvents } from "../../types.ts";
 import { DuplicateOrigin, SourceNotFound } from "../errors.ts";
 import { SourceRegistry, SourceRegistryLive } from "../sources-live.ts";
 
@@ -199,9 +199,7 @@ describe("SourceRegistryLive — first-run Starter seeding", () => {
   });
 
   test("first-run seed emits NO source.added audit event; a real user add still does", async () => {
-    const seen: Array<
-      { id: string; kind: "git"; origin: string } | { id: string; kind: "working-tree" }
-    > = [];
+    const seen: SourcesAuditEvents["source.added"][] = [];
     const { svc: s, rt } = svc();
     s.events.on("source.added", (e) => {
       seen.push(e);
@@ -220,6 +218,7 @@ describe("SourceRegistryLive — first-run Starter seeding", () => {
       id: expect.any(String),
       kind: "git",
       origin: "https://github.com/owner/added",
+      tile: null,
     });
     rt.dispose();
   });
@@ -268,6 +267,23 @@ describe("SourceRegistryLive — first-run Starter seeding", () => {
     const second = svc();
     expect(await Effect.runPromise(second.svc.list())).toHaveLength(0);
     second.rt.dispose();
+  });
+
+  test("restoring the deleted Starter is an audited add of the Starter Tile", async () => {
+    const { svc: s, rt } = svc();
+    const seen: SourcesAuditEvents["source.added"][] = [];
+    s.events.on("source.added", (e) => {
+      seen.push(e);
+    });
+    await Effect.runPromise(s.delete(STARTER_ID));
+
+    const restored = await Effect.runPromise(s.restoreStarter());
+    expect(restored).toMatchObject({ id: STARTER_ID, origin: STARTER_ORIGIN });
+    expect(seen).toEqual([{ id: STARTER_ID, kind: "starter", tile: "starter" }]);
+    expect(await Effect.runPromise(Effect.flip(s.restoreStarter()))).toBeInstanceOf(
+      DuplicateOrigin,
+    );
+    rt.dispose();
   });
 
   test("currentSources() returns the in-memory list synchronously", async () => {

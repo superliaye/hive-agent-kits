@@ -31,6 +31,7 @@ function row(
     reconciliation,
     lastAttempt: { state: "none" },
     applicableTargets: [...applicableTargets],
+    wholeSourceId: null,
     targets: applicableTargets.map((target) => ({
       target,
       desired,

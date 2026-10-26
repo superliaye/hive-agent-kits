@@ -275,6 +275,9 @@ export const OverviewRow = z.object({
   applicableTargets: z.array(DeployTarget),
   targets: z.array(OverviewTargetState),
   variants: z.array(OverviewVariant),
+  // The `whole` Source whose unit holds this row's winning Variant, or null.
+  // Rows that share it are selected together.
+  wholeSourceId: z.string().nullable(),
 });
 export type OverviewRow = z.infer<typeof OverviewRow>;
 

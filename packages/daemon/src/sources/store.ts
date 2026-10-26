@@ -42,9 +42,10 @@ export type SourcesStore = {
   list(): readonly Source[];
   prepareAdd(input: AddSourceInput): PreparedSourceMutation<AddResult>;
   add(input: AddSourceInput): AddResult;
-  // Register a bundled `local` Source with a caller-supplied fixed id. A SYSTEM
-  // action (not the audited user `add`). Idempotent on the id, so a re-seed
-  // after the file already carries it is a clean no-op, never a duplicate row.
+  // Register a bundled `local` Source with a caller-supplied fixed id. Idempotent
+  // on the id, so a re-seed after the file already carries it is a clean no-op,
+  // never a duplicate row.
+  prepareSeedLocal(id: string, origin: string): PreparedSourceMutation<SeedLocalResult>;
   seedLocal(id: string, origin: string): SeedLocalResult;
   prepareActivate(id: string): PreparedSourceMutation<MutateResult>;
   activate(id: string): MutateResult;
@@ -170,6 +171,23 @@ export function createSourcesStore(
     return prepared([...sources, source], { ok: true, source: cloneSource(source) });
   }
 
+  function prepareSeedLocal(id: string, origin: string): PreparedSourceMutation<SeedLocalResult> {
+    // Idempotent on the fixed id — never normalize/dedupe by origin (a local
+    // origin is a non-URL sentinel, not a git URL).
+    if (sources.some((s) => s.id === id)) return unchanged({ ok: false, reason: "duplicate-id" });
+    const source: Source = {
+      id,
+      label: origin,
+      locator: { kind: "starter" },
+      origin,
+      kind: "local",
+      active: true,
+      createdAt: now(),
+      rank: nextRank(),
+    };
+    return prepared([...sources, source], { ok: true, source: cloneSource(source) });
+  }
+
   function prepareReorder(
     id: string,
     direction: ReorderDirection,
@@ -215,23 +233,8 @@ export function createSourcesStore(
     prepareAdd,
     add: (input) => prepareAdd(input).commit(),
 
-    seedLocal(id, origin) {
-      // Idempotent on the fixed id — never normalize/dedupe by origin (a local
-      // origin is a non-URL sentinel, not a git URL).
-      if (sources.some((s) => s.id === id)) return { ok: false, reason: "duplicate-id" };
-      const source: Source = {
-        id,
-        label: origin,
-        locator: { kind: "starter" },
-        origin,
-        kind: "local",
-        active: true,
-        createdAt: now(),
-        rank: nextRank(),
-      };
-      commit([...sources, source]);
-      return { ok: true, source: cloneSource(source) };
-    },
+    prepareSeedLocal,
+    seedLocal: (id, origin) => prepareSeedLocal(id, origin).commit(),
 
     prepareActivate: (id) => prepareSetActive(id, true),
     activate: (id) => prepareSetActive(id, true).commit(),

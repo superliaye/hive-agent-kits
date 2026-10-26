@@ -5,7 +5,7 @@
 
 import { ConformanceError } from "@hive/capability-schema";
 import { z } from "zod";
-import { SourceSyncStatus } from "./kit.ts";
+import { RecipeSummary, SourceSyncStatus } from "./kit.ts";
 
 const SafeRelativeSubpath = z.string().refine(
   (value) => {
@@ -111,7 +111,7 @@ export const SourceSummary = Source.pick({
 });
 export type SourceSummary = z.infer<typeof SourceSummary>;
 
-export const AddSourceBody = z
+const PastedSourceBody = z
   .object({
     label: z.string().min(1).max(160),
     locator: SourceLocator.refine((locator) => locator.kind !== "starter", {
@@ -119,11 +119,29 @@ export const AddSourceBody = z
     }),
   })
   .strict();
+
+// POST /api/sources body: a pasted locator, or a Tile id whose label and
+// locator the Daemon supplies. A pasted body cannot name a Tile.
+export const AddSourceBody = z.union([
+  PastedSourceBody,
+  z.object({ tile: z.string().min(1) }).strict(),
+]);
 export type AddSourceBody = z.infer<typeof AddSourceBody>;
 export type AddSourceInput = {
   label: string;
   locator: Exclude<SourceLocator, { kind: "starter" }>;
 };
+
+// One shelf entry for GET /api/tiles. `sourceId` is the Source whose locator is
+// this Tile's, or null.
+export const TileSummary = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string(),
+  recipe: RecipeSummary,
+  sourceId: z.string().nullable(),
+});
+export type TileSummary = z.infer<typeof TileSummary>;
 
 // POST /api/sources/:id/reorder body: raise ("up") or lower ("down") a Source one
 // precedence step. The only re-rank control (decision: move-up/down buttons, not

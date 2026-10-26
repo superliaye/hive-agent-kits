@@ -7,6 +7,7 @@ import { AddSourceBody, ReorderSourceBody } from "@hive/contract";
 import type { Effect } from "effect";
 import { Hono } from "hono";
 import { ZodError } from "zod";
+import { type Tile, tileById, tileForLocator, tileShelf } from "../kit/recipes/tiles.ts";
 import { log } from "../lib/log.ts";
 import { DuplicateOrigin, SourceIoError, SourceNotFound } from "./effect/errors.ts";
 import type { SourceRegistrySvc } from "./effect/sources-live.ts";
@@ -45,6 +46,17 @@ function sourceSummary(source: Source): SourceSummary {
   };
 }
 
+// The Daemon takes a Tile's label and locator from the Tile. Only the Starter
+// Tile has the Starter locator, and adding it re-adds the deleted Starter.
+function addFromTile(
+  registry: SourceRegistrySvc,
+  tile: Tile,
+): Effect.Effect<Source, DuplicateOrigin | SourceIoError> {
+  return tile.locator.kind === "starter"
+    ? registry.restoreStarter()
+    : registry.add({ label: tile.label, locator: tile.locator });
+}
+
 export function buildSourcesRoutes(
   registry: SourceRegistrySvc,
   run: RunSources,
@@ -62,6 +74,8 @@ export function buildSourcesRoutes(
     return c.json({ error: "source_list_failed" }, 500);
   });
 
+  app.get("/api/tiles", (c) => c.json(tileShelf(registry.currentSources())));
+
   app.post("/api/sources", async (c) => {
     const body = await readJson(c);
     if (!body.ok) return c.json({ error: "invalid JSON body" }, 400);
@@ -69,25 +83,41 @@ export function buildSourcesRoutes(
     if (!parsed.success) {
       return c.json({ error: "invalid source", issues: zodIssues(parsed.error) }, 400);
     }
-    const prepared = await run(lifecycle.prepareLocator(parsed.data.locator));
-    if (!prepared.ok) {
-      return c.json(
-        {
-          error: "invalid source",
-          issues: [{ path: "locator.repoRoot", message: "working tree locator is unavailable" }],
-        },
-        400,
-      );
+    let locator: SourceLocator;
+    let add: Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
+    if ("tile" in parsed.data) {
+      const tile = tileById(parsed.data.tile);
+      if (!tile) {
+        return c.json(
+          { error: "invalid source", issues: [{ path: "tile", message: "unknown Tile" }] },
+          400,
+        );
+      }
+      locator = tile.locator;
+      add = addFromTile(registry, tile);
+    } else {
+      const prepared = await run(lifecycle.prepareLocator(parsed.data.locator));
+      if (!prepared.ok) {
+        return c.json(
+          {
+            error: "invalid source",
+            issues: [{ path: "locator.repoRoot", message: "working tree locator is unavailable" }],
+          },
+          400,
+        );
+      }
+      locator = prepared.value;
+      add = registry.add({
+        label: tileForLocator(prepared.value)?.label ?? parsed.data.label,
+        locator: prepared.value,
+      });
     }
-    const res = await run(registry.add({ ...parsed.data, locator: prepared.value }));
+    const res = await run(add);
     if (!res.ok) {
       const err = res.error;
       if (err instanceof DuplicateOrigin) {
         return c.json(
-          {
-            error: "duplicate source",
-            ...(parsed.data.locator.kind === "git" ? { origin: err.origin } : {}),
-          },
+          { error: "duplicate source", ...(locator.kind === "git" ? { origin: err.origin } : {}) },
           409,
         );
       }
