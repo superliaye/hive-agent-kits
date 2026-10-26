@@ -665,6 +665,99 @@ while :; do sleep 1; done
     expect(typeLookup?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
   });
 
+  test("fetches the blobs a read batch lacks in one request", async () => {
+    const repo = fixtureRepository();
+    runGit(repo.root, "config", "uploadpack.allowFilter", "true");
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const local = localGitProcess(repo.root);
+    const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv; ids: string[] }> = [];
+    const git = testGitProcess(async (args, options) => {
+      calls.push({
+        args,
+        env: options?.env,
+        ids: new TextDecoder().decode(options?.stdin).split("\n").filter(Boolean),
+      });
+      return local.run(args, {
+        ...options,
+        env: {
+          ...options?.env,
+          GIT_CONFIG_COUNT: "1",
+          GIT_CONFIG_KEY_0: `url.${repo.root}.insteadOf`,
+          GIT_CONFIG_VALUE_0: FIXTURE_REPOSITORY_URL,
+        },
+      });
+    });
+
+    const listed = await listGitSource(
+      {
+        kind: "git",
+        repoUrl: FIXTURE_REPOSITORY_URL,
+        revision: { mode: "pin", commit: repo.goodCommit },
+        subpath: "nested/personal-kit",
+      },
+      { cacheRoot: join(work, "cache"), process: git },
+    );
+
+    const isBlobFetch = (call: (typeof calls)[number]) =>
+      call.args.includes("fetch") && call.args.includes("--stdin");
+    expect(calls.filter(isBlobFetch)).toHaveLength(1);
+    const at = calls.findIndex(isBlobFetch);
+    const fetched = calls[at];
+    expect(fetched?.ids).toHaveLength(3);
+    expect(fetched?.args).toContain("protocol.allow=never");
+    expect(fetched?.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+    expect(calls[at - 1]?.env?.GIT_NO_LAZY_FETCH).toBe("1");
+    expect(calls[at - 1]?.ids).toEqual(fetched?.ids ?? []);
+    expect(calls[at + 1]?.ids).toEqual(fetched?.ids ?? []);
+    expect(listed.paths).toContain("capabilities/skills/current");
+    expect(await listed.read("capabilities/skills/arca-smoke/SKILL.md")).toBe(
+      "---\nname: arca-smoke\ndescription: smoke\n---\nbody\n",
+    );
+  });
+
+  test("maps an unreachable batch blob fetch to offline", async () => {
+    const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
+    roots.push(work);
+    const git = testGitProcess(async (args, options) => {
+      if (args.includes("ls-tree")) {
+        return gitResult(
+          `100644 blob ${"c".repeat(40)}\tcapabilities/skills/x/SKILL.md\0` +
+            `100644 blob ${"d".repeat(40)}\tcapabilities/skills/x/notes.md\0`,
+        );
+      }
+      if (args.includes("--batch")) {
+        const ids = new TextDecoder().decode(options?.stdin).split("\n").filter(Boolean);
+        return gitResult(ids.map((id) => `${id} missing\n`).join(""));
+      }
+      if (args.includes("--stdin")) {
+        throw new GitProcessFailure(
+          args,
+          {
+            exitCode: 128,
+            stdout: new Uint8Array(),
+            stderr: "fatal: unable to access: Could not resolve host: example.invalid",
+          },
+          false,
+        );
+      }
+      return emptyTreeResult(args);
+    });
+
+    await expect(
+      syncGitSource(
+        {
+          kind: "git",
+          repoUrl: "https://example.invalid/acme/kits.git",
+          revision: { mode: "track", ref: "refs/heads/main" },
+          subpath: ".",
+        },
+        join(work, "mirror"),
+        { cacheRoot: join(work, "cache"), tmpRoot: join(work, "tmp"), process: git },
+      ),
+    ).rejects.toMatchObject({ reason: "offline" });
+  });
+
   test("blocks ambient insteadOf rewrites from HTTPS to a local protocol", async () => {
     const repo = fixtureRepository();
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));

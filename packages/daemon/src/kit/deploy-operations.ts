@@ -5,7 +5,11 @@ import { basename, dirname, extname, join } from "node:path";
 import { CapabilityKey } from "@hive/capability-schema";
 import { DeployOperationState, type DeployOperationSummary, DeployTarget } from "@hive/contract";
 import { z } from "zod";
-import { atomicWriteFile, withAdvisoryFileLock } from "../lib/durable-file.ts";
+import {
+  atomicWriteFile,
+  syncDirectoryForDurability,
+  withAdvisoryFileLock,
+} from "../lib/durable-file.ts";
 import type { SkillFile } from "./deploy/transforms.ts";
 import type { DeployPlan, DeployPlanAction } from "./deploy-plan.ts";
 
@@ -208,6 +212,36 @@ export const StagedDeployPayloadSchema = z.object({
 export type StagedDeployPayload = z.infer<typeof StagedDeployPayloadSchema>;
 export type StagedDeployTask = StagedDeployPayload["tasks"][number];
 
+const BlobDigest = z.string().regex(/^[0-9a-f]{64}$/);
+
+// On disk a skill file names its body in the blob store by sha256, and
+// `encoding` restores the staged text form. Payloads written before the blob
+// store hold the body inline.
+const StoredBlobFile = z.object({
+  rel: z.string(),
+  blob: BlobDigest,
+  encoding: z.enum(["utf8", "base64"]),
+  mode: z.union([z.literal(0o644), z.literal(0o755)]),
+});
+
+const StoredSkillTask = StagedSkillTask.extend({
+  files: z.array(z.union([StoredBlobFile, StagedFile])),
+});
+
+const StoredDeployPayloadSchema = StagedDeployPayloadSchema.extend({
+  tasks: z.array(
+    z.discriminatedUnion("type", [
+      StagedInstructionTask,
+      StoredSkillTask,
+      StagedAgentTask,
+      StagedManagedNpxBundleTask,
+      StagedMarketplacePluginTask,
+      StagedMarketplacePluginRemovalTask,
+      StagedRemovalTask,
+    ]),
+  ),
+});
+
 export const DeployOperationOutcomeSchema = z.object({
   action: z.enum(["add", "update", "remove"]),
   key: CapabilityKey,
@@ -251,6 +285,11 @@ const DeployOperationPayload = z.object({
   staged: StagedDeployPayloadSchema,
 });
 type DeployOperationPayload = z.infer<typeof DeployOperationPayload>;
+
+const StoredDeployOperationPayload = DeployOperationPayload.extend({
+  staged: StoredDeployPayloadSchema,
+});
+type StoredDeployOperationPayload = z.infer<typeof StoredDeployOperationPayload>;
 
 const DeployOperationsFile = z.object({
   schemaVersion: z.literal(2),
@@ -393,6 +432,7 @@ export function openDeployOperationStore(
   const payloadRetention = Math.max(0, options.payloadRetention ?? 20);
   const stem = basename(path, extname(path));
   const payloadDirectory = join(dirname(path), `${stem}.payloads`);
+  const blobDirectory = join(dirname(path), `${stem}.blobs`);
   const payloadPath = (operationId: string): string =>
     join(payloadDirectory, `${createHash("sha256").update(operationId).digest("hex")}.json`);
 
@@ -404,12 +444,44 @@ export function openDeployOperationStore(
     }
   };
 
+  // A blob already in place was fsynced before its rename, and the directory
+  // sync below makes its name durable too.
+  const writeBlobs = (blobs: ReadonlyMap<string, Uint8Array>): void => {
+    if (blobs.size === 0) return;
+    mkdirSync(blobDirectory, { recursive: true });
+    for (const [digest, bytes] of blobs) {
+      const target = join(blobDirectory, digest);
+      if (existsSync(target)) continue;
+      atomicWriteFile(target, bytes, { ...options, fsyncDirectory: () => {} });
+    }
+    (options.fsyncDirectory ?? syncDirectoryForDurability)(blobDirectory);
+  };
+
+  // Every blob a payload names is durable before the payload is written, so a
+  // crash between the two leaves only unreferenced blobs for the sweep.
   const writePayload = (payload: DeployOperationPayload): void => {
     try {
+      const parsed = DeployOperationPayload.parse(payload);
+      const blobs = new Map<string, Uint8Array>();
+      const tasks = parsed.staged.tasks.map((task) => {
+        if (task.type !== "skill") return task;
+        const files = task.files.map((file) => {
+          const { bytes } = stagedSkillFile(file);
+          const blob = createHash("sha256").update(bytes).digest("hex");
+          blobs.set(blob, bytes);
+          return { rel: file.rel, blob, encoding: file.encoding, mode: file.mode };
+        });
+        return { ...task, files };
+      });
+      const stored: StoredDeployOperationPayload = {
+        ...parsed,
+        staged: { ...parsed.staged, tasks },
+      };
+      writeBlobs(blobs);
       mkdirSync(payloadDirectory, { recursive: true });
       atomicWriteFile(
         payloadPath(payload.operationId),
-        Buffer.from(`${JSON.stringify(DeployOperationPayload.parse(payload), null, 2)}\n`),
+        Buffer.from(`${JSON.stringify(stored, null, 2)}\n`),
         options,
       );
     } catch {
@@ -417,17 +489,73 @@ export function openDeployOperationStore(
     }
   };
 
-  const readPayload = (operationId: string): DeployOperationPayload | undefined => {
+  const readStoredPayload = (operationId: string): StoredDeployOperationPayload | undefined => {
     const target = payloadPath(operationId);
     if (!existsSync(target)) return undefined;
     try {
-      const payload = DeployOperationPayload.parse(JSON.parse(readFileSync(target, "utf8")));
+      const payload = StoredDeployOperationPayload.parse(JSON.parse(readFileSync(target, "utf8")));
       if (payload.operationId !== operationId) {
         throw new DeployOperationStoreError("operation_store_corrupt", operationId);
       }
       return payload;
     } catch {
       throw new DeployOperationStoreError("operation_store_corrupt", operationId);
+    }
+  };
+
+  const readPayload = (operationId: string): DeployOperationPayload | undefined => {
+    const stored = readStoredPayload(operationId);
+    if (!stored) return undefined;
+    const bodies = new Map<string, Buffer>();
+    const body = (digest: string): Buffer => {
+      const cached = bodies.get(digest);
+      if (cached) return cached;
+      const bytes = readFileSync(join(blobDirectory, digest));
+      bodies.set(digest, bytes);
+      return bytes;
+    };
+    try {
+      const tasks = stored.staged.tasks.map((task) => {
+        if (task.type !== "skill") return task;
+        const files = task.files.map((file): StagedFile => {
+          if (!("blob" in file)) return file;
+          const bytes = body(file.blob);
+          const content =
+            file.encoding === "base64" ? bytes.toString("base64") : strictUtf8.decode(bytes);
+          return { rel: file.rel, content, encoding: file.encoding, mode: file.mode };
+        });
+        return { ...task, files };
+      });
+      return { ...stored, staged: { ...stored.staged, tasks } };
+    } catch {
+      throw new DeployOperationStoreError("operation_store_corrupt", operationId);
+    }
+  };
+
+  // Runs under the store lock, so no Deploy is between writing its blobs and
+  // the payload that names them. A payload that cannot be read keeps every blob.
+  const sweepBlobs = (file: DeployOperationsFile): void => {
+    if (!existsSync(blobDirectory)) return;
+    const referenced = new Set<string>();
+    for (const operation of file.operations) {
+      let stored: StoredDeployOperationPayload | undefined;
+      try {
+        stored = readStoredPayload(operation.operationId);
+      } catch {
+        return;
+      }
+      for (const task of stored?.staged.tasks ?? []) {
+        if (task.type !== "skill") continue;
+        for (const staged of task.files) if ("blob" in staged) referenced.add(staged.blob);
+      }
+    }
+    for (const entry of readdirSync(blobDirectory)) {
+      if (referenced.has(entry)) continue;
+      try {
+        unlinkSync(join(blobDirectory, entry));
+      } catch {
+        // A later sweep retries.
+      }
     }
   };
 
@@ -524,13 +652,13 @@ export function openDeployOperationStore(
     }
   };
 
-  const sweepOrphanPayloads = (): void => {
-    if (!existsSync(payloadDirectory)) return;
+  const sweepOrphans = (): void => {
+    if (!existsSync(payloadDirectory) && !existsSync(blobDirectory)) return;
     withLock((file) => {
       const referenced = new Set(
         file.operations.map((operation) => payloadPath(operation.operationId)),
       );
-      for (const entry of readdirSync(payloadDirectory)) {
+      for (const entry of existsSync(payloadDirectory) ? readdirSync(payloadDirectory) : []) {
         const candidate = join(payloadDirectory, entry);
         if (referenced.has(candidate)) continue;
         try {
@@ -539,6 +667,7 @@ export function openDeployOperationStore(
           // A later open retries bounded orphan cleanup.
         }
       }
+      sweepBlobs(file);
     });
   };
 
@@ -560,6 +689,13 @@ export function openDeployOperationStore(
     const composed = compose(result.next);
     if (!composed) throw new DeployOperationStoreError("operation_store_corrupt", operationId);
     deletePayloads(result.deletePayloads);
+    if (result.deletePayloads.length > 0) {
+      try {
+        withLock(sweepBlobs);
+      } catch {
+        // The next open sweeps unreferenced blobs.
+      }
+    }
     return composed;
   };
 
@@ -651,7 +787,7 @@ export function openDeployOperationStore(
     }
   }
 
-  sweepOrphanPayloads();
+  sweepOrphans();
 
   const markPhase = (operationId: string, executionPhase: DeployExecutionPhase): DeployOperation =>
     replace(operationId, (operation) => {

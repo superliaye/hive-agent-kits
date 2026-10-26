@@ -177,14 +177,24 @@ function assertSafeTreePath(path: string): void {
   }
 }
 
-function parseBatchObjects(output: Uint8Array, expectedIds: readonly string[]): Uint8Array[] {
+// A null object is one the cache lacks; only a read with lazy fetching off
+// reports one.
+function parseBatchObjects(
+  output: Uint8Array,
+  expectedIds: readonly string[],
+): (Uint8Array | null)[] {
   const decoder = new TextDecoder("utf-8", { fatal: true });
-  const objects: Uint8Array[] = [];
+  const objects: (Uint8Array | null)[] = [];
   let offset = 0;
   for (const expectedId of expectedIds) {
     const newline = output.indexOf(10, offset);
     if (newline < 0) throw new GitAcquireError("io", "git blob batch response is incomplete");
     const header = decoder.decode(output.subarray(offset, newline));
+    if (header === `${expectedId} missing`) {
+      objects.push(null);
+      offset = newline + 1;
+      continue;
+    }
     const parsed = /^([0-9a-f]{40}) blob ([0-9]+)$/.exec(header);
     if (!parsed || parsed[1] !== expectedId) {
       throw new GitAcquireError("io", "git blob batch response is invalid");
@@ -212,8 +222,7 @@ const BATCH_SIZE = 128;
 type GitBlob = { path: TreePath; objectId: string };
 
 // One repository's bare partial-clone cache under one acquisition deadline and
-// byte budget. `cat-file --batch` fetches the blobs it is asked for lazily, so
-// only what is read crosses the network.
+// byte budget. Only the blobs that are read cross the network.
 class GitCache {
   private bytesRead = 0;
   private readonly cache: string;
@@ -225,6 +234,7 @@ class GitCache {
     private readonly limits: TreeLimits,
     private readonly deadlineMs: number,
     private readonly daemonEnv: NodeJS.ProcessEnv,
+    private readonly repoUrl: string,
   ) {
     this.cache = join(cacheRoot, key);
   }
@@ -463,38 +473,90 @@ class GitCache {
     return { listed, objectIds };
   }
 
+  // A lazy fetch costs one network round trip per missing blob, so each batch
+  // reads with lazy fetching off and then fetches what it lacks in one request.
+  // A single missing blob costs one round trip either way and is left to the
+  // lazy fetch. Git without GIT_NO_LAZY_FETCH (before 2.44) fetches lazily.
   async readBlobs(blobs: readonly GitBlob[]): Promise<Map<TreePath, Uint8Array>> {
     const out = new Map<TreePath, Uint8Array>();
-    const networkSafeEnv = httpsOnlyEnv(this.daemonEnv);
     for (let start = 0; start < blobs.length; start += BATCH_SIZE) {
       const group = blobs.slice(start, start + BATCH_SIZE);
       const objectIds = group.map((blob) => blob.objectId);
-      let batch: Uint8Array;
-      try {
-        batch = (
-          await this.git.run(httpsOnly(["-C", this.cache, "cat-file", "--batch"]), {
-            env: networkSafeEnv,
-            timeoutMs: this.remainingMs(),
-            maxStdoutBytes: Math.max(1, this.limits.maxBytes - this.bytesRead + group.length * 96),
-            stdin: new TextEncoder().encode(`${objectIds.join("\n")}\n`),
-          })
-        ).stdout;
-      } catch (error) {
-        throw mapGitFailure(error, "other");
+      const local = await this.catFile(objectIds, false);
+      const missing = [...new Set(objectIds.filter((_, index) => local[index] === null))];
+      let fetched = new Map<string, Uint8Array | null>();
+      if (missing.length > 0) {
+        if (missing.length > 1) await this.fetchBlobs(missing);
+        const data = await this.catFile(missing, true);
+        fetched = new Map(missing.map((objectId, index) => [objectId, data[index] ?? null]));
       }
-      const data = parseBatchObjects(batch, objectIds);
       for (let index = 0; index < group.length; index++) {
         const blob = group[index];
-        const content = data[index];
+        const content = local[index] ?? (blob ? fetched.get(blob.objectId) : null);
         if (!blob || !content) throw new GitAcquireError("io", "git blob batch is incomplete");
-        this.bytesRead += content.byteLength;
-        if (this.bytesRead > this.limits.maxBytes) {
-          throw new GitAcquireError("budget_exceeded", "selected tree exceeds byte limit");
-        }
         out.set(blob.path, content);
       }
     }
     return out;
+  }
+
+  private async catFile(
+    objectIds: readonly string[],
+    lazyFetch: boolean,
+  ): Promise<(Uint8Array | null)[]> {
+    const networkSafeEnv = httpsOnlyEnv(this.daemonEnv);
+    let batch: Uint8Array;
+    try {
+      batch = (
+        await this.git.run(httpsOnly(["-C", this.cache, "cat-file", "--batch"]), {
+          env: lazyFetch ? networkSafeEnv : { ...networkSafeEnv, GIT_NO_LAZY_FETCH: "1" },
+          timeoutMs: this.remainingMs(),
+          maxStdoutBytes: Math.max(
+            1,
+            this.limits.maxBytes - this.bytesRead + objectIds.length * 96,
+          ),
+          stdin: new TextEncoder().encode(`${objectIds.join("\n")}\n`),
+        })
+      ).stdout;
+    } catch (error) {
+      throw mapGitFailure(error, "other");
+    }
+    const objects = parseBatchObjects(batch, objectIds);
+    for (const content of objects) {
+      this.bytesRead += content?.byteLength ?? 0;
+      if (this.bytesRead > this.limits.maxBytes) {
+        throw new GitAcquireError("budget_exceeded", "selected tree exceeds byte limit");
+      }
+    }
+    return objects;
+  }
+
+  // The request Git's own lazy fetch makes, for many blobs at once.
+  private async fetchBlobs(objectIds: readonly string[]): Promise<void> {
+    try {
+      await this.git.run(
+        httpsOnly([
+          "-c",
+          "fetch.negotiationAlgorithm=noop",
+          "-C",
+          this.cache,
+          "fetch",
+          "--filter=blob:none",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "--recurse-submodules=no",
+          "--stdin",
+          this.repoUrl,
+        ]),
+        {
+          env: httpsOnlyEnv(this.daemonEnv),
+          timeoutMs: this.remainingMs(),
+          stdin: new TextEncoder().encode(`${objectIds.join("\n")}\n`),
+        },
+      );
+    } catch (error) {
+      throw mapGitFailure(error, "other");
+    }
   }
 }
 
@@ -548,6 +610,7 @@ export function gitSnapshot(
       options.limits,
       Date.now() + options.limits.timeoutMs,
       { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+      locator.repoUrl,
     );
     const opened = yield* tracked(async () => {
       const fetched = await cache.fetch(locator, normalizedRepoUrl);
