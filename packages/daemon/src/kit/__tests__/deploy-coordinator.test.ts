@@ -88,6 +88,7 @@ function plan(
     actions: [action],
     instructionWrites: [],
     blocked: [],
+    satisfiedRemovalIntents: [],
     ...overrides,
   };
 }
@@ -1409,6 +1410,97 @@ plugin
     });
     expect(unrecorded).toMatchObject({ outcome: "failed", code: "installer_failed" });
     expect(unrecorded.detail).toContain("without recording ye@yestack");
+
+    const warned = await run("warned-codex", {
+      probe: async () => true,
+      exec: async () => ({
+        status: 1,
+        stdout: "",
+        stderr:
+          "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir\nError: marketplace not found",
+      }),
+    });
+    expect(warned.detail).toStartWith("Error: marketplace not found");
+    expect(warned.detail).toContain("could not create PATH aliases");
+  });
+
+  test("installs a Codex plugin when the Codex home does not exist yet", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-marketplace-codex-home-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const action: DeployPlan["actions"][number] = {
+      action: "add",
+      key: { kind: "plugin", name: "ye" },
+      target: "codex",
+      sourceId: "source-a",
+      contentSha: "d".repeat(64),
+      renderedHash: null,
+      artifact: { existence: "missing", hash: null },
+    };
+    const deployPlan = plan({ actions: [action], mirrors: [] }, action);
+    const store = openDeployOperationStore(operationPath());
+    store.createQueued({
+      operationId: "codex-home",
+      acceptedAt: 1,
+      selectionRevision: deployPlan.selectionRevision,
+      planToken: "token",
+      plan: deployPlan,
+      staged: {
+        tasks: [
+          {
+            type: "marketplace-plugin",
+            action: "add",
+            key: { kind: "plugin", name: "ye" },
+            target: "codex",
+            marketplaceSource: "https://github.com/superliaye/yestack",
+            marketplaceName: "yestack",
+            pluginName: "ye",
+            sourceId: "source-a",
+            contentSha: "d".repeat(64),
+          },
+        ],
+        metadata: {},
+      },
+    });
+    let observed: DeployOperationOutcome[] = [];
+
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: async () => true,
+          exec: async (request, env) => {
+            const codexHome = env.CODEX_HOME ?? "";
+            if (!existsSync(codexHome)) {
+              return {
+                status: 1,
+                stdout: "",
+                stderr: `Error: CODEX_HOME points to "${codexHome}", but that path does not exist`,
+              };
+            }
+            if (request.args[1] === "add") {
+              writeFileSync(join(codexHome, "config.toml"), '[plugins."ye@yestack"]\n');
+            }
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+        deploymentState,
+        now: () => 20,
+      },
+      store.markRunning("codex-home"),
+      async (outcomes) => {
+        observed = [...outcomes];
+      },
+    );
+
+    expect(observed.map((outcome) => [outcome.target, outcome.outcome, outcome.detail])).toEqual([
+      ["codex", "succeeded", undefined],
+    ]);
+    expect(existsSync(join(homes.codexHome, "config.toml"))).toBe(true);
   });
 
   test("stages a plugin removal from its install record, or from its pointer for an older record", () => {

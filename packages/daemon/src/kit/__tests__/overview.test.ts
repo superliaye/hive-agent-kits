@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CapabilityKey } from "@hive/capability-schema";
 import type { OverviewRow, Source } from "@hive/contract";
-import type { DeploymentSnapshot } from "../deploy-plan.ts";
+import { buildDeployPlan, type DeploymentSnapshot } from "../deploy-plan.ts";
 import {
   buildOverview,
   captureCoherentDeploymentSnapshot,
@@ -459,6 +459,56 @@ describe("authoritative Overview union and state matrix", () => {
     expect(row(overview, plugin).applicableTargets).toEqual(["claude", "codex"]);
     expect(target(row(overview, plugin), "claude").reconciliation).toBe("in_sync");
     expect(target(row(overview, plugin), "codex").reconciliation).toBe("pending_add");
+  });
+
+  test("a removal intent with nothing installed is in_sync; one Hive cannot remove stays manual", () => {
+    const neverApplied = key("plugin", "ye");
+    const otherCli = key("bundle", "codex-only");
+    const setupScript = key("bundle", "setup");
+    const gone = key("bundle", "gone");
+    const intent = (item: CapabilityKey, on: "claude" | "codex") => ({
+      key: item,
+      targets: [on] as ["claude" | "codex"],
+      generation: `remove-${item.name}-${on}`,
+    });
+    const snapshot = fixture({
+      catalog: {
+        entries: [variant(neverApplied), variant(otherCli), variant(setupScript)],
+        presets: [],
+        problems: [],
+      },
+      plugins: new Map([["ye", { targets: ["claude", "codex"] }]]),
+      bundles: new Map([["codex-only", { targets: ["codex"] }]]),
+      selection: {
+        revision: 4,
+        enabled: [],
+        removalIntents: [
+          intent(neverApplied, "codex"),
+          intent(otherCli, "claude"),
+          intent(setupScript, "claude"),
+          intent(gone, "claude"),
+        ],
+      },
+      deploymentState: {
+        schemaVersion: 1,
+        revision: 1,
+        records: [applied(setupScript, "setup-hash", "claude")],
+      },
+    });
+
+    const overview = buildOverview(snapshot);
+
+    expect(target(row(overview, neverApplied), "codex").reconciliation).toBe("in_sync");
+    expect(target(row(overview, setupScript), "claude").reconciliation).toBe(
+      "manual_removal_required",
+    );
+    expect(overview.rows.some((value) => value.key.name === gone.name)).toBe(false);
+    expect(buildDeployPlan(snapshot).satisfiedRemovalIntents).toEqual([
+      { key: otherCli, target: "claude", generation: "remove-codex-only-claude" },
+      { key: gone, target: "claude", generation: "remove-gone-claude" },
+      { key: neverApplied, target: "codex", generation: "remove-ye-codex" },
+    ]);
+    expect(overview.diff.entries).toEqual([]);
   });
 
   test("keeps targetless Ledger-only ownership unmanaged without claiming target ownership", () => {

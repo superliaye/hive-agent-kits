@@ -10,6 +10,12 @@ export class InstallerTaskError extends Error {
   }
 }
 
+// Warnings an installer prints before carrying on, which say nothing about why
+// it then failed.
+const HARMLESS_WARNINGS = [/^WARNING: proceeding, even though we could not create PATH aliases\b/];
+
+const harmless = (line: string) => HARMLESS_WARNINGS.some((pattern) => pattern.test(line));
+
 export function boundedInstallerDetail(value: string): string {
   const redacted = stripVTControlCharacters(value)
     .replace(/\bbearer\s+[^\s,;]+/gi, "bearer <redacted>")
@@ -18,5 +24,12 @@ export function boundedInstallerDetail(value: string): string {
       "$1=<redacted>",
     )
     .trim();
-  return redacted.length <= 512 ? redacted : redacted.slice(-512);
+  const bounded = redacted.length <= 512 ? redacted : redacted.slice(-512);
+  // A detail is read from its start, so a harmless warning moves after the error.
+  const lines = bounded.split("\n");
+  const warnings = lines.filter(harmless);
+  const rest = lines.filter((line) => !harmless(line));
+  return warnings.length === 0 || rest.every((line) => line.trim() === "")
+    ? bounded
+    : [...rest, ...warnings].join("\n");
 }

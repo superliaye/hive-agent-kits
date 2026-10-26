@@ -4,7 +4,7 @@
 // suite WITHOUT blocking a real deploy.
 
 import { describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -109,7 +109,8 @@ describe("execInstaller redirection guard", () => {
   });
 
   test("the installer env carries Hive's Codex home over a CODEX_HOME the shell exported", async () => {
-    const homes = redirectHomeEnv(join(tmpdir(), `hive-codex-home-${process.pid}`));
+    const root = join(tmpdir(), `hive-codex-home-${process.pid}`);
+    const homes = redirectHomeEnv(root);
     const exported = process.env.CODEX_HOME;
     process.env.CODEX_HOME = join(tmpdir(), "elsewhere", ".codex");
     try {
@@ -128,6 +129,7 @@ describe("execInstaller redirection guard", () => {
       if (exported === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = exported;
       clearHomeEnv();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

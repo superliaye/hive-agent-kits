@@ -416,9 +416,26 @@ export function KitDeployPage({
         row.key.kind === "instruction" && row.desired === "on" && row.catalog === "unavailable",
     ) ?? [];
 
+  // The daemon applies a change to one row of a whole unit to every row of it, on
+  // the CLIs the change names, so a unit row names the CLIs of the whole unit.
+  function unitRows(row: OverviewRow): OverviewRow[] {
+    const unit = row.wholeSourceId;
+    if (unit === null || !overview) return [row];
+    return overview.rows.filter((candidate) => candidate.wholeSourceId === unit);
+  }
+
   function targetsForRow(row: OverviewRow): DeployTarget[] {
-    const matching = row.applicableTargets.filter((target) => activeTargets.includes(target));
-    return matching.length > 0 ? matching : row.applicableTargets;
+    const applicable = DEPLOY_TARGETS.filter((target) =>
+      unitRows(row).some((member) => member.applicableTargets.includes(target)),
+    );
+    const matching = applicable.filter((target) => activeTargets.includes(target));
+    return matching.length > 0 ? matching : applicable;
+  }
+
+  function enabledTargetsForRow(row: OverviewRow): DeployTarget[] {
+    return DEPLOY_TARGETS.filter((target) =>
+      unitRows(row).some((member) => desiredTargets(member).includes(target)),
+    );
   }
 
   function toggleTarget(target: DeployTarget): void {
@@ -454,7 +471,7 @@ export function KitDeployPage({
       if (!row) return [];
       if (active) {
         if (keptByOtherPreset.has(keyId(key))) return [];
-        const targets = desiredTargets(row);
+        const targets = enabledTargetsForRow(row);
         return targets.length > 0 ? [{ key, enabled: false, targets }] : [];
       }
       return row.desired === "off" ? [{ key, enabled: true, targets: targetsForRow(row) }] : [];
@@ -768,7 +785,8 @@ export function KitDeployPage({
                       {
                         key: row.key,
                         enabled: row.desired === "off",
-                        targets: row.desired === "off" ? targetsForRow(row) : desiredTargets(row),
+                        targets:
+                          row.desired === "off" ? targetsForRow(row) : enabledTargetsForRow(row),
                       },
                     ],
                   })

@@ -211,6 +211,9 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
   const actionByPair = new Map(
     plan.actions.map((action) => [pairId(action.key, action.target), action] as const),
   );
+  const satisfiedIntentPairs = new Set(
+    plan.satisfiedRemovalIntents.map((intent) => pairId(intent.key, intent.target)),
+  );
   const unmanagedInstructionTargets = new Set(
     plan.blocked.filter((block) => block.reason === "unmanaged_owned").map((block) => block.target),
   );
@@ -255,7 +258,8 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
       const targets: OverviewTargetState[] = applicableTargets(key, snapshot).map((target) => {
         const record = recordsByPair.get(pairId(key, target));
         const selectedOnTarget = selected?.targets.includes(target) ?? false;
-        const intentOnTarget = intentTargets?.has(target) ?? false;
+        const intentOnTarget =
+          (intentTargets?.has(target) ?? false) && !satisfiedIntentPairs.has(pairId(key, target));
         const ledgerOwned = ownership.get(id)?.has(target) ?? false;
         const action = actionByPair.get(pairId(key, target));
         let reconciliation: ReconciliationState = "in_sync";

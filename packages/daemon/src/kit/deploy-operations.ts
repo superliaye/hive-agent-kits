@@ -66,6 +66,15 @@ const DeployPlanSchema = z.object({
       keys: z.array(CapabilityKey),
     }),
   ),
+  satisfiedRemovalIntents: z
+    .array(
+      z.object({
+        key: CapabilityKey,
+        target: DeployTarget,
+        generation: z.string().optional(),
+      }),
+    )
+    .default([]),
 });
 
 const StagedAction = z.object({

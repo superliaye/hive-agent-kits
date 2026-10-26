@@ -139,6 +139,9 @@ export async function execInstaller(
     });
   }
   const env = fx.targets.childEnv(process.env);
+  // childEnv always sets CODEX_HOME, and Codex refuses one that does not exist,
+  // though with none set it would create ~/.codex itself.
+  if (req.command === "codex") ensureDir(fx.targets.codexHome());
   return fx.exec(req, env);
 }
 

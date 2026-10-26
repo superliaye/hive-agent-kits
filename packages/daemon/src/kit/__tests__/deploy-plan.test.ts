@@ -940,6 +940,7 @@ describe("canonical plan token", () => {
       mirrors: [...first.mirrors].reverse(),
       sourceRegistryRevision: first.sourceRegistryRevision,
       selectionRevision: first.selectionRevision,
+      satisfiedRemovalIntents: [...first.satisfiedRemovalIntents].reverse(),
     };
     expect(tokenForPlan(first)).toBe(tokenForPlan(second));
     expect(tokenForPlan(first)).toMatch(/^[0-9a-f]{64}$/);

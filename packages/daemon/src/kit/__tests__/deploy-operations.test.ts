@@ -57,6 +57,7 @@ function plan(): DeployPlan {
     ],
     instructionWrites: [],
     blocked: [],
+    satisfiedRemovalIntents: [],
   };
 }
 

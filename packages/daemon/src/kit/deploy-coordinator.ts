@@ -203,7 +203,11 @@ function outcomeId(value: Pick<DeployOperationOutcome, "key" | "target">): strin
   return `${serializeCapabilityKey(value.key)}\u0000${value.target}`;
 }
 
-function successfulRemovalIntents(operation: DeployOperation): Array<{
+// The intents an operation fulfilled: each removal that succeeded, and each
+// intent with nothing left to remove when it was accepted. No other operation
+// runs beside it and its plan adds no pair that has an intent, so those pairs
+// are still empty when it finishes.
+function fulfilledRemovalIntents(operation: DeployOperation): Array<{
   key: DeployPlan["actions"][number]["key"];
   target: DeployTarget;
   generation: string;
@@ -213,6 +217,9 @@ function successfulRemovalIntents(operation: DeployOperation): Array<{
     target: DeployTarget;
     generation: string;
   }> = [];
+  for (const { key, target, generation } of operation.plan.satisfiedRemovalIntents) {
+    if (generation) completed.push({ key, target, generation });
+  }
   for (const outcome of operation.outcomes) {
     if (outcome.action !== "remove" || outcome.outcome !== "succeeded") continue;
     const accepted = operation.plan.actions.find(
@@ -270,7 +277,7 @@ export function createDeployCoordinator(
     const actual = new Set(completed.outcomes.map(outcomeId));
     const incomplete = [...expected].some((action) => !actual.has(action));
     const failed = completed.outcomes.some((outcome) => outcome.outcome === "failed");
-    const removals = successfulRemovalIntents(completed);
+    const removals = fulfilledRemovalIntents(completed);
     if (removals.length > 0) await options.clearRemovalIntents(removals);
     options.operations.finish(
       id,

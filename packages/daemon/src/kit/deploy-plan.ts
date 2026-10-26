@@ -72,6 +72,14 @@ export type DeployPlanAction = {
   artifact: Omit<ArtifactObservation, "key" | "target">;
 };
 
+// A removal intent whose pair holds nothing Hive or the Ledger installed: there is
+// nothing left for it to remove.
+export type SatisfiedRemovalIntent = {
+  key: CapabilityKey;
+  target: DeployTarget;
+  generation?: string;
+};
+
 export type DeployPlanBlock = {
   kind: "instruction";
   target: DeployTarget;
@@ -101,6 +109,7 @@ export type DeployPlan = {
   actions: DeployPlanAction[];
   instructionWrites: InstructionWriteOperation[];
   blocked: DeployPlanBlock[];
+  satisfiedRemovalIntents: SatisfiedRemovalIntent[];
 };
 
 function pairId(key: CapabilityKey, target: DeployTarget): string {
@@ -183,6 +192,13 @@ function instructionWriteOrder(
   );
 }
 
+function satisfiedIntentOrder(left: SatisfiedRemovalIntent, right: SatisfiedRemovalIntent): number {
+  return (
+    pairId(left.key, left.target).localeCompare(pairId(right.key, right.target)) ||
+    stableJson(left).localeCompare(stableJson(right))
+  );
+}
+
 function mirrorOrder(left: OverviewMirror, right: OverviewMirror): number {
   return (
     right.precedence - left.precedence ||
@@ -219,6 +235,9 @@ function canonicalPlan(plan: DeployPlan): DeployPlan {
           stableJson(left).localeCompare(stableJson(right)),
       ),
     })),
+    satisfiedRemovalIntents: [...plan.satisfiedRemovalIntents]
+      .sort(satisfiedIntentOrder)
+      .map((intent) => ({ ...intent, key: { ...intent.key } })),
   };
 }
 
@@ -436,9 +455,19 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     }
   }
 
+  const satisfiedRemovalIntents: SatisfiedRemovalIntent[] = [];
   for (const intent of snapshot.selection.removalIntents) {
     for (const target of intent.targets) {
       const privatelyApplied = records.get(pairId(intent.key, target))?.applied;
+      const ledgerOwned = owned.get(serializeCapabilityKey(intent.key))?.has(target) ?? false;
+      if (!privatelyApplied && !ledgerOwned) {
+        satisfiedRemovalIntents.push({
+          key: intent.key,
+          target,
+          ...(intent.generation ? { generation: intent.generation } : {}),
+        });
+        continue;
+      }
       // A Hive record proves a plugin landed on a target its pointer may no longer list.
       const recordedPlugin =
         intent.key.kind === "plugin" &&
@@ -447,8 +476,6 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
         continue;
       }
       if (intent.key.kind === "instruction" && blockedByTarget.has(target)) continue;
-      const ledgerOwned = owned.get(serializeCapabilityKey(intent.key))?.has(target) ?? false;
-      if (!privatelyApplied && !ledgerOwned) continue;
       // An installer-owned removal needs the coordinates to uninstall: Hive's install
       // record, or failing that the current pointer.
       let pointer: { sourceId: string; contentSha: string; renderedHash?: string } | undefined;
@@ -513,5 +540,6 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       reason: block.reason,
       keys: block.keys,
     })),
+    satisfiedRemovalIntents,
   });
 }

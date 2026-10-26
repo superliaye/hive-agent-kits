@@ -16,7 +16,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { AddSourceResult, type DeploymentOverview, type Ledger } from "@hive/contract";
+import {
+  AddSourceResult,
+  type DeploymentOverview,
+  type Ledger,
+  SelectionSnapshot,
+} from "@hive/contract";
 import {
   buildGzipTar,
   clearHomeEnv,
@@ -216,6 +221,25 @@ describe("Tile installer bundles over HTTP", () => {
 
   const commands = () =>
     ran.map((request) => [request.command.replace(tmpRoot, "<root>"), ...request.args].join(" "));
+
+  const selection = async (api: ServerHandles) =>
+    SelectionSnapshot.parse(await (await api.app.fetch(authed("/api/kit/selection"))).json());
+
+  async function select(
+    api: ServerHandles,
+    changes: { key: { kind: string; name: string }; enabled: boolean; targets: string[] }[],
+  ) {
+    const res = await api.app.fetch(
+      authed("/api/kit/selection", {
+        method: "PATCH",
+        body: JSON.stringify({ expectedRevision: (await selection(api)).revision, changes }),
+      }),
+    );
+    expect(res.status).toBe(200);
+  }
+
+  const overviewOf = async (api: ServerHandles) =>
+    (await (await api.app.fetch(authed("/api/kit/overview"))).json()) as DeploymentOverview;
 
   test("installs gstack by running setup for each CLI from the durable checkout with HOME redirected", async () => {
     const api = await start();
@@ -522,5 +546,50 @@ describe("Tile installer bundles over HTTP", () => {
     expect(row(removed, "bundle", "ui-ux-pro-max")?.targets).toMatchObject([
       { target: "codex", desired: "off", reconciliation: "in_sync", observation: "missing" },
     ]);
+    // Including the intents for the plugin on Codex and the bundle on Claude,
+    // where neither applies.
+    expect((await selection(api)).removalIntents).toEqual([]);
+  });
+
+  test("one UI UX Pro Max row turned on for both CLIs installs the plugin and the Codex skills", async () => {
+    const api = await start();
+    await add(api, { tile: "ui-ux-pro-max" });
+
+    const installed = await acceptDesiredSelection(api, TOKEN, [
+      { key: { kind: "plugin", name: "ui-ux-pro-max" }, targets: ["claude", "codex"] },
+    ]);
+
+    expect(installed.lastOperation?.state).toBe("completed");
+    expect(commands()).toContain(
+      "claude plugin install ui-ux-pro-max@ui-ux-pro-max-skill --scope user",
+    );
+    expect(commands()).toContain("npx -y ui-ux-pro-max-cli init --ai codex --global");
+    for (const kind of ["plugin", "bundle"]) {
+      expect(row(installed, kind, "ui-ux-pro-max")?.targets).toMatchObject([
+        { desired: "on", reconciliation: "in_sync" },
+      ]);
+    }
+  });
+
+  test("a removal intent for a pair Hive never installed is in_sync, and the next Deploy clears it", async () => {
+    const api = await start();
+    await add(api, { tile: "ui-ux-pro-max" });
+    const unit = { key: { kind: "plugin", name: "ui-ux-pro-max" }, targets: ["claude", "codex"] };
+    await select(api, [{ ...unit, enabled: true }]);
+    await select(api, [{ ...unit, enabled: false }]);
+    expect((await selection(api)).removalIntents).toHaveLength(4);
+
+    const pending = await overviewOf(api);
+    expect(pending.diff.entries).toEqual([]);
+    for (const kind of ["plugin", "bundle"]) {
+      expect(row(pending, kind, "ui-ux-pro-max")?.targets).toMatchObject([
+        { desired: "off", reconciliation: "in_sync", observation: "missing" },
+      ]);
+    }
+
+    const deployed = await acceptDesiredSelection(api, TOKEN, []);
+    expect(deployed.lastOperation?.state).toBe("completed");
+    expect(ran).toEqual([]);
+    expect((await selection(api)).removalIntents).toEqual([]);
   });
 });

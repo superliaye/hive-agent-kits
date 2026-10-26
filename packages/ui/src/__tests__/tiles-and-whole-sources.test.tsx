@@ -69,9 +69,30 @@ function skill(name: string, sourceId: string, wholeSourceId: string | null): Ov
   };
 }
 
+// UI UX Pro Max's unit: a Claude-only plugin and a Codex-only bundle.
+function uiproRow(kind: "plugin" | "bundle", on: boolean): OverviewRow {
+  const target = kind === "plugin" ? "claude" : "codex";
+  return {
+    ...skill("ui-ux-pro-max", "uipro", "uipro"),
+    key: { kind, name: "ui-ux-pro-max" },
+    desired: on ? "on" : "off",
+    applicableTargets: [target],
+    targets: [
+      {
+        target,
+        desired: on ? "on" : "off",
+        reconciliation: "in_sync",
+        observation: on ? "recorded_unverified" : "missing",
+        lastAttempt: { state: "none" },
+      },
+    ],
+  };
+}
+
 let calls: { method: string; path: string; body: string | undefined }[];
 let archifyAdded: boolean;
 let withRows: boolean;
+let uipro: "absent" | "off" | "on";
 let patchResponse: () => Response;
 
 function sources(): OverviewSource[] {
@@ -93,6 +114,16 @@ function sources(): OverviewSource[] {
       recipe: CAPABILITY_KIT,
     },
   ];
+  if (uipro !== "absent") {
+    list.push({
+      id: "uipro",
+      label: "UI UX Pro Max",
+      kind: "git",
+      active: true,
+      rank: -1,
+      recipe: { id: "ui-ux-pro-max-plugin-and-cli", label: "UI UX Pro Max", unit: "whole" },
+    });
+  }
   if (archifyAdded) {
     list.unshift({
       id: "archify",
@@ -113,6 +144,9 @@ function overview(): DeploymentOverview {
         skill("hf-compose", "hyperframes", "hyperframes"),
         skill("hf-render", "hyperframes", "hyperframes"),
         ...(archifyAdded ? [skill("archify", "archify", null)] : []),
+        ...(uipro === "absent"
+          ? []
+          : [uiproRow("plugin", uipro === "on"), uiproRow("bundle", uipro === "on")]),
       ]
     : [];
   return {
@@ -163,6 +197,7 @@ function installStubs(): void {
   calls = [];
   archifyAdded = false;
   withRows = true;
+  uipro = "absent";
   patchResponse = () => json({ error: "unexpected" }, 500);
   globalThis.fetch = (async (
     input: string | URL | Request,
@@ -304,6 +339,44 @@ describe("Whole Sources", () => {
       );
     }
     expect(byTestId(host, "kit-row-whole-skill-alpha")).toBeNull();
+  });
+
+  test("a row of a unit spanning both CLIs turns the whole unit on for the targeted CLIs", async () => {
+    installStubs();
+    uipro = "off";
+    patchResponse = () => json({ revision: 4, enabled: [], removalIntents: [] });
+    const host = await render();
+
+    await click(byTestId(host, "kit-target-codex"));
+    await click(byTestId(host, "kit-row-plugin-ui-ux-pro-max"));
+    await click(byTestId(host, "kit-row-bundle-ui-ux-pro-max"));
+
+    const patches = calls.filter((call) => call.method === "PATCH");
+    expect(patches.map((call) => JSON.parse(call.body ?? "null").changes)).toEqual(
+      (["plugin", "bundle"] as const).map((kind) => [
+        { key: { kind, name: "ui-ux-pro-max" }, enabled: true, targets: ["claude", "codex"] },
+      ]),
+    );
+  });
+
+  test("a row of a unit spanning both CLIs turns the whole unit off", async () => {
+    installStubs();
+    uipro = "on";
+    patchResponse = () => json({ revision: 4, enabled: [], removalIntents: [] });
+    const host = await render();
+
+    await click(byTestId(host, "kit-row-plugin-ui-ux-pro-max"));
+
+    const patches = calls.filter((call) => call.method === "PATCH");
+    expect(patches.map((call) => JSON.parse(call.body ?? "null").changes)).toEqual([
+      [
+        {
+          key: { kind: "plugin", name: "ui-ux-pro-max" },
+          enabled: false,
+          targets: ["claude", "codex"],
+        },
+      ],
+    ]);
   });
 
   test("a selection_unit_conflict names the whole Source and the target", async () => {
