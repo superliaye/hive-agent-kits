@@ -1,0 +1,676 @@
+{
+  "tile": "hyperframes",
+  "remote": {
+    "repoUrl": "https://github.com/heygen-com/hyperframes",
+    "commit": "a11280eef09305ed6517ca6c08bdc5929f38a5a2"
+  },
+  "answers": {
+    "copy skills-cli skills/figma": [
+      "SKILL.md",
+      "scripts/verify-motion.mjs"
+    ],
+    "copy skills-cli skills/hyperframes": [
+      "SKILL.md",
+      "assets/frame-presets/biennale-yellow/FRAME.md",
+      "assets/frame-presets/biennale-yellow/caption-skin.html",
+      "assets/frame-presets/biennale-yellow/frame-showcase.html",
+      "assets/frame-presets/blockframe/FRAME.md",
+      "assets/frame-presets/blockframe/caption-skin.html",
+      "assets/frame-presets/blockframe/frame-showcase.html",
+      "assets/frame-presets/blue-professional/FRAME.md",
+      "assets/frame-presets/blue-professional/caption-skin.html",
+      "assets/frame-presets/blue-professional/frame-showcase.html",
+      "assets/frame-presets/bold-poster/FRAME.md",
+      "assets/frame-presets/bold-poster/caption-skin.html",
+      "assets/frame-presets/bold-poster/frame-showcase.html",
+      "assets/frame-presets/broadside/FRAME.md",
+      "assets/frame-presets/broadside/caption-skin.html",
+      "assets/frame-presets/broadside/frame-showcase.html",
+      "assets/frame-presets/capsule/FRAME.md",
+      "assets/frame-presets/capsule/caption-skin.html",
+      "assets/frame-presets/capsule/frame-showcase.html",
+      "assets/frame-presets/cartesian/FRAME.md",
+      "assets/frame-presets/cartesian/caption-skin.html",
+      "assets/frame-presets/cartesian/frame-showcase.html",
+      "assets/frame-presets/cobalt-grid/FRAME.md",
+      "assets/frame-presets/cobalt-grid/caption-skin.html",
+      "assets/frame-presets/cobalt-grid/frame-showcase.html",
+      "assets/frame-presets/code-editorial/FRAME.md",
+      "assets/frame-presets/code-editorial/caption-skin.html",
+      "assets/frame-presets/code-editorial/fonts/EBGaramond-400.woff2",
+      "assets/frame-presets/code-editorial/fonts/EBGaramond-700.woff2",
+      "assets/frame-presets/code-editorial/fonts/Inter-400.woff2",
+      "assets/frame-presets/code-editorial/fonts/Inter-700.woff2",
+      "assets/frame-presets/code-editorial/fonts/JetBrainsMono-400.woff2",
+      "assets/frame-presets/code-editorial/fonts/JetBrainsMono-700.woff2",
+      "assets/frame-presets/code-editorial/fonts/OFL-eb-garamond.txt",
+      "assets/frame-presets/code-editorial/fonts/OFL-inter.txt",
+      "assets/frame-presets/code-editorial/fonts/OFL-jetbrains-mono.txt",
+      "assets/frame-presets/code-editorial/frame-showcase.html",
+      "assets/frame-presets/coral/FRAME.md",
+      "assets/frame-presets/coral/caption-skin.html",
+      "assets/frame-presets/coral/frame-showcase.html",
+      "assets/frame-presets/creative-mode/FRAME.md",
+      "assets/frame-presets/creative-mode/caption-skin.html",
+      "assets/frame-presets/creative-mode/frame-showcase.html",
+      "assets/frame-presets/daisy-days/FRAME.md",
+      "assets/frame-presets/daisy-days/caption-skin.html",
+      "assets/frame-presets/daisy-days/frame-showcase.html",
+      "assets/frame-presets/editorial-forest/FRAME.md",
+      "assets/frame-presets/editorial-forest/caption-skin.html",
+      "assets/frame-presets/editorial-forest/frame-showcase.html",
+      "references/captions.md",
+      "references/film.md",
+      "references/format.md",
+      "references/look.md",
+      "references/motion.md",
+      "references/overlays.md",
+      "references/plugin-installation.md",
+      "references/review.md",
+      "references/runtimes.md",
+      "references/skill-lifecycle.md",
+      "references/sound.md",
+      "references/spec.md",
+      "references/story.md",
+      "references/storyboard-format.md",
+      "references/storyboard.md",
+      "references/types/3d.md",
+      "references/types/character.md",
+      "references/types/data.md",
+      "references/types/explainer.md",
+      "references/types/launch.md",
+      "references/types/music.md",
+      "references/types/vertical.md",
+      "scripts/bake-basemap.mjs",
+      "scripts/lib/main-module.mjs",
+      "scripts/lib/main-module.test.mjs",
+      "scripts/locate.mjs",
+      "scripts/plugin-cli.mjs",
+      "scripts/plugin-cli.test.mjs"
+    ],
+    "copy skills-cli skills/hyperframes-cli": [
+      "SKILL.md",
+      "references/beats.md",
+      "references/cloud.md",
+      "references/cloudrun.md",
+      "references/compare-and-batch.md",
+      "references/conventions.md",
+      "references/doctor-browser.md",
+      "references/feedback.md",
+      "references/init-and-scaffold.md",
+      "references/lambda.md",
+      "references/lint-validate-inspect.md",
+      "references/preview-render.md",
+      "references/upgrade-info-misc.md"
+    ],
+    "copy skills-cli skills/hyperframes-registry": [
+      "SKILL.md",
+      "examples/add-block.md",
+      "examples/add-component.md",
+      "references/component-quality-bar.md",
+      "references/contributing.md",
+      "references/demo-html-pattern.md",
+      "references/discovery.md",
+      "references/install-locations.md",
+      "references/placeholder-material.md",
+      "references/search.md",
+      "references/templates.md",
+      "references/wiring-blocks.md",
+      "references/wiring-components.md"
+    ],
+    "copy skills-cli skills/media-use": [
+      ".gitignore",
+      "SKILL.md",
+      "audio/assets/sfx/CREDITS.md",
+      "audio/assets/sfx/chime.mp3",
+      "audio/assets/sfx/click-soft.mp3",
+      "audio/assets/sfx/click.mp3",
+      "audio/assets/sfx/error.mp3",
+      "audio/assets/sfx/glitch-1.mp3",
+      "audio/assets/sfx/glitch-2.mp3",
+      "audio/assets/sfx/glitch-3.mp3",
+      "audio/assets/sfx/impact-bass-1.mp3",
+      "audio/assets/sfx/impact-bass-2.mp3",
+      "audio/assets/sfx/key-press.mp3",
+      "audio/assets/sfx/manifest.json",
+      "audio/assets/sfx/notification.mp3",
+      "audio/assets/sfx/ping.mp3",
+      "audio/assets/sfx/pop.mp3",
+      "audio/assets/sfx/riser.mp3",
+      "audio/assets/sfx/sparkle.mp3",
+      "audio/assets/sfx/typing.mp3",
+      "audio/assets/sfx/whoosh-cinematic.mp3",
+      "audio/assets/sfx/whoosh-short.mp3",
+      "audio/assets/sfx/whoosh.mp3",
+      "audio/references/bgm.md",
+      "audio/references/captions/authoring.md",
+      "audio/references/captions/motion.md",
+      "audio/references/captions/transcript-handling.md",
+      "audio/references/remove-background.md",
+      "audio/references/requirements.md",
+      "audio/references/sfx.md",
+      "audio/references/transcribe.md",
+      "audio/references/tts-to-captions.md",
+      "audio/references/tts.md",
+      "audio/scripts/audio.mjs",
+      "audio/scripts/audio.test.mjs",
+      "audio/scripts/carve.mjs",
+      "audio/scripts/carve.test.mjs",
+      "audio/scripts/extract-audio-data.py",
+      "audio/scripts/gemini-pipeline.test.mjs",
+      "audio/scripts/heygen-tts.mjs",
+      "audio/scripts/heygen-tts.test.mjs",
+      "audio/scripts/heygen-voice.mjs",
+      "audio/scripts/heygen-voice.test.mjs",
+      "audio/scripts/lib/audio-meta.mjs",
+      "audio/scripts/lib/audio-meta.test.mjs",
+      "audio/scripts/lib/bgm-volume.mjs",
+      "audio/scripts/lib/bgm.mjs",
+      "audio/scripts/lib/bgm.test.mjs",
+      "audio/scripts/lib/concurrency.mjs",
+      "audio/scripts/lib/concurrency.test.mjs",
+      "audio/scripts/lib/gemini-auth.mjs",
+      "audio/scripts/lib/gemini-auth.py",
+      "audio/scripts/lib/gemini-auth.test.mjs",
+      "audio/scripts/lib/gemini-auth_test.py",
+      "audio/scripts/lib/gemini-tts.mjs",
+      "audio/scripts/lib/gemini-tts.test.mjs",
+      "audio/scripts/lib/heygen.mjs",
+      "audio/scripts/lib/heygen.test.mjs",
+      "audio/scripts/lib/main-module.mjs",
+      "audio/scripts/lib/media-record.mjs",
+      "audio/scripts/lib/media-record.test.mjs",
+      "audio/scripts/lib/openverse.mjs",
+      "audio/scripts/lib/python.mjs",
+      "audio/scripts/lib/python.test.mjs",
+      "audio/scripts/lib/sfx.mjs",
+      "audio/scripts/lib/sfx.test.mjs",
+      "audio/scripts/lib/tts.cleanup.test.mjs",
+      "audio/scripts/lib/tts.mjs",
+      "audio/scripts/lib/tts.spawn.test.mjs",
+      "audio/scripts/lib/tts.test.mjs",
+      "audio/scripts/lyria-recipe.py",
+      "audio/scripts/wait-bgm.mjs",
+      "audio/scripts/wait-bgm.test.mjs",
+      "luts/README.md",
+      "luts/index.json",
+      "references/audio.md",
+      "references/grading.md",
+      "references/local.md",
+      "references/media-treatment-recipes.md",
+      "references/media-treatments.md",
+      "references/memory.md",
+      "references/meta.md",
+      "references/mixing.md",
+      "references/operations.md",
+      "references/resolve.md",
+      "references/setup-providers.md",
+      "references/telemetry-dashboard.md",
+      "scripts/audio-duck.mjs",
+      "scripts/compatibility.test.mjs",
+      "scripts/dither.mjs",
+      "scripts/dither.test.mjs",
+      "scripts/eval.mjs",
+      "scripts/lib/config-lock.mjs",
+      "scripts/lib/cutlist.mjs",
+      "scripts/lib/duck.mjs",
+      "scripts/lib/error-diffusion.mjs",
+      "scripts/lib/index-gen.mjs",
+      "scripts/lib/manifest.mjs",
+      "scripts/lib/media-fetch.mjs",
+      "scripts/lib/media-home.mjs",
+      "scripts/lib/npx-sync.mjs",
+      "scripts/lib/parakeet-words.mjs",
+      "scripts/lib/prefs-store.mjs",
+      "scripts/lib/recipe-store.mjs",
+      "scripts/lib/telemetry.mjs",
+      "scripts/lib/telemetry.test.mjs",
+      "scripts/lib/transcriptCutFade.mjs",
+      "scripts/lib/words.mjs",
+      "scripts/prefs.mjs",
+      "scripts/recipe.mjs",
+      "scripts/resolve-plugin.test.mjs",
+      "scripts/resolve.mjs",
+      "scripts/transcribe.mjs",
+      "scripts/transcribe.test.mjs",
+      "scripts/transcript-cut.mjs",
+      "scripts/transcript-cut.test.mjs"
+    ],
+    "copy skills-cli skills/remotion-to-hyperframes": [
+      "SKILL.md",
+      "assets/.gitkeep",
+      "assets/test-corpus/.gitignore",
+      "assets/test-corpus/run.sh",
+      "assets/test-corpus/tier-1-title-card/.gitignore",
+      "assets/test-corpus/tier-1-title-card/README.md",
+      "assets/test-corpus/tier-1-title-card/expected.json",
+      "assets/test-corpus/tier-1-title-card/hf-src/compositions/title.html",
+      "assets/test-corpus/tier-1-title-card/hf-src/index.html",
+      "assets/test-corpus/tier-1-title-card/remotion-src/package.json",
+      "assets/test-corpus/tier-1-title-card/remotion-src/remotion.config.ts",
+      "assets/test-corpus/tier-1-title-card/remotion-src/src/Root.tsx",
+      "assets/test-corpus/tier-1-title-card/remotion-src/src/TitleCard.tsx",
+      "assets/test-corpus/tier-1-title-card/remotion-src/src/index.ts",
+      "assets/test-corpus/tier-1-title-card/remotion-src/tsconfig.json",
+      "assets/test-corpus/tier-2-multi-scene/.gitignore",
+      "assets/test-corpus/tier-2-multi-scene/README.md",
+      "assets/test-corpus/tier-2-multi-scene/expected.json",
+      "assets/test-corpus/tier-2-multi-scene/hf-src/compositions/scene-1.html",
+      "assets/test-corpus/tier-2-multi-scene/hf-src/compositions/scene-2.html",
+      "assets/test-corpus/tier-2-multi-scene/hf-src/compositions/scene-3.html",
+      "assets/test-corpus/tier-2-multi-scene/hf-src/index.html",
+      "assets/test-corpus/tier-2-multi-scene/remotion-src/package.json",
+      "assets/test-corpus/tier-2-multi-scene/remotion-src/remotion.config.ts",
+      "assets/test-corpus/tier-2-multi-scene/remotion-src/src/MultiScene.tsx",
+      "assets/test-corpus/tier-2-multi-scene/remotion-src/src/Root.tsx",
+      "assets/test-corpus/tier-2-multi-scene/remotion-src/src/index.ts",
+      "assets/test-corpus/tier-2-multi-scene/remotion-src/tsconfig.json",
+      "assets/test-corpus/tier-2-multi-scene/setup.sh",
+      "assets/test-corpus/tier-3-data-driven/.gitignore",
+      "assets/test-corpus/tier-3-data-driven/README.md",
+      "assets/test-corpus/tier-3-data-driven/expected.json",
+      "assets/test-corpus/tier-3-data-driven/hf-src/compositions/scene-1.html",
+      "assets/test-corpus/tier-3-data-driven/hf-src/compositions/scene-2.html",
+      "assets/test-corpus/tier-3-data-driven/hf-src/compositions/scene-3.html",
+      "assets/test-corpus/tier-3-data-driven/hf-src/index.html",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/package.json",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/remotion.config.ts",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/src/Root.tsx",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/src/Stargazed.tsx",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/src/components/AnimatedNumber.tsx",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/src/components/StatCard.tsx",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/src/components/UnderlinedText.tsx",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/src/index.ts",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/src/scenes/OutroScene.tsx",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/src/scenes/StatsScene.tsx",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/src/scenes/TitleScene.tsx",
+      "assets/test-corpus/tier-3-data-driven/remotion-src/tsconfig.json",
+      "assets/test-corpus/tier-4-escape-hatch/README.md",
+      "assets/test-corpus/tier-4-escape-hatch/cases/01-use-state.tsx",
+      "assets/test-corpus/tier-4-escape-hatch/cases/02-use-effect-deps.tsx",
+      "assets/test-corpus/tier-4-escape-hatch/cases/03-async-metadata.tsx",
+      "assets/test-corpus/tier-4-escape-hatch/cases/04-third-party-react.tsx",
+      "assets/test-corpus/tier-4-escape-hatch/cases/05-lambda-config.tsx",
+      "assets/test-corpus/tier-4-escape-hatch/cases/06-warnings-only.tsx",
+      "assets/test-corpus/tier-4-escape-hatch/cases/07-custom-hook.tsx",
+      "assets/test-corpus/tier-4-escape-hatch/cases/08-mixed.tsx",
+      "assets/test-corpus/tier-4-escape-hatch/expected.json",
+      "assets/test-corpus/tier-4-escape-hatch/validate.sh",
+      "references/api-map.md",
+      "references/escape-hatch.md",
+      "references/eval.md",
+      "references/fonts.md",
+      "references/limitations.md",
+      "references/lottie.md",
+      "references/media.md",
+      "references/parameters.md",
+      "references/sequencing.md",
+      "references/timing.md",
+      "references/transitions.md",
+      "scripts/.gitkeep",
+      "scripts/frame_strip.sh",
+      "scripts/lint_source.py",
+      "scripts/render_diff.sh",
+      "scripts/tests/fixtures/blocker.tsx",
+      "scripts/tests/fixtures/clean.tsx",
+      "scripts/tests/smoke.sh"
+    ],
+    "copy skills-cli skills/slideshow": [
+      "SKILL.md",
+      "references/standalone-harness.md"
+    ],
+    "dirs ": [
+      ".agents",
+      ".claude",
+      ".claude-plugin",
+      ".codex",
+      ".codex-plugin",
+      ".cursor-plugin",
+      ".github",
+      "assets",
+      "docs",
+      "examples",
+      "packages",
+      "plans",
+      "registry",
+      "releases",
+      "scripts",
+      "skills",
+      "themes",
+      "updates"
+    ],
+    "dirs .agents/skills": [
+      "captions-overlay",
+      "changelog-video",
+      "cut-the-curve",
+      "motion-doctrine",
+      "oversized-cursor",
+      "seam-craft"
+    ],
+    "dirs .claude/skills": [
+      "captions-overlay",
+      "changelog-video",
+      "cut-the-curve",
+      "motion-doctrine",
+      "oversized-cursor",
+      "seam-craft"
+    ],
+    "dirs .cline/skills": [],
+    "dirs .codebuddy/skills": [],
+    "dirs .codex/skills": [],
+    "dirs .commandcode/skills": [],
+    "dirs .continue/skills": [],
+    "dirs .factory/skills": [],
+    "dirs .github/skills": [],
+    "dirs .goose/skills": [],
+    "dirs .grok/skills": [],
+    "dirs .iflow/skills": [],
+    "dirs .junie/skills": [],
+    "dirs .kilo/skills": [],
+    "dirs .kilocode/skills": [],
+    "dirs .kimchi/skills": [],
+    "dirs .kiro/skills": [],
+    "dirs .minimax/skills": [],
+    "dirs .mux/skills": [],
+    "dirs .neovate/skills": [],
+    "dirs .opencode/skills": [],
+    "dirs .openhands/skills": [],
+    "dirs .pi/skills": [],
+    "dirs .posit/assistant/skills": [],
+    "dirs .qoder/skills": [],
+    "dirs .roo/skills": [],
+    "dirs .trae/skills": [],
+    "dirs .windsurf/skills": [],
+    "dirs .zcode/skills": [],
+    "dirs .zencoder/skills": [],
+    "dirs skills": [
+      "figma",
+      "hyperframes",
+      "hyperframes-cli",
+      "hyperframes-registry",
+      "media-use",
+      "remotion-to-hyperframes",
+      "slideshow"
+    ],
+    "dirs skills/.curated": [],
+    "dirs skills/.experimental": [],
+    "dirs skills/.system": [],
+    "frontmatter .agents/skills/captions-overlay/SKILL.md": {
+      "name": "captions-overlay",
+      "description": "Overlay doctrine for captions in HyperFrames videos — the caption MODEL (drop / rail / embed) and the rule that captions are an OVERLAY composited on top of the film, never a reserved bottom band you shift content up to avoid. Load when adding captions/subtitles to a talking-head or launch video, when deciding whether a phrase should be dropped, ride the verbatim rail, or be promoted to a scarce embedded climax, when laying out a composition that will carry captions (do NOT reserve a keep-out band), or when centering a composition on the true frame center under captions. Applies ON TOP of the `/hyperframes` skill's references/captions.md.",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .agents/skills/changelog-video/SKILL.md": {
+      "name": "changelog-video",
+      "description": "Turn a weekly changelog .md into a finished branded changelog video (square 1080, ~45-60s, Annie VO, animated brand background, mock-UI visualizations, lowkey captions). Use when the user provides a changelog/digest markdown and wants the weekly video, or says \"changelog video\". Self-contained — fonts, background, lexicon, and scripts ship in this skill.",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .agents/skills/cut-the-curve/SKILL.md": {
+      "name": "cut-the-curve",
+      "description": "The technique catalog: five velocity-matched SEAMS (zoom-through, INVERSE zoom-through, cut-the-curve, waterfall cut, rack-focus blur-cut) plus the two in-scene techniques — waterfall ENTRY (staggered arrival cascades for title cards / segment openers) and the nudge curve (slow-fast-slow three-phase group slides). Covers partial-travel (~12% of frame) velocity matching via mirrored power4 eases, the Z scale-sign rule, size-scaled blur (10px text / 18-20px full-frame), word-by-word staggered cuts, cascade pacing by element weight, and the 10/65/25 slide ratio. Read before authoring any transition, text-beat handoff, kinetic text entry, or group reposition. [depth, zoom, inverse-zoom, scale-sign, mirrored-zoom, rack-focus, pacing, velocity, cut-the-curve, waterfall, stagger, cascade, kinetic-text, title-card, segment-opener, nudge, slide, easing, group-motion, z-depth, motion-graphics, cinematic, transition, blur, directional-continuity]",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .agents/skills/motion-doctrine/SKILL.md": {
+      "name": "motion-doctrine",
+      "description": "GATEWAY — load FIRST before composing any HyperFrames animation or video. The high-level motion law that makes a multi-scene video feel like ONE continuous camera move instead of a stack of independently-animated slides. Covers the vector law (how you exit determines how you enter, incl. the Z scale-sign rule), the film's current, carrier elements, causal motion, the Seam Gate (build-gate enforcement), the ban on idle wobble (motion must PERFORM, not breathe), stillness-before-climax, and the sustained-motion routes. Routes to the low-level technique skills (cut-the-curve — the full catalog incl. waterfall entry + nudge curve, oversized-cursor, seam-craft). These rules SUPERSEDE generic / upstream motion guidance. [continuity, direction, vector, momentum, seam, transition, ease, performance, idle-motion, narrative-motion, film-grammar]",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .agents/skills/oversized-cursor/SKILL.md": {
+      "name": "oversized-cursor",
+      "description": "House-style oversized macOS cursor technique for HyperFrames launch videos. Load whenever a scene involves cursors or a pointer-led action, when kicking off a UI scene, when igniting a morph/transition/typing run with a click, or when a scene reads as static, dead, or stale and needs a cheap high-yield source of motion to carry the viewer's eye and segment them out of the stale state. Covers cursor size/look (incl. brand-motif cursors), the off-screen entry law, tip-targeting and the click tap, click-ignites-the-next-beat, and exit / cross-scene handoff.",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .agents/skills/seam-craft/SKILL.md": {
+      "name": "seam-craft",
+      "description": "Render-correctness doctrine for scene-to-scene seams in HyperFrames launch videos — the prerequisites that make transitions composite correctly on the master timeline. Load when assembling the master timeline / index.html, when a white flash appears at a cut or crossfade seam (especially on dark films), when reasoning about why a transition opacity dip shows through, or when verifying the render-side mechanics of how overlapping scene wrappers blend. Covers the opaque stage-ground (#root background) white-flash guard and how the injector overlaps wrappers, holds final frames, ping-pongs tracks, and stamps lint-clean template code onto the master timeline. Does NOT contain the per-transition catalog — see the transition registry for individual transition entries.",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .claude/skills/captions-overlay/SKILL.md": {
+      "name": "captions-overlay",
+      "description": "Overlay doctrine for captions in HyperFrames videos — the caption MODEL (drop / rail / embed) and the rule that captions are an OVERLAY composited on top of the film, never a reserved bottom band you shift content up to avoid. Load when adding captions/subtitles to a talking-head or launch video, when deciding whether a phrase should be dropped, ride the verbatim rail, or be promoted to a scarce embedded climax, when laying out a composition that will carry captions (do NOT reserve a keep-out band), or when centering a composition on the true frame center under captions. Applies ON TOP of the `/hyperframes` skill's references/captions.md.",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .claude/skills/changelog-video/SKILL.md": {
+      "name": "changelog-video",
+      "description": "Turn a weekly changelog .md into a finished branded changelog video (square 1080, ~45-60s, Annie VO, animated brand background, mock-UI visualizations, lowkey captions). Use when the user provides a changelog/digest markdown and wants the weekly video, or says \"changelog video\". Self-contained — fonts, background, lexicon, and scripts ship in this skill.",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .claude/skills/cut-the-curve/SKILL.md": {
+      "name": "cut-the-curve",
+      "description": "The technique catalog: five velocity-matched SEAMS (zoom-through, INVERSE zoom-through, cut-the-curve, waterfall cut, rack-focus blur-cut) plus the two in-scene techniques — waterfall ENTRY (staggered arrival cascades for title cards / segment openers) and the nudge curve (slow-fast-slow three-phase group slides). Covers partial-travel (~12% of frame) velocity matching via mirrored power4 eases, the Z scale-sign rule, size-scaled blur (10px text / 18-20px full-frame), word-by-word staggered cuts, cascade pacing by element weight, and the 10/65/25 slide ratio. Read before authoring any transition, text-beat handoff, kinetic text entry, or group reposition. [depth, zoom, inverse-zoom, scale-sign, mirrored-zoom, rack-focus, pacing, velocity, cut-the-curve, waterfall, stagger, cascade, kinetic-text, title-card, segment-opener, nudge, slide, easing, group-motion, z-depth, motion-graphics, cinematic, transition, blur, directional-continuity]",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .claude/skills/motion-doctrine/SKILL.md": {
+      "name": "motion-doctrine",
+      "description": "GATEWAY — load FIRST before composing any HyperFrames animation or video. The high-level motion law that makes a multi-scene video feel like ONE continuous camera move instead of a stack of independently-animated slides. Covers the vector law (how you exit determines how you enter, incl. the Z scale-sign rule), the film's current, carrier elements, causal motion, the Seam Gate (build-gate enforcement), the ban on idle wobble (motion must PERFORM, not breathe), stillness-before-climax, and the sustained-motion routes. Routes to the low-level technique skills (cut-the-curve — the full catalog incl. waterfall entry + nudge curve, oversized-cursor, seam-craft). These rules SUPERSEDE generic / upstream motion guidance. [continuity, direction, vector, momentum, seam, transition, ease, performance, idle-motion, narrative-motion, film-grammar]",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .claude/skills/oversized-cursor/SKILL.md": {
+      "name": "oversized-cursor",
+      "description": "House-style oversized macOS cursor technique for HyperFrames launch videos. Load whenever a scene involves cursors or a pointer-led action, when kicking off a UI scene, when igniting a morph/transition/typing run with a click, or when a scene reads as static, dead, or stale and needs a cheap high-yield source of motion to carry the viewer's eye and segment them out of the stale state. Covers cursor size/look (incl. brand-motif cursors), the off-screen entry law, tip-targeting and the click tap, click-ignites-the-next-beat, and exit / cross-scene handoff.",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter .claude/skills/seam-craft/SKILL.md": {
+      "name": "seam-craft",
+      "description": "Render-correctness doctrine for scene-to-scene seams in HyperFrames launch videos — the prerequisites that make transitions composite correctly on the master timeline. Load when assembling the master timeline / index.html, when a white flash appears at a cut or crossfade seam (especially on dark films), when reasoning about why a transition opacity dip shows through, or when verifying the render-side mechanics of how overlapping scene wrappers blend. Covers the opaque stage-ground (#root background) white-flash guard and how the injector overlaps wrappers, holds final frames, ping-pongs tracks, and stamps lint-clean template code onto the master timeline. Does NOT contain the per-transition catalog — see the transition registry for individual transition entries.",
+      "metadata": {
+        "internal": true
+      }
+    },
+    "frontmatter skills/figma/SKILL.md": {
+      "name": "figma",
+      "description": "Bring Figma into a HyperFrames video - rendered assets, brand tokens, components, storyboard frames as reconstructed motion (frames read as states, not slides), shaders and connector-assisted motion. Use when the person pastes a figma.com link or asks to use a Figma design, frame, logo or brand."
+    },
+    "frontmatter skills/hyperframes-cli/SKILL.md": {
+      "name": "hyperframes-cli",
+      "description": "The HyperFrames CLI by job - scaffold, check, look at frames, edit the timeline, preview, render locally or in the cloud, publish, project history - plus reading its JSON and recovering from build or render failures."
+    },
+    "frontmatter skills/hyperframes-registry/SKILL.md": {
+      "name": "hyperframes-registry",
+      "description": "About 450 ready-made HyperFrames blocks and components installed as editable source - transitions, overlays, titles, kinetic type, captions, charts, map overlays, 3D, camera moves. Use it before hand-building any named visual (CRT scanlines, glitch, film grain, a chart); also for hyperframes add and catalog."
+    },
+    "frontmatter skills/hyperframes/SKILL.md": {
+      "name": "hyperframes",
+      "description": "Read first to make, edit, animate or render any video with HyperFrames (HTML rendered to video), including launch films, explainers, music videos, charts, maps, vertical clips, title cards, captions and overlays. Holds the render contract, the work loop and what each kind of video needs."
+    },
+    "frontmatter skills/media-use/SKILL.md": {
+      "name": "media-use",
+      "description": "Get or make any media for a HyperFrames video - music, sound effects, images, icons, logos, voiceover, avatar and generated video, transcripts, cutouts, colour grades and looks - with HeyGen or free local tools, and mix placed audio. Also for footage that looks dark, flat or dull, or should be stylized or hidden."
+    },
+    "frontmatter skills/remotion-to-hyperframes/SKILL.md": {
+      "name": "remotion-to-hyperframes",
+      "description": "Bring existing video code or footage into HyperFrames and verify it frame by frame against the original - Remotion first, also Motion Canvas, Lottie, Three.js, p5.js, canvas or plain HTML/CSS animation, or renders from Manim, After Effects or Blender. Use to port, convert, migrate or reuse work made with another tool."
+    },
+    "frontmatter skills/slideshow/SKILL.md": {
+      "name": "slideshow",
+      "description": "Build a HyperFrames slideshow to present live - slides, fragment reveals, branching hotspots and presenter mode with speaker notes, served by `hyperframes present` - or turn an existing page into one. Use when the person wants a deck or presentation rather than a rendered video."
+    },
+    "json .agents/plugins/marketplace.json": [],
+    "json .claude-plugin/marketplace.json": [
+      {
+        "name": "hyperframes",
+        "owner": {
+          "name": "HeyGen",
+          "email": "hyperframes@heygen.com",
+          "url": "https://hyperframes.heygen.com"
+        },
+        "plugins": [
+          {
+            "name": "hyperframes",
+            "source": "./",
+            "description": "Recommended: all published HyperFrames skills in one versioned bundle. Create and render videos from HTML: the contract, film, captions, overlays, motion and look references, the CLI, the registry, media, Figma, slideshows and Remotion ports.",
+            "homepage": "https://hyperframes.heygen.com",
+            "license": "Apache-2.0"
+          },
+          {
+            "name": "core-skills",
+            "source": "./",
+            "description": "Legacy core-only installation. For the release-managed bundle of every skill, install hyperframes@hyperframes and then uninstall core-skills@hyperframes.",
+            "homepage": "https://hyperframes.heygen.com",
+            "license": "Apache-2.0",
+            "skills": [
+              "./skills/hyperframes",
+              "./skills/hyperframes-cli",
+              "./skills/hyperframes-registry",
+              "./skills/media-use"
+            ]
+          }
+        ],
+        "description": "HyperFrames video creation skills, versioned and updated as one plugin."
+      }
+    ],
+    "json .claude-plugin/plugin.json": [
+      {
+        "name": "hyperframes",
+        "description": "HyperFrames by HeyGen. Write HTML, render video. Compositions, GSAP and runtime adapter animations, captions, voiceovers, audio-reactive visuals, and website capture for HyperFrames.",
+        "version": "0.8.201",
+        "author": {
+          "name": "HeyGen",
+          "email": "hyperframes@heygen.com",
+          "url": "https://hyperframes.heygen.com"
+        },
+        "homepage": "https://hyperframes.heygen.com",
+        "repository": "https://github.com/heygen-com/hyperframes",
+        "license": "Apache-2.0"
+      }
+    ],
+    "json skills-lock.json": [],
+    "kind .agents/SKILL.md": "absent",
+    "kind .agents/skills/captions-overlay/SKILL.md": "file",
+    "kind .agents/skills/changelog-video/SKILL.md": "file",
+    "kind .agents/skills/cut-the-curve/SKILL.md": "file",
+    "kind .agents/skills/motion-doctrine/SKILL.md": "file",
+    "kind .agents/skills/oversized-cursor/SKILL.md": "file",
+    "kind .agents/skills/seam-craft/SKILL.md": "file",
+    "kind .claude-plugin/SKILL.md": "absent",
+    "kind .claude/SKILL.md": "absent",
+    "kind .claude/skills/captions-overlay/SKILL.md": "file",
+    "kind .claude/skills/changelog-video/SKILL.md": "file",
+    "kind .claude/skills/cut-the-curve/SKILL.md": "file",
+    "kind .claude/skills/motion-doctrine/SKILL.md": "file",
+    "kind .claude/skills/oversized-cursor/SKILL.md": "file",
+    "kind .claude/skills/seam-craft/SKILL.md": "file",
+    "kind .codex-plugin/SKILL.md": "absent",
+    "kind .codex/SKILL.md": "absent",
+    "kind .cursor-plugin/SKILL.md": "absent",
+    "kind .github/SKILL.md": "absent",
+    "kind SKILL.md": "absent",
+    "kind assets/SKILL.md": "absent",
+    "kind docs/SKILL.md": "absent",
+    "kind examples/SKILL.md": "absent",
+    "kind packages/SKILL.md": "absent",
+    "kind plans/SKILL.md": "absent",
+    "kind registry/SKILL.md": "absent",
+    "kind releases/SKILL.md": "absent",
+    "kind scripts/SKILL.md": "absent",
+    "kind skills/SKILL.md": "absent",
+    "kind skills/figma/SKILL.md": "file",
+    "kind skills/hyperframes-cli/SKILL.md": "file",
+    "kind skills/hyperframes-registry/SKILL.md": "file",
+    "kind skills/hyperframes/SKILL.md": "file",
+    "kind skills/media-use/SKILL.md": "file",
+    "kind skills/remotion-to-hyperframes/SKILL.md": "file",
+    "kind skills/slideshow/SKILL.md": "file",
+    "kind themes/SKILL.md": "absent",
+    "kind updates/SKILL.md": "absent",
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" skills/figma": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" skills/hyperframes": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" skills/hyperframes-cli": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" skills/hyperframes-registry": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" skills/media-use": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" skills/remotion-to-hyperframes": false,
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" skills/slideshow": false
+  },
+  "expect": {
+    "tile": {
+      "recipe": "published-skills",
+      "unit": "whole",
+      "capabilities": [
+        {
+          "capability": "skill/figma",
+          "files": 2
+        },
+        {
+          "capability": "skill/hyperframes",
+          "files": 77
+        },
+        {
+          "capability": "skill/hyperframes-cli",
+          "files": 13
+        },
+        {
+          "capability": "skill/hyperframes-registry",
+          "files": 13
+        },
+        {
+          "capability": "skill/media-use",
+          "files": 116
+        },
+        {
+          "capability": "skill/remotion-to-hyperframes",
+          "files": 77
+        },
+        {
+          "capability": "skill/slideshow",
+          "files": 2
+        }
+      ]
+    },
+    "generic": {
+      "recipe": "published-skills",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "skill/figma",
+          "files": 2
+        },
+        {
+          "capability": "skill/hyperframes",
+          "files": 77
+        },
+        {
+          "capability": "skill/hyperframes-cli",
+          "files": 13
+        },
+        {
+          "capability": "skill/hyperframes-registry",
+          "files": 13
+        },
+        {
+          "capability": "skill/media-use",
+          "files": 116
+        },
+        {
+          "capability": "skill/remotion-to-hyperframes",
+          "files": 77
+        },
+        {
+          "capability": "skill/slideshow",
+          "files": 2
+        }
+      ]
+    }
+  }
+}

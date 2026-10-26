@@ -140,8 +140,8 @@ type RecipeBase = {
   readonly id: string;
   readonly label: string;
   readonly unit: SelectionUnit;
-  // Pure given its port, so the same tree gives the same Match and a re-Sync of
-  // an unchanged tree writes identical bytes.
+  // Pure given its port, so the same tree gives the same Match, a re-Sync of an
+  // unchanged tree writes identical bytes, and a recorded fixture replays it.
   recognize(tree: RecipeTree): Effect.Effect<Match, SyncError>;
 };
 

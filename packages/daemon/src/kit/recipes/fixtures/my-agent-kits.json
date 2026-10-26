@@ -1,0 +1,968 @@
+{
+  "tile": "my-agent-kits",
+  "remote": {
+    "repoUrl": "https://github.com/superliaye/my-agent-kits",
+    "commit": "1b9081981ec45ebe1ad83d50e6f3397ff0e4f902"
+  },
+  "answers": {
+    "copy none capabilities": [
+      "agents/@loop/loop-build-acceptance/AGENT.md",
+      "agents/@loop/loop-build-agent/AGENT.md",
+      "agents/@loop/loop-retro-agent/AGENT.md",
+      "agents/@my-productivity/my-mermaid-agent/AGENT.md",
+      "agents/@my-productivity/my-slidev-agent/AGENT.md",
+      "agents/@reviews/architecture-review/AGENT.md",
+      "agents/@reviews/design-critic/AGENT.md",
+      "agents/@reviews/general-review/AGENT.md",
+      "agents/@reviews/product-critic/AGENT.md",
+      "agents/@reviews/rules-enforcer/AGENT.md",
+      "agents/@reviews/smell-review/AGENT.md",
+      "agents/@reviews/spec-review/AGENT.md",
+      "bundles/archify.bundle.md",
+      "bundles/gstack.bundle.md",
+      "bundles/hyperframes.bundle.md",
+      "bundles/slidev.bundle.md",
+      "instructions/core.instructions.md",
+      "instructions/karpathy.instructions.md",
+      "instructions/typescript.instructions.md",
+      "plugins/frontend-design.plugin.md",
+      "plugins/superpowers.plugin.md",
+      "plugins/ui-ux-pro-max.plugin.md",
+      "skills/@loop/@feedback-loops/desktop-app-loop/SKILL.md",
+      "skills/@loop/@feedback-loops/desktop-app-loop/helpers/a11y_readback.py",
+      "skills/@loop/@feedback-loops/desktop-app-loop/helpers/capture_window.ps1",
+      "skills/@loop/@feedback-loops/desktop-app-loop/helpers/discover_exe.ps1",
+      "skills/@loop/@feedback-loops/desktop-app-loop/helpers/input_synth.py",
+      "skills/@loop/@feedback-loops/desktop-app-loop/helpers/requirements.txt",
+      "skills/@loop/@feedback-loops/electron-visual-loop/SKILL.md",
+      "skills/@loop/@feedback-loops/electron-visual-loop/SOURCE.md",
+      "skills/@loop/@feedback-loops/web-visual-loop/SKILL.md",
+      "skills/@loop/@feedback-loops/web-visual-loop/SOURCE.md",
+      "skills/@loop/@setup/loop-check-readiness/SKILL.md",
+      "skills/@loop/full-loop-semiauto/SKILL.md",
+      "skills/@loop/grill-with-committee/SKILL.md",
+      "skills/@loop/loop-build/FLOW.md",
+      "skills/@loop/loop-build/SKILL.md",
+      "skills/@loop/loop-plan-manual/FLOW.md",
+      "skills/@loop/loop-plan-manual/SKILL.md",
+      "skills/@loop/loop-plan-semiauto/SKILL.md",
+      "skills/@loop/loop-retro/SKILL.md",
+      "skills/@loop/loop-review-committee/SKILL.md",
+      "skills/@matt-pocock/code-review/SKILL.md",
+      "skills/@matt-pocock/code-review/SOURCE.md",
+      "skills/@matt-pocock/codebase-design/DEEPENING.md",
+      "skills/@matt-pocock/codebase-design/DESIGN-IT-TWICE.md",
+      "skills/@matt-pocock/codebase-design/SKILL.md",
+      "skills/@matt-pocock/codebase-design/SOURCE.md",
+      "skills/@matt-pocock/diagnosing-bugs/SKILL.md",
+      "skills/@matt-pocock/diagnosing-bugs/SOURCE.md",
+      "skills/@matt-pocock/diagnosing-bugs/scripts/hitl-loop.template.sh",
+      "skills/@matt-pocock/domain-modeling/ADR-FORMAT.md",
+      "skills/@matt-pocock/domain-modeling/GLOSSARY-FORMAT.md",
+      "skills/@matt-pocock/domain-modeling/SKILL.md",
+      "skills/@matt-pocock/domain-modeling/SOURCE.md",
+      "skills/@matt-pocock/grill-me/SKILL.md",
+      "skills/@matt-pocock/grill-me/SOURCE.md",
+      "skills/@matt-pocock/grill-with-docs/SKILL.md",
+      "skills/@matt-pocock/grill-with-docs/SOURCE.md",
+      "skills/@matt-pocock/grilling/SKILL.md",
+      "skills/@matt-pocock/grilling/SOURCE.md",
+      "skills/@matt-pocock/handoff/SKILL.md",
+      "skills/@matt-pocock/handoff/SOURCE.md",
+      "skills/@matt-pocock/implement-spec/SKILL.md",
+      "skills/@matt-pocock/implement-spec/SOURCE.md",
+      "skills/@matt-pocock/implement/SKILL.md",
+      "skills/@matt-pocock/implement/SOURCE.md",
+      "skills/@matt-pocock/improve-codebase-architecture/HTML-REPORT.md",
+      "skills/@matt-pocock/improve-codebase-architecture/SKILL.md",
+      "skills/@matt-pocock/improve-codebase-architecture/SOURCE.md",
+      "skills/@matt-pocock/prototype/LOGIC.md",
+      "skills/@matt-pocock/prototype/SKILL.md",
+      "skills/@matt-pocock/prototype/SOURCE.md",
+      "skills/@matt-pocock/prototype/UI.md",
+      "skills/@matt-pocock/research/SKILL.md",
+      "skills/@matt-pocock/research/SOURCE.md",
+      "skills/@matt-pocock/retro/SKILL.md",
+      "skills/@matt-pocock/retro/SOURCE.md",
+      "skills/@matt-pocock/tdd/SKILL.md",
+      "skills/@matt-pocock/tdd/SOURCE.md",
+      "skills/@matt-pocock/tdd/mocking.md",
+      "skills/@matt-pocock/tdd/tests.md",
+      "skills/@matt-pocock/teach/GLOSSARY-FORMAT.md",
+      "skills/@matt-pocock/teach/LEARNING-RECORD-FORMAT.md",
+      "skills/@matt-pocock/teach/MISSION-FORMAT.md",
+      "skills/@matt-pocock/teach/RESOURCES-FORMAT.md",
+      "skills/@matt-pocock/teach/SKILL.md",
+      "skills/@matt-pocock/teach/SOURCE.md",
+      "skills/@matt-pocock/to-questionnaire/SKILL.md",
+      "skills/@matt-pocock/to-questionnaire/SOURCE.md",
+      "skills/@matt-pocock/to-spec/SKILL.md",
+      "skills/@matt-pocock/to-spec/SOURCE.md",
+      "skills/@matt-pocock/triage/AGENT-BRIEF.md",
+      "skills/@matt-pocock/triage/OUT-OF-SCOPE.md",
+      "skills/@matt-pocock/triage/SKILL.md",
+      "skills/@matt-pocock/triage/SOURCE.md",
+      "skills/@matt-pocock/wait-what/SKILL.md",
+      "skills/@matt-pocock/wait-what/SOURCE.md",
+      "skills/@matt-pocock/wayfinder/SKILL.md",
+      "skills/@matt-pocock/wayfinder/SOURCE.md",
+      "skills/@matt-pocock/wizard/SKILL.md",
+      "skills/@matt-pocock/wizard/SOURCE.md",
+      "skills/@matt-pocock/wizard/template.sh",
+      "skills/@matt-pocock/writing-for-agents/SKILL-MECHANICS.md",
+      "skills/@matt-pocock/writing-for-agents/SKILL.md",
+      "skills/@matt-pocock/writing-for-agents/SOURCE.md",
+      "skills/@my-productivity/illustrate/SKILL.md",
+      "skills/@my-productivity/my-dissolve-doc/SKILL.md",
+      "skills/@my-productivity/my-domain-vocab/SKILL.md",
+      "skills/@my-productivity/my-domain-vocab/scripts/drill.html",
+      "skills/@my-productivity/my-domain-vocab/scripts/serve.mjs",
+      "skills/@my-productivity/my-domain-vocab/scripts/vocab.mjs",
+      "skills/@my-productivity/my-mermaid/SKILL.md",
+      "skills/@my-productivity/my-present/SKILL.md",
+      "skills/@my-productivity/my-slidev/SKILL.md",
+      "skills/@my-productivity/newspaper/SKILL.md",
+      "skills/@my-productivity/newspaper/references/canvas-schema.md",
+      "skills/@my-productivity/newspaper/runtime/app.css",
+      "skills/@my-productivity/newspaper/runtime/app.js",
+      "skills/@my-productivity/newspaper/runtime/app.source.jsx",
+      "skills/@my-productivity/newspaper/runtime/canvas-model.mjs",
+      "skills/@my-productivity/newspaper/runtime/index.html",
+      "skills/@my-productivity/newspaper/runtime/react-flow.css",
+      "skills/@my-productivity/newspaper/scripts/newspaper.mjs",
+      "skills/@my-productivity/prepare-peer-feedback/SKILL.md",
+      "skills/@my-productivity/project-review/SKILL.md",
+      "skills/@my-productivity/project-sync/SKILL.md",
+      "skills/@my-productivity/project-tracker-update/SKILL.md",
+      "skills/@my/grill-to-design-doc/DESIGN-DOC-FORMAT.md",
+      "skills/@my/grill-to-design-doc/SKILL.md",
+      "skills/@my/my-aggressive-clean-up/SKILL.md",
+      "skills/@my/my-commit-and-push/SKILL.md",
+      "skills/@my/my-commit/SKILL.md",
+      "skills/@my/my-create-pr/SKILL.md",
+      "skills/@my/my-fix-build/SKILL.md",
+      "skills/@my/my-port-code/SKILL.md",
+      "skills/@my/my-summarize-changes/SKILL.md",
+      "skills/@my/pr-check-ci/SKILL.md",
+      "skills/@my/pr-check-comments/SKILL.md",
+      "skills/@my/pr-get-ready/SKILL.md",
+      "skills/calibrate-system-prompt/SKILL.md",
+      "skills/critique-committee/SKILL.md",
+      "skills/design-critique/SKILL.md",
+      "skills/e2e-validate/SKILL.md",
+      "skills/e2e-validate/recipes/backend-api.md",
+      "skills/e2e-validate/recipes/electron.md",
+      "skills/e2e-validate/recipes/static-html.md",
+      "skills/e2e-validate/recipes/ts-node.md",
+      "skills/e2e-validate/recipes/vite-spa.md",
+      "skills/improve-DDD-architecture/SKILL.md",
+      "skills/improve-DDD-architecture/references/domain-driven-hexagon/concepts.md",
+      "skills/improve-DDD-architecture/references/dotnet/README.md",
+      "skills/improve-DDD-architecture/references/dotnet/concepts.md",
+      "skills/improve-DDD-architecture/references/effect/concepts.md",
+      "skills/product-critique/SKILL.md",
+      "skills/serenity-chokepoint-market-research/README.md",
+      "skills/serenity-chokepoint-market-research/SKILL.md",
+      "skills/serenity-chokepoint-market-research/_unshipped/serenity_corpus_manifest.csv",
+      "skills/serenity-chokepoint-market-research/_unshipped/serenity_full_retrieved_corpus.csv",
+      "skills/serenity-chokepoint-market-research/_unshipped/serenity_methodology_report.md",
+      "skills/serenity-chokepoint-market-research/examples/example_power_transformers.md",
+      "skills/serenity-chokepoint-market-research/templates/theme_analysis.md",
+      "skills/thermo-nuclear-code-quality-review/SKILL.md",
+      "snippets/acceptance-contract.md",
+      "snippets/artifact-review.md",
+      "snippets/change-summary-rules.md",
+      "snippets/commit-procedure.md",
+      "snippets/committee-answer-contract.md",
+      "snippets/critique-finding-contract.md",
+      "snippets/draft-to-loop-build-format.md",
+      "snippets/forwardable-local-service.md",
+      "snippets/fowler-smell-baseline.md",
+      "snippets/long-running-command.md",
+      "snippets/plan-contract.md",
+      "snippets/pr-context.md",
+      "snippets/research-fan-out.md",
+      "snippets/review-finding-contract.md",
+      "snippets/review-payload-contract.md",
+      "snippets/source-state-attestation.md",
+      "snippets/visual-env-routing.md"
+    ],
+    "copy none presets": [
+      "engineering.yaml",
+      "experimenting-engineering.yaml",
+      "experimenting-productivity.yaml",
+      "financial.yaml",
+      "loop.yaml",
+      "productivity.yaml"
+    ],
+    "dirs ": [
+      ".claude",
+      ".githooks",
+      ".vscode",
+      "bin",
+      "capabilities",
+      "docs",
+      "lib",
+      "presets",
+      "test"
+    ]
+  },
+  "expect": {
+    "tile": {
+      "recipe": "capability-kit",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "agent/@loop/loop-build-acceptance",
+          "files": 1
+        },
+        {
+          "capability": "agent/@loop/loop-build-agent",
+          "files": 1
+        },
+        {
+          "capability": "agent/@loop/loop-retro-agent",
+          "files": 1
+        },
+        {
+          "capability": "agent/@my-productivity/my-mermaid-agent",
+          "files": 1
+        },
+        {
+          "capability": "agent/@my-productivity/my-slidev-agent",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/architecture-review",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/design-critic",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/general-review",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/product-critic",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/rules-enforcer",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/smell-review",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/spec-review",
+          "files": 1
+        },
+        {
+          "capability": "bundle/archify",
+          "files": 1
+        },
+        {
+          "capability": "bundle/gstack",
+          "files": 1
+        },
+        {
+          "capability": "bundle/hyperframes",
+          "files": 1
+        },
+        {
+          "capability": "bundle/slidev",
+          "files": 1
+        },
+        {
+          "capability": "instruction/core",
+          "files": 1
+        },
+        {
+          "capability": "instruction/karpathy",
+          "files": 1
+        },
+        {
+          "capability": "instruction/typescript",
+          "files": 1
+        },
+        {
+          "capability": "other/capabilities/snippets",
+          "files": 17
+        },
+        {
+          "capability": "plugin/frontend-design",
+          "files": 1
+        },
+        {
+          "capability": "plugin/superpowers",
+          "files": 1
+        },
+        {
+          "capability": "plugin/ui-ux-pro-max",
+          "files": 1
+        },
+        {
+          "capability": "preset/engineering",
+          "files": 1
+        },
+        {
+          "capability": "preset/experimenting-engineering",
+          "files": 1
+        },
+        {
+          "capability": "preset/experimenting-productivity",
+          "files": 1
+        },
+        {
+          "capability": "preset/financial",
+          "files": 1
+        },
+        {
+          "capability": "preset/loop",
+          "files": 1
+        },
+        {
+          "capability": "preset/productivity",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/@feedback-loops/desktop-app-loop",
+          "files": 6
+        },
+        {
+          "capability": "skill/@loop/@feedback-loops/electron-visual-loop",
+          "files": 2
+        },
+        {
+          "capability": "skill/@loop/@feedback-loops/web-visual-loop",
+          "files": 2
+        },
+        {
+          "capability": "skill/@loop/@setup/loop-check-readiness",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/full-loop-semiauto",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/grill-with-committee",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/loop-build",
+          "files": 2
+        },
+        {
+          "capability": "skill/@loop/loop-plan-manual",
+          "files": 2
+        },
+        {
+          "capability": "skill/@loop/loop-plan-semiauto",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/loop-retro",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/loop-review-committee",
+          "files": 1
+        },
+        {
+          "capability": "skill/@matt-pocock/code-review",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/codebase-design",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/diagnosing-bugs",
+          "files": 3
+        },
+        {
+          "capability": "skill/@matt-pocock/domain-modeling",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/grill-me",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/grill-with-docs",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/grilling",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/handoff",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/implement",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/implement-spec",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/improve-codebase-architecture",
+          "files": 3
+        },
+        {
+          "capability": "skill/@matt-pocock/prototype",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/research",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/retro",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/tdd",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/teach",
+          "files": 6
+        },
+        {
+          "capability": "skill/@matt-pocock/to-questionnaire",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/to-spec",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/triage",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/wait-what",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/wayfinder",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/wizard",
+          "files": 3
+        },
+        {
+          "capability": "skill/@matt-pocock/writing-for-agents",
+          "files": 3
+        },
+        {
+          "capability": "skill/@my-productivity/illustrate",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/my-dissolve-doc",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/my-domain-vocab",
+          "files": 4
+        },
+        {
+          "capability": "skill/@my-productivity/my-mermaid",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/my-present",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/my-slidev",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/newspaper",
+          "files": 9
+        },
+        {
+          "capability": "skill/@my-productivity/prepare-peer-feedback",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/project-review",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/project-sync",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/project-tracker-update",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/grill-to-design-doc",
+          "files": 2
+        },
+        {
+          "capability": "skill/@my/my-aggressive-clean-up",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-commit",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-commit-and-push",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-create-pr",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-fix-build",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-port-code",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-summarize-changes",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/pr-check-ci",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/pr-check-comments",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/pr-get-ready",
+          "files": 1
+        },
+        {
+          "capability": "skill/calibrate-system-prompt",
+          "files": 1
+        },
+        {
+          "capability": "skill/critique-committee",
+          "files": 1
+        },
+        {
+          "capability": "skill/design-critique",
+          "files": 1
+        },
+        {
+          "capability": "skill/e2e-validate",
+          "files": 6
+        },
+        {
+          "capability": "skill/improve-DDD-architecture",
+          "files": 5
+        },
+        {
+          "capability": "skill/product-critique",
+          "files": 1
+        },
+        {
+          "capability": "skill/serenity-chokepoint-market-research",
+          "files": 7
+        },
+        {
+          "capability": "skill/thermo-nuclear-code-quality-review",
+          "files": 1
+        }
+      ]
+    },
+    "generic": {
+      "recipe": "capability-kit",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "agent/@loop/loop-build-acceptance",
+          "files": 1
+        },
+        {
+          "capability": "agent/@loop/loop-build-agent",
+          "files": 1
+        },
+        {
+          "capability": "agent/@loop/loop-retro-agent",
+          "files": 1
+        },
+        {
+          "capability": "agent/@my-productivity/my-mermaid-agent",
+          "files": 1
+        },
+        {
+          "capability": "agent/@my-productivity/my-slidev-agent",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/architecture-review",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/design-critic",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/general-review",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/product-critic",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/rules-enforcer",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/smell-review",
+          "files": 1
+        },
+        {
+          "capability": "agent/@reviews/spec-review",
+          "files": 1
+        },
+        {
+          "capability": "bundle/archify",
+          "files": 1
+        },
+        {
+          "capability": "bundle/gstack",
+          "files": 1
+        },
+        {
+          "capability": "bundle/hyperframes",
+          "files": 1
+        },
+        {
+          "capability": "bundle/slidev",
+          "files": 1
+        },
+        {
+          "capability": "instruction/core",
+          "files": 1
+        },
+        {
+          "capability": "instruction/karpathy",
+          "files": 1
+        },
+        {
+          "capability": "instruction/typescript",
+          "files": 1
+        },
+        {
+          "capability": "other/capabilities/snippets",
+          "files": 17
+        },
+        {
+          "capability": "plugin/frontend-design",
+          "files": 1
+        },
+        {
+          "capability": "plugin/superpowers",
+          "files": 1
+        },
+        {
+          "capability": "plugin/ui-ux-pro-max",
+          "files": 1
+        },
+        {
+          "capability": "preset/engineering",
+          "files": 1
+        },
+        {
+          "capability": "preset/experimenting-engineering",
+          "files": 1
+        },
+        {
+          "capability": "preset/experimenting-productivity",
+          "files": 1
+        },
+        {
+          "capability": "preset/financial",
+          "files": 1
+        },
+        {
+          "capability": "preset/loop",
+          "files": 1
+        },
+        {
+          "capability": "preset/productivity",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/@feedback-loops/desktop-app-loop",
+          "files": 6
+        },
+        {
+          "capability": "skill/@loop/@feedback-loops/electron-visual-loop",
+          "files": 2
+        },
+        {
+          "capability": "skill/@loop/@feedback-loops/web-visual-loop",
+          "files": 2
+        },
+        {
+          "capability": "skill/@loop/@setup/loop-check-readiness",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/full-loop-semiauto",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/grill-with-committee",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/loop-build",
+          "files": 2
+        },
+        {
+          "capability": "skill/@loop/loop-plan-manual",
+          "files": 2
+        },
+        {
+          "capability": "skill/@loop/loop-plan-semiauto",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/loop-retro",
+          "files": 1
+        },
+        {
+          "capability": "skill/@loop/loop-review-committee",
+          "files": 1
+        },
+        {
+          "capability": "skill/@matt-pocock/code-review",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/codebase-design",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/diagnosing-bugs",
+          "files": 3
+        },
+        {
+          "capability": "skill/@matt-pocock/domain-modeling",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/grill-me",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/grill-with-docs",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/grilling",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/handoff",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/implement",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/implement-spec",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/improve-codebase-architecture",
+          "files": 3
+        },
+        {
+          "capability": "skill/@matt-pocock/prototype",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/research",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/retro",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/tdd",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/teach",
+          "files": 6
+        },
+        {
+          "capability": "skill/@matt-pocock/to-questionnaire",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/to-spec",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/triage",
+          "files": 4
+        },
+        {
+          "capability": "skill/@matt-pocock/wait-what",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/wayfinder",
+          "files": 2
+        },
+        {
+          "capability": "skill/@matt-pocock/wizard",
+          "files": 3
+        },
+        {
+          "capability": "skill/@matt-pocock/writing-for-agents",
+          "files": 3
+        },
+        {
+          "capability": "skill/@my-productivity/illustrate",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/my-dissolve-doc",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/my-domain-vocab",
+          "files": 4
+        },
+        {
+          "capability": "skill/@my-productivity/my-mermaid",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/my-present",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/my-slidev",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/newspaper",
+          "files": 9
+        },
+        {
+          "capability": "skill/@my-productivity/prepare-peer-feedback",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/project-review",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/project-sync",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my-productivity/project-tracker-update",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/grill-to-design-doc",
+          "files": 2
+        },
+        {
+          "capability": "skill/@my/my-aggressive-clean-up",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-commit",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-commit-and-push",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-create-pr",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-fix-build",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-port-code",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/my-summarize-changes",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/pr-check-ci",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/pr-check-comments",
+          "files": 1
+        },
+        {
+          "capability": "skill/@my/pr-get-ready",
+          "files": 1
+        },
+        {
+          "capability": "skill/calibrate-system-prompt",
+          "files": 1
+        },
+        {
+          "capability": "skill/critique-committee",
+          "files": 1
+        },
+        {
+          "capability": "skill/design-critique",
+          "files": 1
+        },
+        {
+          "capability": "skill/e2e-validate",
+          "files": 6
+        },
+        {
+          "capability": "skill/improve-DDD-architecture",
+          "files": 5
+        },
+        {
+          "capability": "skill/product-critique",
+          "files": 1
+        },
+        {
+          "capability": "skill/serenity-chokepoint-market-research",
+          "files": 7
+        },
+        {
+          "capability": "skill/thermo-nuclear-code-quality-review",
+          "files": 1
+        }
+      ]
+    }
+  }
+}

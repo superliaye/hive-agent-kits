@@ -1,0 +1,76 @@
+{
+  "tile": "yestack",
+  "remote": {
+    "repoUrl": "https://github.com/superliaye/yestack",
+    "commit": "ec37f2ab5996f974c59103c91e2c4b48f22df7db"
+  },
+  "answers": {
+    "dirs ": [
+      ".agents",
+      ".claude-plugin",
+      ".github",
+      "plugins",
+      "scripts"
+    ],
+    "json .agents/plugins/marketplace.json": [
+      {
+        "name": "yestack",
+        "interface": {
+          "displayName": "yestack"
+        },
+        "plugins": [
+          {
+            "name": "ye",
+            "source": {
+              "source": "local",
+              "path": "./plugins/ye"
+            },
+            "policy": {
+              "installation": "AVAILABLE",
+              "authentication": "ON_INSTALL"
+            },
+            "category": "Productivity"
+          }
+        ]
+      }
+    ],
+    "json .claude-plugin/marketplace.json": [
+      {
+        "name": "yestack",
+        "description": "Leon Ye's personal agent skills, packaged as the ye plugin.",
+        "owner": {
+          "name": "superliaye"
+        },
+        "plugins": [
+          {
+            "name": "ye",
+            "source": "./plugins/ye",
+            "description": "Leon Ye's personal engineering skills."
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "tile": {
+      "recipe": "plugin-marketplace",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "plugin/ye",
+          "files": 1
+        }
+      ]
+    },
+    "generic": {
+      "recipe": "plugin-marketplace",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "plugin/ye",
+          "files": 1
+        }
+      ]
+    }
+  }
+}
