@@ -271,9 +271,6 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     snapshot.wouldDeploy.map((item) => [pairId(item.key, item.target), item] as const),
   );
   const owned = ledgerOwnershipByKey(snapshot.ledger.value);
-  const legacyInstructions = new Map(
-    snapshot.deploymentState.legacyInstructionFingerprints.map((entry) => [entry.target, entry]),
-  );
 
   const blockedByTarget = new Map<
     DeployTarget,
@@ -376,12 +373,9 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       if (selected.key.kind === "instruction" && blockedByTarget.has(target)) continue;
       const id = pairId(selected.key, target);
       const deployment = records.get(id);
-      const legacyInstruction =
-        selected.key.kind === "instruction" ? legacyInstructions.get(target) : undefined;
       if (
         selected.key.kind !== "bundle" &&
         !deployment &&
-        !legacyInstruction &&
         owned.get(serializeCapabilityKey(selected.key))?.has(target)
       ) {
         continue;
@@ -390,17 +384,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       if (!rendered || rendered.error || rendered.renderedHash === null) continue;
       const artifact = artifactFor(snapshot.artifacts, selected.key, target);
       let action: "add" | "update" | undefined;
-      const applied =
-        deployment?.applied ??
-        (legacyInstruction
-          ? {
-              sourceId: null,
-              contentSha: null,
-              renderedHash: legacyInstruction.renderedHash,
-              appliedAt: legacyInstruction.appliedAt,
-              operationId: "legacy-fingerprint-import",
-            }
-          : undefined);
+      const applied = deployment?.applied;
       if (!applied) {
         action = "add";
       } else if (
@@ -460,9 +444,7 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
       }
       if (intent.key.kind === "instruction" && blockedByTarget.has(target)) continue;
       const ledgerOwned = owned.get(serializeCapabilityKey(intent.key))?.has(target) ?? false;
-      const legacyInstructionOwned =
-        intent.key.kind === "instruction" && legacyInstructions.has(target);
-      if (!privatelyApplied && !ledgerOwned && !legacyInstructionOwned) continue;
+      if (!privatelyApplied && !ledgerOwned) continue;
       // An installer-owned removal needs the coordinates to uninstall: Hive's install
       // record, or failing that the current pointer.
       let pointer: { sourceId: string; contentSha: string; renderedHash?: string } | undefined;

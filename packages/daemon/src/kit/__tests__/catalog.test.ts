@@ -2,10 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Selection, Source } from "@hive/contract";
+import type { Source } from "@hive/contract";
 import { readCatalog } from "../catalog.ts";
-import { DeployError } from "../effect/errors.ts";
-import { resolveSelection } from "../selection.ts";
 import { failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
@@ -77,22 +75,6 @@ function writePresetIn(mirrorRoot: string, name: string, yaml: string): void {
   writeFileSync(join(presets, `${name}.yaml`), yaml);
 }
 
-function emptySelection(over: Partial<Selection["add"]>): Selection {
-  return {
-    presets: [],
-    add: {
-      instructions: [],
-      skills: [],
-      agents: [],
-      plugins: [],
-      bundles: [],
-      ...over,
-    },
-    remove: { instructions: [], skills: [], agents: [], plugins: [], bundles: [] },
-    targets: ["claude"],
-  };
-}
-
 describe("readCatalog (single Source)", () => {
   test("(a) @-group flatten: leaf name + group path are content-derived", () => {
     writeSkill("@grp/@sub/foo", "description: nested foo");
@@ -104,7 +86,7 @@ describe("readCatalog (single Source)", () => {
     expect(foo?.deployable).toBe(true);
   });
 
-  test("(b) within-kind collision blocks both, and resolveSelection throws", () => {
+  test("(b) within-kind collision blocks both", () => {
     writeSkill("@a/foo", "description: a-foo");
     writeSkill("@b/foo", "description: b-foo");
     const cat = readCatalog(failSafeDeployTargets(), [SOURCE]);
@@ -116,15 +98,6 @@ describe("readCatalog (single Source)", () => {
       expect(f.blockedReason).toBeDefined();
     }
     expect(cat.problems.some((p) => p.kind === "skill" && p.name === "foo")).toBe(true);
-
-    let thrown: unknown;
-    try {
-      resolveSelection(cat, emptySelection({ skills: ["foo"] }));
-    } catch (e) {
-      thrown = e;
-    }
-    expect(thrown).toBeInstanceOf(DeployError);
-    expect((thrown as DeployError).reason).toBe("collision");
   });
 
   test("(c) malformed entries skipped, not fatal; problems[] lists the bad ones", () => {

@@ -46,7 +46,6 @@ function snapshot(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapsh
       schemaVersion: 1,
       revision: 2,
       records: [],
-      legacyInstructionFingerprints: [],
     },
     wouldDeploy: [
       {
@@ -107,7 +106,6 @@ describe("buildDeployPlan", () => {
           schemaVersion: 1,
           revision: 0,
           records: [],
-          legacyInstructionFingerprints: [],
         },
         wouldDeploy: [],
         artifacts: [
@@ -138,7 +136,6 @@ describe("buildDeployPlan", () => {
         deploymentState: {
           schemaVersion: 1,
           revision: 3,
-          legacyInstructionFingerprints: [],
           records: [
             {
               key: unavailable,
@@ -200,7 +197,6 @@ describe("buildDeployPlan", () => {
           schemaVersion: 1,
           revision: 0,
           records: [],
-          legacyInstructionFingerprints: [],
         },
         wouldDeploy: [],
         artifacts: [{ key: owned, target: "codex", existence: "present", hash: "disk" }],
@@ -367,70 +363,6 @@ describe("buildDeployPlan", () => {
       }),
     );
     expect(plan.actions).toEqual([]);
-  });
-
-  test("uses imported whole-instruction provenance to plan a changed whole-file rewrite", () => {
-    const rules = { kind: "instruction" as const, name: "rules" };
-    const planned = buildDeployPlan(
-      snapshot({
-        catalog: {
-          entries: [
-            {
-              ...rules,
-              description: "Rules",
-              group: "",
-              deployable: true,
-              shadowed: false,
-              sourceIds: ["source-a"],
-              contentSha: "rules-content",
-            },
-          ],
-          presets: [],
-          problems: [],
-        },
-        selection: {
-          revision: 15,
-          enabled: [{ key: rules, targets: ["claude"] }],
-          removalIntents: [],
-        },
-        ledger: {
-          revision: null,
-          identity: "legacy-instruction-ledger",
-          value: {
-            kitVersion: "",
-            agents: ["claude"],
-            skills: [],
-            agentDefs: [],
-            instructions: [{ name: rules.name }],
-            plugins: [],
-            bundles: [],
-          },
-        },
-        deploymentState: {
-          schemaVersion: 1,
-          revision: 1,
-          records: [],
-          legacyInstructionFingerprints: [
-            { target: "claude", renderedHash: "legacy-whole", appliedAt: 1 },
-          ],
-        },
-        wouldDeploy: [
-          {
-            key: rules,
-            target: "claude",
-            sourceId: "source-a",
-            contentSha: "rules-content",
-            renderedHash: "new-whole",
-          },
-        ],
-        artifacts: [{ key: rules, target: "claude", existence: "present", hash: "legacy-whole" }],
-      }),
-    );
-
-    expect(planned.actions).toContainEqual(
-      expect.objectContaining({ action: "update", key: rules, target: "claude" }),
-    );
-    expect(planned.instructionWrites).toHaveLength(1);
   });
 
   test("blocks the whole instruction target while other kinds continue best-effort", () => {
@@ -621,7 +553,6 @@ describe("buildDeployPlan", () => {
         deploymentState: {
           schemaVersion: 1,
           revision: 5,
-          legacyInstructionFingerprints: [],
           records: [
             {
               key: first,
@@ -733,7 +664,6 @@ describe("buildDeployPlan", () => {
             schemaVersion: 1,
             revision: 1,
             records,
-            legacyInstructionFingerprints: [],
           },
           wouldDeploy: [],
           artifacts: [],
@@ -846,7 +776,6 @@ describe("buildDeployPlan", () => {
         schemaVersion: 1 as const,
         revision: 2,
         records,
-        legacyInstructionFingerprints: [],
       },
     });
 
@@ -923,7 +852,6 @@ describe("buildDeployPlan", () => {
               },
             },
           ],
-          legacyInstructionFingerprints: [],
         },
         wouldDeploy: [],
         artifacts: [],

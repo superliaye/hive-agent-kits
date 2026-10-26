@@ -41,18 +41,16 @@ export class SyncError extends Data.TaggedError("SyncError")<{
   readonly rateLimitReset?: number;
 }> {}
 
-// Deploy failures. `missing_binary` is the pre-flight abort (names the tool);
-// `collision` is an un-deployable colliding leaf name; `not_redirected` is the
-// A0 guard refusing a real installer with no redirected child env; `io` is a
-// filesystem fault during apply (per-kind failures stay in the per-kind result,
-// not the typed channel).
-export type DeployFailureReason = "missing_binary" | "collision" | "not_redirected" | "io";
+// Deploy failures. `collision` is a snippet more than one active Source
+// provides; `not_redirected` is the A0 guard refusing a real installer with no
+// redirected child env.
+export type DeployFailureReason = "collision" | "not_redirected";
 
 export class DeployError extends Data.TaggedError("DeployError")<{
   readonly reason: DeployFailureReason;
   readonly message: string;
-  // For `missing_binary`: the tool that was absent (claude | git | npx).
+  // For `not_redirected`: the installer that was refused (claude | git | npx).
   readonly tool?: string;
-  // For `collision`: the colliding capability name.
+  // For `collision`: the colliding snippet name.
   readonly name?: string;
 }> {}

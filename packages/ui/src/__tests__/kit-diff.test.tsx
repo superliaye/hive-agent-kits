@@ -4,21 +4,14 @@
 // row-level danger so a destructive deploy is legible from the rows, not only the
 // column header.
 //
-// The server is authoritative for the diff; this test stubs the diff endpoint to
+// The server is authoritative for the diff; this test stubs the Overview's diff to
 // drive a one-sided (removed-only) diff and asserts the panel's structure.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type {
-  CapabilityEntry,
-  Catalog,
-  DiffEntry,
-  KitState,
-  Source,
-  VerifyReport,
-} from "../api.ts";
+import type { CapabilityEntry, Catalog, DiffEntry, KitState, Source } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
@@ -40,14 +33,13 @@ async function flush(): Promise<void> {
 }
 
 const apiConfig = { baseUrl: "http://localhost", token: "test-token" };
-const emptyVerify: VerifyReport = { entries: [] };
 
 const GIT_ID = "git-src";
 const GIT_ORIGIN = "https://github.com/owner/repo";
 const OTHER_ID = "other-src";
 const OTHER_ORIGIN = "https://github.com/owner/repo-b";
 
-// The diff entries the stubbed /api/kit/diff endpoint returns for this render.
+// The diff entries the stubbed Overview returns for this render.
 let diffEntries: DiffEntry[];
 let ledgerInstructions: string[];
 
@@ -185,9 +177,7 @@ function installStubs(): void {
       return json({ revision: 8, enabled: [], removalIntents: [] });
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
-    if (path === "/api/kit/verify") return json(emptyVerify);
     if (path === "/api/sources" && method === "GET") return json(sources());
-    if (path === "/api/kit/diff" && method === "POST") return json({ entries: diffEntries });
     if (path === "/api/kit/deploy" && method === "POST") {
       return json({ kitSha: null, perKind: [], pruned: [], targets: ["claude"] });
     }

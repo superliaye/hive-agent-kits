@@ -14,7 +14,6 @@ import { CapabilityKey, serializeCapabilityKey } from "@hive/capability-schema";
 import { DeployTarget } from "@hive/contract";
 import { z } from "zod";
 import { syncDirectoryForDurability, withAdvisoryFileLock } from "../lib/durable-file.ts";
-import { readFingerprintSidecar } from "./fingerprint.ts";
 
 const AttemptAction = z.enum(["add", "update", "remove"]);
 const AttemptOutcome = z.enum(["succeeded", "failed", "interrupted"]);
@@ -59,10 +58,11 @@ export const DeploymentApplied = z.object({
   contentSha: z.string().nullable(),
   renderedHash: z.string(),
   appliedAt: z.number().int().nonnegative(),
-  operationId: z.string().min(1).default("legacy-deployment-import"),
+  operationId: z.string().min(1),
   installedVia: InstalledVia.optional(),
 });
-export type DeploymentApplied = z.input<typeof DeploymentApplied>;
+// recordSuccess supplies the operationId.
+export type DeploymentApplied = Omit<z.input<typeof DeploymentApplied>, "operationId">;
 
 export const DeploymentAttempt = z.object({
   action: AttemptAction,
@@ -88,17 +88,10 @@ const DeploymentInterruptionReceipt = z.object({
   operationId: z.string(),
 });
 
-const LegacyInstructionFingerprint = z.object({
-  target: DeployTarget,
-  renderedHash: z.string(),
-  appliedAt: z.number().int().nonnegative(),
-});
-
 export const DeploymentStateFile = z.object({
   schemaVersion: z.literal(1),
   revision: z.number().int().nonnegative(),
   records: z.array(DeploymentStateRecord),
-  legacyInstructionFingerprints: z.array(LegacyInstructionFingerprint).default([]),
   interruptionReceipts: z.array(DeploymentInterruptionReceipt).optional(),
 });
 export type DeploymentStateFile = z.infer<typeof DeploymentStateFile>;
@@ -110,7 +103,6 @@ type FailureInput = {
 };
 
 export type DeploymentStateStoreOptions = {
-  legacyFingerprintPath?: string;
   now?: () => number;
   rename?: (oldPath: string, newPath: string) => void;
   fsyncDirectory?: (directory: string) => void;
@@ -155,7 +147,6 @@ function emptyFile(): DeploymentStateFile {
     schemaVersion: 1,
     revision: 0,
     records: [],
-    legacyInstructionFingerprints: [],
     interruptionReceipts: [],
   };
 }
@@ -196,53 +187,6 @@ function normalizeCode(code: string): z.infer<typeof FailureCode> {
   return parsed.success ? parsed.data : "unknown";
 }
 
-function appliedOperationIdMissing(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  const applied = Reflect.get(value, "applied");
-  return (
-    applied !== undefined &&
-    applied !== null &&
-    typeof applied === "object" &&
-    !Object.hasOwn(applied, "operationId")
-  );
-}
-
-function readLegacyFingerprint(
-  path: string,
-): Pick<DeploymentStateFile, "records" | "legacyInstructionFingerprints"> {
-  const records = new Map<string, DeploymentStateRecord>();
-  const legacyInstructionFingerprints: z.infer<typeof LegacyInstructionFingerprint>[] = [];
-  for (const entry of readFingerprintSidecar(path).entries) {
-    if (entry.kind === "instruction" && entry.name === "") {
-      legacyInstructionFingerprints.push({
-        target: entry.target,
-        renderedHash: entry.hash,
-        appliedAt: entry.deployedAt,
-      });
-      continue;
-    }
-    const record = DeploymentStateRecord.parse({
-      key: { kind: entry.kind, name: entry.name },
-      target: entry.target,
-      applied: {
-        sourceId: entry.winnerSourceId ?? null,
-        contentSha: null,
-        renderedHash: entry.hash,
-        appliedAt: entry.deployedAt,
-        operationId: "legacy-fingerprint-import",
-      },
-      lastAttempt: {
-        action: "add",
-        outcome: "succeeded",
-        attemptedAt: entry.deployedAt,
-        operationId: "legacy-fingerprint-import",
-      },
-    });
-    records.set(recordId(record.key, record.target), record);
-  }
-  return { records: [...records.values()], legacyInstructionFingerprints };
-}
-
 export function openDeploymentStateStore(
   path: string,
   options: DeploymentStateStoreOptions = {},
@@ -260,7 +204,7 @@ export function openDeploymentStateStore(
       writeSync(fd, bytes, offset, length));
   const fsyncDirectory = options.fsyncDirectory ?? syncDirectoryForDurability;
 
-  const load = (): { file: DeploymentStateFile; needsMigration: boolean } | undefined => {
+  const load = (): DeploymentStateFile | undefined => {
     if (!existsSync(path)) return undefined;
     let raw: unknown;
     try {
@@ -269,29 +213,7 @@ export function openDeploymentStateStore(
       throw new DeploymentStateError("deployment_state_corrupt");
     }
     const parsed = DeploymentStateFile.safeParse(raw);
-    if (parsed.success) {
-      const rawRecords =
-        raw && typeof raw === "object" && Array.isArray(Reflect.get(raw, "records"))
-          ? Reflect.get(raw, "records")
-          : [];
-      let needsMigration = false;
-      const records = parsed.data.records.map((record, index) => {
-        if (!record.applied || !appliedOperationIdMissing(rawRecords[index])) return record;
-        needsMigration = true;
-        const successfulOperationId =
-          record.lastAttempt.outcome === "succeeded" && record.lastAttempt.action !== "remove"
-            ? record.lastAttempt.operationId
-            : "legacy-deployment-import";
-        return {
-          ...record,
-          applied: { ...record.applied, operationId: successfulOperationId },
-        };
-      });
-      return {
-        file: needsMigration ? DeploymentStateFile.parse({ ...parsed.data, records }) : parsed.data,
-        needsMigration,
-      };
-    }
+    if (parsed.success) return parsed.data;
     throw new DeploymentStateError("deployment_state_corrupt");
   };
 
@@ -356,34 +278,7 @@ export function openDeploymentStateStore(
     }
   };
 
-  const migrate = (): DeploymentStateFile => {
-    const imported = options.legacyFingerprintPath
-      ? readLegacyFingerprint(options.legacyFingerprintPath)
-      : { records: [], legacyInstructionFingerprints: [] };
-    if (imported.records.length === 0 && imported.legacyInstructionFingerprints.length === 0) {
-      return emptyFile();
-    }
-    const initial = DeploymentStateFile.parse({
-      schemaVersion: 1,
-      revision: 1,
-      ...imported,
-    });
-    write(initial);
-    return initial;
-  };
-
-  const loadLocked = (): DeploymentStateFile => {
-    const loaded = load();
-    if (!loaded) return migrate();
-    if (loaded.needsMigration) write(loaded.file);
-    return loaded.file;
-  };
-
-  const current = (): DeploymentStateFile => {
-    const loaded = load();
-    if (loaded && !loaded.needsMigration) return loaded.file;
-    return withLock(loadLocked);
-  };
+  const current = (): DeploymentStateFile => load() ?? emptyFile();
 
   const commit = (
     keyInput: z.input<typeof CapabilityKey>,
@@ -393,7 +288,7 @@ export function openDeploymentStateStore(
     const key = CapabilityKey.parse(keyInput);
     const target = DeployTarget.parse(targetInput);
     return withLock(() => {
-      const file = loadLocked();
+      const file = current();
       const id = recordId(key, target);
       const previous = file.records.find((record) => recordId(record.key, record.target) === id);
       const nextRecord = DeploymentStateRecord.parse(change(previous));
@@ -457,7 +352,7 @@ export function openDeploymentStateStore(
         operationId,
       });
       return withLock(() => {
-        const file = loadLocked();
+        const file = current();
         const id = recordId(parsedKey, parsedTarget);
         const previous = file.records.find((record) => recordId(record.key, record.target) === id);
         const receipts = file.interruptionReceipts ?? [];

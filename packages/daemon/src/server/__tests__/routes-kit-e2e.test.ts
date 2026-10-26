@@ -26,7 +26,6 @@ import {
   AddSourceResult,
   type CapabilityEntry,
   type DeploymentOverview,
-  type DiffEntry,
   type Ledger,
   type SelectionSnapshot,
 } from "@hive/contract";
@@ -233,30 +232,6 @@ type SelectionInput = {
   instructions?: string[];
   targets?: ("claude" | "codex")[];
 };
-function selectionBody(sel: SelectionInput): string {
-  return JSON.stringify({
-    presets: [],
-    add: {
-      skills: sel.skills ?? [],
-      agents: sel.agents ?? [],
-      instructions: sel.instructions ?? [],
-    },
-    remove: {},
-    targets: sel.targets ?? ["claude", "codex"],
-  });
-}
-
-async function postDiff(
-  server: ServerHandles,
-  sel: SelectionInput,
-): Promise<{ entries: DiffEntry[] }> {
-  const res = await server.app.fetch(
-    authed("/api/kit/diff", { method: "POST", body: selectionBody(sel) }),
-  );
-  expect(res.status).toBe(200);
-  return (await res.json()) as { entries: DiffEntry[] };
-}
-
 function desiredEntries(sel: SelectionInput): SelectionSnapshot["enabled"] {
   const targets = sel.targets ?? ["claude", "codex"];
   return [
@@ -273,10 +248,11 @@ function selectionEntryId(entry: SelectionSnapshot["enabled"][number]): string {
   return `${entry.key.kind}:${entry.key.name}`;
 }
 
-async function acceptSelection(
+// Make the durable Selection exactly `sel` without deploying it.
+async function selectExactly(
   server: ServerHandles,
   sel: SelectionInput & { plugins?: string[]; bundles?: string[] },
-): Promise<DeploymentOverview> {
+): Promise<void> {
   const current = (await (
     await server.app.fetch(authed("/api/kit/selection"))
   ).json()) as SelectionSnapshot;
@@ -322,7 +298,25 @@ async function acceptSelection(
     );
     expect(changed.status).toBe(200);
   }
+}
 
+// The Deploy Diff the Overview reports once `sel` is the durable Selection.
+async function overviewDiff(
+  server: ServerHandles,
+  sel: SelectionInput,
+): Promise<DeploymentOverview["diff"]> {
+  await selectExactly(server, sel);
+  const overview = (await (
+    await server.app.fetch(authed("/api/kit/overview"))
+  ).json()) as DeploymentOverview;
+  return overview.diff;
+}
+
+async function acceptSelection(
+  server: ServerHandles,
+  sel: SelectionInput & { plugins?: string[]; bundles?: string[] },
+): Promise<DeploymentOverview> {
+  await selectExactly(server, sel);
   let operationId = "";
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const overview = (await (
@@ -769,7 +763,7 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
         instructions: ["house-rules"],
         targets: ["claude", "codex"],
       };
-      const diff1 = await postDiff(server, sel);
+      const diff1 = await overviewDiff(server, sel);
       expect(diff1.entries.some((e) => e.name === "alpha" && e.change === "added")).toBe(true);
       expect(diff1.entries.some((e) => e.name === "helper" && e.change === "added")).toBe(true);
       expect(diff1.entries.some((e) => e.name === "house-rules" && e.change === "added")).toBe(
@@ -807,7 +801,7 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
 
       // ---- (e) re-deploy is idempotent: diff empty for those names, ledger unchanged ----
       const ledgerBytesBefore = readFileSync(homes.ledgerPath, "utf8");
-      const diff2 = await postDiff(server, sel);
+      const diff2 = await overviewDiff(server, sel);
       for (const name of ["alpha", "merged", "helper", "house-rules"]) {
         expect(diff2.entries.some((e) => e.name === name)).toBe(false);
       }
@@ -878,10 +872,8 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
 
   test("(i) unresolved-include strict guard: the skill FAILS and lands no bytes", async () => {
     // The strict-include guard (transforms.ts:21) throws on an unknown `<!-- include:
-    // NOPE -->` in a SKILL.md. The deploy engine is ordered best-effort, so that
-    // throw is caught PER-SKILL as a `failed` entry inside a 200 response (not a
-    // whole-HTTP-500) — but, decisively, the throw happens in transformSkill BEFORE
-    // any writeSkillFolder, so NO bytes land for that skill. That is the guard:
+    // NOPE -->` in a SKILL.md. The Overview records that render failure, so the
+    // Deploy plans no action for the skill and NO bytes land. That is the guard:
     // a strict marker is never silently left literal, and the skill never deploys.
     const server = await serverWith(twoSourceFetch());
     try {
@@ -906,8 +898,6 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
   });
 
   test("a hand-written plugin pointer installs and uninstalls through the Claude CLI", async () => {
-    delete process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL;
-    delete process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL;
     const argv: string[] = [];
     const installedPlugins = join(homes.claudeHome, "plugins", "installed_plugins.json");
     const server = await serverWith(installerFetch(), {
@@ -1020,17 +1010,12 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
     }
   });
 
-  test("environment hatches do not change what a Deploy plans for installer selections", async () => {
-    process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL = "1";
-    process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL = "1";
-    // Re-use a Source carrying a plugin + bundle capability.
+  test("a selected plugin plans its install while a setup-script bundle stays manual", async () => {
     const server = await serverWith(installerFetch());
     try {
       const add = await postOrigin(server, ORIGIN_INSTALLERS);
       expect(add.status).toBe(201);
-      // The well-formed plugin + bundle pass the now-stricter validate() gate
-      // end-to-end — a conformance flip would otherwise slip through this e2e, which
-      // previously checked only HTTP 201 + the `applied` lists.
+      // The well-formed plugin + bundle pass the validate() gate end-to-end.
       expect(AddSourceResult.parse(await add.json()).validation.conformant).toBe(true);
       const selection = (await (
         await server.app.fetch(authed("/api/kit/selection"))
@@ -1050,8 +1035,7 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
       const overview = (await (
         await server.app.fetch(authed("/api/kit/overview"))
       ).json()) as DeploymentOverview;
-      // The plugin installs as it would without the hatches; the setup-script bundle
-      // has no Hive-run installer, so it stays manual.
+      // The setup-script bundle has no Hive-run installer, so it stays manual.
       expect(overview.diff.entries).toEqual([
         { kind: "plugin", name: "myplugin", change: "added" },
       ]);
@@ -1066,8 +1050,6 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
       expect(existsSync(homes.ledgerPath)).toBe(false);
     } finally {
       await server.dispose();
-      delete process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL;
-      delete process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL;
     }
   });
 });

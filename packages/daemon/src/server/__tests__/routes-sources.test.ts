@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AddSourceResult } from "@hive/contract";
+import { AddSourceResult, type DeploymentOverview, type SelectionSnapshot } from "@hive/contract";
 import {
   buildGzipTar,
   clearHomeEnv,
@@ -247,21 +247,26 @@ describe("server routes — sources", () => {
       expect(foo?.sourceIds[0]).toBe(body.source.id);
 
       // An immediate diff resolves that just-synced Mirror's winner — `foo` only
-      // appears as `added` if resolveSelection found a deployable winner for it.
-      const diffRes = await server.app.fetch(
-        authed("/api/kit/diff", {
-          method: "POST",
+      // appears as `added` if the Deploy plan found a deployable winner for it.
+      const selection = (await (
+        await server.app.fetch(authed("/api/kit/selection"))
+      ).json()) as SelectionSnapshot;
+      const selected = await server.app.fetch(
+        authed("/api/kit/selection", {
+          method: "PATCH",
           body: JSON.stringify({
-            presets: [],
-            add: { skills: ["foo"] },
-            remove: {},
-            targets: ["claude"],
+            expectedRevision: selection.revision,
+            changes: [{ key: { kind: "skill", name: "foo" }, enabled: true, targets: ["claude"] }],
           }),
         }),
       );
-      expect(diffRes.status).toBe(200);
-      const diff = (await diffRes.json()) as { entries: { name: string; change: string }[] };
-      expect(diff.entries.some((e) => e.name === "foo" && e.change === "added")).toBe(true);
+      expect(selected.status).toBe(200);
+      const overviewRes = await server.app.fetch(authed("/api/kit/overview"));
+      expect(overviewRes.status).toBe(200);
+      const overview = (await overviewRes.json()) as DeploymentOverview;
+      expect(overview.diff.entries.some((e) => e.name === "foo" && e.change === "added")).toBe(
+        true,
+      );
     } finally {
       await server.dispose();
     }

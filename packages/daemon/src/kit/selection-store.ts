@@ -39,22 +39,6 @@ export const SelectionFile = z.object({
   removalIntents: z.array(RemovalIntent),
 });
 
-const LegacySelectionFileV2 = z.object({
-  schemaVersion: z.literal(2),
-  initialized: z.literal(true),
-  revision: z.number().int().nonnegative(),
-  enabled: z.array(SelectionEntry),
-  removalIntents: z.array(RemovalIntent),
-});
-
-const LegacySelectionFile = z.object({
-  schemaVersion: z.literal(1),
-  initialized: z.literal(true),
-  revision: z.number().int().nonnegative(),
-  enabled: z.array(SelectionEntry),
-  removalIntents: z.array(SelectionEntry),
-});
-
 const UninitializedSelectionFile = z
   .object({
     schemaVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
@@ -98,7 +82,6 @@ export type SelectionStore = {
     body: z.input<typeof SelectionMutation>,
     ledger?: Ledger | null,
   ): PreparedSelectionMutation;
-  mutate(body: z.input<typeof SelectionMutation>, ledger?: Ledger | null): SelectionSnapshotType;
   // Internal seam for a later successful Deploy removal outcome. It changes only
   // matching intents and never lets Deployment State author Selection.
   clearRemovalIntents(
@@ -256,38 +239,6 @@ export function openSelectionStore(
     }
     const parsed = SelectionFile.safeParse(raw);
     if (parsed.success) return parsed.data;
-    const legacyV2 = LegacySelectionFileV2.safeParse(raw);
-    if (legacyV2.success) {
-      const migrated: SelectionFile = {
-        schemaVersion: 3,
-        initialized: true,
-        revision: legacyV2.data.revision,
-        enabled: canonical(legacyV2.data.enabled),
-        removalIntents: canonicalIntents(legacyV2.data.removalIntents),
-      };
-      write(migrated);
-      return migrated;
-    }
-    const legacy = LegacySelectionFile.safeParse(raw);
-    if (legacy.success) {
-      const migrated: SelectionFile = {
-        schemaVersion: 3,
-        initialized: true,
-        revision: legacy.data.revision,
-        enabled: canonical(legacy.data.enabled),
-        removalIntents: canonicalIntents(
-          legacy.data.removalIntents.flatMap((entry) =>
-            entry.targets.map((target) => ({
-              key: entry.key,
-              targets: [target] as [DeployTarget],
-              generation: generation(),
-            })),
-          ),
-        ),
-      };
-      write(migrated);
-      return migrated;
-    }
     if (UninitializedSelectionFile.safeParse(raw).success) return undefined;
     throw new Error(`selection_corrupt: ${parsed.error.message}`);
   };
@@ -405,7 +356,6 @@ export function openSelectionStore(
       return snapshot(initial);
     },
     prepareMutation,
-    mutate: (body, ledger) => prepareMutation(body, ledger).commit(),
     clearRemovalIntents: (entries) => {
       const current = initialized();
       const removalIntents = intentMap(current.removalIntents);

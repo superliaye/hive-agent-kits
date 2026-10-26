@@ -1,10 +1,10 @@
-// Content hashing of deployed artifacts — the SINGLE hash function shared by the
-// Deploy Diff's `changed` detection (selection.ts), the integrity fingerprint
-// sidecar (fingerprint.ts), and the on-disk verify pass (verify.ts). One hash so
-// drift detection can never false-positive on an incompatible second algorithm.
+// Content hashing of deployed artifacts — the SINGLE hash function shared by
+// Deploy staging and recovery (deploy-coordinator.ts) and the Overview's
+// would-deploy and on-disk observations (overview.ts). One hash so drift
+// detection can never false-positive on an incompatible second algorithm.
 //
 // Each function hashes what deploy ACTUALLY wrote to disk for a kind under a
-// target, matching the engine's write semantics exactly:
+// target, matching Deploy's write semantics exactly:
 //   skill       — stable hash over the deployed file-set (sorted relative paths +
 //                 bytes); the on-disk folder already includes the Codex sidecar.
 //   agent       — hash of the rendered .md (claude) / .toml (codex) file bytes.
@@ -20,14 +20,14 @@ export function sha256(s: string): string {
 }
 
 // Stable hash of a skill file-set: sort by relative path, join `${rel}\n${content}`
-// with a NUL separator. Matches selection.ts renderedHash/deployedHash exactly.
+// with a NUL separator. Rendered and deployed skill hashes both go through here.
 export function hashSkillFiles(files: { rel: string; content: string }[]): string {
   const sorted = [...files].sort((a, b) => a.rel.localeCompare(b.rel));
   return sha256(sorted.map((f) => `${f.rel}\n${f.content}`).join("\0"));
 }
 
 // The on-disk skills root for a target: claude skills live under claudeHome/skills,
-// codex skills under agentsHome/skills (per the deploy engine).
+// codex skills under agentsHome/skills.
 function skillsRootFor(targets: DeployTargets, target: DeployTarget): string {
   return target === "claude" ? targets.claudeHome() : targets.agentsHome();
 }

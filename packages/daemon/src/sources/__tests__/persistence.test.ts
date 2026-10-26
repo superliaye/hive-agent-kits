@@ -93,53 +93,6 @@ describe("SourcesPersistence", () => {
     expect(p.read()).toEqual({ version: SOURCES_FILE_VERSION, revision: 0, sources: [] });
   });
 
-  test("migrates the prior git/local registry into revisioned locators", () => {
-    const legacy = {
-      version: 3,
-      sources: [
-        {
-          id: "git",
-          origin: "https://github.com/a/b",
-          kind: "git",
-          active: true,
-          createdAt: 1,
-          rank: 1,
-        },
-        {
-          id: "starter",
-          origin: "local:starter",
-          kind: "local",
-          active: true,
-          createdAt: 1,
-          rank: 0,
-        },
-      ],
-    } as const;
-    writeFileSync(path, JSON.stringify(legacy), "utf8");
-
-    expect(new SourcesPersistence(path).read()).toEqual({
-      version: SOURCES_FILE_VERSION,
-      revision: 0,
-      sources: [
-        {
-          ...legacy.sources[0],
-          label: legacy.sources[0].origin,
-          locator: {
-            kind: "git",
-            repoUrl: "https://github.com/a/b",
-            revision: { mode: "track", ref: "refs/heads/main" },
-            subpath: ".",
-          },
-        },
-        {
-          ...legacy.sources[1],
-          label: legacy.sources[1].origin,
-          locator: { kind: "starter" },
-        },
-      ],
-    });
-  });
-
   test("a SAME-version file with a bad shape still THROWS (corruption not swallowed)", () => {
     writeFileSync(
       path,

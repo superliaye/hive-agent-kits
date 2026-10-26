@@ -1,6 +1,9 @@
 # Pivot to a capability deploy-manager for my-agent-kits
 
-status: accepted
+status: accepted; superseded-in-part — the synchronous deploy engine and its
+skip-env hatches, the `verify` pass, and the fingerprint sidecar are removed;
+ADR-0029's accepted Deploys, Deployment State, and Deployment Overview replace
+them
 supersedes: ADR-0019, ADR-0009, ADR-0013, ADR-0014, ADR-0015
 supersedes-in-part: ADR-0007
 

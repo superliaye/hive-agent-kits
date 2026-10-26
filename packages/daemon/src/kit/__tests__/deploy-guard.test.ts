@@ -24,7 +24,6 @@ function fakeTargets(redirected: boolean): DeployTargets {
     agentsHome: () => "/tmp/a",
     ledgerPath: () => "/tmp/l",
     mirrorRoot: (sourceId: string) => `/tmp/m/${sourceId}`,
-    fingerprintPath: () => "/tmp/f",
     deploymentStatePath: () => "/tmp/deployment-state.json",
     kitTmpRoot: () => "/tmp/t",
     starterRoot: () => "/tmp/starter",

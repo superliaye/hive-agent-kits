@@ -50,9 +50,9 @@ export function onboardSource(
 
     // Bounded sync: a never-resolving fetch (or a slow one) must not hang the add.
     // On timeout the fiber is interrupted and we fold a `timeout` SyncError.
-    // (Caveat: productionFetch uses bare fetch with no AbortSignal, so the
-    // underlying request may linger until it settles and is discarded — acceptable;
-    // threading an AbortSignal is a follow-on.)
+    // (Caveat: acquisition takes no AbortSignal, so the underlying work may
+    // linger until it settles and is discarded — acceptable; threading an
+    // AbortSignal is a follow-on.)
     const syncResult = yield* Effect.result(
       syncLocatorSource(source, targets, options).pipe(
         Effect.timeoutOrElse({

@@ -1,7 +1,7 @@
-// Deploy fs/exec adapter — the single narrow I/O boundary for the
-// deploy engine. All writes + external execs go through here, against the
-// redirected child env from the DeployTargets port. Injectable so a test can
-// assert the exec adapter is NOT called under AGENT_KIT_SKIP_*.
+// Deploy fs/exec adapter — the single narrow I/O boundary for Deploy. All
+// writes + external execs go through here, against the redirected child env
+// from the DeployTargets port. Injectable so a test can assert what the exec
+// adapter ran.
 
 import {
   cpSync,
@@ -10,7 +10,6 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -102,13 +101,13 @@ export function readSkillSource(srcDir: string): SkillFile[] {
 // legitimately targets the real home (deploying is the product's whole point).
 // The A0 blast-radius guard exists only to stop HIVE'S OWN TEST SUITE from
 // shelling out a real installer against the developer's real ~/.claude: it fires
-// solely under an automated test (NODE_ENV==="test") that neither redirected the
-// home nor set an AGENT_KIT_SKIP_* hatch. `tool` names the binary for the error.
+// solely under an automated test (NODE_ENV==="test") that did not redirect the
+// home. `tool` names the binary for the error.
 export function execInstaller(fx: DeployFsExec, req: ExecRequest, tool: string): ExecResult {
   if (isAutomatedTest() && !fx.targets.isChildEnvRedirected()) {
     throw new DeployError({
       reason: "not_redirected",
-      message: `refusing to run real ${tool} installer in a test without a redirected home (${join(homedir(), ".claude")}); redirect HIVE_*_HOME or set AGENT_KIT_SKIP_*`,
+      message: `refusing to run real ${tool} installer in a test without a redirected home (${join(homedir(), ".claude")}); redirect HIVE_*_HOME`,
       tool,
     });
   }
@@ -168,21 +167,4 @@ export function bunExec(req: ExecRequest, env: NodeJS.ProcessEnv): ExecResult {
 
 export function bunBinaryProbe(name: string, env: NodeJS.ProcessEnv): boolean {
   return spawnViaShell([name, "--version"], { env }).exitCode === 0;
-}
-
-// Convenience: read a directory's entries safely (used to probe skill folders).
-export function listDirSafe(p: string): string[] {
-  try {
-    return readdirSync(p);
-  } catch {
-    return [];
-  }
-}
-
-export function isDir(p: string): boolean {
-  try {
-    return statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
 }

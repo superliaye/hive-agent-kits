@@ -98,7 +98,7 @@ const source: Source = {
 
 describe("KitDeployPage catalog skeleton", () => {
   test("skeleton present while catalog pending, gone after it resolves", async () => {
-    // Hold the catalog fetch open; state/verify resolve immediately so only the
+    // Hold the catalog fetch open; state resolves immediately so only the
     // catalog query gates the skeleton.
     const catalog = deferred<Response>();
     globalThis.fetch = (async (input: string | URL | Request): Promise<Response> => {

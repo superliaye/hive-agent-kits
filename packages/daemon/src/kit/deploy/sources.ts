@@ -1,6 +1,6 @@
 // Resolve Mirror source paths for deployable capabilities. Skills/agents may sit
 // under @-group folders; this flattens to leaf name → source dir/file. Used by
-// the deploy engine to read source content the pure transforms consume.
+// Deploy to read source content the pure transforms consume.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -60,8 +60,8 @@ export function resolveFolderSources(kindDir: string, marker: string): Map<strin
 // by mirrorRoot would serve a stale leaf→dir map after any re-sync — a freshly-synced
 // skill reading as "source not found", a removed one pointing at a deleted dir. The
 // walk is one shallow readdir per kind dir; callers that resolve many names from one
-// Mirror in a single pass can hoist `resolveFolderSources` themselves (see the deploy
-// engine), but the shared accessor never holds cross-operation state.
+// Mirror in a single pass can hoist `resolveFolderSources` themselves, but the shared
+// accessor never holds cross-operation state.
 
 // The winner Mirror's source dir for a skill leaf name, or null when absent.
 export function skillSourceDir(mirrorRoot: string, name: string): string | null {
@@ -168,19 +168,13 @@ export function pluginMeta(mirrorRoot: string, name: string): PluginMeta | null 
   };
 }
 
-// Bundle frontmatter (installer kind, source, pinned_commit, package, requires).
+// Bundle frontmatter (installer kind, package, skills, verify_paths).
 export type BundleMeta = {
   name: string;
   installerKind: "setup-script" | "npx-skills";
-  source: string;
-  pinnedCommit: string;
-  command: string;
-  flags: string[];
-  hostFlagMap: Record<string, string[]>;
   pkg: string;
   skills: string[];
   verifyPaths: Partial<Record<"claude" | "codex", string[]>>;
-  requires: string[];
 };
 
 export function bundleMeta(mirrorRoot: string, name: string): BundleMeta | null {
@@ -194,19 +188,9 @@ export function bundleMeta(mirrorRoot: string, name: string): BundleMeta | null 
   return {
     name,
     installerKind: kind === "npx-skills" ? "npx-skills" : "setup-script",
-    source: typeof fm.source === "string" ? fm.source : "",
-    pinnedCommit: typeof fm.pinned_commit === "string" ? fm.pinned_commit : "",
-    command: typeof installer.command === "string" ? installer.command : "",
-    flags: Array.isArray(installer.flags)
-      ? installer.flags.filter((x): x is string => typeof x === "string")
-      : [],
-    hostFlagMap: normalizeHostFlagMap(installer.host_flag_map),
     pkg: typeof installer.package === "string" ? installer.package : "",
     skills: normalizeStringList(installer.skills),
     verifyPaths: normalizeVerifyPaths(fm.verify_paths),
-    requires: Array.isArray(fm.requires)
-      ? fm.requires.filter((x): x is string => typeof x === "string")
-      : [],
   };
 }
 
@@ -232,16 +216,6 @@ function normalizeVerifyPaths(value: unknown): Partial<Record<"claude" | "codex"
     if (paths.length > 0) result[target] = paths;
   }
   return result;
-}
-
-function normalizeHostFlagMap(v: unknown): Record<string, string[]> {
-  const out: Record<string, string[]> = {};
-  if (v && typeof v === "object") {
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      if (Array.isArray(val)) out[k] = val.filter((x): x is string => typeof x === "string");
-    }
-  }
-  return out;
 }
 
 function parseYamlFrontmatter(content: string): Record<string, unknown> {

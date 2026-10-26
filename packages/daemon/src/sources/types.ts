@@ -11,8 +11,8 @@
 import { Source, type SourceLocator } from "@hive/contract";
 import { z } from "zod";
 
-// Version 4 adds revisioned Source registry writes. Persistence migrates the
-// supported version-3 shape and rejects same-version corruption.
+// Version 4 adds revisioned Source registry writes. Persistence discards an
+// older-version file and rejects same-version corruption.
 export const SOURCES_FILE_VERSION = 4;
 
 export const SourcesFileSchema = z.object({

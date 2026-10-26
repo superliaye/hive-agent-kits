@@ -8,23 +8,12 @@ export type {
   CapabilityKind,
   Catalog,
   DeployDiff,
-  DeployResult,
   PresetSummary,
-  Selection,
   SourceSyncStatus,
   SyncRunResult,
   SyncStatus,
-  VerifyEntry,
-  VerifyReport,
-  VerifyStatus,
-  VerifyTargetStatus,
 } from "@hive/contract";
-export {
-  DesiredSelection,
-  SelectionMutation,
-  SelectionSchema,
-  SelectionSnapshot,
-} from "@hive/contract";
+export { DesiredSelection, SelectionMutation, SelectionSnapshot } from "@hive/contract";
 export { DeployError, SyncError } from "./effect/errors.ts";
 export { type CreateKitOptions, Kit, KitLive, type KitSvc } from "./effect/kit-live.ts";
 export { type DeployTarget, type DeployTargets, defaultDeployTargets } from "./targets.ts";

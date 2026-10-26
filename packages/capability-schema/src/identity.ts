@@ -48,7 +48,7 @@ export const CapabilityKey = z.object({
 export type CapabilityKey = z.infer<typeof CapabilityKey>;
 
 // Canonical `${kind}:${name}` string — the single SSOT for the deploy-identity
-// string currently re-derived ad hoc in kit/catalog.ts and kit/selection.ts.
+// string.
 export function serializeCapabilityKey(key: CapabilityKey): string {
   return `${key.kind}:${key.name}`;
 }

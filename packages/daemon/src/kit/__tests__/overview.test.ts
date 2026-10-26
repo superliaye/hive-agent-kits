@@ -40,7 +40,6 @@ function fixture(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapsho
       schemaVersion: 1,
       revision: 0,
       records: [],
-      legacyInstructionFingerprints: [],
     },
     wouldDeploy: [],
     artifacts: [],
@@ -116,7 +115,6 @@ describe("authoritative Overview union and state matrix", () => {
         deploymentState: {
           schemaVersion: 1,
           revision: 2,
-          legacyInstructionFingerprints: [],
           records: [
             {
               key: removed,
@@ -190,7 +188,6 @@ describe("authoritative Overview union and state matrix", () => {
         deploymentState: {
           schemaVersion: 1,
           revision: 1,
-          legacyInstructionFingerprints: [],
           records: [
             {
               key: stateKey,
@@ -283,7 +280,6 @@ describe("authoritative Overview union and state matrix", () => {
         deploymentState: {
           schemaVersion: 1,
           revision: 4,
-          legacyInstructionFingerprints: [],
           records: [
             applied(states.inSync, "same-hash"),
             updateRecord,
@@ -355,7 +351,6 @@ describe("authoritative Overview union and state matrix", () => {
           records: [rows.verified, rows.missing, rows.drifted, rows.recorded, rows.error].map(
             (item) => applied(item, "expected"),
           ),
-          legacyInstructionFingerprints: [],
         },
         ledger: {
           revision: null,
@@ -410,7 +405,6 @@ describe("authoritative Overview union and state matrix", () => {
         deploymentState: {
           schemaVersion: 1,
           revision: 2,
-          legacyInstructionFingerprints: [],
           records: [applied(dual, "old", "claude"), applied(dual, "same", "codex")],
         },
         wouldDeploy: [
@@ -455,7 +449,6 @@ describe("authoritative Overview union and state matrix", () => {
         deploymentState: {
           schemaVersion: 1,
           revision: 1,
-          legacyInstructionFingerprints: [],
           records: [applied(plugin, "ye-sha", "claude")],
         },
       }),
@@ -549,7 +542,6 @@ function testTargets(root: string): DeployTargets {
     agentsHome: () => join(root, ".agents"),
     ledgerPath: () => join(root, "manifest.json"),
     mirrorRoot: (sourceId) => join(root, "mirrors", sourceId),
-    fingerprintPath: () => join(root, "fingerprints.json"),
     deploymentStatePath: () => join(root, "deployment-state.json"),
     kitTmpRoot: () => join(root, "tmp"),
     starterRoot: () => join(root, "starter"),
@@ -614,7 +606,6 @@ describe("managed npx bundle snapshot capture", () => {
             schemaVersion: 1,
             revision: 0,
             records: [],
-            legacyInstructionFingerprints: [],
           },
         },
         [],
@@ -659,6 +650,66 @@ describe("managed npx bundle snapshot capture", () => {
   });
 });
 
+describe("snippet collision snapshot capture", () => {
+  test("a snippet two active Sources provide blocks rendering instead of picking one", () => {
+    const root = mkdtempSync(join(tmpdir(), "overview-snippet-collision-"));
+    try {
+      const targets = testTargets(root);
+      const alpha = key("skill", "alpha");
+      const skillPath = join(
+        targets.mirrorRoot("source-win"),
+        "capabilities",
+        "skills",
+        "alpha",
+        "SKILL.md",
+      );
+      mkdirSync(join(skillPath, ".."), { recursive: true });
+      writeFileSync(
+        skillPath,
+        "---\nname: alpha\ndescription: alpha\n---\n<!-- include: shared -->\n",
+      );
+      for (const sourceId of ["source-win", "source-other"]) {
+        const snippet = join(targets.mirrorRoot(sourceId), "capabilities", "snippets", "shared.md");
+        mkdirSync(join(snippet, ".."), { recursive: true });
+        writeFileSync(snippet, `from ${sourceId}`);
+      }
+      const captured = captureDeploymentSnapshot(
+        targets,
+        {
+          sourceRegistry: {
+            revision: 1,
+            sources: [
+              { ...coherentSource, id: "source-win" },
+              { ...coherentSource, id: "source-other", rank: 2 },
+            ],
+          },
+          catalog: { entries: [variant(alpha)], presets: [], problems: [] },
+          selection: {
+            revision: 1,
+            enabled: [{ key: alpha, targets: ["claude"] }],
+            removalIntents: [],
+          },
+          ledger: null,
+          deploymentState: { schemaVersion: 1, revision: 0, records: [] },
+        },
+        [],
+      );
+
+      expect(captured.wouldDeploy).toEqual([
+        expect.objectContaining({
+          key: alpha,
+          target: "claude",
+          renderedHash: null,
+          error: "render_error",
+        }),
+      ]);
+      expect(buildOverview(captured).diff.entries).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 function coherentReaders(onCatalog: () => void) {
   return {
     readSourceRegistry: () => ({ version: 4 as const, revision: 3, sources: [coherentSource] }),
@@ -672,7 +723,6 @@ function coherentReaders(onCatalog: () => void) {
       schemaVersion: 1 as const,
       revision: 0,
       records: [],
-      legacyInstructionFingerprints: [],
     }),
   };
 }

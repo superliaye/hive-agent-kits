@@ -46,12 +46,10 @@ export function redirectHomeEnv(root: string): RedirectedHome {
   return { root, claudeHome, codexHome, agentsHome, ledgerPath, runtimeRoot };
 }
 
-// Clear all HIVE_* + skip-env overrides so the real home is never touched and
-// state never bleeds between tests.
+// Clear all HIVE_* overrides so the real home is never touched and state never
+// bleeds between tests.
 export function clearHomeEnv(): void {
   for (const k of HIVE_ENV_KEYS) delete process.env[k];
-  delete process.env.AGENT_KIT_SKIP_PLUGIN_INSTALL;
-  delete process.env.AGENT_KIT_SKIP_BUNDLE_INSTALL;
 }
 
 // ---- in-memory ustar tar builder ----

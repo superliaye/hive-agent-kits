@@ -105,7 +105,7 @@ describe("childEnv sandbox reconciliation (B2a)", () => {
     // CLAUDE_CONFIG_DIR pins claude directly.
     expect(env.CLAUDE_CONFIG_DIR).toBe(t.claudeHome());
     // $HOME points at the sandbox parent so an installer resolving ~/.codex,
-    // ~/.agents from $HOME lands on the SAME tree the deploy engine writes.
+    // ~/.agents from $HOME lands on the SAME tree Deploy writes.
     expect(env.HOME).toBe(sandboxParent);
     expect(env.USERPROFILE).toBe(sandboxParent);
     // The B2a invariant: installer-resolved ~/.codec|.agents == resolved homes.
@@ -193,8 +193,8 @@ test("sandbox parent equals dirname of resolved claude home", () => {
 
 // Guard the B2a invariant for the EXPLICIT-env redirect path (redirectHomeEnv),
 // not just the dev-sandbox path. The helper's dotted-sibling layout must keep
-// installer-resolved ~/.codex|.agents equal to the resolved homes, or the deploy
-// engine and a shelled-out installer would write different trees.
+// installer-resolved ~/.codex|.agents equal to the resolved homes, or Deploy and
+// a shelled-out installer would write different trees.
 describe("childEnv reconciliation under redirectHomeEnv (explicit env)", () => {
   test("$HOME-resolved ~/.claude|.codex|.agents equal the resolved homes", () => {
     const homes = redirectHomeEnv("/tmp/hive-redir");

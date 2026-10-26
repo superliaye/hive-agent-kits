@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { Catalog, KitState, VerifyReport } from "../api.ts";
+import type { Catalog, KitState } from "../api.ts";
 import { DeveloperSettings } from "../components/DeveloperSettings.tsx";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
@@ -30,7 +30,6 @@ async function flush(): Promise<void> {
 }
 
 const apiConfig = { baseUrl: "http://localhost", token: "test-token" };
-const emptyVerify: VerifyReport = { entries: [] };
 
 function catalog(): Catalog {
   return { entries: [], presets: [], problems: [] };
@@ -70,7 +69,6 @@ function installStubs(): void {
       return json(overviewFromLegacy({ catalog: catalog(), state: kitState(), sources: [] }));
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
-    if (path === "/api/kit/verify") return json(emptyVerify);
     if (path === "/api/sources") return json([]);
     if (path === "/api/developer") {
       if (method === "PUT") {
