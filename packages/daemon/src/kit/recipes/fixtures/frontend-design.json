@@ -1,0 +1,41 @@
+{
+  "tile": "frontend-design",
+  "remote": null,
+  "answers": {
+    "copy skills-cli ": [
+      "LICENSE.txt",
+      "SKILL.md"
+    ],
+    "dirs ": [],
+    "frontmatter SKILL.md": {
+      "name": "frontend-design",
+      "description": "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.",
+      "license": "Complete terms in LICENSE.txt"
+    },
+    "json skills-lock.json": [],
+    "kind SKILL.md": "file",
+    "mentions \"${CLAUDE_PLUGIN_ROOT}\" ": false
+  },
+  "expect": {
+    "tile": {
+      "recipe": "published-skills",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "skill/frontend-design",
+          "files": 2
+        }
+      ]
+    },
+    "generic": {
+      "recipe": "published-skills",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "skill/frontend-design",
+          "files": 2
+        }
+      ]
+    }
+  }
+}

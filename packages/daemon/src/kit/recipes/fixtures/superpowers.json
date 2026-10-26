@@ -1,0 +1,95 @@
+{
+  "tile": "superpowers",
+  "remote": {
+    "repoUrl": "https://github.com/obra/superpowers",
+    "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b"
+  },
+  "answers": {
+    "dirs ": [
+      ".agents",
+      ".antigravity-plugin",
+      ".claude-plugin",
+      ".codex-plugin",
+      ".cursor-plugin",
+      ".devin-plugin",
+      ".github",
+      ".hermes-plugin",
+      ".kimi-plugin",
+      ".muse-plugin",
+      ".opencode",
+      ".pi",
+      "assets",
+      "docs",
+      "hooks",
+      "scripts",
+      "skills",
+      "tests"
+    ],
+    "json .agents/plugins/marketplace.json": [
+      {
+        "name": "superpowers-dev",
+        "interface": {
+          "displayName": "Superpowers Dev"
+        },
+        "plugins": [
+          {
+            "name": "superpowers",
+            "source": {
+              "source": "url",
+              "url": "./"
+            },
+            "policy": {
+              "installation": "AVAILABLE",
+              "authentication": "ON_INSTALL"
+            },
+            "category": "Developer Tools"
+          }
+        ]
+      }
+    ],
+    "json .claude-plugin/marketplace.json": [
+      {
+        "name": "superpowers-dev",
+        "description": "Development marketplace for Superpowers core skills library",
+        "owner": {
+          "name": "Jesse Vincent",
+          "email": "jesse@fsck.com"
+        },
+        "plugins": [
+          {
+            "name": "superpowers",
+            "description": "Core skills library for Claude Code: TDD, debugging, collaboration patterns, and proven techniques",
+            "version": "7.0.1",
+            "source": "./",
+            "author": {
+              "name": "Jesse Vincent",
+              "email": "jesse@fsck.com"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "tile": {
+      "recipe": "plugin-marketplace",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "plugin/superpowers",
+          "files": 1
+        }
+      ]
+    },
+    "generic": {
+      "recipe": "plugin-marketplace",
+      "unit": "pick",
+      "capabilities": [
+        {
+          "capability": "plugin/superpowers",
+          "files": 1
+        }
+      ]
+    }
+  }
+}

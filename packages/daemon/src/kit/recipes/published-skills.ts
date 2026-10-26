@@ -9,7 +9,7 @@ import { log } from "../../lib/log.ts";
 import { type TreePath, treePath } from "../acquisition/snapshot.ts";
 import type { SyncError } from "../effect/errors.ts";
 import { type CapabilityName, type CopyRule, capabilityName, skillFolder } from "./projection.ts";
-import type { GenericRecipe, Match, RecipeTree } from "./recipe.ts";
+import type { Match, PickRecipe, RecipeTree } from "./recipe.ts";
 
 // Copied verbatim from skills@1.7.2 dist/cli.mjs.
 const SKIP_DIRS = ["node_modules", ".git", "dist", "build", "__pycache__"];
@@ -292,7 +292,7 @@ const PLUGIN_RUNTIME = `\${CLAUDE_PLUGIN_ROOT}`;
 
 const miss = (reason: string): Match => ({ _tag: "Miss", reason });
 
-export const publishedSkills: GenericRecipe = {
+export const publishedSkills: PickRecipe = {
   id: "published-skills",
   label: "Published skills",
   unit: "pick",

@@ -8,11 +8,13 @@
 import type {
   AcceptedDeployRequest,
   AcceptedDeployResponse,
+  AddSourceBody,
   AddSourceInput,
   AddSourceResult,
   BackendReadiness,
   BackendStatus,
   Catalog,
+  DeployTarget,
   KitState,
   SelectionMutation,
   SelectionSnapshot,
@@ -23,7 +25,9 @@ import {
   AcceptedDeployResponse as AcceptedDeployResponseSchema,
   AddSourceResult as AddSourceResultSchema,
   DeploymentOverview as DeploymentOverviewSchema,
+  DeployTarget as DeployTargetSchema,
   SelectionSnapshot as SelectionSnapshotSchema,
+  TileSummary as TileSummarySchema,
 } from "@hive/contract";
 import type { Preferences } from "@hive/theming";
 
@@ -61,6 +65,7 @@ export type {
   SyncStatus,
   SyncStatusState,
   TargetObservation,
+  TileSummary,
 } from "@hive/contract";
 
 declare global {
@@ -234,6 +239,17 @@ export class SelectionConflictError extends Error {
   }
 }
 
+// One Selection change turned a whole Source's unit both on and off for one target.
+export class SelectionUnitConflictError extends Error {
+  constructor(
+    readonly sourceId: string,
+    readonly target: DeployTarget,
+  ) {
+    super("Selection change contradicts a whole Source");
+    this.name = "SelectionUnitConflictError";
+  }
+}
+
 export class PlanStaleError extends Error {
   constructor() {
     super("Deployment plan changed");
@@ -342,7 +358,14 @@ export const api = {
   // `call<T>`, this reads the error body so the control can surface the server's
   // structured 400 issues / 409 duplicate; on any non-201 it throws a typed
   // `AddSourceError`.
-  addSource: (cfg: ApiConfig, origin: string) => addSource(cfg, origin),
+  addSource: (cfg: ApiConfig, origin: string) =>
+    postSource(cfg, sourceInputFromValue(origin), origin),
+  // The Tile shelf, each Tile with the id of the Source already added from it.
+  listTiles: (cfg: ApiConfig) =>
+    call<unknown>(cfg, "/api/tiles").then((body) => TileSummarySchema.array().parse(body)),
+  // Add a Tile's Source. The Daemon supplies its label and locator; the result
+  // and errors are the same as addSource.
+  addTile: (cfg: ApiConfig, tileId: string) => postSource(cfg, { tile: tileId }, tileId),
   // Flip a Source on/off. Activate/deactivate only change `active` (no sync) and
   // emit the source.activated/deactivated audit event server-side; the catalog is
   // built from active sources only, so the page re-fetches ["kit"] to reflect it.
@@ -369,16 +392,33 @@ export const api = {
     callVoid(cfg, `/api/sources/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 
-async function addSource(cfg: ApiConfig, origin: string): Promise<AddSourceResult> {
+// `origin` names the request in a 409 whose body carries no origin.
+async function postSource(
+  cfg: ApiConfig,
+  input: AddSourceBody,
+  origin: string,
+): Promise<AddSourceResult> {
   const path = "/api/sources";
-  const input = sourceInputFromValue(origin);
-  const res = await request(cfg, path, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(input),
-  });
+  let res: Response;
+  try {
+    res = await request(cfg, path, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(input),
+    });
+  } catch (error) {
+    // Every add failure is an AddSourceError, so the banner can always render it.
+    throw new AddSourceError(
+      {
+        kind: "other",
+        status: 0,
+        message: "Could not reach the Daemon. Check that it is running.",
+      },
+      error instanceof Error ? error.message : String(error),
+    );
+  }
   let body: unknown;
   try {
     body = await res.json();
@@ -514,6 +554,13 @@ async function patchKitSelection(
     throw new SelectionConflictError(
       typeof currentRevision === "number" ? currentRevision : mutation.expectedRevision,
     );
+  }
+  if (res.status === 409 && isRecord(body) && body.error === "selection_unit_conflict") {
+    const sourceId = asString(body.sourceId);
+    const target = DeployTargetSchema.safeParse(body.target);
+    if (sourceId !== undefined && target.success) {
+      throw new SelectionUnitConflictError(sourceId, target.data);
+    }
   }
   throw new Error(`${res.status} ${res.statusText} on ${path}`);
 }

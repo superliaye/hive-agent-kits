@@ -161,7 +161,8 @@ const backendUpdateNormalizer: Normalizer<BackendUpdateEvents> = {
 // Sources (registry mutation): add/activate/deactivate/delete/reorder are user
 // actions. run_id/agent_id are NULL (a registry mutation has neither). Payload is
 // REFS only — the opaque SourceId and locator kind, a normalized credential-free
-// git origin on add, and the new rank on reorder. Working-tree paths stay local.
+// git origin and the Tile id on add, and the new rank on reorder. Working-tree
+// paths stay local.
 const sourcesNormalizer: Normalizer<SourcesAuditEvents> = {
   "source.added": (event) => ({
     event_type: "source.added",
@@ -171,6 +172,7 @@ const sourcesNormalizer: Normalizer<SourcesAuditEvents> = {
       id: event.id,
       kind: event.kind,
       ...(event.kind === "git" ? { origin: event.origin } : {}),
+      ...(event.tile !== null ? { tile: event.tile } : {}),
     },
   }),
   "source.activated": (event) => ({

@@ -1057,7 +1057,8 @@ plugin
     redirectHomeEnv(root);
     const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("source-a");
-    const repoUrl = "https://github.com/superliaye/yestack";
+    // No Tile's repository, so the generic single-CLI pattern recognizes it.
+    const repoUrl = "https://github.com/owner/yestack";
     const source: Source = {
       id: "source-a",
       label: "yestack",
@@ -1101,7 +1102,7 @@ plugin
         action: "add",
         key: { kind: "plugin", name: "ye" },
         target: "claude",
-        marketplaceSource: "https://github.com/superliaye/yestack",
+        marketplaceSource: repoUrl,
         marketplaceName: "yestack",
         pluginName: "ye",
         sourceId: "source-a",

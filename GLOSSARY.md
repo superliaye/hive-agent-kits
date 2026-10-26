@@ -59,7 +59,9 @@ Recipe may call.
 A curated **Source** Hive ships on its shelf: a **Source Locator**, a label, and the
 **Recipe** that **Onboarding** verified for it. Selecting a Tile adds the Source; the
 Recipe decides whether the user then picks Capabilities or the Source installs
-whole. A pasted link behaves like a Tile without the curation.
+whole. A Source is a Tile's Source exactly when its Source Locator is the Tile's,
+however it was added. Any other pasted link behaves like a Tile without the
+curation.
 
 **Onboarding**:
 The Hive development step that investigates a new repository, finds its

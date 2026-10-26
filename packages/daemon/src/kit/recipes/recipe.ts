@@ -30,6 +30,7 @@ import {
   pluginPointer,
 } from "./projection.ts";
 import { publishedSkills } from "./published-skills.ts";
+import type { Tile } from "./tiles.ts";
 
 // Semantics follow `npx skills add` where a Recipe depends on them:
 // - Every path follows the links along it, as opening it would.
@@ -134,18 +135,24 @@ export type Match =
   // Short and user-facing: it becomes part of the not_recognized detail.
   | { readonly _tag: "Miss"; readonly reason: string };
 
-export type Recipe = {
+type RecipeBase = {
   // Stable: recorded in the Mirror record.
   readonly id: string;
   readonly label: string;
   readonly unit: SelectionUnit;
-  // Pure given its port, so the same tree gives the same Match and a re-Sync of
-  // an unchanged tree writes identical bytes.
+  // Pure given its port, so the same tree gives the same Match, a re-Sync of an
+  // unchanged tree writes identical bytes, and a recorded fixture replays it.
   recognize(tree: RecipeTree): Effect.Effect<Match, SyncError>;
 };
 
 // Applies to every Source, a pasted link included, and never runs repository code.
-export type GenericRecipe = Recipe & { readonly trust: "generic" };
+export type GenericRecipe = RecipeBase & { readonly trust: "generic" };
+// A generic pattern whose Capabilities the user picks; a Tile may narrow it to whole.
+export type PickRecipe = GenericRecipe & { readonly unit: "pick" };
+// Covers one repository no generic pattern fits and may run its setup, so only
+// a Tile carries one (ADR-0033). Its `trust` keeps it out of GENERIC_RECIPES.
+export type RepoRecipe = RecipeBase & { readonly trust: "repo"; readonly unit: "whole" };
+export type Recipe = GenericRecipe | RepoRecipe;
 
 export type Recognition = {
   readonly recipe: RecipeSummary;
@@ -159,7 +166,7 @@ const ROOT = "" as TreePath;
 // deploy as their upstream ships them.
 export const CAPABILITY_KIT_RECIPE_ID = "capability-kit";
 
-const capabilityKit: GenericRecipe = {
+export const capabilityKit: PickRecipe = {
   id: CAPABILITY_KIT_RECIPE_ID,
   label: "Capability kit",
   unit: "pick",
@@ -271,7 +278,7 @@ function pluginPointers(
   });
 }
 
-const pluginMarketplace: GenericRecipe = {
+export const pluginMarketplace: PickRecipe = {
   id: "plugin-marketplace",
   label: "Plugin marketplace",
   unit: "pick",
@@ -291,7 +298,7 @@ const pluginMarketplace: GenericRecipe = {
     }),
 };
 
-const singleCliMarketplace: GenericRecipe = {
+const singleCliMarketplace: PickRecipe = {
   id: "single-cli-marketplace",
   label: "Single-CLI plugin marketplace",
   unit: "pick",
@@ -324,16 +331,26 @@ const GENERIC_RECIPES: readonly GenericRecipe[] = [
 
 const DETAIL_LIMIT = 160;
 
-function notRecognizedDetail(reasons: readonly string[]): string {
-  const detail = `No Recipe matched: ${[...new Set(reasons)].join("; ")}`;
+function clip(detail: string): string {
   return detail.length <= DETAIL_LIMIT ? detail : `${detail.slice(0, DETAIL_LIMIT - 1)}…`;
 }
 
-// Runs GENERIC_RECIPES in order and takes the first Match.
-export function recognizeSource(tree: RecipeTree): Effect.Effect<Recognition, SyncError> {
+function notRecognizedDetail(reasons: readonly string[]): string {
+  return clip(`No Recipe matched: ${[...new Set(reasons)].join("; ")}`);
+}
+
+// A Tile's Source runs exactly that Tile's Recipe and never falls back to the
+// generic list: a generic pattern can match a repository its Tile rejects
+// (gstack's router-only root skill). Any other Source, the default, runs
+// GENERIC_RECIPES in order and takes the first Match.
+export function recognizeSource(
+  tree: RecipeTree,
+  tile: Tile | null = null,
+): Effect.Effect<Recognition, SyncError> {
   return Effect.gen(function* () {
+    const recipes: readonly Recipe[] = tile ? [tile.recipe] : GENERIC_RECIPES;
     const reasons: string[] = [];
-    for (const recipe of GENERIC_RECIPES) {
+    for (const recipe of recipes) {
       const result = yield* recipe.recognize(tree);
       if (result._tag === "Match") {
         return {
@@ -343,7 +360,9 @@ export function recognizeSource(tree: RecipeTree): Effect.Effect<Recognition, Sy
       }
       reasons.push(result.reason);
     }
-    const detail = notRecognizedDetail(reasons);
+    const detail = tile
+      ? clip(`no longer matches the ${tile.label} Tile: ${reasons.join("; ")}`)
+      : notRecognizedDetail(reasons);
     return yield* Effect.fail(new SyncError({ reason: "not_recognized", message: detail, detail }));
   });
 }

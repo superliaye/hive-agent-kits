@@ -156,6 +156,22 @@ describe("AddSourceBody", () => {
       }).success,
     ).toBe(true);
   });
+  test("accepts a Tile id alone", () => {
+    expect(AddSourceBody.safeParse({ tile: "hyperframes" }).success).toBe(true);
+    expect(AddSourceBody.safeParse({ tile: "" }).success).toBe(false);
+  });
+
+  test("a pasted body cannot name a Tile, and a Tile body cannot carry a locator", () => {
+    const locator = {
+      kind: "git",
+      repoUrl: "https://github.com/a/b",
+      revision: { mode: "track", ref: "refs/heads/main" },
+      subpath: ".",
+    };
+    expect(AddSourceBody.safeParse({ label: "x", locator, tile: "slidev" }).success).toBe(false);
+    expect(AddSourceBody.safeParse({ tile: "slidev", locator }).success).toBe(false);
+  });
+
   test("requires the labeled locator transport shape", () => {
     expect(AddSourceBody.safeParse({ origin: "https://github.com/a/b" }).success).toBe(false);
     expect(AddSourceBody.safeParse({ origin: "https://github.com/a/b.git" }).success).toBe(false);

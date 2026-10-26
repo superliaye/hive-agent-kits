@@ -60,6 +60,7 @@ import {
 } from "./deploy-plan.ts";
 import { type DeploymentStateFile, type DeploymentStateRecord } from "./deployment-state.ts";
 import { readMirrorIdentity, readMirrorRecord } from "./mirror.ts";
+import { selectionUnits } from "./selection-units.ts";
 import type { DeployTargets } from "./targets.ts";
 
 function pairId(key: CapabilityKey, target: DeployTarget): string {
@@ -186,6 +187,7 @@ function currentDiff(plan: ReturnType<typeof buildDeployPlan>): DeployDiff {
 
 export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview {
   const plan = buildDeployPlan(snapshot);
+  const units = selectionUnits(snapshot.catalog, snapshot.sources);
   const keys = new Map<string, CapabilityKey>();
   for (const entry of snapshot.catalog.entries) keys.set(serializeCapabilityKey(entry), entry);
   for (const entry of snapshot.selection.enabled)
@@ -312,6 +314,7 @@ export function buildOverview(snapshot: DeploymentSnapshot): DeploymentOverview 
           ...entry,
           catalog: entry.deployable ? "deployable" : entry.shadowed ? "shadowed" : "blocked",
         })),
+        wholeSourceId: units.wholeSourceOf(key),
       };
     })
     .filter(
@@ -614,11 +617,10 @@ function wouldDeployArtifacts(
 
 export function captureDeploymentSnapshot(
   targets: DeployTargets,
-  input: CaptureDeploymentSnapshotInput,
+  captured: CaptureDeploymentSnapshotInput,
   capturedMirrors?: OverviewMirror[],
 ): DeploymentSnapshot {
-  const activeSources = input.sourceRegistry.sources.filter((source) => source.active);
-  const sources = input.sourceRegistry.sources.map((source) => ({
+  const sources = captured.sourceRegistry.sources.map((source) => ({
     id: source.id,
     label: source.label,
     kind: source.kind,
@@ -626,6 +628,13 @@ export function captureDeploymentSnapshot(
     rank: source.rank,
     recipe: readMirrorRecord(targets.mirrorRoot(source.id))?.recipe ?? null,
   }));
+  // The Overview and the Deploy plan read the closed Selection, so neither sees
+  // a partial whole unit.
+  const input = {
+    ...captured,
+    selection: selectionUnits(captured.catalog, sources).close(captured.selection),
+  };
+  const activeSources = input.sourceRegistry.sources.filter((source) => source.active);
   const mirrors = capturedMirrors ?? captureMirrors(targets, activeSources);
   const ledgerOwned = ledgerKeySet(input.ledger);
   const ledgerTargets = new Set(

@@ -60,6 +60,7 @@ function row(name: string, desiredTargets: DeployTarget[]): OverviewRow {
     reconciliation: selected ? "in_sync" : "pending_add",
     lastAttempt: { state: "none" },
     applicableTargets: ["claude", "codex"],
+    wholeSourceId: null,
     targets: (["claude", "codex"] as DeployTarget[]).map((target) => ({
       target,
       desired: desiredTargets.includes(target) ? "on" : "off",

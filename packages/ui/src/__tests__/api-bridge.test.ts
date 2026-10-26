@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { api, resolveApiConfig } from "../api.ts";
+import { api, resolveApiConfig, type TileSummary } from "../api.ts";
 
 const priorWindow = globalThis.window;
 
@@ -33,5 +33,41 @@ describe("Electron daemon bridge", () => {
     ]);
     expect(window.__hive).not.toHaveProperty("token");
     expect(window.__hive).not.toHaveProperty("baseUrl");
+  });
+
+  test("lists and adds Tiles through the bridge", async () => {
+    const tile: TileSummary = {
+      id: "archify",
+      label: "Archify",
+      description: "The archify skill.",
+      recipe: { id: "published-skills", label: "Published skills", unit: "pick" },
+      sourceId: null,
+    };
+    const added = {
+      source: { id: "s1", label: "Archify", kind: "git", active: true, createdAt: 1, rank: 1 },
+      sync: { state: "up_to_date", sha: "abc", fetchedAt: 1, sourceId: "s1" },
+      validation: { conformant: true, errors: [], capabilityCount: 1 },
+    };
+    const calls: Array<{ path: string; init: { method?: string; body?: string } }> = [];
+    globalThis.window = {
+      __hive: {
+        daemon: {
+          request: async (path: string, init: { method?: string; body?: string }) => {
+            calls.push({ path, init });
+            return init.method === "POST"
+              ? { status: 201, statusText: "Created", body: JSON.stringify(added) }
+              : { status: 200, statusText: "OK", body: JSON.stringify([tile]) };
+          },
+        },
+      },
+    } as Window & typeof globalThis;
+
+    const config = resolveApiConfig();
+    expect(await api.listTiles(config)).toEqual([tile]);
+    expect((await api.addTile(config, "archify")).source.id).toBe("s1");
+    expect(calls.map((call) => [call.path, call.init.method, call.init.body])).toEqual([
+      ["/api/tiles", undefined, undefined],
+      ["/api/sources", "POST", JSON.stringify({ tile: "archify" })],
+    ]);
   });
 });

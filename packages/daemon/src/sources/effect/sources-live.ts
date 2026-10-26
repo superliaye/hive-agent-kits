@@ -20,6 +20,7 @@ import {
   createDeploymentMutationCoordinator,
   type DeploymentMutationCoordinator,
 } from "../../kit/deploy-coordinator.ts";
+import { tileForLocator } from "../../kit/recipes/tiles.ts";
 import { log } from "../../lib/log.ts";
 import { TypedEmitter } from "../../lib/typed-emitter.ts";
 import { SourcesPersistence } from "../persistence.ts";
@@ -39,6 +40,9 @@ export type SourceRegistrySvc = {
   currentSources(): readonly Source[];
   currentSnapshot(): SourcesFile;
   add(input: AddSourceInput): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
+  // Re-adds the deleted Starter from its Tile, exactly as first-run seeding
+  // creates it. A user action, so unlike seeding it is audited.
+  restoreStarter(): Effect.Effect<Source, DuplicateOrigin | SourceIoError>;
   activate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   deactivate(id: string): Effect.Effect<Source, SourceNotFound | SourceIoError>;
   delete(id: string): Effect.Effect<void, SourceNotFound | SourceIoError>;
@@ -62,9 +66,8 @@ export class SourceRegistry extends Context.Service<SourceRegistry, SourceRegist
 // REPLACES the old remote `my-agent-kits` seed — `my-agent-kits` is now just a
 // Source the user may add by URL like any other. Fixed well-known id + a non-URL
 // origin sentinel so the seed is idempotent and the add route's GitHttpsUrl never
-// applies to it.
-const STARTER_SOURCE_ID = "starter";
-const STARTER_SOURCE_ORIGIN = "local:starter";
+// applies to it. It is the Starter Tile's Source.
+const STARTER_SEED = { id: "starter", origin: "local:starter" } as const;
 
 export const DEV_FIXTURE_SOURCES = [
   { id: "fixture-alpha", origin: "local:fixture-alpha" },
@@ -100,10 +103,7 @@ function openStore(opts: CreateSourceRegistryOptions): SourcesStore {
     // fault here must NOT crash daemon boot (openStore runs inside the Layer
     // build) — degrade to the unseeded store and trace it, matching how the route
     // verbs ioGuard their persistence faults.
-    const seeds = [
-      { id: STARTER_SOURCE_ID, origin: STARTER_SOURCE_ORIGIN },
-      ...(opts.seedFixtureSources ? DEV_FIXTURE_SOURCES : []),
-    ];
+    const seeds = [STARTER_SEED, ...(opts.seedFixtureSources ? DEV_FIXTURE_SOURCES : [])];
     for (const seed of seeds) {
       try {
         store.seedLocal(seed.id, seed.origin);
@@ -185,18 +185,42 @@ function buildSvc(
                 }),
               );
             }
+            const { id, locator } = result.source;
+            const tile = tileForLocator(locator)?.id ?? null;
             const event: SourcesAuditEvents["source.added"] =
-              result.source.locator.kind === "git"
-                ? {
-                    id: result.source.id,
-                    kind: "git",
-                    origin: result.source.locator.repoUrl,
-                  }
-                : { id: result.source.id, kind: "working-tree" };
+              locator.kind === "git"
+                ? { id, kind: "git", origin: locator.repoUrl, tile }
+                : { id, kind: "working-tree", tile };
             return Effect.promise(() => events.emit("source.added", event)).pipe(
               Effect.flatMap(() => ioGuard(() => prepared.commit())),
               Effect.map((committed) => {
                 if (!committed.ok) throw new Error("prepared Source add changed result");
+                return committed.source;
+              }),
+            );
+          },
+        ),
+      ),
+
+    restoreStarter: () =>
+      serializeMutation(
+        coordinator,
+        Effect.flatMap(
+          ioGuard(() => store.prepareSeedLocal(STARTER_SEED.id, STARTER_SEED.origin)),
+          (prepared): Effect.Effect<Source, DuplicateOrigin | SourceIoError> => {
+            const result = prepared.result;
+            if (!result.ok) {
+              return Effect.fail(new DuplicateOrigin({ origin: STARTER_SEED.origin }));
+            }
+            const event: SourcesAuditEvents["source.added"] = {
+              id: result.source.id,
+              kind: "starter",
+              tile: tileForLocator(result.source.locator)?.id ?? null,
+            };
+            return Effect.promise(() => events.emit("source.added", event)).pipe(
+              Effect.flatMap(() => ioGuard(() => prepared.commit())),
+              Effect.map((committed) => {
+                if (!committed.ok) throw new Error("prepared Starter restore changed result");
                 return committed.source;
               }),
             );

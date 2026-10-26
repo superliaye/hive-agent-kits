@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 describe("sources audit emission", () => {
-  test("add emits source.added with refs-only payload (id + normalized origin)", async () => {
+  test("add emits source.added with refs-only payload (id, normalized origin, Tile id)", async () => {
     const audit = makeAudit();
     const registry = makeRegistry();
     wireSubscriptions(audit, { sourceRegistry: { events: registry.events } });
@@ -62,6 +62,7 @@ describe("sources audit emission", () => {
       id: source.id,
       kind: "git",
       origin: "https://github.com/superliaye/my-agent-kits",
+      tile: "my-agent-kits",
     });
   });
 

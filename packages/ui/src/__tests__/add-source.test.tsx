@@ -49,9 +49,19 @@ let calls: Call[];
 // the new Source + its capability, mirroring the live ["sources"]/["kit"] refetch.
 let added: boolean;
 // The POST /api/sources outcome the stub returns. "conformant" / "empty" /
-// "nonconformant" yield a 201 AddSourceResult; "bad" yields a 400; "duplicate"
-// yields a 409.
-let addOutcome: "conformant" | "empty" | "nonconformant" | "bad" | "duplicate";
+// "nonconformant" / "not_recognized" yield a 201 AddSourceResult; "bad" yields a
+// 400; "duplicate" yields a 409.
+let addOutcome:
+  | "conformant"
+  | "empty"
+  | "nonconformant"
+  | "not_recognized"
+  | "bad"
+  | "duplicate"
+  | "unreachable";
+
+const NOT_RECOGNIZED_DETAIL =
+  "No Recipe matched: no capabilities/ folder; no marketplace for both CLIs; no published skills; no plugin marketplace";
 
 function sources(): Source[] {
   const list: Source[] = [
@@ -139,7 +149,7 @@ function validation(): SourceValidationReport {
       capabilityCount: 2,
     };
   }
-  if (addOutcome === "empty") {
+  if (addOutcome === "empty" || addOutcome === "not_recognized") {
     return { conformant: true, errors: [], capabilityCount: 0 };
   }
   return { conformant: true, errors: [], capabilityCount: 1 };
@@ -162,13 +172,23 @@ function addResult(): unknown {
       createdAt: 2,
       rank: 1,
     },
-    sync: {
-      state: "up_to_date",
-      sha: "abc1234def",
-      fetchedAt: 1,
-      sourceId: ADDED_ID,
-      origin: ADDED_ORIGIN,
-    },
+    sync:
+      addOutcome === "not_recognized"
+        ? {
+            state: "check_failed",
+            sha: null,
+            fetchedAt: null,
+            sourceId: ADDED_ID,
+            errorReason: "not_recognized",
+            errorDetail: NOT_RECOGNIZED_DETAIL,
+          }
+        : {
+            state: "up_to_date",
+            sha: "abc1234def",
+            fetchedAt: 1,
+            sourceId: ADDED_ID,
+            origin: ADDED_ORIGIN,
+          },
     validation: validation(),
   };
 }
@@ -188,6 +208,7 @@ function installStubs(): void {
     calls.push({ method, path, body });
 
     if (path === "/api/sources" && method === "POST") {
+      if (addOutcome === "unreachable") throw new TypeError("fetch failed");
       if (addOutcome === "bad") {
         return json(
           {
@@ -341,6 +362,21 @@ describe("KitDeployPage — Add-Source UI", () => {
     expect(host.querySelector(`[data-testid="kit-source-${ADDED_ID}"]`)).toBeNull();
   });
 
+  test("(c2) an unreachable Daemon shows an error banner instead of breaking the page", async () => {
+    installStubs();
+    const host = await render();
+    addOutcome = "unreachable";
+
+    const input = host.querySelector('[data-testid="add-source-input"]') as HTMLInputElement;
+    await typeUrl(input, "https://github.com/owner/repo");
+    await submitForm(host.querySelector('[data-testid="add-source-form"]') as HTMLFormElement);
+
+    expect(host.querySelector('[data-testid="add-source-error"]')?.textContent).toContain(
+      "Could not reach the Daemon",
+    );
+    expect(host.querySelector('[data-testid="add-source-input"]')).not.toBeNull();
+  });
+
   test("(d) a non-conformant 201 shows a warning with the problem count and keeps the Source row", async () => {
     installStubs();
     const host = await render();
@@ -395,6 +431,22 @@ describe("KitDeployPage — Add-Source UI", () => {
     expect(host.querySelector(`[data-testid="kit-source-${ADDED_ID}"]`)).not.toBeNull();
     // No capability row (the catalog stays empty for this Source).
     expect(host.querySelector('[data-testid="kit-row-skill-alpha"]')).toBeNull();
+  });
+
+  test("(f2) a not_recognized 201 shows the Daemon's detail, not the empty banner", async () => {
+    installStubs();
+    const host = await render();
+    addOutcome = "not_recognized";
+
+    const input = host.querySelector('[data-testid="add-source-input"]') as HTMLInputElement;
+    await typeUrl(input, ADDED_ORIGIN);
+    await submitForm(host.querySelector('[data-testid="add-source-form"]') as HTMLFormElement);
+
+    const banner = host.querySelector('[data-testid="add-source-not-recognized"]');
+    expect(banner?.textContent).toContain("Hive does not recognize it");
+    expect(banner?.textContent).toContain(NOT_RECOGNIZED_DETAIL);
+    expect(host.querySelector('[data-testid="add-source-empty"]')).toBeNull();
+    expect(host.querySelector(`[data-testid="kit-source-${ADDED_ID}"]`)).not.toBeNull();
   });
 
   test("(g) a later error clears a prior success banner — the two states never co-render", async () => {

@@ -300,6 +300,14 @@ pre,
   color: var(--color-fg-muted);
   border: 1px solid var(--color-border-default);
 }
+/* A Source whose Recipe installs it as one unit: tinted so it reads as a
+ * behavior the user must know before toggling, not as provenance. */
+.badge-whole {
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  color: var(--color-fg-default);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 40%, transparent);
+  font-weight: 600;
+}
 
 /* ─── Backends page cards ──────────────────────────────────────────────
  * One card per Agent Backend. Bordered + elevated so each backend reads as
@@ -1355,6 +1363,93 @@ pre.config {
 .kit-add-source-panel {
   min-width: 340px;
 }
+.tile-shelf {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg-surface) 86%, transparent);
+}
+/* In the first-run empty state the shelf is the primary action: full width and
+   left-aligned inside the centered block. */
+.kit-empty-state .tile-shelf {
+  align-self: stretch;
+  text-align: left;
+  background: var(--color-bg-base);
+}
+.tile-shelf-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.tile-shelf-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-fg-default);
+}
+.tile-shelf-meta,
+.tile-shelf-note {
+  font-size: 11px;
+  color: var(--color-fg-muted);
+}
+.tile-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+.tile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  background: var(--color-bg-elevated);
+}
+.tile-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+}
+.tile-card-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-fg-default);
+}
+.tile-card-desc {
+  flex: 1;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-fg-muted);
+}
+.tile-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.button.tile-add {
+  padding: 3px 12px;
+  font-size: 12px;
+}
+.tile-added {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--color-success) 18%, transparent);
+  color: var(--color-success);
+}
 .kit-add-source-panel .add-source-form {
   margin-top: 0;
 }
@@ -1950,6 +2045,10 @@ pre.config {
   font-size: 11px;
   color: var(--color-text-muted);
   font-style: italic;
+}
+.kit-row-whole {
+  font-size: 11px;
+  color: var(--color-fg-muted);
 }
 .kit-connection {
   width: fit-content;

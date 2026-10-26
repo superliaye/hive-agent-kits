@@ -102,6 +102,7 @@ export function overviewFromLegacy(
       reconciliation,
       lastAttempt: { state: "none" },
       applicableTargets: applicable,
+      wholeSourceId: null,
       targets: applicable.map((target) => ({
         target,
         desired: selected && targets.includes(target) ? "on" : "off",
