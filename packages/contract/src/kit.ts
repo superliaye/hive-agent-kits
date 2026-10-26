@@ -126,26 +126,8 @@ export type SyncRunResult = z.infer<typeof SyncRunResult>;
 
 // ---- Selection (wire boundary) ----
 
-const NameSets = z.object({
-  instructions: z.array(z.string()).default([]),
-  skills: z.array(z.string()).default([]),
-  agents: z.array(z.string()).default([]),
-  plugins: z.array(z.string()).default([]),
-  bundles: z.array(z.string()).default([]),
-});
-
-export const SelectionSchema = z.object({
-  presets: z.array(z.string()),
-  // Individual toggles layered on the preset seed.
-  add: NameSets,
-  remove: NameSets,
-  targets: z.array(DeployTarget).min(1),
-});
-export type Selection = z.infer<typeof SelectionSchema>;
-
-// Durable desired state. Unlike the legacy SelectionSchema above, this retains
-// resolved deploy identities and their exact target sets only: a Source and a
-// ContentSha are deliberately not part of desired state.
+// Durable desired state: resolved deploy identities and their exact target sets
+// only. A Source and a ContentSha are deliberately not part of desired state.
 export const DesiredSelection = z.object({
   enabled: z.array(z.object({ key: CapabilityKey, targets: z.array(DeployTarget).min(1) })),
   removalIntents: z.array(
@@ -221,54 +203,6 @@ export const DeployDiff = z.object({
   entries: z.array(DiffEntry),
 });
 export type DeployDiff = z.infer<typeof DeployDiff>;
-
-// ---- Deploy result (per-kind, ordered best-effort) ----
-
-export const KindResult = z.object({
-  kind: CapabilityKind,
-  applied: z.array(z.string()),
-  failed: z.array(z.object({ name: z.string(), error: z.string() })),
-  // Plugins/bundles never auto-removed: a hint when one was deselected.
-  pruneHint: z.array(z.string()).optional(),
-});
-export type KindResult = z.infer<typeof KindResult>;
-
-export const DeployResult = z.object({
-  kitSha: z.string().nullable(),
-  perKind: z.array(KindResult),
-  // Names pruned (owned-but-deselected skills/agents).
-  pruned: z.array(z.object({ kind: CapabilityKind, name: z.string() })),
-  targets: z.array(DeployTarget),
-});
-export type DeployResult = z.infer<typeof DeployResult>;
-
-// ---- Verify (on-disk existence + drift) ----
-
-// Per-target on-disk status for a deployed capability:
-//   present  — expected file(s) exist and match the fingerprint (or none recorded).
-//   missing  — the ledger records it but the on-disk target is gone.
-//   drifted  — present, but edited since deploy (disk hash != recorded fingerprint).
-//   recorded — plugin/bundle: external-installer owned, not stat-verifiable.
-export const VerifyStatus = z.enum(["present", "missing", "drifted", "recorded"]);
-export type VerifyStatus = z.infer<typeof VerifyStatus>;
-
-export const VerifyTargetStatus = z.object({
-  target: DeployTarget,
-  status: VerifyStatus,
-});
-export type VerifyTargetStatus = z.infer<typeof VerifyTargetStatus>;
-
-export const VerifyEntry = z.object({
-  kind: CapabilityKind,
-  name: z.string(),
-  targets: z.array(VerifyTargetStatus),
-});
-export type VerifyEntry = z.infer<typeof VerifyEntry>;
-
-export const VerifyReport = z.object({
-  entries: z.array(VerifyEntry),
-});
-export type VerifyReport = z.infer<typeof VerifyReport>;
 
 // ---- Authoritative Deployment Overview ----
 

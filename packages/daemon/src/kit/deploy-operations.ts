@@ -101,30 +101,6 @@ const StagedAgentTask = z.object({
   content: z.string(),
 });
 
-// Kept only to recover an operation accepted by an older build. Current staging
-// never writes these types, and execution rejects these legacy skipped tasks
-// rather than turning them into success.
-const StagedPluginTask = z.object({
-  type: z.literal("plugin"),
-  action: z.enum(["add", "update"]),
-  key: z.object({ kind: z.literal("plugin"), name: z.string() }),
-  target: z.literal("claude"),
-  sourceId: z.string(),
-  contentSha: z.string(),
-  execution: z.literal("skipped").default("skipped"),
-});
-
-const StagedBundleTask = z.object({
-  type: z.literal("bundle"),
-  action: z.enum(["add", "update"]),
-  key: z.object({ kind: z.literal("bundle"), name: z.string() }),
-  target: DeployTarget,
-  sourceId: z.string(),
-  contentSha: z.string(),
-  execution: z.literal("skipped").default("skipped"),
-  pin: z.string().nullable(),
-});
-
 // A target that keeps the bundle while another target removes it. The skills CLI
 // can only uninstall a skill from every agent at once, so a removal reinstalls
 // each kept target afterwards.
@@ -187,8 +163,6 @@ export const StagedDeployPayloadSchema = z.object({
       StagedInstructionTask,
       StagedSkillTask,
       StagedAgentTask,
-      StagedPluginTask,
-      StagedBundleTask,
       StagedManagedNpxBundleTask,
       StagedMarketplacePluginTask,
       StagedMarketplacePluginRemovalTask,
@@ -243,20 +217,6 @@ const DeployOperationPayload = z.object({
   staged: StagedDeployPayloadSchema,
 });
 type DeployOperationPayload = z.infer<typeof DeployOperationPayload>;
-
-const LegacyPersistedDeployOperation = PersistedDeployOperationSummary.omit({
-  executionPhase: true,
-  provisionalOutcomes: true,
-}).extend({
-  plan: DeployPlanSchema,
-  staged: StagedDeployPayloadSchema,
-});
-
-const LegacyDeployOperationsFile = z.object({
-  schemaVersion: z.literal(1),
-  revision: z.number().int().nonnegative(),
-  operations: z.array(LegacyPersistedDeployOperation),
-});
 
 const DeployOperationsFile = z.object({
   schemaVersion: z.literal(2),
@@ -462,76 +422,6 @@ export function openDeployOperationStore(
     return { operations: kept, deletePayloads };
   };
 
-  const migrateLegacy = (
-    legacy: z.infer<typeof LegacyDeployOperationsFile>,
-  ): DeployOperationsFile => {
-    const entries = legacy.operations.map((operation, index) => {
-      const laterCompletedActions = new Set(
-        legacy.operations
-          .slice(index + 1)
-          .filter((candidate) => candidate.state === "completed")
-          .flatMap((candidate) => candidate.outcomes)
-          .filter((outcome) => outcome.outcome === "succeeded")
-          .map(actionId),
-      );
-      const unsupersededOutcomes = operation.outcomes.filter(
-        (outcome) => !laterCompletedActions.has(actionId(outcome)),
-      );
-      const recoverRecordedOutcomes =
-        (operation.state === "running" ||
-          operation.state === "failed" ||
-          operation.state === "interrupted") &&
-        operation.auditState === "recorded" &&
-        unsupersededOutcomes.some((outcome) => outcome.outcome === "succeeded");
-      return {
-        payload: {
-          operationId: operation.operationId,
-          plan: operation.plan,
-          staged: operation.staged,
-        },
-        summary: PersistedDeployOperationSummary.parse({
-          operationId: operation.operationId,
-          state: operation.state,
-          acceptedAt: operation.acceptedAt,
-          ...(operation.completedAt !== undefined ? { completedAt: operation.completedAt } : {}),
-          selectionRevision: operation.selectionRevision,
-          planToken: operation.planToken,
-          auditState: operation.auditState,
-          executionPhase: recoverRecordedOutcomes
-            ? "ledger_pending"
-            : operation.state === "completed" || operation.state === "failed"
-              ? "finished"
-              : "applying",
-          finalizationState: recoverRecordedOutcomes ? "already_recorded" : "pending",
-          provisionalOutcomes: recoverRecordedOutcomes ? unsupersededOutcomes : [],
-          outcomes: recoverRecordedOutcomes ? [] : operation.outcomes,
-          recoveryPendingActions: operation.recoveryPendingActions,
-          ...(operation.errorCode ? { errorCode: operation.errorCode } : {}),
-        }),
-      };
-    });
-    const compacted = compact(entries.map((entry) => entry.summary));
-    const retainedSummaries = new Set(
-      compacted.operations.map((operation) => operation.operationId),
-    );
-    const deletedPayloads = new Set(compacted.deletePayloads);
-    for (const entry of entries) {
-      if (
-        retainedSummaries.has(entry.summary.operationId) &&
-        !deletedPayloads.has(entry.summary.operationId)
-      ) {
-        writePayload(entry.payload);
-      }
-    }
-    const migrated = DeployOperationsFile.parse({
-      schemaVersion: 2,
-      revision: legacy.revision,
-      operations: compacted.operations,
-    });
-    writeIndex(migrated);
-    return migrated;
-  };
-
   const load = (): DeployOperationsFile => {
     if (!existsSync(path)) return emptyFile();
     let value: unknown;
@@ -542,8 +432,6 @@ export function openDeployOperationStore(
     }
     const current = DeployOperationsFile.safeParse(value);
     if (current.success) return current.data;
-    const legacy = LegacyDeployOperationsFile.safeParse(value);
-    if (legacy.success) return migrateLegacy(legacy.data);
     throw new DeployOperationStoreError("operation_store_corrupt");
   };
 

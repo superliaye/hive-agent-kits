@@ -8,16 +8,13 @@ import { serializeCapabilityKey } from "@hive/capability-schema";
 import type {
   AcceptedDeployRequest,
   Catalog,
-  DeployDiff,
   DeploymentOverview,
   DeployTarget,
   KitState,
-  Selection,
   SelectionMutation as SelectionMutationType,
   SelectionSnapshot,
   Source,
   SyncRunResult,
-  VerifyReport,
 } from "@hive/contract";
 import { Context, Effect, Layer } from "effect";
 import { log } from "../../lib/log.ts";
@@ -48,14 +45,12 @@ import { openDeploymentStateStore } from "../deployment-state.ts";
 import { readLedger } from "../ledger.ts";
 import { recoverMirror, sweepStaleTmp } from "../mirror.ts";
 import { buildOverview, captureCoherentDeploymentSnapshot } from "../overview.ts";
-import { catalogNameSets, computeDiff, resolveSelection } from "../selection.ts";
 import { openSelectionStore } from "../selection-store.ts";
 import { type HttpFetch, syncLocatorSource } from "../sync.ts";
 import { buildSourceSyncStatus, type LastSyncError } from "../sync-status.ts";
 import { type DeployTargets, failSafeDeployTargets } from "../targets.ts";
 import type { DeployAuditEvents } from "../types.ts";
-import { runVerify } from "../verify.ts";
-import { DeployError, SyncError } from "./errors.ts";
+import { SyncError } from "./errors.ts";
 
 export type KitSvc = {
   // Read the catalog from the Mirror (resilient; problems surfaced).
@@ -70,11 +65,6 @@ export type KitSvc = {
   // Run a per-Source sync over the active Sources; one Source's failure never
   // fails the whole run. Returns the per-Source outcomes.
   sync(): Effect.Effect<SyncRunResult>;
-  // Compute the Deploy Diff for a Selection.
-  diff(selection: Selection): Effect.Effect<DeployDiff, DeployError>;
-  // On-disk self-check: per-capability per-target status (present/missing/drifted/
-  // recorded). Read-only — emits no audit row.
-  verify(): VerifyReport;
   // Audit source emitter (source: 'deploy').
   events: TypedEmitter<DeployAuditEvents>;
 };
@@ -147,9 +137,7 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
   };
   const events = new TypedEmitter<DeployAuditEvents>();
   const selectionStore = openSelectionStore(join(runtimeRoot(), "kit", "selection.json"));
-  const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
-    legacyFingerprintPath: targets.fingerprintPath(),
-  });
+  const deploymentState = openDeploymentStateStore(targets.deploymentStatePath());
   selectionStore.seedOnce(readLedger(targets));
   const operations = openDeployOperationStore(
     join(runtimeRoot(), "kit", "deploy-operations.json"),
@@ -163,14 +151,6 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
   // Per-Source last sync error, keyed by Source id. A Map so a lookup miss is a
   // clean `undefined` under noUncheckedIndexedAccess — never an `as`.
   const lastSyncError = new Map<string, LastSyncError>();
-
-  // Active-Source mirror roots for a captured snapshot, in registry order — used
-  // for SNIPPET loading only (snippets aren't Capabilities, so they have no
-  // winner). Each Capability's winner Mirror travels in the resolved selection.
-  // Derive both the catalog input and the mirror roots from ONE snapshot per verb
-  // so a concurrent registry mutation can't make them diverge mid-operation.
-  const mirrorRootsOf = (active: readonly Source[]): readonly string[] =>
-    active.map((s) => targets.mirrorRoot(s.id));
 
   const capture = () => {
     const captured = captureCoherentDeploymentSnapshot(targets, {
@@ -224,7 +204,6 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
       const snapshot = capture().snapshot;
       return buildOverview(snapshot);
     },
-    verify: () => runVerify(targets),
     sync: () => {
       const run = Effect.gen(function* () {
         const sources = activeSources(registry);
@@ -268,20 +247,6 @@ function buildSvc(opts: CreateKitOptions, registry: SourceRegistrySvc): KitSvc {
       });
       return Effect.promise(() => mutationCoordinator.runExclusive(() => Effect.runPromise(run)));
     },
-    diff: (selection) =>
-      Effect.try({
-        try: () => {
-          const active = activeSources(registry);
-          const catalog = readCatalog(targets, active);
-          const resolved = resolveSelection(catalog, selection);
-          // Only an owned name still in the active catalog can be removed.
-          return computeDiff(targets, mirrorRootsOf(active), resolved, catalogNameSets(catalog));
-        },
-        catch: (err) =>
-          err instanceof DeployError
-            ? err
-            : new DeployError({ reason: "io", message: `diff failed: ${String(err)}` }),
-      }),
   };
 }
 

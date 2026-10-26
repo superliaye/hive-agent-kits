@@ -1,12 +1,7 @@
 // Kit HTTP routes. Mounted additively behind the surviving server.
 // Zod at the boundary; typed errors mapped to wire codes.
 
-import {
-  AcceptedDeployRequest,
-  SelectionMutation,
-  SelectionSchema,
-  SelectionSnapshot,
-} from "@hive/contract";
+import { AcceptedDeployRequest, SelectionMutation, SelectionSnapshot } from "@hive/contract";
 import { Effect } from "effect";
 import { Hono } from "hono";
 import { ZodError } from "zod";
@@ -16,7 +11,6 @@ import {
   ImmutableInstallerStagingError,
   PlanStaleError,
 } from "./deploy-coordinator.ts";
-import { DeployError } from "./effect/errors.ts";
 import type { KitSvc } from "./effect/kit-live.ts";
 import { DeploymentSnapshotChangedError } from "./overview.ts";
 import { SelectionConflictError } from "./selection-store.ts";
@@ -28,18 +22,6 @@ export type RunKit = <A, E>(
 
 function zodIssues(err: ZodError): { path: string; message: string }[] {
   return err.issues.map((i) => ({ path: i.path.join("."), message: i.message }));
-}
-
-// One mapping for a DeployError → wire code, shared by diff and deploy so the
-// same reason never gets two different statuses across the two routes.
-function deployErrorCode(err: DeployError): 422 | 500 {
-  switch (err.reason) {
-    case "collision":
-    case "missing_binary":
-      return 422; // client-fixable: bad selection / absent tool
-    default:
-      return 500; // io / not_redirected: server-side
-  }
 }
 
 export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
@@ -98,9 +80,6 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
     }
   });
 
-  // On-disk self-check. Read-only — no audit row, no body.
-  app.get("/api/kit/verify", (c) => c.json(kit.verify()));
-
   // Per-Source sync: one Source's failure never fails the whole run, so the
   // verb itself does not fail — the response is the per-Source SyncRunResult.
   app.post("/api/kit/sync", async (c) => {
@@ -109,25 +88,6 @@ export function buildKitRoutes(kit: KitSvc, runKit: RunKit): Hono {
     // sync() has no typed failure channel; a defect here is a 500.
     log().error({ module: "kit/routes", route: "sync", err: String(res.error) }, "sync defect");
     return c.json({ error: "sync_failed" }, 500);
-  });
-
-  app.post("/api/kit/diff", async (c) => {
-    const body = await readJson(c);
-    if (!body.ok) return c.json({ error: "invalid JSON body" }, 400);
-    const parsed = SelectionSchema.safeParse(body.value);
-    if (!parsed.success) {
-      return c.json({ error: "invalid selection", issues: zodIssues(parsed.error) }, 400);
-    }
-    const res = await runKit(kit.diff(parsed.data));
-    if (res.ok) return c.json(res.value);
-    const err = res.error as DeployError;
-    const status = deployErrorCode(err);
-    return c.json(
-      status === 500
-        ? { error: "diff_failed", reason: err.reason }
-        : { error: "diff_failed", reason: err.reason, message: err.message },
-      status,
-    );
   });
 
   app.post("/api/kit/deploy", async (c) => {

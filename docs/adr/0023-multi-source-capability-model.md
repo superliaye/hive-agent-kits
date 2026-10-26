@@ -1,6 +1,9 @@
 # Multi-source capability model
 
-status: accepted
+status: accepted; superseded-in-part — the synchronous deploy engine and its
+`resolveSelection` plan, the `verify` pass, and the fingerprint sidecar
+(Source-winner provenance) are removed; ADR-0029's accepted Deploys, Deployment
+State, and Deployment Overview replace them
 extends: ADR-0021
 supersedes-in-part: ADR-0021 (the single-**Kit** assumption)
 

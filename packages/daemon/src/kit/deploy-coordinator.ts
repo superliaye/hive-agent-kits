@@ -988,9 +988,6 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
         removeFile(deployedAgentPath(fx.targets, task.key.name, task.target));
       }
       return;
-    case "plugin": {
-      throw new ImmutableInstallerStagingError();
-    }
     case "npx-bundle":
       applyManagedNpxBundle(fx, task);
       return;
@@ -1000,9 +997,6 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
     case "marketplace-plugin-remove":
       removeMarketplacePlugin(fx, task);
       return;
-    case "bundle": {
-      throw new ImmutableInstallerStagingError();
-    }
   }
 }
 
@@ -1088,9 +1082,6 @@ function stagedTaskStillApplied(fx: DeployFsExec, task: StagedDeployTask): boole
         return marketplacePluginInstalled(fx.targets, task);
       case "marketplace-plugin-remove":
         return !marketplacePluginInstalled(fx.targets, task);
-      case "plugin":
-      case "bundle":
-        return false;
     }
   } catch {
     return false;
@@ -1178,10 +1169,8 @@ function commitProvisionalLedger(
       skills.add(task.key.name);
     } else if (task.type === "agent") {
       agents.add(task.key.name);
-    } else if (task.type === "plugin" || task.type === "marketplace-plugin") {
+    } else if (task.type === "marketplace-plugin") {
       plugins.add(task.key.name);
-    } else if (task.type === "bundle") {
-      bundles.set(task.key.name, task.pin);
     } else if (task.type === "npx-bundle" && task.action !== "remove") {
       bundles.set(task.key.name, task.pin);
     }
@@ -1298,8 +1287,6 @@ function finalizeCommittedDeployment(
         );
       } else if (task.type === "marketplace-plugin-remove") {
         options.deploymentState.recordRemoval(task.key, task.target, operation.operationId);
-      } else if (task.type === "plugin" || task.type === "bundle") {
-        throw new ImmutableInstallerStagingError();
       } else {
         options.deploymentState.recordSuccess(
           task.key,

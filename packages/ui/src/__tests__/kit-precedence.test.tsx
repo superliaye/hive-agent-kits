@@ -15,7 +15,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { CapabilityEntry, Catalog, KitState, Source, VerifyReport } from "../api.ts";
+import type { CapabilityEntry, Catalog, KitState, Source } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
@@ -37,7 +37,6 @@ async function flush(): Promise<void> {
 }
 
 const apiConfig = { baseUrl: "http://localhost", token: "test-token" };
-const emptyVerify: VerifyReport = { entries: [] };
 
 const A_ID = "src-a";
 const B_ID = "src-b";
@@ -166,7 +165,6 @@ function installStubs(): void {
       );
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
-    if (path === "/api/kit/verify") return json(emptyVerify);
     if (path === "/api/sources" && method === "GET") return json(sources());
 
     const reorder = path.match(/^\/api\/sources\/(.+)\/reorder$/);

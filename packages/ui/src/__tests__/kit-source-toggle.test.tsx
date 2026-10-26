@@ -11,7 +11,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { CapabilityEntry, Catalog, KitState, Source, VerifyReport } from "../api.ts";
+import type { CapabilityEntry, Catalog, KitState, Source } from "../api.ts";
 import { KitDeployPage } from "../pages/KitDeployPage.tsx";
 import { mount, setupDom, teardownDom } from "./happy-dom-env.ts";
 import { overviewFromLegacy } from "./kit-overview-test-helpers.ts";
@@ -33,7 +33,6 @@ async function flush(): Promise<void> {
 }
 
 const apiConfig = { baseUrl: "http://localhost", token: "test-token" };
-const emptyVerify: VerifyReport = { entries: [] };
 
 const STARTER_ID = "starter-local";
 const GIT_ID = "git-src";
@@ -166,17 +165,6 @@ function installStubs(): void {
     }
     if (path === "/api/kit/catalog") return json(catalog());
     if (path === "/api/kit/state") return json(kitState());
-    if (path === "/api/kit/verify") return json(emptyVerify);
-    // Selecting a capability triggers the Deploy Diff fetch. This mock returns a
-    // "removed" entry for the still-selected capability once its Source is inactive,
-    // to exercise the general removal warning + confirm gate. (The live server
-    // keeps an owned-but-absent orphan OUT of the removed set.)
-    if (path === "/api/kit/diff" && method === "POST") {
-      const entries = inactive.has(GIT_ID)
-        ? [{ kind: "skill", name: "alpha", change: "removed", replacesUserFile: false }]
-        : [];
-      return json({ entries });
-    }
     if (path === "/api/sources" && method === "GET") return json(sources());
 
     const deact = path.match(/^\/api\/sources\/(.+)\/deactivate$/);

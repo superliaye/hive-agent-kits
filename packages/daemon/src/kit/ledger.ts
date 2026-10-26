@@ -122,7 +122,7 @@ function parseLedgerBytes(raw: string | null): Ledger {
 // landed, and write atomically. Names this deploy did not touch (e.g. a skill
 // the CLI added concurrently) are preserved. `prunedSkills`/`prunedAgents` are
 // the owned-but-deselected names to drop — caller computes them against a fresh
-// read (see reconcilePrune). Returns the written ledger.
+// read. Returns the written ledger.
 export function mergeLedger(
   targets: DeployTargets,
   input: LedgerMergeInput,
@@ -199,56 +199,4 @@ export function mergeLedgerWithinLock(
     return next;
   }
   throw new Error("ledger_concurrent_update");
-}
-
-// Compute owned-but-deselected names by RE-READING the on-disk ledger NOW (A3:
-// never from a stale request-start snapshot). Returns names present in the fresh
-// ledger but absent from the new selection — only these are Hive-owned + prunable.
-//
-// `priorOwned` is the snapshot of names this deploy is allowed to prune: the
-// names Hive owned at request start (read BEFORE applying). A name the agent-kit
-// CLI added concurrently is in the fresh on-disk ledger but NOT in `priorOwned`,
-// so it is never pruned (the two-writer lost-update guard, A3). The fresh re-read
-// then narrows to names that still exist on disk now, so we never try to prune a
-// name an external writer already removed.
-//
-// `activeNames` is the per-kind set of names the ACTIVE catalog currently provides
-// ( data-loss guard): an owned-but-deselected name is prunable ONLY if it is
-// still in the active catalog. An owned name absent from it is an ORPHAN — its
-// Source isn't active — and is KEPT (never auto-unlinked), honoring ADR-0023's
-// "disabling only hides" without putting Source attribution in the Ledger.
-export function reconcilePrune(
-  targets: DeployTargets,
-  selectedSkills: string[],
-  selectedAgents: string[],
-  priorOwned: { skills: string[]; agents: string[] },
-  activeNames: { skills: Set<string>; agents: Set<string> },
-): { skills: string[]; agents: string[] } {
-  const fresh = readLedger(targets) ?? emptyLedger();
-  const freshSkills = new Set(fresh.skills.map((e) => e.name));
-  const freshAgents = new Set(fresh.agentDefs.map((e) => e.name));
-  const keepSkill = new Set(selectedSkills);
-  const keepAgent = new Set(selectedAgents);
-  return {
-    // Prunable = was Hive-owned at request start ∩ still on disk ∩ now deselected ∩
-    // still provided by an active Source (in the active catalog).
-    skills: priorOwned.skills.filter(
-      (n) => freshSkills.has(n) && !keepSkill.has(n) && activeNames.skills.has(n),
-    ),
-    agents: priorOwned.agents.filter(
-      (n) => freshAgents.has(n) && !keepAgent.has(n) && activeNames.agents.has(n),
-    ),
-  };
-}
-
-// Snapshot the names Hive owns right now (the pre-deploy basis for prune).
-export function ownedNamesSnapshot(targets: DeployTargets): {
-  skills: string[];
-  agents: string[];
-} {
-  const ledger = readLedger(targets) ?? emptyLedger();
-  return {
-    skills: ledger.skills.map((e) => e.name),
-    agents: ledger.agentDefs.map((e) => e.name),
-  };
 }

@@ -13,15 +13,11 @@ import type {
   BackendReadiness,
   BackendStatus,
   Catalog,
-  DeployDiff,
-  DeployResult,
   KitState,
-  Selection,
   SelectionMutation,
   SelectionSnapshot,
   SourceSummary,
   SyncRunResult,
-  VerifyReport,
 } from "@hive/contract";
 import {
   AcceptedDeployResponse as AcceptedDeployResponseSchema,
@@ -44,10 +40,8 @@ export type {
   CatalogProblem,
   DeployDiff,
   DeploymentOverview,
-  DeployResult,
   DeployTarget,
   DiffEntry,
-  KindResult,
   KitState,
   Ledger,
   OverviewLastAttempt,
@@ -56,7 +50,6 @@ export type {
   OverviewSource,
   PresetSummary,
   ReconciliationState,
-  Selection,
   SelectionMutation,
   SelectionSnapshot,
   Source,
@@ -68,10 +61,6 @@ export type {
   SyncStatus,
   SyncStatusState,
   TargetObservation,
-  VerifyEntry,
-  VerifyReport,
-  VerifyStatus,
-  VerifyTargetStatus,
 } from "@hive/contract";
 
 declare global {
@@ -336,26 +325,11 @@ export const api = {
   getKitCatalog: (cfg: ApiConfig) => call<Catalog>(cfg, "/api/kit/catalog"),
   // Sync status (freshness state + SHA) + the Deployment Ledger.
   getKitState: (cfg: ApiConfig) => call<KitState>(cfg, "/api/kit/state"),
-  // On-disk self-check: per-capability per-target status (present/missing/drifted/
-  // recorded). Read-only — no audit row. The page runs this on load and after deploy.
-  getKitVerify: (cfg: ApiConfig) => call<VerifyReport>(cfg, "/api/kit/verify"),
   // Check for updates: sync every active Source into its Mirror. Returns the
   // per-Source outcomes; the catalog/state queries are re-fetched after.
   syncKit: (cfg: ApiConfig) =>
     call<SyncRunResult>(cfg, "/api/kit/sync", {
       method: "POST",
-    }),
-  // Compute the Deploy Diff for a Selection (added/removed/changed).
-  kitDiff: (cfg: ApiConfig, selection: Selection) =>
-    call<DeployDiff>(cfg, "/api/kit/diff", {
-      method: "POST",
-      body: JSON.stringify(selection),
-    }),
-  // Apply a Selection. Returns the per-kind result.
-  kitDeploy: (cfg: ApiConfig, selection: Selection) =>
-    call<DeployResult>(cfg, "/api/kit/deploy", {
-      method: "POST",
-      body: JSON.stringify(selection),
     }),
 
   // ─── Sources ─────────────────────────────────────────────────────────

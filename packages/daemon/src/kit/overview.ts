@@ -23,6 +23,7 @@ import {
   type Source,
   type TargetObservation,
 } from "@hive/contract";
+import { readSkillSource } from "./deploy/adapter.ts";
 import {
   deployedAgentPath,
   deployedInstructionPath,
@@ -30,6 +31,7 @@ import {
   hashDeployedAgent,
   hashDeployedInstruction,
   hashDeployedSkill,
+  hashSkillFiles,
   sha256,
 } from "./deploy/artifact-hash.ts";
 import {
@@ -37,7 +39,16 @@ import {
   managedNpxBundleMeta,
   probeManagedNpxBundle,
 } from "./deploy/npx-bundle.ts";
-import { bundleMeta, loadSnippets, pluginMeta } from "./deploy/sources.ts";
+import {
+  agentSourceDir,
+  bundleMeta,
+  instructionBody,
+  loadSnippets,
+  pluginMeta,
+  skillDisablesModelInvocation,
+  skillSourceDir,
+} from "./deploy/sources.ts";
+import { transformAgent, transformInstructions, transformSkill } from "./deploy/transforms.ts";
 import {
   type ArtifactObservation,
   applicableTargets,
@@ -52,7 +63,6 @@ import {
 } from "./deploy-plan.ts";
 import { type DeploymentStateFile, type DeploymentStateRecord } from "./deployment-state.ts";
 import { readProvenance } from "./mirror.ts";
-import { type ResolvedItem, renderedInstructionHash, renderedNamedHash } from "./selection.ts";
 import type { DeployTargets } from "./targets.ts";
 
 function pairId(key: CapabilityKey, target: DeployTarget): string {
@@ -495,6 +505,60 @@ function pluginDeployInfo(
     if (meta) plugins.set(entry.name, { targets: meta.targets });
   }
   return plugins;
+}
+
+// A resolved deploy item: the leaf name plus the WINNING Source's id (whose Mirror
+// the Deploy reads). Self-describing — the anti-corruption seam (ADR-0023:85-86):
+// Deploy never recomputes precedence or counts Sources.
+type ResolvedItem = { name: string; sourceId: string };
+
+// Hash the rendered content a deploy WOULD write for a skill/agent under `target`,
+// reading from the WINNER's Mirror (the single resolved mirrorRoot for this name),
+// so a same-name new-body change is detectable. Matches what Deploy staging writes
+// per target (incl. the Codex sidecar) so the hash is comparable to the deployed
+// artifact's hash. Returns null when the source isn't in the winner's Mirror.
+function renderedNamedHash(
+  mirrorRoot: string,
+  snippets: Map<string, string>,
+  kind: "skill" | "agent",
+  name: string,
+  target: DeployTarget,
+): string | null {
+  if (kind === "skill") {
+    const src = skillSourceDir(mirrorRoot, name);
+    if (!src) return null;
+    const out = transformSkill(
+      {
+        name,
+        files: readSkillSource(src),
+        disableModelInvocation: skillDisablesModelInvocation(src),
+      },
+      snippets,
+    );
+    // Codex also writes the manual-only sidecar; claude does not (matches staging).
+    const written = out.sidecar && target === "codex" ? [...out.files, out.sidecar] : out.files;
+    return hashSkillFiles(written);
+  }
+  const src = agentSourceDir(mirrorRoot, name);
+  if (!src) return null;
+  const raw = readFileSync(join(src, "AGENT.md"), "utf8");
+  const rendered = transformAgent({ name, raw }, snippets);
+  return sha256(target === "claude" ? rendered.claudeMd : rendered.codexToml);
+}
+
+// Hash the concatenated instruction whole-file a deploy WOULD write. Each
+// instruction resolves to ITS OWN winner Mirror — two instructions in one
+// selection may be won by different Sources, so a single shared mirrorRoot would
+// hash the wrong bytes. Concatenation order is the resolved-array order
+// (deterministic, identical to the deploy path).
+function renderedInstructionHash(
+  items: readonly ResolvedItem[],
+  targets: DeployTargets,
+): string | null {
+  const bodies = items.map((item) => instructionBody(targets.mirrorRoot(item.sourceId), item.name));
+  // A selected unavailable contribution blocks this whole-file render.
+  if (!bodies.every((body): body is string => body !== null)) return null;
+  return sha256(transformInstructions(bodies));
 }
 
 function wouldDeployArtifacts(

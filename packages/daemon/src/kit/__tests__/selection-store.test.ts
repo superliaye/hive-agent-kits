@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, writeSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Ledger } from "@hive/contract";
-import { openSelectionStore, SelectionConflictError, SelectionFile } from "../selection-store.ts";
+import {
+  openSelectionStore,
+  SelectionConflictError,
+  SelectionFile,
+  type SelectionStore,
+} from "../selection-store.ts";
 
 const ledger: Ledger = {
   kitVersion: "",
@@ -23,6 +28,10 @@ function path(): string {
   return join(root, "selection.json");
 }
 
+function mutate(store: SelectionStore, ...args: Parameters<SelectionStore["prepareMutation"]>) {
+  return store.prepareMutation(...args).commit();
+}
+
 afterEach(() => {
   if (root && existsSync(root)) rmSync(root, { recursive: true, force: true });
   root = "";
@@ -40,7 +49,7 @@ describe("SelectionStore", () => {
       key: { kind: "plugin", name: "listed-on-both" },
       targets: ["claude"],
     });
-    const mutated = store.mutate({
+    const mutated = mutate(store, {
       expectedRevision: seeded.revision,
       changes: [
         {
@@ -56,31 +65,6 @@ describe("SelectionStore", () => {
     });
   });
 
-  test("migrates a v2 Selection without dropping plugin targets", () => {
-    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
-    writeFileSync(
-      path(),
-      JSON.stringify({
-        schemaVersion: 2,
-        initialized: true,
-        revision: 9,
-        enabled: [
-          { key: { kind: "plugin", name: "plug" }, targets: ["claude", "codex"] },
-          { key: { kind: "skill", name: "skill" }, targets: ["codex"] },
-        ],
-        removalIntents: [],
-      }),
-    );
-
-    expect(openSelectionStore(path()).read()).toEqual({
-      revision: 9,
-      enabled: [
-        { key: { kind: "plugin", name: "plug" }, targets: ["claude", "codex"] },
-        { key: { kind: "skill", name: "skill" }, targets: ["codex"] },
-      ],
-      removalIntents: [],
-    });
-  });
   test("persists a seeded selection across restart and seeds only once", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     const store = openSelectionStore(path());
@@ -115,39 +99,11 @@ describe("SelectionStore", () => {
     expect(readFileSync(path(), "utf8")).toContain('"bad"');
   });
 
-  test("migrates v1 target intents to generated current identities", () => {
-    root = mkdtempSync(join(tmpdir(), "hive-selection-"));
-    writeFileSync(
-      path(),
-      JSON.stringify({
-        schemaVersion: 1,
-        initialized: true,
-        revision: 4,
-        enabled: [],
-        removalIntents: [{ key, targets: ["claude", "codex"] }],
-      }),
-    );
-    const generations = ["migrated-claude", "migrated-codex"];
-    const store = openSelectionStore(path(), {
-      generation: () => generations.shift() ?? "unexpected",
-    });
-
-    expect(store.read()).toEqual({
-      revision: 4,
-      enabled: [],
-      removalIntents: [
-        { key, targets: ["claude"], generation: "migrated-claude" },
-        { key, targets: ["codex"], generation: "migrated-codex" },
-      ],
-    });
-    expect(JSON.parse(readFileSync(path(), "utf8"))).toMatchObject({ schemaVersion: 3 });
-  });
-
   test("keeps exact target sets and exposes no mutable internal state", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     const store = openSelectionStore(path());
     store.seedOnce(ledger);
-    const changed = store.mutate({
+    const changed = mutate(store, {
       expectedRevision: 1,
       changes: [{ key, enabled: false, targets: codex }],
     });
@@ -171,19 +127,20 @@ describe("SelectionStore", () => {
     store.seedOnce(null);
     const unavailable = { kind: "skill" as const, name: "alpha" };
     expect(
-      store.mutate(
+      mutate(
+        store,
         { expectedRevision: 1, changes: [{ key: unavailable, enabled: false, targets: codex }] },
         ledger,
       ).removalIntents,
     ).toEqual([{ key: unavailable, targets: ["codex"], generation: expect.any(String) }]);
     expect(
-      store.mutate({
+      mutate(store, {
         expectedRevision: 2,
         changes: [{ key: unavailable, enabled: true, targets: codex }],
       }).removalIntents,
     ).toEqual([]);
     expect(
-      store.mutate({
+      mutate(store, {
         expectedRevision: 3,
         changes: [{ key: { kind: "skill", name: "absent" }, enabled: false, targets: codex }],
       }).removalIntents,
@@ -196,7 +153,8 @@ describe("SelectionStore", () => {
     const store = openSelectionStore(path());
     const seeded = store.seedOnce(claudeOnlyLedger);
 
-    const changed = store.mutate(
+    const changed = mutate(
+      store,
       {
         expectedRevision: seeded.revision,
         changes: [{ key, enabled: false, targets: ["claude", "codex"] }],
@@ -214,7 +172,7 @@ describe("SelectionStore", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     const store = openSelectionStore(path());
     store.seedOnce(ledger);
-    store.mutate({ expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
+    mutate(store, { expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
     const generation = store.read().removalIntents[0]?.generation;
     if (!generation) throw new Error("missing removal generation");
     expect(store.clearRemovalIntents([{ key, target: "claude", generation }])).toMatchObject({
@@ -235,11 +193,11 @@ describe("SelectionStore", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     const store = openSelectionStore(path());
     store.seedOnce(ledger);
-    store.mutate({ expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
+    mutate(store, { expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
     const generation = store.read().removalIntents[0]?.generation;
     if (!generation) throw new Error("missing removal generation");
     const later = { kind: "skill" as const, name: "later" };
-    store.mutate({
+    mutate(store, {
       expectedRevision: 2,
       changes: [{ key: later, enabled: true, targets: ["claude"] }],
     });
@@ -258,11 +216,11 @@ describe("SelectionStore", () => {
       generation: () => generations.shift() ?? "unexpected-generation",
     });
     store.seedOnce(ledger);
-    store.mutate({ expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
+    mutate(store, { expectedRevision: 1, changes: [{ key, enabled: false, targets: codex }] });
     const acceptedGeneration = store.read().removalIntents[0]?.generation;
     expect(acceptedGeneration).toBe("intent-old");
-    store.mutate({ expectedRevision: 2, changes: [{ key, enabled: true, targets: codex }] });
-    store.mutate({ expectedRevision: 3, changes: [{ key, enabled: false, targets: codex }] });
+    mutate(store, { expectedRevision: 2, changes: [{ key, enabled: true, targets: codex }] });
+    mutate(store, { expectedRevision: 3, changes: [{ key, enabled: false, targets: codex }] });
     expect(store.read().removalIntents[0]?.generation).toBe("intent-new");
 
     store.clearRemovalIntents([
@@ -278,11 +236,11 @@ describe("SelectionStore", () => {
     root = mkdtempSync(join(tmpdir(), "hive-selection-"));
     const store = openSelectionStore(path());
     store.seedOnce(ledger);
-    store.mutate({ expectedRevision: 1, changes: [] });
-    expect(() => store.mutate({ expectedRevision: 1, changes: [] })).toThrow(
+    mutate(store, { expectedRevision: 1, changes: [] });
+    expect(() => mutate(store, { expectedRevision: 1, changes: [] })).toThrow(
       SelectionConflictError,
     );
-    expect(() => store.mutate({ expectedRevision: 1, changes: [] })).toThrow("selection_conflict");
+    expect(() => mutate(store, { expectedRevision: 1, changes: [] })).toThrow("selection_conflict");
   });
 
   test("retains the prior committed bytes when an atomic write fails", () => {
@@ -295,7 +253,7 @@ describe("SelectionStore", () => {
         throw new Error("disk full");
       },
     });
-    expect(() => failing.mutate({ expectedRevision: 1, changes: [] })).toThrow("disk full");
+    expect(() => mutate(failing, { expectedRevision: 1, changes: [] })).toThrow("disk full");
     expect(readFileSync(path(), "utf8")).toBe(before);
   });
 
@@ -311,7 +269,7 @@ describe("SelectionStore", () => {
       },
     });
 
-    const committed = partial.mutate({ expectedRevision: 1, changes: [] });
+    const committed = mutate(partial, { expectedRevision: 1, changes: [] });
 
     expect(writes).toBeGreaterThan(1);
     expect(SelectionFile.parse(JSON.parse(readFileSync(path(), "utf8")))).toMatchObject({
@@ -334,7 +292,7 @@ describe("SelectionStore", () => {
       },
     });
 
-    expect(() => stalled.mutate({ expectedRevision: 1, changes: [] })).toThrow(
+    expect(() => mutate(stalled, { expectedRevision: 1, changes: [] })).toThrow(
       "selection_write_failed",
     );
     expect(writes).toBe(1);
@@ -352,7 +310,9 @@ describe("SelectionStore", () => {
       },
     });
 
-    expect(() => failing.mutate({ expectedRevision: 1, changes: [] })).toThrow("write interrupted");
+    expect(() => mutate(failing, { expectedRevision: 1, changes: [] })).toThrow(
+      "write interrupted",
+    );
     expect(readFileSync(path(), "utf8")).toBe(before);
   });
 });

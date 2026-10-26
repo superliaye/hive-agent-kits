@@ -1,4 +1,4 @@
-// Deploy-target port — the safety boundary for the deploy engine.
+// Deploy-target port — the safety boundary for Deploy.
 //
 // The Kit module never reads `~/.claude` from a bare global; it resolves every
 // CLI-home path through this consumer-owned port. Each home is env-overridable
@@ -12,7 +12,7 @@
 // Without redirecting those, a plugin/bundle deploy would hit the real
 // `~/.claude` even under test. `childEnv()` overrides them to the redirected
 // home, and `isChildEnvRedirected()` lets the exec adapter refuse to run a real
-// installer unless redirection is in place (or an AGENT_KIT_SKIP_* hatch is set).
+// installer under test unless redirection is in place.
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -34,10 +34,6 @@ export type DeployTargets = {
   // (<hiveHome>/kit/mirrors/<sourceId>). Each active Source gets its own Mirror;
   // there is no single-kit mirror anymore.
   mirrorRoot(sourceId: string): string;
-  // Hive-PRIVATE integrity fingerprint sidecar (<hiveHome>/kit/fingerprints.json).
-  // Distinct from the ledger — the ledger is the fixed agent-kit interop schema
-  // and cannot carry Hive deploy-time hashes; this is where they live instead.
-  fingerprintPath(): string;
   // Hive-private durable applied/attempt state. This is intentionally separate
   // from the byte-compatible agent-kit ledger.
   deploymentStatePath(): string;
@@ -96,7 +92,7 @@ function normalizeHome(p: string): string {
 //      <hiveHome>/homes/ using DOTTED dir names so an installer subprocess that
 //      resolves ~/.claude from $HOME lands on the same tree (see childEnv, B2a).
 // Only the four deploy-target homes follow this ladder; the shared onboard paths
-// (mirrorRoot/fingerprintPath/kitTmpRoot/starterRoot) stay hiveHome()-derived.
+// (mirrorRoot/kitTmpRoot/starterRoot) stay hiveHome()-derived.
 // Fail-safe default port: dev mode, toggle off → the per-instance sandbox. The
 // safe construction for a caller with no Config to read (the Kit module's
 // no-targets fallback, and tests that rely on explicit HIVE_*_HOME env, where the
@@ -133,7 +129,6 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
     );
 
   const mirrorRoot = (sourceId: string) => join(hiveHome(), "kit", "mirrors", sourceId);
-  const fingerprintPath = () => join(hiveHome(), "kit", "fingerprints.json");
   const deploymentStatePath = () => join(hiveHome(), "kit", "deployment-state.json");
   const kitTmpRoot = () => join(hiveHome(), "kit", "tmp");
   const starterRoot = () => {
@@ -161,7 +156,6 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
     agentsHome,
     ledgerPath,
     mirrorRoot,
-    fingerprintPath,
     deploymentStatePath,
     kitTmpRoot,
     starterRoot,
@@ -170,13 +164,13 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
       const env: NodeJS.ProcessEnv = { ...base, PATH: withUserBinDir(base.PATH) };
       // Claude / its plugins resolve config from CLAUDE_CONFIG_DIR; pin it to the
       // resolved claude home (real ~/.claude in production, the sandbox/temp home
-      // otherwise — the same tree the deploy engine writes).
+      // otherwise — the same tree Deploy writes).
       env.CLAUDE_CONFIG_DIR = claudeHome();
       // git / npx / ./setup resolve config from $HOME (POSIX) / $USERPROFILE
       // (Windows). When the homes are redirected off the real dir, point $HOME at
       // the resolved sandbox/temp parent so an installer writing to ~/.codex /
-      // ~/.agents (no CONFIG_DIR pin) lands on the SAME tree the deploy engine
-      // writes — never a split between the two. In production (real homes) we
+      // ~/.agents (no CONFIG_DIR pin) lands on the SAME tree Deploy writes —
+      // never a split between the two. In production (real homes) we
       // leave the real $HOME intact, or installers would write into the sandbox.
       if (isChildEnvRedirected()) {
         // Point $HOME at the parent dir of the resolved claude home so an

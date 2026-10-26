@@ -51,7 +51,7 @@ export function parseGithubOrigin(origin: string): { owner: string; repo: string
 }
 
 // Injectable HTTP port so tests drive offline / 403 / fixture-tarball without
-// real network. Production wires `globalThis.fetch`.
+// real network.
 export type HttpFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 export type SyncOutcome = {
@@ -295,8 +295,4 @@ export function syncLocatorSource(
         catch: acquisitionSyncError,
       });
   }
-}
-
-export function productionFetch(): HttpFetch {
-  return (url, init) => fetch(url, init);
 }
