@@ -12,7 +12,7 @@ import {
   captureDeploymentSnapshot,
   DeploymentSnapshotChangedError,
 } from "../overview.ts";
-import type { DeployTargets } from "../targets.ts";
+import type { DeployHomes, DeployTargets } from "../targets.ts";
 
 const key = (kind: CapabilityKey["kind"], name: string): CapabilityKey => ({ kind, name });
 
@@ -538,18 +538,27 @@ describe("authoritative Overview union and state matrix", () => {
   });
 });
 
-function testTargets(root: string): DeployTargets {
+function testTargets(
+  root: string,
+  homes: DeployHomes = {
+    claudeHome: join(root, ".claude"),
+    codexHome: join(root, ".codex"),
+    agentsHome: join(root, ".agents"),
+    ledgerPath: join(root, "manifest.json"),
+  },
+): DeployTargets {
   return {
-    claudeHome: () => join(root, ".claude"),
-    codexHome: () => join(root, ".codex"),
-    agentsHome: () => join(root, ".agents"),
-    ledgerPath: () => join(root, "manifest.json"),
+    claudeHome: () => homes.claudeHome,
+    codexHome: () => homes.codexHome,
+    agentsHome: () => homes.agentsHome,
+    ledgerPath: () => homes.ledgerPath,
     mirrorRoot: (sourceId) => join(root, "mirrors", sourceId),
     deploymentStatePath: () => join(root, "deployment-state.json"),
     kitTmpRoot: () => join(root, "tmp"),
     starterRoot: () => join(root, "starter"),
     childEnv: (base) => ({ ...base }),
     isChildEnvRedirected: () => true,
+    withHomes: (fixed) => testTargets(root, fixed),
   };
 }
 

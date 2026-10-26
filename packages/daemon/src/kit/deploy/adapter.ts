@@ -11,6 +11,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -24,11 +25,12 @@ export type ExecResult = { status: number; stdout: string; stderr: string };
 export type ExecRequest = { command: string; args: string[]; cwd?: string; stdin?: string };
 
 // The exec port — injectable. Production wires `bunExec`; tests inject a mock to
-// assert what was/was not run.
-export type ExecPort = (req: ExecRequest, env: NodeJS.ProcessEnv) => ExecResult;
+// assert what was/was not run. Asynchronous so an installer that runs for
+// minutes never blocks the Daemon's event loop.
+export type ExecPort = (req: ExecRequest, env: NodeJS.ProcessEnv) => Promise<ExecResult>;
 
 // Binary presence check — injectable for the missing-binary test.
-export type BinaryProbe = (name: string, env: NodeJS.ProcessEnv) => boolean;
+export type BinaryProbe = (name: string, env: NodeJS.ProcessEnv) => Promise<boolean>;
 
 export type DeployFsExec = {
   targets: DeployTargets;
@@ -78,6 +80,23 @@ export function backupIfExists(path: string): boolean {
   return true;
 }
 
+// Moves an existing folder or file to `backup`, or to `backup-<n>` when that is
+// taken, so an earlier backup is never clobbered. Returns where it went. The
+// backup may sit on another filesystem, where only a copy can move it.
+export function moveAside(path: string, backup: string): string {
+  let dest = backup;
+  for (let n = 1; existsSync(dest); n += 1) dest = `${backup}-${n}`;
+  mkdirSync(dirname(dest), { recursive: true });
+  try {
+    renameSync(path, dest);
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "EXDEV")) throw error;
+    cpSync(path, dest, { recursive: true, verbatimSymlinks: true });
+    rmSync(path, { recursive: true, force: true });
+  }
+  return dest;
+}
+
 // Read a skill source folder from the Mirror into SkillFile[] (recursive), so
 // the pure transform can filter/expand without touching disk itself.
 export function readSkillSource(srcDir: string): SkillFile[] {
@@ -107,7 +126,11 @@ export function readSkillSource(srcDir: string): SkillFile[] {
 // shelling out a real installer against the developer's real ~/.claude: it fires
 // solely under an automated test (NODE_ENV==="test") that did not redirect the
 // home. `tool` names the binary for the error.
-export function execInstaller(fx: DeployFsExec, req: ExecRequest, tool: string): ExecResult {
+export async function execInstaller(
+  fx: DeployFsExec,
+  req: ExecRequest,
+  tool: string,
+): Promise<ExecResult> {
   if (isAutomatedTest() && !fx.targets.isChildEnvRedirected()) {
     throw new DeployError({
       reason: "not_redirected",
@@ -125,20 +148,19 @@ function isAutomatedTest(): boolean {
   return process.env.NODE_ENV === "test";
 }
 
-export function probeBinary(fx: DeployFsExec, name: string): boolean {
+export function probeBinary(fx: DeployFsExec, name: string): Promise<boolean> {
   return fx.probe(name, fx.targets.childEnv(process.env));
 }
 
 const inside = (path: string, dir: string) =>
   path === dir || path.startsWith(`${dir}/`) || path.startsWith(`${dir}\\`);
 
-// A repository's own script runs with CODEX_HOME pinned to the Codex target. When
-// the homes are redirected, no variable but PATH may point into the real home
-// outside the redirected HOME, so that HOME is the only home the script sees.
-// The dev sandbox lives inside the real home, so "outside" matters.
+// When the homes are redirected, no variable but PATH may point into the real
+// home outside the redirected HOME, so that HOME is the only home a repository's
+// own script sees. The dev sandbox lives inside the real home, so "outside"
+// matters.
 export function repoCommandEnv(targets: DeployTargets, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = targets.childEnv(base);
-  env.CODEX_HOME = targets.codexHome();
   const home = env.HOME;
   if (!targets.isChildEnvRedirected() || !home) return env;
   const realHome = homedir();
@@ -165,7 +187,11 @@ function seedRegistry(home: string): void {
   writeFileAt(seeded, `${existing}${separator}${missing.join("\n")}\n`);
 }
 
-export function execRepoCommand(fx: DeployFsExec, req: ExecRequest, tool: string): ExecResult {
+export async function execRepoCommand(
+  fx: DeployFsExec,
+  req: ExecRequest,
+  tool: string,
+): Promise<ExecResult> {
   if (isAutomatedTest() && !fx.targets.isChildEnvRedirected()) {
     throw new DeployError({
       reason: "not_redirected",
@@ -181,19 +207,19 @@ export function execRepoCommand(fx: DeployFsExec, req: ExecRequest, tool: string
 // ---- production wiring ----
 
 // On Windows the external CLIs are `.cmd`/`.ps1` shims (`claude.cmd`, `npx.cmd`,
-// `git` is a real exe) that a bare `Bun.spawnSync(["claude", ...])` cannot
+// `git` is a real exe) that a bare `Bun.spawn(["claude", ...])` cannot
 // resolve — it ENOENTs. Route through `cmd /c` on win32 so the shim is found,
 // exactly as the upstream agent-kit does (`shell: process.platform==="win32"`).
 // PROBE and EXEC must resolve identically, or a probe can pass while the install
 // spawn ENOENTs (the asymmetry that escaped the typed error channel).
-function spawnViaShell(
+async function spawnViaShell(
   cmd: string[],
   opts: { cwd?: string; env: NodeJS.ProcessEnv; stdin?: string },
-): { exitCode: number | null; stdout: string; stderr: string } {
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const onWindows = process.platform === "win32";
   const finalCmd = onWindows ? ["cmd", "/c", ...cmd] : cmd;
   try {
-    const proc = Bun.spawnSync({
+    const proc = Bun.spawn({
       cmd: finalCmd,
       cwd: opts.cwd,
       env: opts.env,
@@ -201,11 +227,13 @@ function spawnViaShell(
       stdout: "pipe",
       stderr: "pipe",
     });
-    return {
-      exitCode: proc.exitCode ?? -1,
-      stdout: proc.stdout?.toString() ?? "",
-      stderr: proc.stderr?.toString() ?? "",
-    };
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    // A signal-killed child reports -1, not `exited`'s 128+n.
+    return { exitCode: proc.exitCode ?? -1, stdout, stderr };
   } catch (err) {
     // A spawn failure (ENOENT for a genuinely-missing binary, even via the
     // shell) is a non-zero result here — never an untyped throw escaping the
@@ -214,11 +242,15 @@ function spawnViaShell(
   }
 }
 
-export function bunExec(req: ExecRequest, env: NodeJS.ProcessEnv): ExecResult {
-  const r = spawnViaShell([req.command, ...req.args], { cwd: req.cwd, env, stdin: req.stdin });
-  return { status: r.exitCode ?? -1, stdout: r.stdout, stderr: r.stderr };
+export async function bunExec(req: ExecRequest, env: NodeJS.ProcessEnv): Promise<ExecResult> {
+  const r = await spawnViaShell([req.command, ...req.args], {
+    cwd: req.cwd,
+    env,
+    stdin: req.stdin,
+  });
+  return { status: r.exitCode, stdout: r.stdout, stderr: r.stderr };
 }
 
-export function bunBinaryProbe(name: string, env: NodeJS.ProcessEnv): boolean {
-  return spawnViaShell([name, "--version"], { env }).exitCode === 0;
+export async function bunBinaryProbe(name: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  return (await spawnViaShell([name, "--version"], { env })).exitCode === 0;
 }

@@ -902,8 +902,8 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
     const argv: string[] = [];
     const installedPlugins = join(homes.claudeHome, "plugins", "installed_plugins.json");
     const server = await serverWith(installerFetch(), {
-      probe: (name) => name === "claude",
-      exec: (request) => {
+      probe: async (name) => name === "claude",
+      exec: async (request) => {
         argv.push([request.command, ...request.args].join(" "));
         if (request.args[1] === "install") {
           mkdirSync(join(homes.claudeHome, "plugins"), { recursive: true });
@@ -946,8 +946,8 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
   test("managed Archify installs, becomes in sync, and removes one target through fake npx", async () => {
     const requests: Array<{ command: string; args: string[]; cwd?: string }> = [];
     const server = await serverWith(installerFetch(), {
-      probe: (name) => name === "npx" || name === "git",
-      exec: (request) => {
+      probe: async (name) => name === "npx" || name === "git",
+      exec: async (request) => {
         requests.push(request);
         if (request.command === "git") {
           return {

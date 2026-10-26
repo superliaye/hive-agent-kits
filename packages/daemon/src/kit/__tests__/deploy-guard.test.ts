@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   type DeployFsExec,
@@ -15,42 +15,56 @@ import {
   repoCommandEnv,
 } from "../deploy/adapter.ts";
 import { DeployError } from "../effect/errors.ts";
-import { type DeployTargets, defaultDeployTargets, failSafeDeployTargets } from "../targets.ts";
+import {
+  type DeployHomes,
+  type DeployTargets,
+  defaultDeployTargets,
+  failSafeDeployTargets,
+} from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 // Packaged port: real homes, the production deploy target.
 const packagedOpts = { devMode: false, allowRealHomeDeploy: () => false } as const;
 
-function fakeTargets(redirected: boolean): DeployTargets {
+function fakeTargets(
+  redirected: boolean,
+  homes: DeployHomes = {
+    claudeHome: "/tmp/c",
+    codexHome: "/tmp/cx",
+    agentsHome: "/tmp/a",
+    ledgerPath: "/tmp/l",
+  },
+): DeployTargets {
   return {
-    claudeHome: () => "/tmp/c",
-    codexHome: () => "/tmp/cx",
-    agentsHome: () => "/tmp/a",
-    ledgerPath: () => "/tmp/l",
+    claudeHome: () => homes.claudeHome,
+    codexHome: () => homes.codexHome,
+    agentsHome: () => homes.agentsHome,
+    ledgerPath: () => homes.ledgerPath,
     mirrorRoot: (sourceId: string) => `/tmp/m/${sourceId}`,
     deploymentStatePath: () => "/tmp/deployment-state.json",
     kitTmpRoot: () => "/tmp/t",
     starterRoot: () => "/tmp/starter",
     childEnv: (base) => ({ ...base }),
     isChildEnvRedirected: () => redirected,
+    withHomes: (fixed) => fakeTargets(redirected, fixed),
   };
 }
 
 function recordingFx(redirected: boolean): { fx: DeployFsExec; calls: ExecRequest[] } {
   const calls: ExecRequest[] = [];
-  const exec = (req: ExecRequest): ExecResult => {
+  const exec = async (req: ExecRequest): Promise<ExecResult> => {
     calls.push(req);
     return { status: 0, stdout: "", stderr: "" };
   };
-  return { fx: { targets: fakeTargets(redirected), exec, probe: () => true }, calls };
+  return { fx: { targets: fakeTargets(redirected), exec, probe: async () => true }, calls };
 }
 
-function withNodeEnv<T>(value: string | undefined, fn: () => T): T {
+async function withNodeEnv<T>(value: string | undefined, fn: () => Promise<T>): Promise<T> {
   const prev = process.env.NODE_ENV;
   if (value === undefined) delete process.env.NODE_ENV;
   else process.env.NODE_ENV = value;
   try {
-    return fn();
+    return await fn();
   } finally {
     if (prev === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = prev;
@@ -58,21 +72,25 @@ function withNodeEnv<T>(value: string | undefined, fn: () => T): T {
 }
 
 describe("execInstaller redirection guard", () => {
-  test("PRODUCTION (not a test) runs the installer even when not redirected", () => {
+  test("PRODUCTION (not a test) runs the installer even when not redirected", async () => {
     const { fx, calls } = recordingFx(false);
-    withNodeEnv("production", () => {
-      const r = execInstaller(fx, { command: "claude", args: ["plugin", "install"] }, "claude");
+    await withNodeEnv("production", async () => {
+      const r = await execInstaller(
+        fx,
+        { command: "claude", args: ["plugin", "install"] },
+        "claude",
+      );
       expect(r.status).toBe(0);
     });
     expect(calls).toHaveLength(1);
   });
 
-  test("TEST context still refuses a real installer when not redirected", () => {
+  test("TEST context still refuses a real installer when not redirected", async () => {
     const { fx, calls } = recordingFx(false);
-    withNodeEnv("test", () => {
+    await withNodeEnv("test", async () => {
       let thrown: unknown;
       try {
-        execInstaller(fx, { command: "claude", args: ["plugin", "install"] }, "claude");
+        await execInstaller(fx, { command: "claude", args: ["plugin", "install"] }, "claude");
       } catch (e) {
         thrown = e;
       }
@@ -82,12 +100,35 @@ describe("execInstaller redirection guard", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("a redirected home runs the installer in any context", () => {
+  test("a redirected home runs the installer in any context", async () => {
     const { fx, calls } = recordingFx(true);
-    withNodeEnv("test", () => {
-      execInstaller(fx, { command: "npx", args: ["skills", "add"] }, "npx");
-    });
+    await withNodeEnv("test", () =>
+      execInstaller(fx, { command: "npx", args: ["skills", "add"] }, "npx"),
+    );
     expect(calls).toHaveLength(1);
+  });
+
+  test("the installer env carries Hive's Codex home over a CODEX_HOME the shell exported", async () => {
+    const homes = redirectHomeEnv(join(tmpdir(), `hive-codex-home-${process.pid}`));
+    const exported = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = join(tmpdir(), "elsewhere", ".codex");
+    try {
+      const seen: NodeJS.ProcessEnv[] = [];
+      const fx: DeployFsExec = {
+        targets: failSafeDeployTargets(),
+        exec: async (_req, env) => {
+          seen.push(env);
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        probe: async () => true,
+      };
+      await execInstaller(fx, { command: "codex", args: ["plugin", "add", "p@m"] }, "codex");
+      expect(seen.map((env) => env.CODEX_HOME)).toEqual([homes.codexHome]);
+    } finally {
+      if (exported === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = exported;
+      clearHomeEnv();
+    }
   });
 });
 
@@ -116,6 +157,14 @@ describe("childEnv HOME redirection", () => {
       expect(env.USERPROFILE).toBe("C:\\real\\home");
       // CLAUDE_CONFIG_DIR is still pinned (equals the real ~/.claude in production).
       expect(env.CLAUDE_CONFIG_DIR).toBeDefined();
+    });
+  });
+
+  test("PACKAGED pins CODEX_HOME to the real ~/.codex, not the shell's", () => {
+    withoutHiveEnv(() => {
+      const targets = defaultDeployTargets(packagedOpts);
+      const env = targets.childEnv({ HOME: "/real/home", CODEX_HOME: "/elsewhere/.codex" });
+      expect(env.CODEX_HOME).toBe(join(homedir(), ".codex"));
     });
   });
 

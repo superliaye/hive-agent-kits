@@ -6,8 +6,9 @@ import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DeployTarget } from "@hive/contract";
+import { log } from "../../lib/log.ts";
 import type { StagedDeployTask } from "../deploy-operations.ts";
-import { readMirrorRecord } from "../mirror.ts";
+import { createOwnedTmpDir, readMirrorRecord } from "../mirror.ts";
 import { CHECKOUT_ROOT } from "../recipes/projection.ts";
 import type { InstalledPath, RepoCommand, RepoRecipe, TargetInstaller } from "../recipes/recipe.ts";
 import { type Tile, tileById } from "../recipes/tiles.ts";
@@ -16,6 +17,7 @@ import {
   type DeployFsExec,
   ensureDir,
   execRepoCommand,
+  moveAside,
   probeBinary,
   removeDir,
 } from "./adapter.ts";
@@ -199,45 +201,100 @@ export function tileTaskSettled(fx: DeployFsExec, task: TileBundleTask): boolean
   );
 }
 
-function requireBinaries(fx: DeployFsExec, names: Iterable<string>): void {
+async function requireBinaries(fx: DeployFsExec, names: Iterable<string>): Promise<void> {
   for (const name of new Set(names)) {
-    if (!probeBinary(fx, name)) {
+    if (!(await probeBinary(fx, name))) {
       throw new InstallerTaskError("missing_binary", `${name} is not available on PATH`);
     }
   }
 }
 
-// The Mirror's checkout/ for `sourceId`, at `commit` when one is required.
-function mirrorCheckout(
-  fx: DeployFsExec,
-  sourceId: string | null,
-  commit: string | null,
-): { path: string; commit: string } | null {
-  if (!sourceId) return null;
-  const root = fx.targets.mirrorRoot(sourceId);
-  const origin = readMirrorRecord(root)?.origin;
-  const synced =
-    origin?.transport === "git" || origin?.transport === "tarball" ? origin.resolvedCommit : null;
-  const path = join(root, CHECKOUT_ROOT);
-  if (!synced || (commit !== null && synced !== commit) || !existsSync(path)) return null;
-  return { path, commit: synced };
+type Checkout = { path: string; commit: string };
+
+// A Deploy operation's private copies of Mirror checkouts. A Sync or a Source
+// delete may replace or remove a Mirror while the Deploy runs, so the operation
+// copies each Source's checkout once, before the first task that needs it, and
+// runs every install and reinstall from that copy.
+export type OperationCheckouts = {
+  // `sourceId`'s checkout at `commit`, or at any commit when `commit` is null.
+  copy(sourceId: string | null, commit: string | null): Checkout | null;
+  release(): void;
+};
+
+export function operationCheckouts(
+  targets: Pick<DeployTargets, "mirrorRoot" | "kitTmpRoot">,
+): OperationCheckouts {
+  let root: string | null = null;
+  const copies = new Map<string, Checkout>();
+  // Synchronous from the record read to the end of the copy, so a Sync's swap
+  // cannot land between them.
+  const take = (sourceId: string, commit: string | null): Checkout | null => {
+    const mirror = targets.mirrorRoot(sourceId);
+    const origin = readMirrorRecord(mirror)?.origin;
+    const synced =
+      origin?.transport === "git" || origin?.transport === "tarball" ? origin.resolvedCommit : null;
+    const from = join(mirror, CHECKOUT_ROOT);
+    if (!synced || (commit !== null && synced !== commit) || !existsSync(from)) return null;
+    root ??= createOwnedTmpDir(targets.kitTmpRoot());
+    const path = join(root, sourceId);
+    cpSync(from, path, { recursive: true });
+    return { path, commit: synced };
+  };
+  return {
+    copy: (sourceId, commit) => {
+      if (!sourceId) return null;
+      const held = copies.get(sourceId);
+      if (held) return commit === null || held.commit === commit ? held : null;
+      const taken = take(sourceId, commit);
+      if (taken) copies.set(sourceId, taken);
+      return taken;
+    },
+    release: () => {
+      if (root) removeDir(root);
+      root = null;
+      copies.clear();
+    },
+  };
 }
 
-function materializeCheckout(source: { path: string; commit: string }, dest: string): void {
+function checkoutCurrent(dest: string, commit: string): boolean {
   const marker = join(dest, CHECKOUT_MARKER);
-  if (existsSync(marker) && readFileSync(marker, "utf8").trim() === source.commit) return;
+  return existsSync(marker) && readFileSync(marker, "utf8").trim() === commit;
+}
+
+// Outside every CLI's skills folder, so no CLI loads a backup as a second skill.
+function backupPath(targets: Pick<DeployTargets, "kitTmpRoot">, tile: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return join(dirname(targets.kitTmpRoot()), "backups", `${tile}-${stamp}`);
+}
+
+// Hive deletes only a checkout that carries its marker. Any other folder at
+// `dest` is moved to Hive's backups, and its backup path is added to `moved`.
+function materializeCheckout(
+  fx: DeployFsExec,
+  tile: string,
+  source: Checkout,
+  dest: string,
+  moved: string[],
+): void {
+  if (checkoutCurrent(dest, source.commit)) return;
+  if (existsSync(dest) && !existsSync(join(dest, CHECKOUT_MARKER))) {
+    const backup = moveAside(dest, backupPath(fx.targets, tile));
+    log().info({ module: "kit/tile-bundle", dest, backup }, "moved a folder Hive did not create");
+    moved.push(backup);
+  }
   removeDir(dest);
   ensureDir(dirname(dest));
   cpSync(source.path, dest, { recursive: true });
-  writeFileSync(marker, `${source.commit}\n`);
+  writeFileSync(join(dest, CHECKOUT_MARKER), `${source.commit}\n`);
 }
 
-function runCommands(
+async function runCommands(
   fx: DeployFsExec,
   tile: string,
   commands: readonly RepoCommand[],
   checkout: string | null,
-): void {
+): Promise<void> {
   const home = commandHome(fx.targets);
   for (const command of commands) {
     const [program, ...args] = command.argv;
@@ -247,7 +304,7 @@ function runCommands(
     const cwd = command.cwd === "checkout" && checkout ? checkout : home;
     ensureDir(cwd);
     const executable = program.startsWith("./") ? join(cwd, program) : program;
-    const result = execRepoCommand(
+    const result = await execRepoCommand(
       fx,
       {
         command: executable,
@@ -275,20 +332,29 @@ function release(fx: DeployFsExec, task: TileBundleTask): void {
   }
 }
 
-function install(fx: DeployFsExec, task: TileBundleTask, resolved: Resolved): void {
+async function install(
+  fx: DeployFsExec,
+  task: TileBundleTask,
+  resolved: Resolved,
+  checkouts: OperationCheckouts,
+  moved: string[],
+): Promise<void> {
   const { recipe, own } = resolved;
-  requireBinaries(fx, own.install.requires);
-  if (recipe.installer.checkout) {
-    const source = mirrorCheckout(fx, task.sourceId, task.commit);
+  await requireBinaries(fx, own.install.requires);
+  if (
+    recipe.installer.checkout &&
+    !(task.checkout && checkoutCurrent(task.checkout, task.commit))
+  ) {
+    const source = checkouts.copy(task.sourceId, task.commit);
     if (!source || !task.checkout) {
       throw new InstallerTaskError(
         "installer_failed",
         `${task.tile}'s Source no longer holds commit ${task.commit}; Sync and Deploy again`,
       );
     }
-    materializeCheckout(source, task.checkout);
+    materializeCheckout(fx, task.tile, source, task.checkout, moved);
   }
-  runCommands(fx, task.tile, own.install.commands, task.checkout);
+  await runCommands(fx, task.tile, own.install.commands, task.checkout);
   if (!tileInstalled(own, fx.targets)) {
     throw new InstallerTaskError(
       "installer_failed",
@@ -299,16 +365,22 @@ function install(fx: DeployFsExec, task: TileBundleTask, resolved: Resolved): vo
 
 // Every check that can fail runs before the uninstaller does, so a removal
 // that cannot reinstall a kept target changes nothing.
-function remove(fx: DeployFsExec, task: TileBundleTask, resolved: Resolved): void {
+async function remove(
+  fx: DeployFsExec,
+  task: TileBundleTask,
+  resolved: Resolved,
+  checkouts: OperationCheckouts,
+  moved: string[],
+): Promise<void> {
   const { recipe, own, kept } = resolved;
-  requireBinaries(fx, [
+  await requireBinaries(fx, [
     ...own.uninstall.requires,
     ...kept.flatMap((entry) => entry.installer.install.requires),
   ]);
-  const reinstallFrom = new Map<string, { path: string; commit: string }>();
+  const reinstallFrom = new Map<string, Checkout>();
   if (recipe.installer.checkout) {
     for (const entry of kept) {
-      const source = mirrorCheckout(fx, task.sourceId, entry.commit);
+      const source = checkouts.copy(task.sourceId, entry.commit);
       if (!source) {
         throw new InstallerTaskError(
           "installer_failed",
@@ -323,21 +395,23 @@ function remove(fx: DeployFsExec, task: TileBundleTask, resolved: Resolved): voi
       throw new InstallerTaskError("installer_failed", `${task.tile} recorded no checkout`);
     }
     if (!existsSync(task.checkout)) {
-      const source = mirrorCheckout(fx, task.sourceId, null);
+      const source = checkouts.copy(task.sourceId, null);
       if (!source) {
         throw new InstallerTaskError(
           "installer_failed",
           `${task.tile}'s checkout is gone and its Source is unavailable to restore it`,
         );
       }
-      materializeCheckout(source, task.checkout);
+      materializeCheckout(fx, task.tile, source, task.checkout, moved);
     }
   }
-  runCommands(fx, task.tile, own.uninstall.commands, task.checkout);
+  await runCommands(fx, task.tile, own.uninstall.commands, task.checkout);
   for (const entry of kept) {
     const source = reinstallFrom.get(entry.target);
-    if (source && entry.checkout) materializeCheckout(source, entry.checkout);
-    runCommands(fx, task.tile, entry.installer.install.commands, entry.checkout);
+    if (source && entry.checkout) {
+      materializeCheckout(fx, task.tile, source, entry.checkout, moved);
+    }
+    await runCommands(fx, task.tile, entry.installer.install.commands, entry.checkout);
   }
   if (!tileRemoved(own, fx.targets)) {
     throw new InstallerTaskError(
@@ -355,7 +429,12 @@ function remove(fx: DeployFsExec, task: TileBundleTask, resolved: Resolved): voi
   }
 }
 
-export function applyTileBundle(fx: DeployFsExec, task: TileBundleTask): void {
+// Resolves to the outcome detail: each folder Hive moved aside, or null.
+export async function applyTileBundle(
+  fx: DeployFsExec,
+  task: TileBundleTask,
+  checkouts: OperationCheckouts,
+): Promise<string | null> {
   const resolved = resolveTask(task);
   if (homeRedirection(fx.targets) === "partial") {
     throw new InstallerTaskError(
@@ -363,10 +442,14 @@ export function applyTileBundle(fx: DeployFsExec, task: TileBundleTask): void {
       "only some deploy-target homes are redirected, so a repository script could write the real home",
     );
   }
+  const moved: string[] = [];
   if (task.action === "remove") {
-    if (!tileTaskSettled(fx, task)) remove(fx, task, resolved);
+    if (!tileTaskSettled(fx, task)) await remove(fx, task, resolved, checkouts, moved);
   } else {
-    install(fx, task, resolved);
+    await install(fx, task, resolved, checkouts, moved);
   }
   release(fx, task);
+  return moved.length > 0
+    ? boundedInstallerDetail(`moved a folder Hive did not create to ${moved.join(", ")}`)
+    : null;
 }

@@ -235,6 +235,16 @@ export const StagedDeployPayloadSchema = z.object({
     ]),
   ),
   metadata: z.record(z.string()).default({}),
+  // The homes the Deploy was staged against, kept for its execution and its
+  // recovery. A payload staged before Hive recorded them has none.
+  homes: z
+    .object({
+      claudeHome: z.string().min(1),
+      codexHome: z.string().min(1),
+      agentsHome: z.string().min(1),
+      ledgerPath: z.string().min(1),
+    })
+    .optional(),
 });
 export type StagedDeployPayload = z.infer<typeof StagedDeployPayloadSchema>;
 export type StagedDeployTask = StagedDeployPayload["tasks"][number];

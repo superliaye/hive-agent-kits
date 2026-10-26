@@ -141,7 +141,8 @@ function liveStageOwner(entry: string): boolean {
   }
 }
 
-function createOwnedMirrorStage(tmpRoot: string): string {
+// A temp folder this Daemon owns, which sweepStaleTmp removes after the Daemon exits.
+export function createOwnedTmpDir(tmpRoot: string): string {
   mkdirSync(tmpRoot, { recursive: true });
   return mkdtempSync(join(tmpRoot, `extract-owner-${process.pid}-`));
 }
@@ -176,7 +177,7 @@ export function materialize(
       );
     }
     const stage = yield* Effect.acquireRelease(
-      Effect.try({ try: () => createOwnedMirrorStage(tmpRoot), catch: mirrorWriteError }),
+      Effect.try({ try: () => createOwnedTmpDir(tmpRoot), catch: mirrorWriteError }),
       (dir) =>
         Effect.sync(() => {
           try {
@@ -242,8 +243,9 @@ export function commitMirror(
   });
 }
 
-// Sweep partial temp extract dirs from Daemons that are no longer alive. Legacy
-// and malformed names carry no live owner and are safe crash remnants to remove.
+// Sweep the owned temp dirs (Sync stages, Deploy checkout copies) of Daemons that
+// are no longer alive. Legacy and malformed names carry no live owner and are
+// safe crash remnants to remove.
 export function sweepStaleTmp(tmpRoot: string): void {
   const root = tmpRoot;
   if (!existsSync(root)) return;

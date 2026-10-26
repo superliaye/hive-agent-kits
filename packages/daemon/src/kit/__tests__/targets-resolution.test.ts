@@ -9,7 +9,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { defaultDeployTargets } from "../targets.ts";
+import { defaultDeployTargets, deployHomes } from "../targets.ts";
 import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const REAL_CLAUDE = join(homedir(), ".claude");
@@ -83,6 +83,28 @@ describe("home resolution precedence", () => {
     expect(t.claudeHome()).toBe(join("/tmp/hive-7", "homes", ".claude"));
     allow = true;
     expect(t.claudeHome()).toBe(REAL_CLAUDE);
+  });
+
+  test("withHomes keeps the homes it was given when the toggle flips", () => {
+    process.env.HIVE_RUNTIME_ROOT = "/tmp/hive-7";
+    let allow = false;
+    const live = defaultDeployTargets({ devMode: true, allowRealHomeDeploy: () => allow });
+    const pinned = live.withHomes(deployHomes(live));
+    allow = true;
+    const sandbox = join("/tmp/hive-7", "homes");
+    expect(live.claudeHome()).toBe(REAL_CLAUDE);
+    expect(deployHomes(pinned)).toEqual({
+      claudeHome: join(sandbox, ".claude"),
+      codexHome: join(sandbox, ".codex"),
+      agentsHome: join(sandbox, ".agents"),
+      ledgerPath: join(sandbox, ".agent-kit", "manifest.json"),
+    });
+    expect(pinned.isChildEnvRedirected()).toBe(true);
+    expect(pinned.childEnv({ HOME: "/real/home" })).toMatchObject({
+      HOME: sandbox,
+      CLAUDE_CONFIG_DIR: join(sandbox, ".claude"),
+      CODEX_HOME: join(sandbox, ".codex"),
+    });
   });
 });
 

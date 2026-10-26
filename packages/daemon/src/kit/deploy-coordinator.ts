@@ -51,6 +51,8 @@ import {
   checkoutLocation,
   hiveCheckout,
   installedTargets,
+  type OperationCheckouts,
+  operationCheckouts,
   repoRecipeOf,
   resolveTileBundle,
   tileTaskSettled,
@@ -76,7 +78,7 @@ import {
 } from "./ledger.ts";
 import { readMirrorIdentity } from "./mirror.ts";
 import { tileById } from "./recipes/tiles.ts";
-import type { DeployTargets } from "./targets.ts";
+import { type DeployTargets, deployHomes } from "./targets.ts";
 
 export type { StagedDeployPayload } from "./deploy-operations.ts";
 
@@ -438,10 +440,12 @@ function requiredActionSource(action: DeployPlan["actions"][number]): {
 }
 
 export function stageDeployPlan(
-  targets: DeployTargets,
+  live: DeployTargets,
   snapshot: DeploymentSnapshot,
   plan: DeployPlan,
 ): StagedDeployPayload {
+  const homes = deployHomes(live);
+  const targets = live.withHomes(homes);
   for (const mirror of plan.mirrors) {
     if (readMirrorIdentity(targets.mirrorRoot(mirror.sourceId)) !== mirror.identity) {
       throw new PlanStaleError();
@@ -608,7 +612,7 @@ export function stageDeployPlan(
     }
   }
   tasks.push(...orderTileTasks(targets, snapshot, tileTasks));
-  return { tasks, metadata: {} };
+  return { tasks, metadata: {}, homes };
 }
 
 type PlanAction = DeployPlan["actions"][number];
@@ -917,21 +921,21 @@ function npxBundleSettled(task: NpxBundleTask): boolean {
   );
 }
 
-function prepareImmutableNpxBundleSource(
+async function prepareImmutableNpxBundleSource(
   fx: DeployFsExec,
   bundleName: string,
   packageRef: string,
-): string {
+): Promise<string> {
   const source = immutableNpxBundleSource(packageRef);
   if (!source) throw new InstallerTaskError("installer_failed", "invalid immutable package");
-  if (!probeBinary(fx, "git")) {
+  if (!(await probeBinary(fx, "git"))) {
     throw new InstallerTaskError("missing_binary", "git is not available on PATH");
   }
 
   const checkout = join(fx.targets.kitTmpRoot(), "npx-skills", bundleName, source.commit);
   const installRoot = source.subpath ? join(checkout, ...source.subpath.split("/")) : checkout;
   if (existsSync(checkout)) {
-    const head = execInstaller(
+    const head = await execInstaller(
       fx,
       { command: "git", args: ["-C", checkout, "rev-parse", "HEAD"] },
       "git",
@@ -953,7 +957,7 @@ function prepareImmutableNpxBundleSource(
     ["-C", checkout, "checkout", "--detach", "FETCH_HEAD"],
   ];
   for (const args of commands) {
-    const result = execInstaller(fx, { command: "git", args }, "git");
+    const result = await execInstaller(fx, { command: "git", args }, "git");
     if (result.status !== 0) {
       removeDir(checkout);
       throw new InstallerTaskError(
@@ -966,7 +970,7 @@ function prepareImmutableNpxBundleSource(
     }
   }
 
-  const head = execInstaller(
+  const head = await execInstaller(
     fx,
     { command: "git", args: ["-C", checkout, "rev-parse", "HEAD"] },
     "git",
@@ -982,8 +986,8 @@ function prepareImmutableNpxBundleSource(
   return installRoot;
 }
 
-function runNpx(fx: DeployFsExec, args: string[], cwd: string | undefined): void {
-  const result = execInstaller(fx, { command: "npx", args, cwd }, "npx");
+async function runNpx(fx: DeployFsExec, args: string[], cwd: string | undefined): Promise<void> {
+  const result = await execInstaller(fx, { command: "npx", args, cwd }, "npx");
   if (result.status !== 0) {
     throw new InstallerTaskError(
       "installer_failed",
@@ -996,10 +1000,14 @@ function runNpx(fx: DeployFsExec, args: string[], cwd: string | undefined): void
 
 // Claude gets its own copy: the CLI's default links Claude to the shared
 // `~/.agents/skills` folder, which would expose the skill to Codex as well.
-function installNpxBundle(fx: DeployFsExec, bundleName: string, install: NpxBundleInstall): void {
-  const installRoot = prepareImmutableNpxBundleSource(fx, bundleName, install.package);
+async function installNpxBundle(
+  fx: DeployFsExec,
+  bundleName: string,
+  install: NpxBundleInstall,
+): Promise<void> {
+  const installRoot = await prepareImmutableNpxBundleSource(fx, bundleName, install.package);
   const agent = install.target === "claude" ? ["claude-code", "--copy"] : ["codex"];
-  runNpx(
+  await runNpx(
     fx,
     [
       "-y",
@@ -1016,18 +1024,18 @@ function installNpxBundle(fx: DeployFsExec, bundleName: string, install: NpxBund
   );
 }
 
-function applyManagedNpxBundle(fx: DeployFsExec, task: NpxBundleTask): void {
+async function applyManagedNpxBundle(fx: DeployFsExec, task: NpxBundleTask): Promise<void> {
   if (npxBundleSettled(task)) return;
-  if (!probeBinary(fx, "npx")) {
+  if (!(await probeBinary(fx, "npx"))) {
     throw new InstallerTaskError("missing_binary", "npx is not available on PATH");
   }
   if (task.action === "remove") {
     // The skills CLI keeps a shared skill while any other agent still has it, so
     // only the full uninstall a user would run removes it from one target.
-    runNpx(fx, ["-y", "skills", "remove", ...task.skills, "--global", "--yes"], undefined);
-    for (const kept of task.keep) installNpxBundle(fx, task.key.name, kept);
+    await runNpx(fx, ["-y", "skills", "remove", ...task.skills, "--global", "--yes"], undefined);
+    for (const kept of task.keep) await installNpxBundle(fx, task.key.name, kept);
   } else {
-    installNpxBundle(fx, task.key.name, task);
+    await installNpxBundle(fx, task.key.name, task);
   }
   if (!npxBundleSettled(task)) {
     throw new InstallerTaskError(
@@ -1037,15 +1045,15 @@ function applyManagedNpxBundle(fx: DeployFsExec, task: NpxBundleTask): void {
   }
 }
 
-function applyMarketplacePlugin(
+async function applyMarketplacePlugin(
   fx: DeployFsExec,
   task: Extract<StagedDeployTask, { type: "marketplace-plugin" }>,
-): void {
-  if (!probeBinary(fx, task.target)) {
+): Promise<void> {
+  if (!(await probeBinary(fx, task.target))) {
     throw new InstallerTaskError("missing_binary", `${task.target} is not available on PATH`);
   }
   for (const request of marketplacePluginCommands(task)) {
-    const result = execInstaller(fx, request, request.command);
+    const result = await execInstaller(fx, request, request.command);
     if (result.status !== 0) {
       throw new InstallerTaskError(
         "installer_failed",
@@ -1064,16 +1072,16 @@ function applyMarketplacePlugin(
   }
 }
 
-function removeMarketplacePlugin(
+async function removeMarketplacePlugin(
   fx: DeployFsExec,
   task: Extract<StagedDeployTask, { type: "marketplace-plugin-remove" }>,
-): void {
+): Promise<void> {
   if (!marketplacePluginInstalled(fx.targets, task)) return;
-  if (!probeBinary(fx, task.target)) {
+  if (!(await probeBinary(fx, task.target))) {
     throw new InstallerTaskError("missing_binary", `${task.target} is not available on PATH`);
   }
   const request = marketplacePluginRemoveCommand(task);
-  const result = execInstaller(fx, request, request.command);
+  const result = await execInstaller(fx, request, request.command);
   if (result.status !== 0) {
     throw new InstallerTaskError(
       "installer_failed",
@@ -1091,7 +1099,12 @@ function removeMarketplacePlugin(
   }
 }
 
-function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
+// Resolves to a detail worth keeping on a succeeded outcome, or null.
+async function applyStagedTask(
+  fx: DeployFsExec,
+  task: StagedDeployTask,
+  checkouts: OperationCheckouts,
+): Promise<string | null> {
   switch (task.type) {
     case "instruction": {
       const path = deployedInstructionPath(fx.targets, task.target);
@@ -1102,36 +1115,35 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
         backupIfExists(path);
         writeFileAt(path, task.content);
       }
-      return;
+      return null;
     }
     case "skill":
       writeSkillFolder(
         deployedSkillDir(fx.targets, task.key.name, task.target),
         task.files.map(stagedSkillFile),
       );
-      return;
+      return null;
     case "agent":
       writeFileAt(deployedAgentPath(fx.targets, task.key.name, task.target), task.content);
-      return;
+      return null;
     case "remove":
       if (task.key.kind === "skill") {
         removeDir(deployedSkillDir(fx.targets, task.key.name, task.target));
       } else {
         removeFile(deployedAgentPath(fx.targets, task.key.name, task.target));
       }
-      return;
+      return null;
     case "npx-bundle":
-      applyManagedNpxBundle(fx, task);
-      return;
+      await applyManagedNpxBundle(fx, task);
+      return null;
     case "tile-bundle":
-      applyTileBundle(fx, task);
-      return;
+      return applyTileBundle(fx, task, checkouts);
     case "marketplace-plugin":
-      applyMarketplacePlugin(fx, task);
-      return;
+      await applyMarketplacePlugin(fx, task);
+      return null;
     case "marketplace-plugin-remove":
-      removeMarketplacePlugin(fx, task);
-      return;
+      await removeMarketplacePlugin(fx, task);
+      return null;
   }
 }
 
@@ -1142,13 +1154,25 @@ function failureFor(error: unknown): { code: string; detail?: string } {
   return { code: "io" };
 }
 
-export async function executeStagedDeploy(
+// The operation writes to the homes it was staged against, even when the home
+// setting changes while it runs or before it recovers.
+function forOperation(
   options: ExecuteStagedDeployOptions,
+  operation: DeployOperation,
+): ExecuteStagedDeployOptions {
+  const { targets } = options.fx;
+  const homes = operation.staged.homes ?? deployHomes(targets);
+  return { ...options, fx: { ...options.fx, targets: targets.withHomes(homes) } };
+}
+
+export async function executeStagedDeploy(
+  given: ExecuteStagedDeployOptions,
   operation: DeployOperation,
   journal:
     | DeployExecutionJournal
     | ((outcomes: readonly DeployOperationOutcome[]) => Promise<void>),
 ): Promise<void> {
+  const options = forOperation(given, operation);
   const now = options.now ?? Date.now;
   const provisional: DeployOperationOutcome[] = [];
   const lockOptions = options.ledgerWriteOptions ?? {};
@@ -1156,22 +1180,28 @@ export async function executeStagedDeploy(
     options.fx.targets.ledgerPath(),
     lockOptions.lockTimeoutMs ?? 5_000,
     async () => {
-      for (const task of operation.staged.tasks) {
-        const actions = taskActions(task);
-        let failure: { code: string; detail?: string } | undefined;
-        try {
-          applyStagedTask(options.fx, task);
-        } catch (error) {
-          failure = failureFor(error);
+      const checkouts = operationCheckouts(options.fx.targets);
+      try {
+        for (const task of operation.staged.tasks) {
+          const actions = taskActions(task);
+          let failure: { code: string; detail?: string } | undefined;
+          let note: string | null = null;
+          try {
+            note = await applyStagedTask(options.fx, task, checkouts);
+          } catch (error) {
+            failure = failureFor(error);
+          }
+          const outcomes = actions.map((action) => ({
+            ...action,
+            outcome: failure ? ("failed" as const) : ("succeeded" as const),
+            attemptedAt: now(),
+            ...(failure ? failure : note ? { detail: note } : {}),
+          }));
+          provisional.push(...outcomes);
+          if ("provisional" in journal) await journal.provisional(outcomes);
         }
-        const outcomes = actions.map((action) => ({
-          ...action,
-          outcome: failure ? ("failed" as const) : ("succeeded" as const),
-          attemptedAt: now(),
-          ...(failure ? failure : {}),
-        }));
-        provisional.push(...outcomes);
-        if ("provisional" in journal) await journal.provisional(outcomes);
+      } finally {
+        checkouts.release();
       }
 
       const checkpointed = { ...operation, provisionalOutcomes: provisional };
@@ -1467,10 +1497,11 @@ function finalizeCommittedDeployment(
 }
 
 export async function resumeStagedDeploy(
-  options: ExecuteStagedDeployOptions,
+  given: ExecuteStagedDeployOptions,
   operation: DeployOperation,
   journal: DeployExecutionJournal,
 ): Promise<void> {
+  const options = forOperation(given, operation);
   let phase = operation.executionPhase;
   let recovered = operation;
   if (phase === "applying") {

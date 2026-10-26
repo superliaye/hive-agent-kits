@@ -25,8 +25,10 @@ commands, and where the trust boundary sits.
   host at once is declared `all-targets`. Hive then runs it once and reinstalls each target that
   keeps the Capability, the same shape as ADR-0032's npx full uninstall.
 - **Commands run from a Hive-owned checkout, never the Mirror.** When a Recipe needs the
-  repository on disk, Sync copies the tree into the Mirror's `checkout/`. Deploy copies that
-  into one checkout that every target installs from. It goes where the repository's
+  repository on disk, Sync copies the tree into the Mirror's `checkout/`. A Deploy copies that
+  once, before the first step that uses it, into a private folder it deletes when it finishes,
+  so a Sync or a Source delete during the Deploy cannot change what it installs. Every target
+  installs from one checkout made from that copy. The checkout goes where the repository's
   documentation puts it for a desired target (gstack's Claude install is
   `~/.claude/skills/gstack`), else into a Hive-owned folder. When the desired targets move it,
   the targets that stay reinstall from the new place, and Hive deletes a Hive-owned checkout
