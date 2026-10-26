@@ -5,7 +5,7 @@
 
 import { Buffer } from "node:buffer";
 import type { PluginTarget } from "@hive/capability-schema";
-import type { RecipeSummary, SelectionUnit } from "@hive/contract";
+import type { DeployTarget, RecipeSummary, SelectionUnit } from "@hive/contract";
 import { Effect } from "effect";
 import { parse as yamlParse, stringify as yamlStringify } from "yaml";
 import { z } from "zod";
@@ -15,6 +15,7 @@ import {
   indexTree,
   kindOf,
   realPath,
+  type TreeIndex,
   type TreePath,
   type TreeSnapshot,
   treePath,
@@ -68,8 +69,46 @@ function parseFrontmatter(text: string): Readonly<Record<string, unknown>> | nul
 
 const READ_BATCH = 128;
 
+const RECOGNITION_MANIFESTS = [
+  "skills-lock.json",
+  ".claude-plugin/marketplace.json",
+  ".claude-plugin/plugin.json",
+  ".agents/plugins/marketplace.json",
+] as TreePath[];
+
+const isNamed = (path: string, name: string) => path === name || path.endsWith(`/${name}`);
+
+// The listed files a Recipe may read for recognition: the root manifests,
+// every SKILL.md, and every Codex plugin manifest, each resolved through its links.
+function recognitionFiles(index: TreeIndex): TreePath[] {
+  const files = new Set<TreePath>();
+  const add = (path: TreePath) => {
+    const file = realPath(index, path);
+    if (file !== null && index.entries.has(file)) files.add(file);
+  };
+  for (const path of RECOGNITION_MANIFESTS) add(path);
+  for (const path of index.entries.keys()) {
+    if (isNamed(path, "SKILL.md") || isNamed(path, ".codex-plugin/plugin.json")) add(path);
+  }
+  return [...files];
+}
+
+// Each blob batch a git snapshot lacks costs a fetch, so the first content read
+// takes every file recognition may read in one batch, and later reads are
+// served from it.
 export function recipeTree(snapshot: TreeSnapshot, limits: TreeLimits): RecipeTree {
   const index = indexTree(snapshot.entries);
+  let prefetched: ReadonlyMap<TreePath, Uint8Array> | null = null;
+  const prefetch = (): Effect.Effect<ReadonlyMap<TreePath, Uint8Array>, SyncError> =>
+    prefetched
+      ? Effect.succeed(prefetched)
+      : snapshot.read(recognitionFiles(index)).pipe(
+          Effect.tap((bytes) =>
+            Effect.sync(() => {
+              prefetched = bytes;
+            }),
+          ),
+        );
   const origin = snapshot.origin;
   const remote =
     origin.transport === "git" && origin.subpath === "."
@@ -77,13 +116,13 @@ export function recipeTree(snapshot: TreeSnapshot, limits: TreeLimits): RecipeTr
       : origin.transport === "tarball"
         ? { repoUrl: origin.repoUrl, commit: origin.resolvedCommit }
         : null;
-  const text = (path: TreePath): Effect.Effect<string | null, SyncError> => {
-    const file = realPath(index, path);
-    if (file === null || !index.entries.has(file)) return Effect.succeed(null);
-    return snapshot
-      .read([file])
-      .pipe(Effect.map((bytes) => new TextDecoder().decode(bytes.get(file) ?? new Uint8Array())));
-  };
+  const text = (path: TreePath): Effect.Effect<string | null, SyncError> =>
+    Effect.gen(function* () {
+      const file = realPath(index, path);
+      if (file === null || !index.entries.has(file)) return null;
+      const bytes = (yield* prefetch()).get(file) ?? (yield* snapshot.read([file])).get(file);
+      return new TextDecoder().decode(bytes ?? new Uint8Array());
+    });
   return {
     remote,
     kind: (path) => kindOf(index, path),
@@ -116,13 +155,19 @@ export function recipeTree(snapshot: TreeSnapshot, limits: TreeLimits): RecipeTr
             return yield* Effect.fail(acquisitionError("budget_exceeded"));
           if (item._tag === "file") files.add(item.path);
         }
-        const paths = [...files];
+        const contains = (data: Uint8Array) =>
+          Buffer.from(data.buffer, data.byteOffset, data.byteLength).includes(pattern);
+        const batch = yield* prefetch();
+        const paths: TreePath[] = [];
+        for (const path of files) {
+          const data = batch.get(path);
+          if (!data) paths.push(path);
+          else if (contains(data)) return true;
+        }
         for (let start = 0; start < paths.length; start += READ_BATCH) {
           const bytes = yield* snapshot.read(paths.slice(start, start + READ_BATCH));
           for (const data of bytes.values()) {
-            if (Buffer.from(data.buffer, data.byteOffset, data.byteLength).includes(pattern)) {
-              return true;
-            }
+            if (contains(data)) return true;
           }
         }
         return false;
@@ -146,12 +191,56 @@ type RecipeBase = {
 };
 
 // Applies to every Source, a pasted link included, and never runs repository code.
-export type GenericRecipe = RecipeBase & { readonly trust: "generic" };
+type GenericRecipe = RecipeBase & { readonly trust: "generic" };
 // A generic pattern whose Capabilities the user picks; a Tile may narrow it to whole.
 export type PickRecipe = GenericRecipe & { readonly unit: "pick" };
+// A path under a target CLI home, or under the HOME a repository's commands run
+// with ("user"). Relative, and never leaves that home.
+export type InstalledPath = {
+  readonly home: "claude" | "codex" | "agents" | "user";
+  readonly path: string;
+};
+
+// `cwd` "checkout" runs the command in Hive's durable copy of the repository.
+// `stdin` answers a prompt the command asks.
+export type RepoCommand = {
+  readonly argv: readonly [string, ...string[]];
+  readonly cwd: "checkout" | null;
+  readonly stdin?: string;
+};
+
+type RepoCommands = {
+  // Probed before any side effect.
+  readonly requires: readonly string[];
+  readonly commands: readonly RepoCommand[];
+};
+
+export type TargetInstaller = {
+  readonly install: RepoCommands;
+  // "all-targets" removes every CLI at once, so Deploy runs it once and then
+  // reinstalls each target that keeps the Capability.
+  readonly uninstall: RepoCommands & { readonly scope: "target" | "all-targets" };
+  // All of them exist exactly when the target is installed.
+  readonly proofs: readonly InstalledPath[];
+};
+
+// The commands a repository's documentation gives, per CLI (ADR-0034). They
+// live here, in Hive's source, and never in Mirror bytes.
+export type RepoInstaller = {
+  // Set when the commands run inside the repository. Sync then copies the tree
+  // into the Mirror's checkout/, and Deploy copies that to the path `at` names
+  // for the first desired target that has one, else to a Hive-owned folder.
+  readonly checkout: { readonly at: Partial<Record<DeployTarget, InstalledPath>> } | null;
+  readonly targets: Partial<Record<DeployTarget, TargetInstaller>>;
+};
+
 // Covers one repository no generic pattern fits and may run its setup, so only
 // a Tile carries one (ADR-0033). Its `trust` keeps it out of GENERIC_RECIPES.
-export type RepoRecipe = RecipeBase & { readonly trust: "repo"; readonly unit: "whole" };
+export type RepoRecipe = RecipeBase & {
+  readonly trust: "repo";
+  readonly unit: "whole";
+  readonly installer: RepoInstaller;
+};
 export type Recipe = GenericRecipe | RepoRecipe;
 
 export type Recognition = {
@@ -159,7 +248,7 @@ export type Recognition = {
   readonly projection: Projection;
 };
 
-const miss = (reason: string): Match => ({ _tag: "Miss", reason });
+export const miss = (reason: string): Match => ({ _tag: "Miss", reason });
 const ROOT = "" as TreePath;
 
 // A kit's skills keep the kit rendering at Deploy; every other Recipe's skills
@@ -202,7 +291,7 @@ const LocalSource = z.object({ path: z.string() });
 
 type Marketplaces = { claude: Marketplace | null; codex: Marketplace | null };
 
-function readMarketplaces(tree: RecipeTree): Effect.Effect<Marketplaces, SyncError> {
+export function readMarketplaces(tree: RecipeTree): Effect.Effect<Marketplaces, SyncError> {
   const read = (path: TreePath) =>
     tree.json(path).pipe(
       Effect.map((value) => {
@@ -234,7 +323,7 @@ function codexDescription(
 // One pointer per listed plugin. `targets` are the files that list it, and
 // `source_commit` moves the pointer's ContentSha with every synced commit, which
 // is what surfaces a pending update.
-function pluginPointers(
+export function pluginPointers(
   tree: RecipeTree,
   remote: NonNullable<RecipeTree["remote"]>,
   marketplaceName: string,

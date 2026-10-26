@@ -627,7 +627,7 @@ pre.config {
   color: var(--color-fg-default);
 }
 
-/* Add-Source control: git-URL input + button in the Capabilities header,
+/* Add-Source control: git-URL input + button under the Sources shelf,
    mirroring .api-key-form. The inline status banner sits directly beneath. */
 .add-source-form {
   display: flex;
@@ -1332,37 +1332,6 @@ pre.config {
   font-size: 12px;
   color: var(--color-fg-muted);
 }
-.kit-source-panel {
-  display: grid;
-  grid-template-columns: minmax(120px, max-content) minmax(360px, max-content) minmax(340px, 1fr);
-  align-items: start;
-  column-gap: 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border-default);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--color-bg-surface) 86%, transparent);
-}
-.kit-source-panel-head {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.kit-source-panel-title {
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--color-fg-default);
-}
-.kit-source-panel-meta {
-  max-width: 18ch;
-  font-size: 11px;
-  line-height: 1.35;
-  color: var(--color-fg-muted);
-}
-.kit-add-source-panel {
-  min-width: 340px;
-}
 .tile-shelf {
   display: flex;
   flex-direction: column;
@@ -1371,13 +1340,6 @@ pre.config {
   border: 1px solid var(--color-border-default);
   border-radius: 8px;
   background: color-mix(in srgb, var(--color-bg-surface) 86%, transparent);
-}
-/* In the first-run empty state the shelf is the primary action: full width and
-   left-aligned inside the centered block. */
-.kit-empty-state .tile-shelf {
-  align-self: stretch;
-  text-align: left;
-  background: var(--color-bg-base);
 }
 .tile-shelf-head {
   display: flex;
@@ -1450,7 +1412,106 @@ pre.config {
   background: color-mix(in srgb, var(--color-success) 18%, transparent);
   color: var(--color-success);
 }
-.kit-add-source-panel .add-source-form {
+.tile-added::before {
+  content: "✓ ";
+}
+/* An added Source reads as selected, the same accent as a selected capability row. */
+.tile-card-added {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-bg-elevated));
+}
+.tile-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 22px;
+}
+.tile-mirror-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.kit-fresh-off {
+  background: var(--color-bg-hover);
+  color: var(--color-fg-muted);
+}
+/* Remove stays out of the way until the card is hovered or focused. It is
+   transparent, not hidden, so the keyboard still reaches it, and always shown
+   where there is no hover. */
+.tile-remove {
+  margin-left: auto;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-danger);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 45%, transparent);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.tile-card:hover .tile-remove,
+.tile-card:focus-within .tile-remove {
+  opacity: 1;
+}
+@media (hover: none) {
+  .tile-remove {
+    opacity: 1;
+  }
+}
+.tile-remove:hover {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+.tile-remove:focus-visible,
+.tile-remove-go:focus-visible,
+.tile-remove-cancel:focus-visible {
+  outline: 2px solid var(--color-danger);
+  outline-offset: 2px;
+}
+.tile-remove-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tile-remove-prompt {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-danger);
+  font-weight: 600;
+}
+.tile-remove-actions {
+  display: flex;
+  gap: 6px;
+}
+.tile-remove-go,
+.tile-remove-cancel {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.tile-remove-go {
+  color: var(--color-fg-on-accent);
+  background: var(--color-danger);
+  border: 1px solid var(--color-danger);
+}
+.tile-remove-cancel {
+  color: var(--color-fg-default);
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+}
+.tile-remove-cancel:hover {
+  background: var(--color-bg-hover);
+}
+.tile-remove-go:disabled,
+.tile-remove-cancel:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.tile-shelf-link .add-source-form {
   margin-top: 0;
 }
 .kit-sha {
@@ -1491,203 +1552,6 @@ pre.config {
 .kit-rate-reset {
   font-size: 11px;
   color: var(--color-fg-muted);
-}
-.kit-sources {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.kit-source-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 24px;
-}
-/* The Source name anchors the row: larger and heavier than the facts ranked
-   after it, so the eye lands on identity first. */
-.kit-source-origin {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--color-fg-default);
-}
-/* Freshness + SHA, grouped and ranked after the name — one secondary cluster the
-   eye reads as a unit, distinct from the on/off toggle that follows. */
-.kit-source-facts {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.kit-source-row-inactive {
-  opacity: 0.55;
-}
-.kit-source-row-inactive .kit-source-origin {
-  color: var(--color-fg-muted);
-}
-/* The Source on/off control reads as a switch (track + sliding thumb), distinct
-   from the multi-select target checkboxes below it, with a visible On/Off word so
-   the state never relies on color or opacity alone. */
-.kit-source-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  margin-left: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.kit-source-switch {
-  appearance: none;
-  -webkit-appearance: none;
-  position: relative;
-  width: 30px;
-  height: 16px;
-  border-radius: 999px;
-  background: var(--color-border-default);
-  border: 1px solid var(--color-border-default);
-  cursor: pointer;
-  flex: none;
-  transition: background 120ms ease;
-}
-.kit-source-switch::after {
-  content: "";
-  position: absolute;
-  top: 1px;
-  left: 1px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--color-bg-base);
-  transition: transform 120ms ease;
-}
-.kit-source-switch:checked {
-  background: var(--color-accent);
-  border-color: var(--color-accent);
-}
-.kit-source-switch:checked::after {
-  transform: translateX(14px);
-}
-.kit-source-switch:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-.kit-source-switch:disabled {
-  cursor: progress;
-  opacity: 0.6;
-}
-.kit-source-toggle-label {
-  color: var(--color-fg-muted);
-}
-.kit-source-toggle.on .kit-source-toggle-label {
-  color: var(--color-accent);
-}
-/* The per-Source Remove control: a danger-tinted ghost button, deliberately
-   distinct from the on/off switch. Hidden for the bundled local Starter. The
-   two-step confirm (Remove? / Remove / Cancel) replaces it inline on arm. */
-.kit-source-delete {
-  margin-left: 4px;
-  padding: 1px 7px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-fg-muted);
-  background: transparent;
-  border: 1px solid var(--color-border-default);
-  border-radius: 4px;
-  cursor: pointer;
-}
-.kit-source-delete:hover {
-  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
-  border-color: var(--color-danger);
-  color: var(--color-danger);
-}
-.kit-source-delete:focus-visible {
-  outline: 2px solid var(--color-danger);
-  outline-offset: 2px;
-}
-.kit-source-delete-confirm {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: 4px;
-  font-size: 11px;
-}
-.kit-source-delete-prompt {
-  color: var(--color-danger);
-  font-weight: 600;
-}
-.kit-source-delete-go,
-.kit-source-delete-cancel {
-  padding: 2px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.kit-source-delete-go {
-  color: var(--color-fg-on-accent);
-  background: var(--color-danger);
-  border: 1px solid var(--color-danger);
-}
-.kit-source-delete-go:disabled,
-.kit-source-delete-cancel:disabled {
-  opacity: 0.6;
-  cursor: progress;
-}
-.kit-source-delete-cancel {
-  color: var(--color-fg-default);
-  background: transparent;
-  border: 1px solid var(--color-border-strong);
-}
-.kit-source-delete-cancel:hover {
-  background: var(--color-bg-hover);
-}
-.kit-source-delete-go:focus-visible,
-.kit-source-delete-cancel:focus-visible {
-  outline: 2px solid var(--color-danger);
-  outline-offset: 2px;
-}
-/* Per-Source precedence re-rank: a stacked up/down pair, muted until hover,
-   so it reads as a secondary control distinct from the toggle/delete. */
-.kit-source-rank {
-  display: inline-flex;
-  flex-direction: column;
-  margin-left: 6px;
-  line-height: 0;
-}
-.kit-source-up,
-.kit-source-down {
-  padding: 0 5px;
-  font-size: 9px;
-  line-height: 1.2;
-  color: var(--color-text-muted);
-  background: transparent;
-  border: 1px solid var(--color-border-default);
-  cursor: pointer;
-}
-.kit-source-up {
-  border-radius: 4px 4px 0 0;
-  border-bottom: none;
-}
-.kit-source-down {
-  border-radius: 0 0 4px 4px;
-}
-.kit-source-up:hover:not(:disabled),
-.kit-source-down:hover:not(:disabled) {
-  color: var(--color-text-default);
-  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-}
-.kit-source-up:disabled,
-.kit-source-down:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-.kit-source-up:focus-visible,
-.kit-source-down:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 1px;
 }
 .kit-header-actions {
   display: flex;
@@ -2046,8 +1910,23 @@ pre.config {
   color: var(--color-text-muted);
   font-style: italic;
 }
-.kit-row-whole {
-  font-size: 11px;
+/* A whole Source's row: each Capability it installs, with its kind and CLIs. */
+.kit-unit-members {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.kit-unit-member {
+  display: flex;
+  flex-direction: column;
+}
+.kit-unit-member-name {
+  font-size: 12px;
+  font-weight: 600;
+}
+.kit-unit-member-meta {
+  font-weight: 400;
   color: var(--color-fg-muted);
 }
 .kit-connection {
@@ -2146,11 +2025,6 @@ pre.config {
 }
 
 @media (max-width: 980px) {
-  .kit-source-panel {
-    grid-template-columns: 1fr;
-    row-gap: 10px;
-  }
-  .kit-add-source-panel,
   .add-source-form input {
     min-width: 0;
   }

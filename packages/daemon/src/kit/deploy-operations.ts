@@ -66,6 +66,15 @@ const DeployPlanSchema = z.object({
       keys: z.array(CapabilityKey),
     }),
   ),
+  satisfiedRemovalIntents: z
+    .array(
+      z.object({
+        key: CapabilityKey,
+        target: DeployTarget,
+        generation: z.string().optional(),
+      }),
+    )
+    .default([]),
 });
 
 const StagedAction = z.object({
@@ -164,6 +173,32 @@ const StagedManagedNpxBundleTask = z.object({
   keep: z.array(NpxBundleKeep).default([]),
 });
 
+// A Tile installer bundle (ADR-0034). The task names the Tile; its commands are
+// read from the Tile's Recipe at execution, never stored. `checkout` is where
+// this target's commands run: the new location for an install, the recorded
+// one for a removal. `keep` lists the targets an all-targets uninstall must
+// reinstall, and `release` a Hive-owned checkout no target uses afterwards.
+const TileTargetInstall = z.object({
+  target: DeployTarget,
+  checkout: z.string().min(1).nullable(),
+  commit: z.string().min(1),
+});
+
+const StagedTileBundleTask = z.object({
+  type: z.literal("tile-bundle"),
+  action: z.enum(["add", "update", "remove"]),
+  key: z.object({ kind: z.literal("bundle"), name: z.string() }),
+  target: DeployTarget,
+  tile: z.string().min(1),
+  checkout: z.string().min(1).nullable(),
+  commit: z.string().min(1),
+  sourceId: z.string().nullable(),
+  contentSha: z.string().nullable(),
+  renderedHash: z.string(),
+  keep: z.array(TileTargetInstall),
+  release: z.string().min(1).nullable(),
+});
+
 const StagedMarketplacePluginTask = z.object({
   type: z.literal("marketplace-plugin"),
   action: z.enum(["add", "update"]),
@@ -202,12 +237,23 @@ export const StagedDeployPayloadSchema = z.object({
       StagedSkillTask,
       StagedAgentTask,
       StagedManagedNpxBundleTask,
+      StagedTileBundleTask,
       StagedMarketplacePluginTask,
       StagedMarketplacePluginRemovalTask,
       StagedRemovalTask,
     ]),
   ),
   metadata: z.record(z.string()).default({}),
+  // The homes the Deploy was staged against, kept for its execution and its
+  // recovery. A payload staged before Hive recorded them has none.
+  homes: z
+    .object({
+      claudeHome: z.string().min(1),
+      codexHome: z.string().min(1),
+      agentsHome: z.string().min(1),
+      ledgerPath: z.string().min(1),
+    })
+    .optional(),
 });
 export type StagedDeployPayload = z.infer<typeof StagedDeployPayloadSchema>;
 export type StagedDeployTask = StagedDeployPayload["tasks"][number];
@@ -235,6 +281,7 @@ const StoredDeployPayloadSchema = StagedDeployPayloadSchema.extend({
       StoredSkillTask,
       StagedAgentTask,
       StagedManagedNpxBundleTask,
+      StagedTileBundleTask,
       StagedMarketplacePluginTask,
       StagedMarketplacePluginRemovalTask,
       StagedRemovalTask,

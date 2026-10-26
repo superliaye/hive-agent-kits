@@ -115,7 +115,8 @@ refresh with no rebuild. A git Sync uses the Daemon machine's ambient git
 credentials and records the requested revision plus resolved commit. A working-tree
 Sync snapshots the selected tree and records its HEAD, dirty state, and content
 identity. The local **Starter Source** copies bundled content without a network
-revision. Each active Source keeps its previous Mirror until the replacement is
+revision. Every kind recognizes its tree with a **Recipe** and copies only what the
+Recipe projects. Each active Source keeps its previous Mirror until the replacement is
 fully in place. A failed Sync keeps the last good Mirror and is surfaced as a
 distinct freshness state — never as "up to date".
 
@@ -123,6 +124,7 @@ distinct freshness state — never as "up to date".
 A **Source**'s private, read-only copy under the Hive home — what a **Deploy** reads
 its artifacts from. Each Source has its own Mirror; Hive never physically merges
 Sources into one tree (the unified view across Sources is computed, not stored).
+It holds only what the Source's **Recipe** projects, in Hive's capability format.
 Distinct from the **CLI homes** a Deploy writes to.
 
 **CapabilityKey**:

@@ -32,10 +32,9 @@ export const SourcesFileVersionProbe = z.object({ version: z.number() });
 
 // ---- Audit events (source: 'sources') ----
 //
-// Source add/activate/deactivate/delete/reorder are user actions, so each emits
-// one audit event. Payloads are refs-only — the opaque SourceId and locator kind,
-// plus a credential-free git origin and the Tile id on add, plus the new rank on
-// reorder. Re-adding the Starter from its Tile is a user add; first-run seeding
+// Source add/activate/deactivate/delete are user actions, so each emits one
+// audit event. Payloads are refs-only — the opaque SourceId and locator kind,
+// plus a credential-free git origin and the Tile id on add. Re-adding the Starter from its Tile is a user add; first-run seeding
 // is not. A registry mutation has neither a Run nor an Agent, so run_id/agent_id
 // are null at the normalizer.
 export type SourcesAuditEvents = {
@@ -46,7 +45,6 @@ export type SourcesAuditEvents = {
   "source.activated": { id: string };
   "source.deactivated": { id: string };
   "source.removed": { id: string };
-  "source.reordered": { id: string; rank: number };
 };
 
 // Normalize an origin for storage / duplicate comparison so that clones of the

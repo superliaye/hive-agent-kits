@@ -5,14 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CapabilityKey } from "@hive/capability-schema";
 import type { OverviewRow, Source } from "@hive/contract";
-import type { DeploymentSnapshot } from "../deploy-plan.ts";
+import { buildDeployPlan, type DeploymentSnapshot } from "../deploy-plan.ts";
 import {
   buildOverview,
   captureCoherentDeploymentSnapshot,
   captureDeploymentSnapshot,
   DeploymentSnapshotChangedError,
 } from "../overview.ts";
-import type { DeployTargets } from "../targets.ts";
+import type { DeployHomes, DeployTargets } from "../targets.ts";
 
 const key = (kind: CapabilityKey["kind"], name: string): CapabilityKey => ({ kind, name });
 
@@ -22,7 +22,9 @@ function fixture(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapsho
     sourceRegistryRevision: 1,
     mirrors: [],
     catalog: { entries: [], presets: [], problems: [] },
+    sourceTiles: new Map(),
     plugins: new Map(),
+    bundles: new Map(),
     selection: { revision: 1, enabled: [], removalIntents: [] },
     ledger: {
       revision: null,
@@ -459,6 +461,56 @@ describe("authoritative Overview union and state matrix", () => {
     expect(target(row(overview, plugin), "codex").reconciliation).toBe("pending_add");
   });
 
+  test("a removal intent with nothing installed is in_sync; one Hive cannot remove stays manual", () => {
+    const neverApplied = key("plugin", "ye");
+    const otherCli = key("bundle", "codex-only");
+    const setupScript = key("bundle", "setup");
+    const gone = key("bundle", "gone");
+    const intent = (item: CapabilityKey, on: "claude" | "codex") => ({
+      key: item,
+      targets: [on] as ["claude" | "codex"],
+      generation: `remove-${item.name}-${on}`,
+    });
+    const snapshot = fixture({
+      catalog: {
+        entries: [variant(neverApplied), variant(otherCli), variant(setupScript)],
+        presets: [],
+        problems: [],
+      },
+      plugins: new Map([["ye", { targets: ["claude", "codex"] }]]),
+      bundles: new Map([["codex-only", { targets: ["codex"] }]]),
+      selection: {
+        revision: 4,
+        enabled: [],
+        removalIntents: [
+          intent(neverApplied, "codex"),
+          intent(otherCli, "claude"),
+          intent(setupScript, "claude"),
+          intent(gone, "claude"),
+        ],
+      },
+      deploymentState: {
+        schemaVersion: 1,
+        revision: 1,
+        records: [applied(setupScript, "setup-hash", "claude")],
+      },
+    });
+
+    const overview = buildOverview(snapshot);
+
+    expect(target(row(overview, neverApplied), "codex").reconciliation).toBe("in_sync");
+    expect(target(row(overview, setupScript), "claude").reconciliation).toBe(
+      "manual_removal_required",
+    );
+    expect(overview.rows.some((value) => value.key.name === gone.name)).toBe(false);
+    expect(buildDeployPlan(snapshot).satisfiedRemovalIntents).toEqual([
+      { key: otherCli, target: "claude", generation: "remove-codex-only-claude" },
+      { key: gone, target: "claude", generation: "remove-gone-claude" },
+      { key: neverApplied, target: "codex", generation: "remove-ye-codex" },
+    ]);
+    expect(overview.diff.entries).toEqual([]);
+  });
+
   test("keeps targetless Ledger-only ownership unmanaged without claiming target ownership", () => {
     const unmanaged = key("skill", "ledger-only");
     const orphan = key("agent", "selected-ledger-only");
@@ -536,18 +588,27 @@ describe("authoritative Overview union and state matrix", () => {
   });
 });
 
-function testTargets(root: string): DeployTargets {
+function testTargets(
+  root: string,
+  homes: DeployHomes = {
+    claudeHome: join(root, ".claude"),
+    codexHome: join(root, ".codex"),
+    agentsHome: join(root, ".agents"),
+    ledgerPath: join(root, "manifest.json"),
+  },
+): DeployTargets {
   return {
-    claudeHome: () => join(root, ".claude"),
-    codexHome: () => join(root, ".codex"),
-    agentsHome: () => join(root, ".agents"),
-    ledgerPath: () => join(root, "manifest.json"),
+    claudeHome: () => homes.claudeHome,
+    codexHome: () => homes.codexHome,
+    agentsHome: () => homes.agentsHome,
+    ledgerPath: () => homes.ledgerPath,
     mirrorRoot: (sourceId) => join(root, "mirrors", sourceId),
     deploymentStatePath: () => join(root, "deployment-state.json"),
     kitTmpRoot: () => join(root, "tmp"),
     starterRoot: () => join(root, "starter"),
     childEnv: (base) => ({ ...base }),
     isChildEnvRedirected: () => true,
+    withHomes: (fixed) => testTargets(root, fixed),
   };
 }
 

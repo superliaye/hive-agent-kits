@@ -27,7 +27,9 @@ function snapshot(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapsh
       presets: [],
       problems: [],
     },
+    sourceTiles: new Map(),
     plugins: new Map(),
+    bundles: new Map(),
     selection: { revision: 8, enabled: [{ key, targets: ["claude"] }], removalIntents: [] },
     ledger: {
       revision: null,
@@ -938,6 +940,7 @@ describe("canonical plan token", () => {
       mirrors: [...first.mirrors].reverse(),
       sourceRegistryRevision: first.sourceRegistryRevision,
       selectionRevision: first.selectionRevision,
+      satisfiedRemovalIntents: [...first.satisfiedRemovalIntents].reverse(),
     };
     expect(tokenForPlan(first)).toBe(tokenForPlan(second));
     expect(tokenForPlan(first)).toMatch(/^[0-9a-f]{64}$/);

@@ -243,11 +243,11 @@ describe("deploy from the local mirror while offline", () => {
       Layer.merge(
         KitLive({
           fetch: NEVER_FETCH,
-          exec: (req) => {
+          exec: async (req) => {
             execCalls.push(req.command);
             return { status: 0, stdout: "", stderr: "" };
           },
-          probe: () => true,
+          probe: async () => true,
         }).pipe(Layer.provide(sourcesLayer)),
         sourcesLayer,
       ),

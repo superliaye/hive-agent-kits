@@ -22,14 +22,6 @@ export type SourcesWriter = { write(file: SourcesFile): void };
 export type AddResult = { ok: true; source: Source } | { ok: false; reason: "duplicate" };
 export type MutateResult = { ok: true; source: Source } | { ok: false; reason: "not-found" };
 export type DeleteResult = { ok: true } | { ok: false; reason: "not-found" };
-// Reorder is a total-order swap. An unknown id is not-found. `changed` tells a
-// genuine swap (ranks moved + persisted) apart from a no-op (already at the
-// requested end) so the audited service emits an audit row only for a real
-// mutation — never for a no-op that wrote nothing.
-export type ReorderResult =
-  | { ok: true; changed: boolean; source: Source }
-  | { ok: false; reason: "not-found" };
-export type ReorderDirection = "up" | "down";
 // Seeding a local Source is idempotent: a duplicate fixed id no-ops (the Starter
 // is the sole minter of its well-known id).
 export type SeedLocalResult = { ok: true; source: Source } | { ok: false; reason: "duplicate-id" };
@@ -53,12 +45,6 @@ export type SourcesStore = {
   deactivate(id: string): MutateResult;
   prepareDelete(id: string): PreparedSourceMutation<DeleteResult>;
   delete(id: string): DeleteResult;
-  // Raise ("up") or lower ("down") a Source one precedence step by swapping its
-  // stored rank with its adjacent neighbor in rank order. A free total order — the
-  // swap may cross kinds (the local Starter above a git Source). A swap at the end
-  // in the requested direction is a no-op (returns the unchanged Source).
-  prepareReorder(id: string, direction: ReorderDirection): PreparedSourceMutation<ReorderResult>;
-  reorder(id: string, direction: ReorderDirection): ReorderResult;
   snapshot(): SourcesFile;
 };
 
@@ -188,34 +174,6 @@ export function createSourcesStore(
     return prepared([...sources, source], { ok: true, source: cloneSource(source) });
   }
 
-  function prepareReorder(
-    id: string,
-    direction: ReorderDirection,
-  ): PreparedSourceMutation<ReorderResult> {
-    if (!sources.some((s) => s.id === id)) {
-      return unchanged({ ok: false, reason: "not-found" });
-    }
-    const ordered = [...sources].sort((a, b) =>
-      a.rank !== b.rank ? a.rank - b.rank : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-    );
-    const pos = ordered.findIndex((s) => s.id === id);
-    const neighborPos = direction === "up" ? pos + 1 : pos - 1;
-    const self = ordered[pos];
-    const neighbor = ordered[neighborPos];
-    if (!self) return unchanged({ ok: false, reason: "not-found" });
-    if (!neighbor) {
-      return unchanged({ ok: true, changed: false, source: cloneSource(self) });
-    }
-    const next = cloneSources(sources).map((s) => {
-      if (s.id === self.id) return { ...s, rank: neighbor.rank };
-      if (s.id === neighbor.id) return { ...s, rank: self.rank };
-      return { ...s };
-    });
-    const updated = next.find((s) => s.id === id);
-    if (!updated) return unchanged({ ok: false, reason: "not-found" });
-    return prepared(next, { ok: true, changed: true, source: cloneSource(updated) });
-  }
-
   function prepareDelete(id: string): PreparedSourceMutation<DeleteResult> {
     const idx = sources.findIndex((s) => s.id === id);
     if (idx === -1) return unchanged({ ok: false, reason: "not-found" });
@@ -240,9 +198,6 @@ export function createSourcesStore(
     activate: (id) => prepareSetActive(id, true).commit(),
     prepareDeactivate: (id) => prepareSetActive(id, false),
     deactivate: (id) => prepareSetActive(id, false).commit(),
-
-    prepareReorder,
-    reorder: (id, direction) => prepareReorder(id, direction).commit(),
 
     prepareDelete,
     delete: (id) => prepareDelete(id).commit(),

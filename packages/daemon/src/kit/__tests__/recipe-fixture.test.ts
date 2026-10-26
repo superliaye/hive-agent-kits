@@ -9,9 +9,8 @@ import {
   replayTree,
   serializeFixture,
 } from "../recipes/fixture.ts";
-import { publishedSkills } from "../recipes/published-skills.ts";
 import { recipeTree, recognizeSource } from "../recipes/recipe.ts";
-import { defineTile } from "../recipes/tiles.ts";
+import { tileById } from "../recipes/tiles.ts";
 import { type MemoryFile, memorySnapshot } from "./helpers.ts";
 
 const skill = (name: string, body = "body\n") =>
@@ -19,7 +18,8 @@ const skill = (name: string, body = "body\n") =>
 const market = { name: "stack", plugins: [{ name: "stack", source: "./" }] };
 
 // Both marketplaces list a plugin, so the generic list stops at
-// plugin-marketplace while the Tile's published-skills Recipe sees the skills.
+// plugin-marketplace while the HyperFrames Tile's published-skills Recipe, narrowed
+// to whole, sees the skills.
 const REPOSITORY: Record<string, MemoryFile> = {
   ".claude-plugin/marketplace.json": JSON.stringify(market),
   ".claude-plugin/plugin.json": "null",
@@ -33,14 +33,9 @@ const REPOSITORY: Record<string, MemoryFile> = {
   "README.md": "stack\n",
 };
 
-const tile = defineTile({
-  id: "stack",
-  label: "Stack",
-  description: "",
-  locator: { kind: "starter" },
-  recipe: publishedSkills,
-  unit: "whole",
-});
+const hyperframes = tileById("hyperframes");
+if (!hyperframes) throw new Error("the HyperFrames Tile is on the shelf");
+const tile = hyperframes;
 
 async function recorded(files: Record<string, MemoryFile>): Promise<RecipeFixture> {
   const { snapshot } = memorySnapshot(files);
@@ -100,10 +95,11 @@ describe("Recipe fixtures", () => {
 
   test("an unrecorded query fails, naming the key and the re-record command", async () => {
     const fixture = await recorded(REPOSITORY);
-    const rerecord = "re-record it with `bun run recipe-lever stack --record` in packages/daemon";
+    const rerecord =
+      "re-record it with `bun run recipe-lever hyperframes --record` in packages/daemon";
 
     expect(() => replayTree(fixture).kind("skills/delta/SKILL.md" as TreePath)).toThrow(
-      `The stack fixture has no answer for "kind skills/delta/SKILL.md"; ${rerecord}`,
+      `The hyperframes fixture has no answer for "kind skills/delta/SKILL.md"; ${rerecord}`,
     );
     const { "frontmatter skills/alpha/SKILL.md": _, ...answers } = fixture.answers;
     const error = await failure(replayOutcome({ ...fixture, answers }, tile));
@@ -117,6 +113,6 @@ describe("Recipe fixtures", () => {
     const fixture = await recorded(REPOSITORY);
     const answers = { ...fixture.answers, "dirs ": "skills" };
     const error = await failure(replayOutcome({ ...fixture, answers }, tile));
-    expect(String(error)).toContain(`The stack fixture's answer for "dirs " is malformed`);
+    expect(String(error)).toContain(`The hyperframes fixture's answer for "dirs " is malformed`);
   });
 });

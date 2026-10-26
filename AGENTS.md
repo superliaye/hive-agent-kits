@@ -9,7 +9,7 @@ Repo conventions for AI coding agents working in this repo.
 
 ## What Hive is
 
-A capability deploy-manager over **N user-added Sources**: git repositories of Capabilities that conform to Hive's capability format (ADR-0024). The user adds a Source by URL, toggles it on/off, or deletes it; Hive syncs each active Source at runtime and deploys selected Capabilities into the CLI homes of Claude Code and Codex (`~/.claude/`, `~/.codex/`, `~/.agents/`), with control + visibility on top (ADR-0023). The capability **format** SSOT is the `capability-schema` package (ADR-0024) — not a single library. The deploy **contract** (how bytes land in those homes) still matches `agent-kit`, validated against a pinned reference clone. Hive's own AI-conversation scenarios are deferred (#2 — ADR-0021). Full vocabulary in GLOSSARY.md.
+A capability deploy-manager over **N user-added Sources**: git repositories of Capabilities that conform to Hive's capability format (ADR-0024). The user adds a Source from a Tile or by URL, or removes it; Hive syncs each active Source at runtime and deploys selected Capabilities into the CLI homes of Claude Code and Codex (`~/.claude/`, `~/.codex/`, `~/.agents/`), with control + visibility on top (ADR-0023). The capability **format** SSOT is the `capability-schema` package (ADR-0024) — not a single library. The deploy **contract** (how bytes land in those homes) still matches `agent-kit`, validated against a pinned reference clone. Hive's own AI-conversation scenarios are deferred (#2 — ADR-0021). Full vocabulary in GLOSSARY.md.
 
 ## Repo layout
 

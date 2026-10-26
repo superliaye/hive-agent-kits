@@ -8,10 +8,14 @@ const ALL_TARGETS: readonly DeployTarget[] = ["claude", "codex"];
 // content, so only a reader holding the catalog can narrow a plugin.
 export type PluginTargets = ReadonlyMap<string, { readonly targets: readonly DeployTarget[] }>;
 
-export function applicableTargets(
-  key: CapabilityKey,
-  pluginTargets: PluginTargets,
-): DeployTarget[] {
-  if (key.kind !== "plugin") return [...ALL_TARGETS];
-  return [...(pluginTargets.get(key.name)?.targets ?? ["claude"])];
+// A bundle pointer may narrow its CLIs too, as a Codex-only Tile installer does.
+export type DeclaredTargets = {
+  readonly plugins: PluginTargets;
+  readonly bundles: PluginTargets;
+};
+
+export function applicableTargets(key: CapabilityKey, declared: DeclaredTargets): DeployTarget[] {
+  if (key.kind === "plugin") return [...(declared.plugins.get(key.name)?.targets ?? ["claude"])];
+  if (key.kind === "bundle") return [...(declared.bundles.get(key.name)?.targets ?? ALL_TARGETS)];
+  return [...ALL_TARGETS];
 }

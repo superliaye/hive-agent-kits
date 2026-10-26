@@ -67,11 +67,11 @@ export function readMirrorIdentity(mirrorRoot: string): string | null {
   return readMirrorRecord(mirrorRoot)?.contentDigest ?? null;
 }
 
-export type IngestEntry =
+type IngestEntry =
   | { readonly to: string; readonly mode: 0o644 | 0o755; readonly from: TreePath }
   | { readonly to: string; readonly mode: 0o644; readonly text: string };
 
-export type IngestPlan = {
+type IngestPlan = {
   // Sorted by `to`.
   readonly entries: readonly IngestEntry[];
   readonly dropped: readonly { readonly from: TreePath; readonly reason: string }[];
@@ -141,7 +141,8 @@ function liveStageOwner(entry: string): boolean {
   }
 }
 
-function createOwnedMirrorStage(tmpRoot: string): string {
+// A temp folder this Daemon owns, which sweepStaleTmp removes after the Daemon exits.
+export function createOwnedTmpDir(tmpRoot: string): string {
   mkdirSync(tmpRoot, { recursive: true });
   return mkdtempSync(join(tmpRoot, `extract-owner-${process.pid}-`));
 }
@@ -153,7 +154,7 @@ const mirrorWriteError = (err: unknown) =>
     detail: "mirror write failed",
   });
 
-export type StagedMirror = { readonly stage: string; readonly record: MirrorRecord };
+type StagedMirror = { readonly stage: string; readonly record: MirrorRecord };
 
 const READ_BATCH = 128;
 
@@ -176,7 +177,7 @@ export function materialize(
       );
     }
     const stage = yield* Effect.acquireRelease(
-      Effect.try({ try: () => createOwnedMirrorStage(tmpRoot), catch: mirrorWriteError }),
+      Effect.try({ try: () => createOwnedTmpDir(tmpRoot), catch: mirrorWriteError }),
       (dir) =>
         Effect.sync(() => {
           try {
@@ -242,8 +243,9 @@ export function commitMirror(
   });
 }
 
-// Sweep partial temp extract dirs from Daemons that are no longer alive. Legacy
-// and malformed names carry no live owner and are safe crash remnants to remove.
+// Sweep the owned temp dirs (Sync stages, Deploy checkout copies) of Daemons that
+// are no longer alive. Legacy and malformed names carry no live owner and are
+// safe crash remnants to remove.
 export function sweepStaleTmp(tmpRoot: string): void {
   const root = tmpRoot;
   if (!existsSync(root)) return;

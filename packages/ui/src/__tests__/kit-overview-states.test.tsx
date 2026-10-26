@@ -617,21 +617,13 @@ describe("KitDeployPage — daemon Overview states", () => {
     const toggle = host.querySelector(
       '[data-testid="kit-row-skill-remote-skill"]',
     ) as HTMLButtonElement;
-    const sourceToggle = host.querySelector(
-      '[data-testid="kit-source-toggle-src"]',
-    ) as HTMLInputElement;
     const sourceRemove = host.querySelector(
       '[data-testid="kit-source-delete-src"]',
-    ) as HTMLButtonElement;
-    const sourceReorder = host.querySelector(
-      '[data-testid="kit-source-down-src"]',
     ) as HTMLButtonElement;
     const addSource = host.querySelector('[data-testid="add-source-input"]') as HTMLInputElement;
     expect(deploy.disabled).toBe(false);
     expect(toggle.disabled).toBe(false);
-    expect(sourceToggle.disabled).toBe(false);
     expect(sourceRemove.disabled).toBe(false);
-    expect(sourceReorder.disabled).toBe(false);
     expect(addSource.disabled).toBe(false);
 
     await rerenderPage({ kind: "external", displayName: "Remote", status: "disconnected" });
@@ -640,18 +632,14 @@ describe("KitDeployPage — daemon Overview states", () => {
     );
     expect(deploy.disabled).toBe(true);
     expect(toggle.disabled).toBe(true);
-    expect(sourceToggle.disabled).toBe(true);
     expect(sourceRemove.disabled).toBe(true);
-    expect(sourceReorder.disabled).toBe(true);
     expect(addSource.disabled).toBe(true);
 
     await rerenderPage({ kind: "external", displayName: "Remote", status: "connected" });
     expect(host.querySelector('[data-testid="kit-connection"]')?.textContent).toContain(
       "Remote · connected",
     );
-    expect(sourceToggle.disabled).toBe(false);
     expect(sourceRemove.disabled).toBe(false);
-    expect(sourceReorder.disabled).toBe(false);
     expect(addSource.disabled).toBe(false);
   });
 });

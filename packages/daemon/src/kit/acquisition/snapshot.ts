@@ -196,7 +196,7 @@ export function kindOf(index: TreeIndex, path: TreePath): "file" | "dir" | "abse
   return index.dirs.has(real) ? "dir" : "absent";
 }
 
-export type WalkItem =
+type WalkItem =
   | {
       readonly _tag: "file";
       // Relative to the walked root; "" when the root is itself a file.

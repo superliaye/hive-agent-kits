@@ -366,23 +366,6 @@ export const api = {
   // Add a Tile's Source. The Daemon supplies its label and locator; the result
   // and errors are the same as addSource.
   addTile: (cfg: ApiConfig, tileId: string) => postSource(cfg, { tile: tileId }, tileId),
-  // Flip a Source on/off. Activate/deactivate only change `active` (no sync) and
-  // emit the source.activated/deactivated audit event server-side; the catalog is
-  // built from active sources only, so the page re-fetches ["kit"] to reflect it.
-  activateSource: (cfg: ApiConfig, id: string) =>
-    call<SourceSummary>(cfg, `/api/sources/${encodeURIComponent(id)}/activate`, { method: "POST" }),
-  deactivateSource: (cfg: ApiConfig, id: string) =>
-    call<SourceSummary>(cfg, `/api/sources/${encodeURIComponent(id)}/deactivate`, {
-      method: "POST",
-    }),
-  // Raise ("up") or lower ("down") a Source one precedence step. Returns the
-  // updated Source. The page re-fetches ["sources"] (row order) + ["kit"] (the
-  // catalog recomputes with the new precedence → shadows flip live).
-  reorderSource: (cfg: ApiConfig, id: string, direction: "up" | "down") =>
-    call<SourceSummary>(cfg, `/api/sources/${encodeURIComponent(id)}/reorder`, {
-      method: "POST",
-      body: JSON.stringify({ direction }),
-    }),
   // Remove a Source: drops the registry row + its Mirror + its catalog entries
   // (DELETE /api/sources/:id, 204 no body). Already-deployed files are NOT touched
   // — a deployed capability whose Source is gone is an orphan (kept, never

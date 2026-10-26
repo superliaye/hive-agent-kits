@@ -101,7 +101,11 @@ async function syncAndDeploy(files: Record<string, MemoryFile>, name: string) {
   });
   await executeStagedDeploy(
     {
-      fx: { targets, exec: () => ({ status: 0, stdout: "", stderr: "" }), probe: () => false },
+      fx: {
+        targets,
+        exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+        probe: async () => false,
+      },
       deploymentState,
       now: () => 20,
     },

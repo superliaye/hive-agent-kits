@@ -25,6 +25,15 @@ import { bundledStarterRoot } from "./bundled-starter.ts";
 // kit-internal modules keep importing it alongside the deploy-target port.
 export type { DeployTarget };
 
+// The paths a Deploy writes. A Deploy resolves them once and keeps them for the
+// whole operation, so a home setting changed while it runs applies to the next one.
+export type DeployHomes = {
+  claudeHome: string;
+  codexHome: string;
+  agentsHome: string;
+  ledgerPath: string;
+};
+
 export type DeployTargets = {
   claudeHome(): string;
   codexHome(): string;
@@ -46,13 +55,26 @@ export type DeployTargets = {
   // sibling), since the sync dispatch already holds `targets`.
   starterRoot(): string;
   // Redirected child-process env for an external exec. Folds CLAUDE_CONFIG_DIR /
-  // HOME / USERPROFILE / npm prefix onto the resolved homes so the shelled-out
-  // installer writes under the redirected home, not the real one.
+  // CODEX_HOME / HOME / USERPROFILE / npm prefix onto the resolved homes so the
+  // shelled-out installer writes under the redirected home, not the real one.
   childEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
   // True iff `childEnv` actually redirects away from the OS-default home — the
   // guard the exec adapter checks before running a real installer.
   isChildEnvRedirected(): boolean;
+  // This port with its homes, and so its child env, fixed to `homes`.
+  withHomes(homes: DeployHomes): DeployTargets;
 };
+
+export function deployHomes(
+  targets: Pick<DeployTargets, "claudeHome" | "codexHome" | "agentsHome" | "ledgerPath">,
+): DeployHomes {
+  return {
+    claudeHome: targets.claudeHome(),
+    codexHome: targets.codexHome(),
+    agentsHome: targets.agentsHome(),
+    ledgerPath: targets.ledgerPath(),
+  };
+}
 
 function envOr(key: string, fallback: string): string {
   const v = process.env[key];
@@ -62,7 +84,8 @@ function envOr(key: string, fallback: string): string {
 // Options governing where a deploy lands. `devMode` is the packaging signal: the
 // packaged launch sets HIVE_PACKAGED=1, so an unknown / hand-run daemon is
 // `devMode:true` and resolves the SANDBOX (the fail-safe default). `allowRealHomeDeploy`
-// is read at CALL time (the toggle can flip at runtime) — never snapshotted.
+// is read at CALL time (the toggle can flip at runtime); a Deploy pins what it
+// read through `withHomes`.
 export type DeployTargetsOptions = {
   allowRealHomeDeploy: () => boolean;
   devMode: boolean;
@@ -85,6 +108,23 @@ function normalizeHome(p: string): string {
   return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+// "partial" when some deploy-target homes resolve off their OS default and
+// others do not. childEnv then keeps the real $HOME, so a script that writes
+// ~/.claude by $HOME would write the real one while Deploy targets another.
+export function homeRedirection(
+  targets: Pick<DeployTargets, "claudeHome" | "codexHome" | "agentsHome">,
+): "none" | "all" | "partial" {
+  const homes: readonly (readonly [string, string])[] = [
+    [targets.claudeHome(), ".claude"],
+    [targets.codexHome(), ".codex"],
+    [targets.agentsHome(), ".agents"],
+  ];
+  const redirected = homes.filter(
+    ([home, dir]) => normalizeHome(home) !== normalizeHome(join(homedir(), dir)),
+  );
+  return redirected.length === 0 ? "none" : redirected.length === 3 ? "all" : "partial";
+}
+
 // Default adapter: each deploy-target home resolves through a three-step ladder:
 //   1. explicit HIVE_*_HOME / HIVE_LEDGER_PATH env wins (the test redirect contract);
 //   2. else if packaged OR the developer toggle is on → the real ~/.claude etc.;
@@ -101,14 +141,15 @@ export function failSafeDeployTargets(): DeployTargets {
   return defaultDeployTargets({ devMode: true, allowRealHomeDeploy: () => false });
 }
 
+// Real OS-default homes — the production deploy targets, and the reference the
+// redirected predicate compares against.
+const realClaudeHome = () => join(homedir(), ".claude");
+const realCodexHome = () => join(homedir(), ".codex");
+const realAgentsHome = () => join(homedir(), ".agents");
+const realLedgerPath = () => join(homedir(), ".agent-kit", "manifest.json");
+
 export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets {
   const hiveHome = () => envOr("HIVE_RUNTIME_ROOT", join(homedir(), ".hive"));
-  // Real OS-default homes — the production deploy targets, and the reference the
-  // redirected predicate compares against.
-  const realClaudeHome = () => join(homedir(), ".claude");
-  const realCodexHome = () => join(homedir(), ".codex");
-  const realAgentsHome = () => join(homedir(), ".agents");
-  const realLedgerPath = () => join(homedir(), ".agent-kit", "manifest.json");
   // The sandbox parent; the installer's $HOME points here (B2a).
   const sandboxRoot = () => join(hiveHome(), "homes");
 
@@ -116,17 +157,19 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
   // Read at call time so a runtime toggle flip takes effect on the next deploy.
   const realHome = () => !opts.devMode || opts.allowRealHomeDeploy();
 
-  const claudeHome = () =>
-    envOr("HIVE_CLAUDE_HOME", realHome() ? realClaudeHome() : join(sandboxRoot(), ".claude"));
-  const codexHome = () =>
-    envOr("HIVE_CODEX_HOME", realHome() ? realCodexHome() : join(sandboxRoot(), ".codex"));
-  const agentsHome = () =>
-    envOr("HIVE_AGENTS_HOME", realHome() ? realAgentsHome() : join(sandboxRoot(), ".agents"));
-  const ledgerPath = () =>
-    envOr(
-      "HIVE_LEDGER_PATH",
-      realHome() ? realLedgerPath() : join(sandboxRoot(), ".agent-kit", "manifest.json"),
-    );
+  const liveHomes = (): DeployHomes => {
+    const real = realHome();
+    const sandbox = sandboxRoot();
+    return {
+      claudeHome: envOr("HIVE_CLAUDE_HOME", real ? realClaudeHome() : join(sandbox, ".claude")),
+      codexHome: envOr("HIVE_CODEX_HOME", real ? realCodexHome() : join(sandbox, ".codex")),
+      agentsHome: envOr("HIVE_AGENTS_HOME", real ? realAgentsHome() : join(sandbox, ".agents")),
+      ledgerPath: envOr(
+        "HIVE_LEDGER_PATH",
+        real ? realLedgerPath() : join(sandbox, ".agent-kit", "manifest.json"),
+      ),
+    };
+  };
 
   const mirrorRoot = (sourceId: string) => join(hiveHome(), "kit", "mirrors", sourceId);
   const deploymentStatePath = () => join(hiveHome(), "kit", "deployment-state.json");
@@ -141,35 +184,49 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
     return existsSync(join(workspace, "capabilities")) ? workspace : bundledStarterRoot(hiveHome());
   };
 
+  return homesPort(liveHomes, { mirrorRoot, deploymentStatePath, kitTmpRoot, starterRoot });
+}
+
+type HiveOwnedPaths = Pick<
+  DeployTargets,
+  "mirrorRoot" | "deploymentStatePath" | "kitTmpRoot" | "starterRoot"
+>;
+
+function homesPort(homes: () => DeployHomes, owned: HiveOwnedPaths): DeployTargets {
   // Honest redirect predicate (B3): true IFF EVERY deploy-target home resolves
   // off its real OS-default dir, normalized for Windows. This drives both the
   // exec guard (adapter.ts) and the childEnv $HOME-rewrite gate below. Computed
   // at call time because the resolved homes depend on the runtime toggle.
-  const isChildEnvRedirected = () =>
-    normalizeHome(claudeHome()) !== normalizeHome(realClaudeHome()) &&
-    normalizeHome(codexHome()) !== normalizeHome(realCodexHome()) &&
-    normalizeHome(agentsHome()) !== normalizeHome(realAgentsHome());
+  const isChildEnvRedirected = () => {
+    const { claudeHome, codexHome, agentsHome } = homes();
+    return (
+      normalizeHome(claudeHome) !== normalizeHome(realClaudeHome()) &&
+      normalizeHome(codexHome) !== normalizeHome(realCodexHome()) &&
+      normalizeHome(agentsHome) !== normalizeHome(realAgentsHome())
+    );
+  };
 
   return {
-    claudeHome,
-    codexHome,
-    agentsHome,
-    ledgerPath,
-    mirrorRoot,
-    deploymentStatePath,
-    kitTmpRoot,
-    starterRoot,
+    ...owned,
+    claudeHome: () => homes().claudeHome,
+    codexHome: () => homes().codexHome,
+    agentsHome: () => homes().agentsHome,
+    ledgerPath: () => homes().ledgerPath,
     isChildEnvRedirected,
+    withHomes: (fixed) => homesPort(() => fixed, owned),
     childEnv: (base) => {
+      const { claudeHome, codexHome } = homes();
       const env: NodeJS.ProcessEnv = { ...base, PATH: withUserBinDir(base.PATH) };
-      // Claude / its plugins resolve config from CLAUDE_CONFIG_DIR; pin it to the
-      // resolved claude home (real ~/.claude in production, the sandbox/temp home
-      // otherwise — the same tree Deploy writes).
-      env.CLAUDE_CONFIG_DIR = claudeHome();
+      // Claude / its plugins resolve config from CLAUDE_CONFIG_DIR, and Codex from
+      // CODEX_HOME; pin both to the resolved homes (the real ones in production,
+      // the sandbox/temp homes otherwise — the same trees Deploy writes), so a
+      // CODEX_HOME exported in the user's shell never redirects an install.
+      env.CLAUDE_CONFIG_DIR = claudeHome;
+      env.CODEX_HOME = codexHome;
       // git / npx / ./setup resolve config from $HOME (POSIX) / $USERPROFILE
       // (Windows). When the homes are redirected off the real dir, point $HOME at
       // the resolved sandbox/temp parent so an installer writing to ~/.codex /
-      // ~/.agents (no CONFIG_DIR pin) lands on the SAME tree Deploy writes —
+      // ~/.agents by $HOME lands on the SAME tree Deploy writes —
       // never a split between the two. In production (real homes) we
       // leave the real $HOME intact, or installers would write into the sandbox.
       if (isChildEnvRedirected()) {
@@ -179,7 +236,7 @@ export function defaultDeployTargets(opts: DeployTargetsOptions): DeployTargets 
         // — true for the dev sandbox (<hiveHome>/homes/.claude) and the test
         // redirect (which uses the same dotted layout, helpers.ts). A non-dotted
         // redirect (e.g. <root>/codex) would split ~/.codex from codexHome().
-        const redirectedHome = dirname(claudeHome());
+        const redirectedHome = dirname(claudeHome);
         env.HOME = redirectedHome;
         env.USERPROFILE = redirectedHome;
       }

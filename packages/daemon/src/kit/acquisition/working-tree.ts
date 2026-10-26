@@ -46,7 +46,7 @@ export class WorkingTreeAcquireError extends Error {
   }
 }
 
-export type WorkingTreeSnapshotOptions = {
+type WorkingTreeSnapshotOptions = {
   allowedRoots: readonly string[];
   process?: GitProcess;
   limits: TreeLimits;

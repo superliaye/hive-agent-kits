@@ -1,15 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  type AddSourceError,
-  type AddSourceResult,
   type ApiConfig,
   api,
   type CapabilityKind,
   type DeploymentOverview,
   type DeployTarget,
   type OverviewLastAttempt,
-  type OverviewMirror,
   type OverviewRow,
   type OverviewSource,
   PlanStaleError,
@@ -21,9 +18,8 @@ import {
   type SyncRunResult,
   type TargetObservation,
 } from "../api.ts";
-import { AddSourceStatus } from "../components/AddSourceStatus.tsx";
 import { Skeleton, SkeletonGroup } from "../components/Skeleton.tsx";
-import { TileShelf, useAddTile } from "../components/TileShelf.tsx";
+import { TileShelf, useTiles } from "../components/TileShelf.tsx";
 import { ToastHost, useToasts } from "../components/Toasts.tsx";
 import { useDeveloperConfig } from "../components/useDeveloperConfig.ts";
 import { signalDeployInFlight } from "../platform/deploy-in-flight.ts";
@@ -85,16 +81,27 @@ const DIFF_BUCKETS: Array<{ change: DiffChange; label: string; glyph: string }> 
   { change: "removed", label: "Removed", glyph: "−" },
 ];
 
-function shortIdentity(identity: string | null): string {
-  return identity ? identity.slice(0, 7) : "no identity";
-}
-
 function keyId(key: OverviewRow["key"]): string {
   return `${key.kind}:${key.name}`;
 }
 
 function desiredTargets(row: OverviewRow): DeployTarget[] {
   return row.targets.filter((target) => target.desired === "on").map((target) => target.target);
+}
+
+// Selection changes that turn off, where they are on, the Capabilities that
+// lose their only Source when `sourceId` goes.
+function turnOffWith(overview: DeploymentOverview, sourceId: string): SelectionMutation["changes"] {
+  return overview.rows.flatMap((row) => {
+    const targets = desiredTargets(row);
+    const provides = row.variants.some((variant) => variant.sourceIds.includes(sourceId));
+    const othersProvide = row.variants.some(
+      (variant) => variant.catalog !== "blocked" && variant.sourceIds.some((id) => id !== sourceId),
+    );
+    return targets.length > 0 && provides && !othersProvide
+      ? [{ key: row.key, enabled: false, targets }]
+      : [];
+  });
 }
 
 function presetKeys(preset: PresetSummary): OverviewRow["key"][] {
@@ -160,7 +167,6 @@ export function KitDeployPage({
   const [planStaleResolved, setPlanStaleResolved] = useState(false);
   const [transportAcceptanceProven, setTransportAcceptanceProven] = useState(false);
   const [targetPreference, setTargetPreference] = useState<DeployTarget[]>(["claude"]);
-  const addSourceInputRef = useRef<HTMLInputElement>(null);
   const { armed: realHomeArmed } = useDeveloperConfig(apiConfig);
 
   const overviewQuery = useQuery({
@@ -188,6 +194,12 @@ export function KitDeployPage({
     queryFn: () => api.getKitCatalog(apiConfig),
   });
   const presets = catalogQuery.data?.presets ?? [];
+  const tilesQuery = useTiles(apiConfig);
+  const tileDescriptions = new Map(
+    (tilesQuery.data ?? []).flatMap((tile) =>
+      tile.sourceId === null ? [] : [[tile.sourceId, tile.description] as const],
+    ),
+  );
   const selectedRows = overview?.rows.filter((row) => row.desired === "on") ?? [];
   const selectedTargets = [...new Set(selectedRows.flatMap((row) => desiredTargets(row)))];
   const activeTargets = selectedTargets.length > 0 ? selectedTargets : targetPreference;
@@ -230,7 +242,6 @@ export function KitDeployPage({
     void queryClient.invalidateQueries({ queryKey: ["kit", "catalog"] });
     void queryClient.invalidateQueries({ queryKey: ["tiles"] });
   };
-  const addTile = useAddTile(apiConfig, refetchKit);
 
   const syncMutation = useMutation({
     mutationFn: () => api.syncKit(apiConfig),
@@ -242,35 +253,25 @@ export function KitDeployPage({
     onSettled: refetchKit,
   });
 
-  const toggleSource = useMutation({
-    mutationFn: (source: OverviewSource) =>
-      source.active
-        ? api.deactivateSource(apiConfig, source.id)
-        : api.activateSource(apiConfig, source.id),
-    onSuccess: (_result, source) => {
-      pushToast("success", `${source.active ? "Deactivated" : "Activated"} ${source.label}`);
-      refetchKit();
+  // Removing a Source first turns off the selected Capabilities only it
+  // provides, so the next Deploy uninstalls them instead of leaving them behind.
+  const removeSource = useMutation({
+    mutationFn: async (source: OverviewSource) => {
+      const current = overviewQuery.data;
+      const changes = current ? turnOffWith(current, source.id) : [];
+      if (current && changes.length > 0) {
+        await api.patchKitSelection(apiConfig, {
+          expectedRevision: current.selectionRevision,
+          changes,
+        });
+      }
+      await api.deleteSource(apiConfig, source.id);
     },
-    onError: () => pushToast("error", "Could not change the Source"),
-  });
-
-  const deleteSource = useMutation({
-    mutationFn: (source: OverviewSource) => api.deleteSource(apiConfig, source.id),
     onSuccess: (_result, source) => {
       pushToast("success", `Removed ${source.label}`);
-      refetchKit();
     },
     onError: () => pushToast("error", "Could not remove the Source"),
-  });
-
-  const reorderSource = useMutation({
-    mutationFn: (input: { source: OverviewSource; direction: "up" | "down" }) =>
-      api.reorderSource(apiConfig, input.source.id, input.direction),
-    onSuccess: (_result, input) => {
-      pushToast("success", `Moved ${input.source.label} ${input.direction}`);
-      refetchKit();
-    },
-    onError: () => pushToast("error", "Could not reorder the Source"),
+    onSettled: refetchKit,
   });
 
   const selectionMutation = useMutation({
@@ -416,9 +417,40 @@ export function KitDeployPage({
         row.key.kind === "instruction" && row.desired === "on" && row.catalog === "unavailable",
     ) ?? [];
 
+  // The daemon applies a change to one row of a whole unit to every row of it, on
+  // the CLIs the change names, so a unit row names the CLIs of the whole unit.
+  function unitRows(row: OverviewRow): OverviewRow[] {
+    const unit = row.wholeSourceId;
+    if (unit === null || !overview) return [row];
+    return overview.rows.filter((candidate) => candidate.wholeSourceId === unit);
+  }
+
   function targetsForRow(row: OverviewRow): DeployTarget[] {
-    const matching = row.applicableTargets.filter((target) => activeTargets.includes(target));
-    return matching.length > 0 ? matching : row.applicableTargets;
+    const applicable = DEPLOY_TARGETS.filter((target) =>
+      unitRows(row).some((member) => member.applicableTargets.includes(target)),
+    );
+    const matching = applicable.filter((target) => activeTargets.includes(target));
+    return matching.length > 0 ? matching : applicable;
+  }
+
+  function enabledTargetsForRow(row: OverviewRow): DeployTarget[] {
+    return DEPLOY_TARGETS.filter((target) =>
+      unitRows(row).some((member) => desiredTargets(member).includes(target)),
+    );
+  }
+
+  function toggleRow(row: OverviewRow): void {
+    if (!overview) return;
+    selectionMutation.mutate({
+      expectedRevision: overview.selectionRevision,
+      changes: [
+        {
+          key: row.key,
+          enabled: row.desired === "off",
+          targets: row.desired === "off" ? targetsForRow(row) : enabledTargetsForRow(row),
+        },
+      ],
+    });
   }
 
   function toggleTarget(target: DeployTarget): void {
@@ -454,7 +486,7 @@ export function KitDeployPage({
       if (!row) return [];
       if (active) {
         if (keptByOtherPreset.has(keyId(key))) return [];
-        const targets = desiredTargets(row);
+        const targets = enabledTargetsForRow(row);
         return targets.length > 0 ? [{ key, enabled: false, targets }] : [];
       }
       return row.desired === "off" ? [{ key, enabled: true, targets: targetsForRow(row) }] : [];
@@ -479,14 +511,13 @@ export function KitDeployPage({
     });
   }
 
+  const pendingKeys = selectionMutation.isPending
+    ? selectionMutation.variables?.changes.map((change) => change.key)
+    : undefined;
   const sources = overview?.sources ?? [];
   const hasRows = (overview?.rows.length ?? 0) > 0;
   const allDisabled =
     overview !== undefined && sources.length > 0 && !sources.some((source) => source.active);
-  const firstRun = overview !== undefined && !hasRows && !allDisabled;
-  const tileShelf = (
-    <TileShelf apiConfig={apiConfig} addTile={addTile} disabled={authorityUnknown} />
-  );
 
   return (
     <div className="kit-page" data-testid="kit-deploy-page">
@@ -508,36 +539,6 @@ export function KitDeployPage({
                 {connection.displayName} · {connection.status}
               </span>
             )}
-          </div>
-          <div className="kit-source-panel">
-            <div className="kit-source-panel-head">
-              <span className="kit-source-panel-title">Sources</span>
-              <span className="kit-source-panel-meta">Precedence order, highest first</span>
-            </div>
-            <div className="kit-sources" data-testid="kit-sources">
-              <SourceRows
-                sources={sources}
-                mirrors={overview?.mirrors ?? []}
-                disabled={authorityUnknown}
-                onToggle={(source) => toggleSource.mutate(source)}
-                pendingId={toggleSource.isPending ? toggleSource.variables?.id : undefined}
-                onDelete={(source) => deleteSource.mutate(source)}
-                deletePendingId={deleteSource.isPending ? deleteSource.variables?.id : undefined}
-                deleteFailedId={deleteSource.isError ? deleteSource.variables?.id : undefined}
-                onReorder={(source, direction) => reorderSource.mutate({ source, direction })}
-                reorderPendingId={
-                  reorderSource.isPending ? reorderSource.variables?.source.id : undefined
-                }
-              />
-            </div>
-            <div className="kit-add-source-panel">
-              <AddSourceForm
-                apiConfig={apiConfig}
-                inputRef={addSourceInputRef}
-                onChanged={refetchKit}
-                disabled={authorityUnknown}
-              />
-            </div>
           </div>
         </div>
         <div className="kit-header-actions">
@@ -572,7 +573,19 @@ export function KitDeployPage({
           )}
         </div>
       </header>
-      {overview && !firstRun && tileShelf}
+      <TileShelf
+        apiConfig={apiConfig}
+        sources={sources}
+        mirrors={overview?.mirrors ?? []}
+        removal={{
+          remove: (source) => removeSource.mutate(source),
+          pendingId: removeSource.isPending ? removeSource.variables?.id : undefined,
+          failedId: removeSource.isError ? removeSource.variables?.id : undefined,
+          turnsOff: (sourceId) => (overview ? turnOffWith(overview, sourceId).length : 0),
+        }}
+        onSourceAdded={refetchKit}
+        disabled={authorityUnknown}
+      />
 
       {realHomeArmed && (
         <div className="banner-warn" data-testid="deploy-real-home-armed" role="alert">
@@ -640,14 +653,9 @@ export function KitDeployPage({
                 : `Deploy could not be accepted: ${deployMutation.error?.message ?? "Unknown error"}`}
         </div>
       )}
-      {toggleSource.isError && (
-        <div className="banner-error" data-testid="kit-source-toggle-error">
-          Could not change the Source — {toggleSource.error.message}
-        </div>
-      )}
-      {deleteSource.isError && (
+      {removeSource.isError && (
         <div className="banner-error" data-testid="kit-source-delete-error">
-          Could not remove the Source — {deleteSource.error.message}
+          Could not remove the Source — {removeSource.error.message}
         </div>
       )}
 
@@ -724,27 +732,26 @@ export function KitDeployPage({
           !hasRows &&
           (allDisabled ? (
             <div className="empty" data-testid="kit-empty-disabled">
-              All Sources are disabled — enable one above to see its capabilities.
+              All Sources are off, so there are no capabilities to show.
             </div>
           ) : (
             <div className="kit-catalog-state kit-empty-state" data-testid="kit-empty">
               <p className="kit-catalog-state-title">No capabilities yet.</p>
               <p className="kit-catalog-state-body">
                 Hive deploys capabilities from one or more Sources into your Claude and Codex homes.
-                Add a Tile, or add any Source by its repository link.
+                Add a Tile above, or add any Source by its link.
               </p>
-              {tileShelf}
-              <button
-                type="button"
-                className="button ghost"
-                onClick={() => addSourceInputRef.current?.focus()}
-                disabled={authorityUnknown}
-                data-testid="kit-empty-add-source"
-              >
-                Paste a repository link
-              </button>
             </div>
           ))}
+        {overview && (
+          <WholeSourceSection
+            overview={overview}
+            descriptions={tileDescriptions}
+            pendingKeys={pendingKeys}
+            selectionDisabled={authorityUnknown}
+            onToggle={toggleRow}
+          />
+        )}
         {overview &&
           KINDS.map((kind) => {
             const rows = overview.rows.filter((row) => row.key.kind === kind);
@@ -755,24 +762,9 @@ export function KitDeployPage({
                 kind={kind}
                 rows={rows}
                 sourceLabels={new Map(overview.sources.map((source) => [source.id, source.label]))}
-                pendingKeys={
-                  selectionMutation.isPending
-                    ? selectionMutation.variables?.changes.map((change) => change.key)
-                    : undefined
-                }
+                pendingKeys={pendingKeys}
                 selectionDisabled={authorityUnknown}
-                onToggle={(row) =>
-                  selectionMutation.mutate({
-                    expectedRevision: overview.selectionRevision,
-                    changes: [
-                      {
-                        key: row.key,
-                        enabled: row.desired === "off",
-                        targets: row.desired === "off" ? targetsForRow(row) : desiredTargets(row),
-                      },
-                    ],
-                  })
-                }
+                onToggle={toggleRow}
               />
             );
           })}
@@ -810,263 +802,6 @@ function OperationStatus({
   );
 }
 
-function AddSourceForm({
-  apiConfig,
-  inputRef,
-  onChanged,
-  disabled,
-}: {
-  apiConfig: ApiConfig;
-  inputRef: RefObject<HTMLInputElement>;
-  onChanged: () => void;
-  disabled: boolean;
-}): JSX.Element {
-  const [empty, setEmpty] = useState(true);
-  const addSource = useMutation<AddSourceResult, AddSourceError, string>({
-    mutationFn: (origin) => api.addSource(apiConfig, origin),
-    onSuccess: onChanged,
-    onError: (error) => {
-      if (error.cause.kind === "malformed-success") onChanged();
-    },
-  });
-  return (
-    <>
-      <form
-        className="add-source-form"
-        data-testid="add-source-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (disabled) return;
-          const origin = inputRef.current?.value.trim() ?? "";
-          if (!origin) return;
-          addSource.mutate(origin, {
-            onSuccess: () => {
-              if (inputRef.current) inputRef.current.value = "";
-              setEmpty(true);
-            },
-          });
-        }}
-      >
-        <input
-          ref={inputRef}
-          type="text"
-          placeholder="Repository URL or absolute Daemon path"
-          disabled={addSource.isPending || disabled}
-          onInput={(event) => {
-            setEmpty(event.currentTarget.value.trim().length === 0);
-            if (!addSource.isPending && (addSource.isError || addSource.data)) addSource.reset();
-          }}
-          aria-label="Repository URL, GitHub folder URL, or absolute Daemon path of a Source to add"
-          data-testid="add-source-input"
-        />
-        <button
-          type="submit"
-          className="button"
-          disabled={addSource.isPending || empty || disabled}
-          data-testid="add-source-submit"
-        >
-          {addSource.isPending ? "Adding…" : "Add Source"}
-        </button>
-      </form>
-      <AddSourceStatus state={addSource} />
-    </>
-  );
-}
-
-function SourceRows({
-  sources,
-  mirrors,
-  disabled,
-  onToggle,
-  pendingId,
-  onDelete,
-  deletePendingId,
-  deleteFailedId,
-  onReorder,
-  reorderPendingId,
-}: {
-  sources: OverviewSource[];
-  mirrors: OverviewMirror[];
-  disabled: boolean;
-  onToggle: (source: OverviewSource) => void;
-  pendingId: string | undefined;
-  onDelete: (source: OverviewSource) => void;
-  deletePendingId: string | undefined;
-  deleteFailedId: string | undefined;
-  onReorder: (source: OverviewSource, direction: "up" | "down") => void;
-  reorderPendingId: string | undefined;
-}): JSX.Element {
-  const mirrorBySource = new Map(mirrors.map((mirror) => [mirror.sourceId, mirror]));
-  return (
-    <>
-      {sources.map((source, index) => (
-        <SourceRow
-          key={source.id}
-          source={source}
-          mirror={mirrorBySource.get(source.id)}
-          disabled={disabled}
-          onToggle={() => onToggle(source)}
-          togglePending={pendingId === source.id}
-          onDelete={() => onDelete(source)}
-          deletePending={deletePendingId === source.id}
-          deleteFailed={deleteFailedId === source.id}
-          onReorder={(direction) => onReorder(source, direction)}
-          reorderPending={reorderPendingId === source.id}
-          isFirst={index === 0}
-          isLast={index === sources.length - 1}
-        />
-      ))}
-    </>
-  );
-}
-
-function SourceRow({
-  source,
-  mirror,
-  disabled,
-  onToggle,
-  togglePending,
-  onDelete,
-  deletePending,
-  deleteFailed,
-  onReorder,
-  reorderPending,
-  isFirst,
-  isLast,
-}: {
-  source: OverviewSource;
-  mirror: OverviewMirror | undefined;
-  disabled: boolean;
-  onToggle: () => void;
-  togglePending: boolean;
-  onDelete: () => void;
-  deletePending: boolean;
-  deleteFailed: boolean;
-  onReorder: (direction: "up" | "down") => void;
-  reorderPending: boolean;
-  isFirst: boolean;
-  isLast: boolean;
-}): JSX.Element {
-  const [confirming, setConfirming] = useState(false);
-  useEffect(() => {
-    if (deleteFailed) setConfirming(false);
-  }, [deleteFailed]);
-  return (
-    <div
-      className={`kit-source-row ${source.active ? "" : "kit-source-row-inactive"}`}
-      data-testid={`kit-source-${source.id}`}
-    >
-      <span className="kit-source-origin" title={source.label}>
-        {source.label}
-      </span>
-      {source.recipe && (
-        <span className="kit-source-facts">
-          <span className="badge badge-source" data-testid={`kit-source-recipe-${source.id}`}>
-            {source.recipe.label}
-          </span>
-          {source.recipe.unit === "whole" && (
-            <span className="badge badge-whole" data-testid={`kit-source-whole-${source.id}`}>
-              Installs whole
-            </span>
-          )}
-        </span>
-      )}
-      {source.active && mirror && (
-        <span className="kit-source-facts">
-          <span
-            className={`kit-fresh ${mirror.error ? "kit-fresh-error" : "kit-fresh-ok"}`}
-            data-testid={`kit-freshness-${source.id}`}
-          >
-            {mirror.error ? "Unavailable" : "Ready"}
-          </span>
-          <span
-            className={`kit-sha ${mirror.identity ? "" : "kit-sha-empty"}`}
-            data-testid={`kit-sha-${source.id}`}
-            title={mirror.identity ?? ""}
-          >
-            {shortIdentity(mirror.identity)}
-          </span>
-        </span>
-      )}
-      <label
-        className={`kit-source-toggle ${source.active ? "on" : "off"}`}
-        title={source.active ? "Deactivate" : "Activate"}
-      >
-        <input
-          type="checkbox"
-          className="kit-source-switch"
-          checked={source.active}
-          onChange={onToggle}
-          disabled={togglePending || disabled}
-          data-testid={`kit-source-toggle-${source.id}`}
-          aria-label={`${source.active ? "Deactivate" : "Activate"} ${source.label}`}
-        />
-        <span className="kit-source-toggle-label" aria-hidden="true">
-          {source.active ? "On" : "Off"}
-        </span>
-      </label>
-      <span className="kit-source-rank" data-testid={`kit-source-rank-${source.id}`}>
-        <button
-          type="button"
-          className="kit-source-up"
-          onClick={() => onReorder("up")}
-          disabled={reorderPending || isFirst || disabled}
-          aria-label={`Raise precedence of ${source.label}`}
-          data-testid={`kit-source-up-${source.id}`}
-        >
-          ▲
-        </button>
-        <button
-          type="button"
-          className="kit-source-down"
-          onClick={() => onReorder("down")}
-          disabled={reorderPending || isLast || disabled}
-          aria-label={`Lower precedence of ${source.label}`}
-          data-testid={`kit-source-down-${source.id}`}
-        >
-          ▼
-        </button>
-      </span>
-      {confirming ? (
-        <span
-          className="kit-source-delete-confirm"
-          data-testid={`kit-source-delete-arm-${source.id}`}
-        >
-          <span className="kit-source-delete-prompt">Remove?</span>
-          <button
-            type="button"
-            className="kit-source-delete-go"
-            onClick={onDelete}
-            disabled={deletePending || disabled}
-            data-testid={`kit-source-delete-confirm-${source.id}`}
-          >
-            {deletePending ? "Removing…" : "Remove"}
-          </button>
-          <button
-            type="button"
-            className="kit-source-delete-cancel"
-            onClick={() => setConfirming(false)}
-            data-testid={`kit-source-delete-cancel-${source.id}`}
-          >
-            Cancel
-          </button>
-        </span>
-      ) : (
-        <button
-          type="button"
-          className="kit-source-delete"
-          onClick={() => setConfirming(true)}
-          disabled={disabled}
-          aria-label={`Remove ${source.label}`}
-          data-testid={`kit-source-delete-${source.id}`}
-        >
-          Remove
-        </button>
-      )}
-    </div>
-  );
-}
-
 function CatalogSkeleton(): JSX.Element {
   return (
     <SkeletonGroup
@@ -1092,6 +827,83 @@ function CatalogSkeleton(): JSX.Element {
   );
 }
 
+// A Source that installs whole is one row: its Capabilities may differ in kind
+// and CLI, but they turn on and off together.
+function WholeSourceSection({
+  overview,
+  descriptions,
+  pendingKeys,
+  selectionDisabled,
+  onToggle,
+}: {
+  overview: DeploymentOverview;
+  descriptions: Map<string, string>;
+  pendingKeys: OverviewRow["key"][] | undefined;
+  selectionDisabled: boolean;
+  onToggle: (row: OverviewRow) => void;
+}): JSX.Element | null {
+  const units = overview.sources.flatMap((source) => {
+    const members = overview.rows.filter((row) => row.wholeSourceId === source.id);
+    const toggled = members.find((row) => row.desired === "on") ?? members[0];
+    return toggled ? [{ source, members, toggled }] : [];
+  });
+  if (units.length === 0) return null;
+  return (
+    <section className="kit-kind" data-testid="kit-kind-whole">
+      <h2 className="kit-kind-title">
+        <span>Whole Sources</span>
+        <span className="kit-kind-count">{units.length}</span>
+      </h2>
+      <div className="kit-group">
+        {units.map(({ source, members, toggled }) => {
+          const selected = toggled.desired === "on";
+          const isPending = members.some((row) =>
+            pendingKeys?.some((key) => key.kind === row.key.kind && key.name === row.key.name),
+          );
+          const description = descriptions.get(source.id);
+          return (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={selected}
+              aria-label={`${source.label} desired ${selected ? "on" : "off"}`}
+              key={source.id}
+              className={`kit-row ${selected ? "selected" : ""}`}
+              onClick={() => onToggle(toggled)}
+              disabled={isPending || selectionDisabled}
+              data-testid={`kit-unit-${source.id}`}
+            >
+              <span className={`kit-row-check ${selected ? "checked" : ""}`} aria-hidden="true" />
+              <span className="kit-row-main">
+                <span className="kit-row-name">{source.label}</span>
+                {description && <span className="kit-row-desc">{description}</span>}
+                <span className="kit-unit-members">
+                  {members.map((row) => (
+                    <span
+                      className="kit-unit-member"
+                      key={keyId(row.key)}
+                      data-testid={`kit-unit-member-${row.key.kind}-${row.key.name}`}
+                    >
+                      <span className="kit-unit-member-name">
+                        {row.key.name}{" "}
+                        <span className="kit-unit-member-meta">
+                          {row.key.kind} ·{" "}
+                          {row.applicableTargets.map((target) => TARGET_LABEL[target]).join(", ")}
+                        </span>
+                      </span>
+                      <StateRail row={row} catalog={row.catalog} />
+                    </span>
+                  ))}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function KindSection({
   kind,
   rows,
@@ -1106,13 +918,19 @@ function KindSection({
   pendingKeys: OverviewRow["key"][] | undefined;
   selectionDisabled: boolean;
   onToggle: (row: OverviewRow) => void;
-}): JSX.Element {
+}): JSX.Element | null {
   type Displayed = { row: OverviewRow; variant: OverviewRow["variants"][number] | undefined };
   const displayed: Displayed[] = [];
   for (const row of rows) {
     if (row.variants.length === 0) displayed.push({ row, variant: undefined });
-    else for (const variant of row.variants) displayed.push({ row, variant });
+    else
+      for (const variant of row.variants) {
+        // The whole Source's row carries the winning copy; a lower-precedence copy stays here.
+        if (row.wholeSourceId !== null && variant.catalog === "deployable") continue;
+        displayed.push({ row, variant });
+      }
   }
+  if (displayed.length === 0) return null;
   const counts = new Map<string, number>();
   for (const item of displayed)
     counts.set(item.row.key.name, (counts.get(item.row.key.name) ?? 0) + 1);
@@ -1134,10 +952,6 @@ function KindSection({
             multi && suffix
               ? `kit-row-${kind}-${row.key.name}-${suffix}`
               : `kit-row-${kind}-${row.key.name}`;
-          const wholeSourceLabel =
-            row.wholeSourceId !== null && selectable
-              ? (sourceLabels.get(row.wholeSourceId) ?? row.wholeSourceId)
-              : null;
           const selected = row.desired === "on" && !shadowed;
           const isPending = pendingKeys?.some(
             (key) => key.kind === row.key.kind && key.name === row.key.name,
@@ -1167,15 +981,6 @@ function KindSection({
                         {sourceLabels.get(sourceId) ?? sourceId}
                       </span>
                     ))}
-                  </span>
-                )}
-                {wholeSourceLabel !== null && (
-                  <span
-                    className="kit-row-whole"
-                    data-testid={testId.replace("kit-row-", "kit-row-whole-")}
-                  >
-                    Installs with {wholeSourceLabel} as one unit: all its Capabilities turn on and
-                    off together.
                   </span>
                 )}
                 {shadowed && (

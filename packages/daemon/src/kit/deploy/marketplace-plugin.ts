@@ -4,7 +4,7 @@ import type { DeployTarget } from "@hive/contract";
 import type { DeployTargets } from "../targets.ts";
 import type { ExecRequest } from "./adapter.ts";
 
-export type MarketplacePluginId = {
+type MarketplacePluginId = {
   target: DeployTarget;
   marketplaceName: string;
   pluginName: string;

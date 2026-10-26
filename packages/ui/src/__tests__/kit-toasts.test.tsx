@@ -1,8 +1,7 @@
 // Transient action feedback: the Capabilities tab pushes a toast when a
-// previously-silent mutation resolves — sync (POST /api/kit/sync), Source
-// activate/deactivate (…/activate, …/deactivate), and a confirmed delete
-// (DELETE /api/sources/:id). Toasts complement, not replace, the persistent
-// inline AddSourceStatus and the kit-source-toggle/delete error banners.
+// previously-silent mutation resolves — sync (POST /api/kit/sync) and a
+// confirmed delete (DELETE /api/sources/:id). Toasts complement, not replace,
+// the persistent inline AddSourceStatus and the kit-source-delete error banner.
 //
 // Assertions check toast PRESENCE by data-testid; they do NOT depend on the
 // ~4s auto-dismiss firing during the real-time flush() loop (which only
@@ -43,7 +42,6 @@ const GIT_ORIGIN = "https://github.com/owner/repo";
 
 type Call = { method: string; path: string };
 let calls: Call[];
-let inactive: Set<string>;
 let deleted: Set<string>;
 // The POST /api/kit/sync result the stub returns for this test — swapped per
 // scenario (all-unchanged, a failed Source, or a thrown sync).
@@ -58,7 +56,7 @@ function sources(): Source[] {
       locator: { kind: "starter" },
       origin: STARTER_ORIGIN,
       kind: "local",
-      active: !inactive.has(STARTER_ID),
+      active: true,
       createdAt: 1,
       rank: 0,
     },
@@ -73,7 +71,7 @@ function sources(): Source[] {
       },
       origin: GIT_ORIGIN,
       kind: "git",
-      active: !inactive.has(GIT_ID),
+      active: true,
       createdAt: 2,
       rank: 1,
     },
@@ -82,27 +80,26 @@ function sources(): Source[] {
 }
 
 function catalog(): Catalog {
-  const entries: CapabilityEntry[] =
-    inactive.has(GIT_ID) || deleted.has(GIT_ID)
-      ? []
-      : [
-          {
-            kind: "skill",
-            name: "alpha",
-            description: "a git capability",
-            group: "",
-            deployable: true,
-            shadowed: false,
-            sourceIds: [GIT_ID],
-            contentSha: "a".repeat(64),
-          },
-        ];
+  const entries: CapabilityEntry[] = deleted.has(GIT_ID)
+    ? []
+    : [
+        {
+          kind: "skill",
+          name: "alpha",
+          description: "a git capability",
+          group: "",
+          deployable: true,
+          shadowed: false,
+          sourceIds: [GIT_ID],
+          contentSha: "a".repeat(64),
+        },
+      ];
   return { entries, presets: [], problems: [] };
 }
 
 function kitState(): KitState {
   const sync = [];
-  if (!inactive.has(STARTER_ID) && !deleted.has(STARTER_ID)) {
+  if (!deleted.has(STARTER_ID)) {
     sync.push({
       state: "local" as const,
       sha: null,
@@ -111,7 +108,7 @@ function kitState(): KitState {
       origin: STARTER_ORIGIN,
     });
   }
-  if (!inactive.has(GIT_ID) && !deleted.has(GIT_ID)) {
+  if (!deleted.has(GIT_ID)) {
     sync.push({
       state: "up_to_date" as const,
       sha: "abc1234def",
@@ -125,7 +122,6 @@ function kitState(): KitState {
 
 function installStubs(): void {
   calls = [];
-  inactive = new Set();
   deleted = new Set();
   failSync = false;
   syncResult = {
@@ -154,19 +150,6 @@ function installStubs(): void {
     if (path === "/api/kit/sync" && method === "POST") {
       if (failSync) return new Response("nope", { status: 500, statusText: "Server Error" });
       return json(syncResult);
-    }
-
-    const deact = path.match(/^\/api\/sources\/(.+)\/deactivate$/);
-    if (deact && method === "POST") {
-      const id = decodeURIComponent(deact[1] ?? "");
-      inactive.add(id);
-      return json(sources().find((s) => s.id === id) ?? {});
-    }
-    const act_ = path.match(/^\/api\/sources\/(.+)\/activate$/);
-    if (act_ && method === "POST") {
-      const id = decodeURIComponent(act_[1] ?? "");
-      inactive.delete(id);
-      return json(sources().find((s) => s.id === id) ?? {});
     }
 
     const del = path.match(/^\/api\/sources\/([^/]+)$/);
@@ -318,22 +301,6 @@ describe("KitDeployPage — action feedback toasts", () => {
 
     expect(host.querySelector('[data-testid="toast-error"]')).not.toBeNull();
     expect(toastText(host, "error")).toContain("Sync failed");
-  });
-
-  test("deactivating then re-activating a Source shows the right verb in a success toast", async () => {
-    installStubs();
-    const host = await render();
-
-    // Deactivate: the Source was active → "Deactivated <label>".
-    await click(host.querySelector(`[data-testid="kit-source-toggle-${GIT_ID}"]`));
-    expect(host.querySelector('[data-testid="toast-success"]')).not.toBeNull();
-    expect(toastText(host, "success")).toContain("Deactivated");
-    expect(toastText(host, "success")).toContain("owner/repo");
-
-    // Re-activate: now inactive → "Activated <label>". toastText reads the
-    // newest toast, so it reflects the re-activation, not the earlier deactivate.
-    await click(host.querySelector(`[data-testid="kit-source-toggle-${GIT_ID}"]`));
-    expect(toastText(host, "success")).toContain("Activated");
   });
 
   test("a confirmed delete shows a 'Removed' success toast", async () => {

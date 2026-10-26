@@ -285,16 +285,15 @@ async function submitForm(form: HTMLFormElement): Promise<void> {
 }
 
 describe("KitDeployPage — Add-Source UI", () => {
-  test("(a) the Add-Source form renders an input + submit in the header", async () => {
+  test("(a) the Add-Source form renders an input + submit in the Sources shelf", async () => {
     installStubs();
     const host = await render();
     expect(host.querySelector('[data-testid="add-source-form"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="add-source-input"]')).not.toBeNull();
     const submit = host.querySelector('[data-testid="add-source-submit"]');
     expect(submit).not.toBeNull();
-    // The form lives inside the Capabilities header version block.
     expect(
-      host.querySelector('.kit-header-version [data-testid="add-source-form"]'),
+      host.querySelector('[data-testid="tile-shelf"] [data-testid="add-source-form"]'),
     ).not.toBeNull();
   });
 
@@ -329,10 +328,10 @@ describe("KitDeployPage — Add-Source UI", () => {
     expect(success?.textContent).toContain("owner/repo");
     expect(success?.textContent).toContain("1 capability");
 
-    // (i) the new Source row appears in kit-sources labelled owner/repo…
-    const row = host.querySelector(`[data-testid="kit-source-${ADDED_ID}"]`);
-    expect(row).not.toBeNull();
-    expect(row?.querySelector(".kit-source-origin")?.textContent).toBe("owner/repo");
+    // (i) the new Source's card appears in the shelf labelled owner/repo…
+    const card = host.querySelector(`[data-testid="kit-source-${ADDED_ID}"]`);
+    expect(card).not.toBeNull();
+    expect(card?.querySelector(".tile-card-label")?.textContent).toBe("owner/repo");
     // …and (ii) the new Source's capability row now renders in the catalog.
     expect(host.querySelector('[data-testid="kit-row-skill-alpha"]')).not.toBeNull();
 

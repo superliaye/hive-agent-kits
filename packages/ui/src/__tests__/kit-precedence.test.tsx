@@ -1,15 +1,7 @@
-// Source precedence / re-rank UI + shadow explanation.
-//
-// The Capabilities header renders its Sources in precedence order (highest rank
-// first) and exposes per-Source move-up / move-down buttons. Clicking one POSTs
-// /api/sources/:id/reorder and — because the catalog is recomputed from the new
-// precedence — the winner flips live (the previously-shadowed variant deploys,
-// the previously-winning one becomes shadowed). A shadowed row explains itself:
+// Source precedence on capability rows. A shadowed row explains itself:
 // "Hidden — also provided by <Source>" derived from `shadowedBy`. A merged entry
-// shows all contributing Source labels (unchanged from ).
-//
-// The stub is STATEFUL: it holds the two Sources' ranks and recomputes the
-// catalog from them on every GET, so a reorder POST → refetch flips the winner.
+// shows all contributing Source labels. The stub derives the winner from the two
+// Sources' ranks.
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -45,9 +37,7 @@ const B_ORIGIN = "https://github.com/owner/repo-b";
 const SHA_A = "a".repeat(64);
 const SHA_B = "b".repeat(64);
 
-type Call = { method: string; path: string; body?: string };
-let calls: Call[];
-// The mutable precedence: rank per Source id. A reorder swaps adjacent ranks.
+// Rank per Source id.
 let ranks: Map<string, number>;
 
 function sources(): Source[] {
@@ -143,7 +133,6 @@ function catalog(): Catalog {
 }
 
 function installStubs(): void {
-  calls = [];
   // A added first (rank 0), B added later (rank 1) → B wins by default.
   ranks = new Map([
     [A_ID, 0],
@@ -156,8 +145,6 @@ function installStubs(): void {
     const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const path = new URL(raw, "http://localhost").pathname;
     const method = (init?.method ?? "GET").toUpperCase();
-    const body = typeof init?.body === "string" ? init.body : undefined;
-    calls.push({ method, path, body });
 
     if (path === "/api/kit/overview")
       return json(
@@ -167,22 +154,6 @@ function installStubs(): void {
     if (path === "/api/kit/state") return json(kitState());
     if (path === "/api/sources" && method === "GET") return json(sources());
 
-    const reorder = path.match(/^\/api\/sources\/(.+)\/reorder$/);
-    if (reorder && method === "POST") {
-      const id = decodeURIComponent(reorder[1] ?? "");
-      const direction = body ? (JSON.parse(body) as { direction: "up" | "down" }).direction : "up";
-      const ordered = [...ranks.entries()].sort((x, y) => x[1] - y[1]).map(([k]) => k);
-      const pos = ordered.indexOf(id);
-      const neighborPos = direction === "up" ? pos + 1 : pos - 1;
-      const neighbor = ordered[neighborPos];
-      if (neighbor) {
-        const a = ranks.get(id) ?? 0;
-        const b = ranks.get(neighbor) ?? 0;
-        ranks.set(id, b);
-        ranks.set(neighbor, a);
-      }
-      return json(sources().find((s) => s.id === id));
-    }
     return json({});
   }) as typeof fetch;
 }
@@ -219,52 +190,7 @@ async function render(): Promise<HTMLElement> {
   return host;
 }
 
-async function click(el: Element | null): Promise<void> {
-  await act(async () => {
-    el?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  });
-  await flush();
-}
-
-describe("KitDeployPage — precedence re-rank + shadow explanation", () => {
-  test("each Source row exposes move-up / move-down buttons, disabled at the ends", async () => {
-    installStubs();
-    const host = await render();
-    // B wins (rank 1, highest) → rendered first (highest precedence first), its
-    // move-up is disabled (already top); A's move-down is disabled (already bottom).
-    const bUp = host.querySelector(
-      `[data-testid="kit-source-up-${B_ID}"]`,
-    ) as HTMLButtonElement | null;
-    const aDown = host.querySelector(
-      `[data-testid="kit-source-down-${A_ID}"]`,
-    ) as HTMLButtonElement | null;
-    expect(bUp).not.toBeNull();
-    expect(aDown).not.toBeNull();
-    expect(bUp?.disabled).toBe(true);
-    expect(aDown?.disabled).toBe(true);
-    // A can still move up; B can still move down.
-    expect(
-      (host.querySelector(`[data-testid="kit-source-up-${A_ID}"]`) as HTMLButtonElement | null)
-        ?.disabled,
-    ).toBe(false);
-    expect(
-      (host.querySelector(`[data-testid="kit-source-down-${B_ID}"]`) as HTMLButtonElement | null)
-        ?.disabled,
-    ).toBe(false);
-  });
-
-  test("the header renders Sources in precedence order (highest rank first)", async () => {
-    installStubs();
-    const host = await render();
-    expect(host.querySelector(".kit-source-panel-title")?.textContent).toBe("Sources");
-    expect(host.querySelector(".kit-source-panel-meta")?.textContent).toContain("Precedence order");
-    const rowIds = [...host.querySelectorAll(".kit-source-row")].map((r) =>
-      r.getAttribute("data-testid"),
-    );
-    // B (rank 1) before A (rank 0).
-    expect(rowIds).toEqual([`kit-source-${B_ID}`, `kit-source-${A_ID}`]);
-  });
-
+describe("KitDeployPage — Source precedence on capability rows", () => {
   test("a shadowed row explains itself: 'Hidden — also provided by <winner label>'", async () => {
     installStubs();
     const host = await render();
@@ -284,30 +210,5 @@ describe("KitDeployPage — precedence re-rank + shadow explanation", () => {
     const host = await render();
     const labels = host.querySelectorAll('[data-testid="kit-row-sources-bar"] .kit-source-label');
     expect(labels.length).toBe(2);
-  });
-
-  test("move-up POSTs /reorder and the winner flips live: A becomes deployable, B shadowed, shadowedBy updates", async () => {
-    installStubs();
-    const host = await render();
-    // Initially B wins. Raise A above B.
-    await click(host.querySelector(`[data-testid="kit-source-up-${A_ID}"]`));
-
-    // The POST was issued with {direction:"up"}.
-    const reorderCall = calls.find(
-      (c) => c.method === "POST" && c.path === `/api/sources/${A_ID}/reorder`,
-    );
-    expect(reorderCall).toBeDefined();
-    expect(reorderCall?.body).toContain("up");
-
-    // After the refetch, A's variant is deployable and B's is shadowed → the shadow
-    // explanation now names A (owner/repo-a).
-    const shadowNote = host.querySelector('[data-testid^="kit-row-shadow-foo-"]');
-    expect(shadowNote?.textContent).toContain("owner/repo-a");
-
-    // The header order flipped too: A (now rank 1) renders first.
-    const rowIds = [...host.querySelectorAll(".kit-source-row")].map((r) =>
-      r.getAttribute("data-testid"),
-    );
-    expect(rowIds).toEqual([`kit-source-${A_ID}`, `kit-source-${B_ID}`]);
   });
 });

@@ -44,7 +44,7 @@ import { openDeploymentStateStore } from "../deployment-state.ts";
 import { mergeLedger, readLedger } from "../ledger.ts";
 import { readMirrorIdentity } from "../mirror.ts";
 import { syncLocatorSource } from "../sync.ts";
-import { failSafeDeployTargets } from "../targets.ts";
+import { deployHomes, failSafeDeployTargets } from "../targets.ts";
 import { clearHomeEnv, fakeGitProcess, redirectHomeEnv } from "./helpers.ts";
 
 const stagedText = (content: string) => ({
@@ -88,6 +88,7 @@ function plan(
     actions: [action],
     instructionWrites: [],
     blocked: [],
+    satisfiedRemovalIntents: [],
     ...overrides,
   };
 }
@@ -100,7 +101,9 @@ function snapshot(deployPlan = plan()): DeploymentSnapshot {
     sourceRegistryRevision: deployPlan.sourceRegistryRevision,
     mirrors: deployPlan.mirrors,
     catalog: { entries: [], presets: [], problems: [] },
+    sourceTiles: new Map(),
     plugins: new Map(),
+    bundles: new Map(),
     selection: {
       revision: deployPlan.selectionRevision,
       enabled: [],
@@ -395,8 +398,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState,
             now: () => 20,
@@ -427,6 +430,115 @@ describe("persisted asynchronous Deploy coordinator", () => {
       renderedHash,
     });
     expect(readLedger(targets)?.skills).toEqual([{ name: "alpha" }]);
+  });
+
+  test("a Deploy and its recovery keep the homes it started with when the homes change", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-pinned-homes-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const started = deployHomes(targets);
+    const mirror = targets.mirrorRoot("source-a");
+    const actions = ["alpha", "beta"].map((name) => {
+      const content = `---\ndescription: ${name}\n---\n${name}\n`;
+      const path = join(mirror, "capabilities", "skills", name, "SKILL.md");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, content);
+      return {
+        action: "add",
+        key: { kind: "skill", name },
+        target: "claude",
+        sourceId: "source-a",
+        contentSha: mirrorContentSha(mirror, "skill", name) ?? "",
+        renderedHash: hashSkillFiles([stagedText(content)].map(stagedSkillFile)),
+        artifact: { existence: "missing", hash: null },
+      } satisfies DeployPlan["actions"][number];
+    });
+    const deployPlan = plan({
+      mirrors: [{ sourceId: "source-a", precedence: 1, identity: readMirrorIdentity(mirror) }],
+      actions,
+    });
+    const operations = openDeployOperationStore(operationPath(), { now: () => 20 });
+    operations.createQueued({
+      operationId: "pinned-homes",
+      acceptedAt: 10,
+      selectionRevision: 7,
+      planToken: "token",
+      plan: deployPlan,
+      staged: stageDeployPlan(targets, snapshot(deployPlan), deployPlan),
+    });
+    const options = {
+      fx: {
+        targets,
+        exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+        probe: async () => false,
+      },
+      deploymentState: openDeploymentStateStore(targets.deploymentStatePath(), { now: () => 20 }),
+      now: () => 20,
+    };
+    const elsewhere = join(root, "elsewhere");
+    const moveHomes = () => {
+      process.env.HIVE_CLAUDE_HOME = join(elsewhere, ".claude");
+      process.env.HIVE_CODEX_HOME = join(elsewhere, ".codex");
+      process.env.HIVE_AGENTS_HOME = join(elsewhere, ".agents");
+      process.env.HIVE_LEDGER_PATH = join(elsewhere, ".agent-kit", "manifest.json");
+    };
+    const journal = (onProvisional: () => void, onLedgerPending: () => void) =>
+      Object.assign(
+        async (outcomes: readonly DeployOperationOutcome[]) => {
+          operations.recordOutcomes("pinned-homes", outcomes);
+        },
+        {
+          provisional: async (outcomes: readonly DeployOperationOutcome[]) => {
+            operations.recordProvisionalOutcomes("pinned-homes", outcomes);
+            onProvisional();
+          },
+          markLedgerPending: () => {
+            onLedgerPending();
+            operations.markLedgerPending("pinned-homes");
+          },
+          markLedgerCommitted: () => {
+            operations.markLedgerCommitted("pinned-homes");
+          },
+          markFinalizing: () => {
+            operations.markFinalizing("pinned-homes");
+          },
+        },
+      );
+
+    await expect(
+      executeStagedDeploy(
+        options,
+        operations.markRunning("pinned-homes"),
+        journal(moveHomes, () => {
+          throw new Error("checkpoint unavailable");
+        }),
+      ),
+    ).rejects.toThrow("checkpoint unavailable");
+    operations.fail("pinned-homes", "execution_failed");
+    const [recovering] = operations.recoverable();
+    if (!recovering) throw new Error("the operation should be recoverable");
+    await resumeStagedDeploy(
+      options,
+      recovering,
+      journal(
+        () => {},
+        () => {},
+      ),
+    );
+
+    for (const name of ["alpha", "beta"]) {
+      expect(existsSync(join(started.claudeHome, "skills", name, "SKILL.md"))).toBe(true);
+    }
+    expect(readLedger(targets.withHomes(started))?.skills).toEqual([
+      { name: "alpha" },
+      { name: "beta" },
+    ]);
+    expect(operations.read("pinned-homes")?.outcomes.map((outcome) => outcome.outcome)).toEqual([
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(existsSync(elsewhere)).toBe(false);
   });
 
   test("does not touch deployment artifacts when the shared Ledger transaction cannot start", async () => {
@@ -477,8 +589,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
         {
           fx: {
             targets,
-            exec: () => ({ status: 0, stdout: "", stderr: "" }),
-            probe: () => false,
+            exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+            probe: async () => false,
           },
           deploymentState,
           now: () => 20,
@@ -540,8 +652,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
       {
         fx: {
           targets,
-          exec: () => ({ status: 0, stdout: "", stderr: "" }),
-          probe: () => false,
+          exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+          probe: async () => false,
         },
         deploymentState,
         now: () => 20,
@@ -608,8 +720,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState,
             now: () => 20,
@@ -652,8 +764,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState,
             now: () => 30,
@@ -666,8 +778,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState,
             now: () => 30,
@@ -770,8 +882,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
       {
         fx: {
           targets,
-          exec: () => ({ status: 0, stdout: "", stderr: "" }),
-          probe: () => false,
+          exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+          probe: async () => false,
         },
         deploymentState,
         now: () => 30,
@@ -870,8 +982,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
         {
           fx: {
             targets,
-            exec: () => ({ status: 0, stdout: "", stderr: "" }),
-            probe: () => false,
+            exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+            probe: async () => false,
           },
           deploymentState,
           now: () => 20,
@@ -918,8 +1030,8 @@ describe("persisted asynchronous Deploy coordinator", () => {
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState,
             now: () => 30,
@@ -1159,8 +1271,8 @@ plugin
       {
         fx: {
           targets,
-          probe: (name) => name === "claude" || name === "codex",
-          exec: (request) => {
+          probe: async (name) => name === "claude" || name === "codex",
+          exec: async (request) => {
             argv.push([request.command, ...request.args].join(" "));
             if (request.command === "claude" && request.args[1] === "install") {
               mkdirSync(join(homes.claudeHome, "plugins"), { recursive: true });
@@ -1276,8 +1388,8 @@ plugin
 
     let execCalls = 0;
     const missing = await run("missing-codex", {
-      probe: () => false,
-      exec: () => {
+      probe: async () => false,
+      exec: async () => {
         execCalls += 1;
         return { status: 0, stdout: "", stderr: "" };
       },
@@ -1286,18 +1398,109 @@ plugin
     expect(execCalls).toBe(0);
 
     const nonzero = await run("nonzero-codex", {
-      probe: () => true,
-      exec: () => ({ status: 1, stdout: "", stderr: "Error: marketplace not found" }),
+      probe: async () => true,
+      exec: async () => ({ status: 1, stdout: "", stderr: "Error: marketplace not found" }),
     });
     expect(nonzero).toMatchObject({ outcome: "failed", code: "installer_failed" });
     expect(nonzero.detail).toContain("marketplace not found");
 
     const unrecorded = await run("unrecorded-codex", {
-      probe: () => true,
-      exec: () => ({ status: 0, stdout: "", stderr: "" }),
+      probe: async () => true,
+      exec: async () => ({ status: 0, stdout: "", stderr: "" }),
     });
     expect(unrecorded).toMatchObject({ outcome: "failed", code: "installer_failed" });
     expect(unrecorded.detail).toContain("without recording ye@yestack");
+
+    const warned = await run("warned-codex", {
+      probe: async () => true,
+      exec: async () => ({
+        status: 1,
+        stdout: "",
+        stderr:
+          "WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir\nError: marketplace not found",
+      }),
+    });
+    expect(warned.detail).toStartWith("Error: marketplace not found");
+    expect(warned.detail).toContain("could not create PATH aliases");
+  });
+
+  test("installs a Codex plugin when the Codex home does not exist yet", async () => {
+    const root = mkdtempSync(join(tmpdir(), "deploy-marketplace-codex-home-"));
+    roots.push(root);
+    const homes = redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
+      now: () => 20,
+    });
+    const action: DeployPlan["actions"][number] = {
+      action: "add",
+      key: { kind: "plugin", name: "ye" },
+      target: "codex",
+      sourceId: "source-a",
+      contentSha: "d".repeat(64),
+      renderedHash: null,
+      artifact: { existence: "missing", hash: null },
+    };
+    const deployPlan = plan({ actions: [action], mirrors: [] }, action);
+    const store = openDeployOperationStore(operationPath());
+    store.createQueued({
+      operationId: "codex-home",
+      acceptedAt: 1,
+      selectionRevision: deployPlan.selectionRevision,
+      planToken: "token",
+      plan: deployPlan,
+      staged: {
+        tasks: [
+          {
+            type: "marketplace-plugin",
+            action: "add",
+            key: { kind: "plugin", name: "ye" },
+            target: "codex",
+            marketplaceSource: "https://github.com/superliaye/yestack",
+            marketplaceName: "yestack",
+            pluginName: "ye",
+            sourceId: "source-a",
+            contentSha: "d".repeat(64),
+          },
+        ],
+        metadata: {},
+      },
+    });
+    let observed: DeployOperationOutcome[] = [];
+
+    await executeStagedDeploy(
+      {
+        fx: {
+          targets,
+          probe: async () => true,
+          exec: async (request, env) => {
+            const codexHome = env.CODEX_HOME ?? "";
+            if (!existsSync(codexHome)) {
+              return {
+                status: 1,
+                stdout: "",
+                stderr: `Error: CODEX_HOME points to "${codexHome}", but that path does not exist`,
+              };
+            }
+            if (request.args[1] === "add") {
+              writeFileSync(join(codexHome, "config.toml"), '[plugins."ye@yestack"]\n');
+            }
+            return { status: 0, stdout: "", stderr: "" };
+          },
+        },
+        deploymentState,
+        now: () => 20,
+      },
+      store.markRunning("codex-home"),
+      async (outcomes) => {
+        observed = [...outcomes];
+      },
+    );
+
+    expect(observed.map((outcome) => [outcome.target, outcome.outcome, outcome.detail])).toEqual([
+      ["codex", "succeeded", undefined],
+    ]);
+    expect(existsSync(join(homes.codexHome, "config.toml"))).toBe(true);
   });
 
   test("stages a plugin removal from its install record, or from its pointer for an older record", () => {
@@ -1468,8 +1671,8 @@ plugin
       {
         fx: {
           targets,
-          probe: (name) => name === "claude" || name === "codex",
-          exec: (request) => {
+          probe: async (name) => name === "claude" || name === "codex",
+          exec: async (request) => {
             argv.push([request.command, ...request.args].join(" "));
             if (request.command === "claude") writeFileSync(installedPlugins, '{"plugins":{}}');
             if (request.command === "codex") writeFileSync(codexConfig, "");
@@ -1513,8 +1716,8 @@ plugin
       {
         fx: {
           targets,
-          probe: () => true,
-          exec: (request) => {
+          probe: async () => true,
+          exec: async (request) => {
             argv.push(request.command);
             return { status: 0, stdout: "", stderr: "" };
           },
@@ -1574,8 +1777,8 @@ plugin
       {
         fx: {
           targets,
-          probe: () => true,
-          exec: (request) => {
+          probe: async () => true,
+          exec: async (request) => {
             if (request.command === "npx") {
               npx.push(request.args);
               // The CLI's full uninstall clears every agent; the reinstall restores Claude.
@@ -1817,8 +2020,8 @@ npx
       {
         fx: {
           targets,
-          probe: (name) => name === "npx" || name === "git",
-          exec: (request, env) => {
+          probe: async (name) => name === "npx" || name === "git",
+          exec: async (request, env) => {
             requests.push({
               command: request.command,
               args: request.args,
@@ -1917,8 +2120,8 @@ npx
       {
         fx: {
           targets,
-          probe: () => true,
-          exec: (request) => {
+          probe: async () => true,
+          exec: async (request) => {
             requests.push({
               command: request.command,
               args: request.args,
@@ -1987,8 +2190,8 @@ npx
 
     let execCalls = 0;
     const missing = await run("missing-npx", {
-      probe: () => false,
-      exec: () => {
+      probe: async () => false,
+      exec: async () => {
         execCalls += 1;
         return { status: 0, stdout: "", stderr: "" };
       },
@@ -1997,8 +2200,8 @@ npx
     expect(execCalls).toBe(0);
 
     const nonzero = await run("nonzero-npx", {
-      probe: () => true,
-      exec: (request) => {
+      probe: async () => true,
+      exec: async (request) => {
         if (request.command === "git") {
           return {
             status: 0,
@@ -2027,8 +2230,8 @@ npx
     });
 
     const missingEffect = await run("missing-effect", {
-      probe: () => true,
-      exec: (request) => ({
+      probe: async () => true,
+      exec: async (request) => ({
         status: 0,
         stdout:
           request.command === "git" && request.args.includes("rev-parse")
@@ -2085,8 +2288,8 @@ npx
       {
         fx: {
           targets,
-          probe: () => true,
-          exec: () => ({ status: 1, stdout: "", stderr: "failed" }),
+          probe: async () => true,
+          exec: async () => ({ status: 1, stdout: "", stderr: "failed" }),
         },
         deploymentState,
         now: () => 20,
@@ -2153,8 +2356,8 @@ npx
       {
         fx: {
           targets,
-          probe: () => true,
-          exec: () => {
+          probe: async () => true,
+          exec: async () => {
             execCalls += 1;
             return { status: 0, stdout: "", stderr: "" };
           },
@@ -2174,8 +2377,8 @@ npx
       {
         fx: {
           targets,
-          probe: () => true,
-          exec: () => {
+          probe: async () => true,
+          exec: async () => {
             execCalls += 1;
             return { status: 0, stdout: "", stderr: "" };
           },
@@ -2251,8 +2454,8 @@ npx
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState,
             now: () => 20,
@@ -2362,8 +2565,8 @@ npx
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState: failingState,
             now: () => 20,
@@ -2408,8 +2611,8 @@ npx
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState: state,
             now: () => 30,
@@ -2475,8 +2678,8 @@ npx
             {
               fx: {
                 targets,
-                exec: () => ({ status: 0, stdout: "", stderr: "" }),
-                probe: () => false,
+                exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+                probe: async () => false,
               },
               deploymentState,
               now: () => 20,
@@ -2550,8 +2753,8 @@ npx
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState,
             now: () => 20,
@@ -2630,8 +2833,8 @@ npx
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState: unavailableState,
             now: () => 20,
@@ -2674,8 +2877,8 @@ npx
           {
             fx: {
               targets,
-              exec: () => ({ status: 0, stdout: "", stderr: "" }),
-              probe: () => false,
+              exec: async () => ({ status: 0, stdout: "", stderr: "" }),
+              probe: async () => false,
             },
             deploymentState: recoveredState,
             now: () => 30,
