@@ -51,8 +51,8 @@ export type SourceRemoval = {
 
 type Recipe = NonNullable<OverviewSource["recipe"]>;
 
-// Every Source in one grid: each Tile, added or not, then each Source added
-// by its link.
+// Every Source in one grid, added ones first: the added Tiles, then each
+// Source added by its link, then the Tiles not added yet.
 export function TileShelf({
   apiConfig,
   sources,
@@ -87,6 +87,30 @@ export function TileShelf({
         disabled={disabled}
       />
     );
+  const tileCard = (tile: TileSummary) => (
+    <SourceCard
+      key={tile.id}
+      testIds={{ card: `tile-${tile.id}`, facts: "tile", id: tile.id }}
+      label={tile.label}
+      description={tile.description}
+      recipe={tile.recipe}
+      added={added(tile.sourceId === null ? undefined : sourceById.get(tile.sourceId))}
+      add={
+        tile.sourceId === null && (
+          <button
+            type="button"
+            className="button ghost tile-add"
+            onClick={() => addTile.mutate(tile.id)}
+            disabled={disabled || addTile.isPending}
+            aria-label={`Add ${tile.label}`}
+            data-testid={`tile-add-${tile.id}`}
+          >
+            {addTile.isPending && addTile.variables === tile.id ? "Adding…" : "Add"}
+          </button>
+        )
+      }
+    />
+  );
   return (
     <section className="tile-shelf" data-testid="tile-shelf" aria-labelledby="tile-shelf-title">
       <div className="tile-shelf-head">
@@ -105,30 +129,7 @@ export function TileShelf({
       )}
       {(tiles.length > 0 || linked.length > 0) && (
         <ul className="tile-grid">
-          {tiles.map((tile) => (
-            <SourceCard
-              key={tile.id}
-              testIds={{ card: `tile-${tile.id}`, facts: "tile", id: tile.id }}
-              label={tile.label}
-              description={tile.description}
-              recipe={tile.recipe}
-              added={added(tile.sourceId === null ? undefined : sourceById.get(tile.sourceId))}
-              add={
-                tile.sourceId === null && (
-                  <button
-                    type="button"
-                    className="button ghost tile-add"
-                    onClick={() => addTile.mutate(tile.id)}
-                    disabled={disabled || addTile.isPending}
-                    aria-label={`Add ${tile.label}`}
-                    data-testid={`tile-add-${tile.id}`}
-                  >
-                    {addTile.isPending && addTile.variables === tile.id ? "Adding…" : "Add"}
-                  </button>
-                )
-              }
-            />
-          ))}
+          {tiles.filter((tile) => tile.sourceId !== null).map(tileCard)}
           {linked.map((source) => (
             <SourceCard
               key={source.id}
@@ -144,6 +145,7 @@ export function TileShelf({
               add={null}
             />
           ))}
+          {tiles.filter((tile) => tile.sourceId === null).map(tileCard)}
         </ul>
       )}
       <AddSourceStatus state={addTile} />

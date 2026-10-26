@@ -293,6 +293,12 @@ function byTestId(host: HTMLElement, id: string): Element | null {
   return host.querySelector(`[data-testid="${id}"]`);
 }
 
+function cardOrder(host: HTMLElement): (string | null)[] {
+  return [...host.querySelectorAll(".tile-grid > li")].map((card) =>
+    card.getAttribute("data-testid"),
+  );
+}
+
 describe("Tile shelf", () => {
   test("lists each Tile with its Recipe, and adds one by Tile id", async () => {
     installStubs();
@@ -306,6 +312,7 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "tile-whole-archify")).toBeNull();
     expect(byTestId(host, "tile-whole-hyperframes")?.textContent).toBe("Installs whole");
     expect(byTestId(host, "kit-source-delete-archify")).toBeNull();
+    expect(cardOrder(host)).toEqual(["tile-starter", "tile-hyperframes", "tile-archify"]);
 
     await click(byTestId(host, "tile-add-archify"));
 
@@ -317,6 +324,8 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "tile-add-archify")).toBeNull();
     expect(byTestId(host, "kit-source-delete-archify")).not.toBeNull();
     expect(byTestId(host, "kit-row-skill-archify")).not.toBeNull();
+    // Added, it moves in front of the Tiles not added yet.
+    expect(cardOrder(host)).toEqual(["tile-starter", "tile-archify", "tile-hyperframes"]);
   });
 
   test("a Tile whose Source is already added shows Added and offers no Add", async () => {
@@ -352,15 +361,17 @@ describe("Tile shelf", () => {
     expect(byTestId(host, "tile-archify")?.querySelector(".tile-remove")).toBeNull();
   });
 
-  test("a Source added by link gets its own card after the Tiles", async () => {
+  test("added Sources come first: added Tiles, then Sources added by link, then the rest", async () => {
     installStubs();
     uipro = "off";
     const host = await render();
 
-    const cards = [...host.querySelectorAll(".tile-grid > li")].map((card) =>
-      card.getAttribute("data-testid"),
-    );
-    expect(cards).toEqual(["tile-starter", "tile-archify", "tile-hyperframes", "kit-source-uipro"]);
+    expect(cardOrder(host)).toEqual([
+      "tile-starter",
+      "tile-hyperframes",
+      "kit-source-uipro",
+      "tile-archify",
+    ]);
     const card = byTestId(host, "kit-source-uipro")?.textContent ?? "";
     expect(card).toContain("UI UX Pro Max");
     expect(card).toContain("Added from its repository link.");
