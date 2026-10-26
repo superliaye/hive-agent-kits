@@ -4,11 +4,14 @@ import type { DeployTarget } from "@hive/contract";
 import type { DeployTargets } from "../targets.ts";
 import type { ExecRequest } from "./adapter.ts";
 
-export type MarketplacePluginInstall = {
+export type MarketplacePluginId = {
   target: DeployTarget;
-  marketplaceSource: string;
   marketplaceName: string;
   pluginName: string;
+};
+
+export type MarketplacePluginInstall = MarketplacePluginId & {
+  marketplaceSource: string;
 };
 
 // Every step re-runs safely. Each CLI fetches the repository itself, so a run
@@ -31,11 +34,19 @@ export function marketplacePluginCommands(install: MarketplacePluginInstall): Ex
   ];
 }
 
+// The CLI's own uninstall, which leaves the marketplace registered.
+export function marketplacePluginRemoveCommand(plugin: MarketplacePluginId): ExecRequest {
+  const id = `${plugin.pluginName}@${plugin.marketplaceName}`;
+  return plugin.target === "claude"
+    ? { command: "claude", args: ["plugin", "uninstall", id, "--scope", "user"] }
+    : { command: "codex", args: ["plugin", "remove", id] };
+}
+
 // Whether the target CLI records the plugin as installed: Claude in
 // `plugins/installed_plugins.json`, Codex as a `[plugins."<id>"]` config table.
 export function marketplacePluginInstalled(
   targets: Pick<DeployTargets, "claudeHome" | "codexHome">,
-  install: MarketplacePluginInstall,
+  install: MarketplacePluginId,
 ): boolean {
   const id = `${install.pluginName}@${install.marketplaceName}`;
   const path =

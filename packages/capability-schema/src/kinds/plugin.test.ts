@@ -63,11 +63,10 @@ describe("PluginFrontmatter — valid fixtures (lenient superset)", () => {
     ).toBe(true);
   });
 
-  test("declared targets and managed_install pass", () => {
-    expect(
-      PluginFrontmatter.safeParse({ ...VALID, targets: ["claude", "codex"], managed_install: true })
-        .success,
-    ).toBe(true);
+  test("declared targets pass", () => {
+    expect(PluginFrontmatter.safeParse({ ...VALID, targets: ["claude", "codex"] }).success).toBe(
+      true,
+    );
   });
 
   test("unknown keys are PRESERVED on the parsed object (passthrough, not stripped)", () => {

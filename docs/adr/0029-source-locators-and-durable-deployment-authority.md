@@ -1,6 +1,7 @@
 # Source locators and durable deployment authority
 
-status: accepted
+status: accepted; superseded-in-part by ADR-0032 — Hive uninstalls plugins and
+managed bundles on removal
 extends: ADR-0023
 
 ## What this ADR records
@@ -79,8 +80,7 @@ or records an interruption; another Deploy cannot run concurrently.
 - Selected unavailable content stays visible instead of being silently dropped.
 - Whole-file instruction deployment waits when any desired contribution is
   unavailable.
-- Plugin and bundle removal remains advisory because their external installers do
-  not provide a safe ownership-preserving uninstall contract.
+- Plugin and bundle removal runs each installer's own uninstall (ADR-0032).
 - The additional persistence and locking complexity is concentrated at the
   Source, Selection, and Deploy seams where crash consistency is required.
 

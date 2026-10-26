@@ -37,12 +37,30 @@ export class DeploymentStateError extends Error {
   }
 }
 
+// The installer coordinates an uninstall needs, recorded when Hive installs through
+// an external installer, so removal still works after the Source or pointer is gone.
+export const InstalledVia = z.discriminatedUnion("installer", [
+  z.object({
+    installer: z.literal("marketplace-plugin"),
+    marketplaceName: z.string().min(1),
+    pluginName: z.string().min(1),
+  }),
+  z.object({
+    installer: z.literal("npx-skills"),
+    package: z.string().min(1),
+    skills: z.array(z.string()).min(1),
+    verifyPaths: z.array(z.string()).min(1),
+  }),
+]);
+export type InstalledVia = z.infer<typeof InstalledVia>;
+
 export const DeploymentApplied = z.object({
   sourceId: z.string().nullable(),
   contentSha: z.string().nullable(),
   renderedHash: z.string(),
   appliedAt: z.number().int().nonnegative(),
   operationId: z.string().min(1).default("legacy-deployment-import"),
+  installedVia: InstalledVia.optional(),
 });
 export type DeploymentApplied = z.input<typeof DeploymentApplied>;
 

@@ -37,11 +37,9 @@ export type LedgerSnapshot = {
   value: Ledger | null;
 };
 
-// Deploy facts of each winning plugin pointer: the CLIs its marketplace lists, and
-// whether Hive installs it itself (ADR-0031).
+// Deploy facts of each winning plugin pointer: the CLIs its marketplace lists.
 export type PluginDeployInfo = {
   targets: DeployTarget[];
-  managedInstall: boolean;
 };
 
 export type DeploymentSnapshot = {
@@ -427,11 +425,10 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
     }
   }
 
-  // A managed plugin installs from its repository whenever its pointer changes. The
+  // A plugin installs from its marketplace whenever its pointer changes. A generated
   // pointer carries the synced commit, so every newly synced commit is an update.
   for (const selected of snapshot.selection.enabled) {
     if (selected.key.kind !== "plugin") continue;
-    if (!snapshot.plugins.get(selected.key.name)?.managedInstall) continue;
     const selectedWinner = winner.get(serializeCapabilityKey(selected.key));
     const sourceId = selectedWinner?.sourceIds[0];
     if (!selectedWinner || !sourceId) continue;
@@ -452,31 +449,47 @@ export function buildDeployPlan(snapshot: DeploymentSnapshot): DeployPlan {
   }
 
   for (const intent of snapshot.selection.removalIntents) {
-    if (intent.key.kind === "plugin") continue;
     for (const target of intent.targets) {
-      if (!applicableTargets(intent.key, snapshot.plugins).includes(target)) continue;
-      if (intent.key.kind === "instruction" && blockedByTarget.has(target)) continue;
-      const renderedBundle =
-        intent.key.kind === "bundle" ? wouldDeploy.get(pairId(intent.key, target)) : undefined;
-      if (intent.key.kind === "bundle" && renderedBundle?.renderedHash == null) {
+      const privatelyApplied = records.get(pairId(intent.key, target))?.applied;
+      // A Hive record proves a plugin landed on a target its pointer may no longer list.
+      const recordedPlugin =
+        intent.key.kind === "plugin" &&
+        privatelyApplied?.installedVia?.installer === "marketplace-plugin";
+      if (!applicableTargets(intent.key, snapshot.plugins).includes(target) && !recordedPlugin) {
         continue;
       }
-      const privatelyApplied = records.get(pairId(intent.key, target))?.applied;
+      if (intent.key.kind === "instruction" && blockedByTarget.has(target)) continue;
       const ledgerOwned = owned.get(serializeCapabilityKey(intent.key))?.has(target) ?? false;
       const legacyInstructionOwned =
         intent.key.kind === "instruction" && legacyInstructions.has(target);
       if (!privatelyApplied && !ledgerOwned && !legacyInstructionOwned) continue;
+      // An installer-owned removal needs the coordinates to uninstall: Hive's install
+      // record, or failing that the current pointer.
+      let pointer: { sourceId: string; contentSha: string; renderedHash?: string } | undefined;
+      if (intent.key.kind === "bundle") {
+        const rendered = wouldDeploy.get(pairId(intent.key, target));
+        if (rendered?.renderedHash != null) {
+          pointer = {
+            sourceId: rendered.sourceId,
+            contentSha: rendered.contentSha,
+            renderedHash: rendered.renderedHash,
+          };
+        }
+        if (!pointer && privatelyApplied?.installedVia?.installer !== "npx-skills") continue;
+      }
+      if (intent.key.kind === "plugin") {
+        const pluginWinner = winner.get(serializeCapabilityKey(intent.key));
+        const sourceId = pluginWinner?.sourceIds[0];
+        if (pluginWinner && sourceId && snapshot.plugins.has(intent.key.name)) {
+          pointer = { sourceId, contentSha: pluginWinner.contentSha };
+        }
+        if (!pointer && !recordedPlugin) continue;
+      }
       actions.push({
         action: "remove",
         key: intent.key,
         target,
-        ...(renderedBundle
-          ? {
-              sourceId: renderedBundle.sourceId,
-              contentSha: renderedBundle.contentSha,
-              renderedHash: renderedBundle.renderedHash,
-            }
-          : {}),
+        ...(pointer ?? {}),
         ...(intent.generation ? { removalIntentGeneration: intent.generation } : {}),
         artifact: artifactFor(snapshot.artifacts, intent.key, target),
       });

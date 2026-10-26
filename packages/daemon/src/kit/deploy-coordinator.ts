@@ -31,6 +31,7 @@ import {
 import {
   marketplacePluginCommands,
   marketplacePluginInstalled,
+  marketplacePluginRemoveCommand,
 } from "./deploy/marketplace-plugin.ts";
 import {
   immutableNpxBundleSource,
@@ -508,13 +509,18 @@ export function stageDeployPlan(
         });
         continue;
       }
-      if (action.action === "remove" && action.key.kind !== "bundle") {
-        throw new PlanStaleError();
+      if (action.action === "remove" && action.key.kind === "plugin") {
+        tasks.push(stagePluginRemoval(targets, snapshot, action));
+        continue;
       }
+      if (action.action === "remove" && action.key.kind === "bundle") {
+        tasks.push(stageNpxBundleRemoval(targets, snapshot, plan, action));
+        continue;
+      }
+      if (action.action === "remove") throw new PlanStaleError();
       const { sourceId, contentSha } = requiredActionSource(action);
       assertContentSha(targets, sourceId, action.key, contentSha);
       if (action.key.kind === "skill") {
-        if (action.action === "remove") throw new PlanStaleError();
         const source = skillSourceDir(targets.mirrorRoot(sourceId), action.key.name);
         if (!source || !action.renderedHash) throw new PlanStaleError();
         const rendered = transformSkill(
@@ -543,7 +549,6 @@ export function stageDeployPlan(
         continue;
       }
       if (action.key.kind === "agent") {
-        if (action.action === "remove") throw new PlanStaleError();
         const source = agentSourceDir(targets.mirrorRoot(sourceId), action.key.name);
         if (!source || !action.renderedHash) throw new PlanStaleError();
         const rendered = transformAgent(
@@ -566,14 +571,7 @@ export function stageDeployPlan(
       }
       if (action.key.kind === "plugin") {
         const metadata = pluginMeta(targets.mirrorRoot(sourceId), action.key.name);
-        if (metadata && !metadata.managedInstall) throw new ImmutableInstallerStagingError();
-        if (
-          action.action === "remove" ||
-          !metadata ||
-          !metadata.targets.includes(action.target) ||
-          !metadata.source ||
-          !metadata.market
-        ) {
+        if (!metadata?.targets.includes(action.target) || !metadata.source || !metadata.market) {
           throw new PlanStaleError();
         }
         tasks.push({
@@ -589,12 +587,7 @@ export function stageDeployPlan(
         });
         continue;
       }
-      const metadata = bundleMeta(targets.mirrorRoot(sourceId), action.key.name);
-      if (!metadata) throw new PlanStaleError();
-      const managed = managedNpxBundleMeta(metadata, action.target, targets);
-      if (!managed || managedNpxBundleHash(managed, action.target) !== action.renderedHash) {
-        throw new ImmutableInstallerStagingError();
-      }
+      const managed = pointerNpxBundle(targets, action, sourceId);
       tasks.push({
         type: "npx-bundle",
         action: action.action,
@@ -606,11 +599,131 @@ export function stageDeployPlan(
         pin: managed.package,
         sourceId,
         contentSha,
-        renderedHash: action.renderedHash,
+        renderedHash: managedNpxBundleHash(managed, action.target),
+        keep: [],
       });
     }
   }
   return { tasks, metadata: {} };
+}
+
+type PlanAction = DeployPlan["actions"][number];
+
+function appliedRecord(snapshot: DeploymentSnapshot, key: PlanAction["key"], target: DeployTarget) {
+  return snapshot.deploymentState.records.find(
+    (record) =>
+      record.target === target &&
+      serializeCapabilityKey(record.key) === serializeCapabilityKey(key),
+  )?.applied;
+}
+
+// The managed npx installer a bundle pointer renders for one target; the plan's
+// rendered hash binds the pointer read at acceptance.
+function pointerNpxBundle(targets: DeployTargets, action: PlanAction, sourceId: string) {
+  const metadata = bundleMeta(targets.mirrorRoot(sourceId), action.key.name);
+  if (!metadata) throw new PlanStaleError();
+  const managed = managedNpxBundleMeta(metadata, action.target, targets);
+  if (!managed || managedNpxBundleHash(managed, action.target) !== action.renderedHash) {
+    throw new ImmutableInstallerStagingError();
+  }
+  return managed;
+}
+
+// Hive's install record names what to uninstall. Without one, as for a plugin the
+// Ledger records but Hive never installed, the current pointer does.
+function stagePluginRemoval(
+  targets: DeployTargets,
+  snapshot: DeploymentSnapshot,
+  action: PlanAction,
+): StagedDeployTask {
+  const key = { kind: "plugin" as const, name: action.key.name };
+  const recorded = appliedRecord(snapshot, action.key, action.target)?.installedVia;
+  if (recorded?.installer === "marketplace-plugin") {
+    return {
+      type: "marketplace-plugin-remove",
+      action: "remove",
+      key,
+      target: action.target,
+      marketplaceName: recorded.marketplaceName,
+      pluginName: recorded.pluginName,
+    };
+  }
+  const { sourceId, contentSha } = requiredActionSource(action);
+  assertContentSha(targets, sourceId, action.key, contentSha);
+  const metadata = pluginMeta(targets.mirrorRoot(sourceId), action.key.name);
+  if (!metadata?.market) throw new PlanStaleError();
+  return {
+    type: "marketplace-plugin-remove",
+    action: "remove",
+    key,
+    target: action.target,
+    marketplaceName: metadata.market,
+    pluginName: metadata.pluginName,
+  };
+}
+
+function stageNpxBundleRemoval(
+  targets: DeployTargets,
+  snapshot: DeploymentSnapshot,
+  plan: DeployPlan,
+  action: PlanAction,
+): StagedDeployTask {
+  type Install = Omit<NpxBundleInstall, "target">;
+  const recordedInstall = (target: DeployTarget): Install | null => {
+    const recorded = appliedRecord(snapshot, action.key, target)?.installedVia;
+    return recorded?.installer === "npx-skills" ? recorded : null;
+  };
+  const pointerInstall = (target: DeployTarget): Install | null => {
+    if (!action.sourceId || !action.contentSha) return null;
+    assertContentSha(targets, action.sourceId, action.key, action.contentSha);
+    const metadata = bundleMeta(targets.mirrorRoot(action.sourceId), action.key.name);
+    return metadata ? managedNpxBundleMeta(metadata, target, targets) : null;
+  };
+
+  const removed =
+    recordedInstall(action.target) ??
+    (action.sourceId ? pointerNpxBundle(targets, action, action.sourceId) : null);
+  if (!removed) throw new PlanStaleError();
+  const keep: NpxBundleInstall[] = [];
+  for (const target of ["claude", "codex"] as const) {
+    if (target === action.target) continue;
+    const other = plan.actions.find(
+      (candidate) =>
+        candidate.target === target &&
+        serializeCapabilityKey(candidate.key) === serializeCapabilityKey(action.key),
+    );
+    if (other?.action === "remove") continue;
+    let kept: Install | null = null;
+    if (other) {
+      if (!other.sourceId) throw new PlanStaleError();
+      kept = pointerNpxBundle(targets, other, other.sourceId);
+    } else if (appliedRecord(snapshot, action.key, target)) {
+      kept = recordedInstall(target) ?? pointerInstall(target);
+    }
+    if (kept) {
+      keep.push({
+        target,
+        package: kept.package,
+        skills: kept.skills,
+        verifyPaths: kept.verifyPaths,
+      });
+    }
+  }
+  return {
+    type: "npx-bundle",
+    action: "remove",
+    key: { kind: "bundle", name: action.key.name },
+    target: action.target,
+    package: removed.package,
+    skills: removed.skills,
+    verifyPaths: removed.verifyPaths,
+    pin: removed.package,
+    sourceId: action.sourceId ?? null,
+    contentSha: action.contentSha ?? null,
+    renderedHash:
+      action.renderedHash ?? appliedRecord(snapshot, action.key, action.target)?.renderedHash ?? "",
+    keep,
+  };
 }
 
 export type ExecuteStagedDeployOptions = {
@@ -664,21 +777,29 @@ function boundedInstallerDetail(value: string): string {
   return redacted.length <= 512 ? redacted : redacted.slice(-512);
 }
 
-function expectedBundleProbe(task: Extract<StagedDeployTask, { type: "npx-bundle" }>) {
-  return task.action === "remove" ? "all-absent" : "all-present";
+type NpxBundleTask = Extract<StagedDeployTask, { type: "npx-bundle" }>;
+type NpxBundleInstall = NpxBundleTask["keep"][number];
+
+function npxBundleSettled(task: NpxBundleTask): boolean {
+  const expected = task.action === "remove" ? "all-absent" : "all-present";
+  return (
+    probeManagedNpxBundle(task) === expected &&
+    task.keep.every((kept) => probeManagedNpxBundle(kept) === "all-present")
+  );
 }
 
 function prepareImmutableNpxBundleSource(
   fx: DeployFsExec,
-  task: Extract<StagedDeployTask, { type: "npx-bundle" }>,
+  bundleName: string,
+  packageRef: string,
 ): string {
-  const source = immutableNpxBundleSource(task.package);
+  const source = immutableNpxBundleSource(packageRef);
   if (!source) throw new InstallerTaskError("installer_failed", "invalid immutable package");
   if (!probeBinary(fx, "git")) {
     throw new InstallerTaskError("missing_binary", "git is not available on PATH");
   }
 
-  const checkout = join(fx.targets.kitTmpRoot(), "npx-skills", task.key.name, source.commit);
+  const checkout = join(fx.targets.kitTmpRoot(), "npx-skills", bundleName, source.commit);
   const installRoot = source.subpath ? join(checkout, ...source.subpath.split("/")) : checkout;
   if (existsSync(checkout)) {
     const head = execInstaller(
@@ -732,32 +853,8 @@ function prepareImmutableNpxBundleSource(
   return installRoot;
 }
 
-function applyManagedNpxBundle(
-  fx: DeployFsExec,
-  task: Extract<StagedDeployTask, { type: "npx-bundle" }>,
-): void {
-  if (probeManagedNpxBundle(task) === expectedBundleProbe(task)) return;
-  if (!probeBinary(fx, "npx")) {
-    throw new InstallerTaskError("missing_binary", "npx is not available on PATH");
-  }
-  const agent = task.target === "claude" ? "claude-code" : "codex";
-  const installRoot =
-    task.action === "remove" ? undefined : prepareImmutableNpxBundleSource(fx, task);
-  const args =
-    task.action === "remove"
-      ? ["-y", "skills", "remove", ...task.skills, "--global", "--agent", agent, "--yes"]
-      : [
-          "-y",
-          "skills",
-          "add",
-          ".",
-          "--global",
-          "--agent",
-          agent,
-          ...task.skills.flatMap((skill) => ["--skill", skill]),
-          "--yes",
-        ];
-  const result = execInstaller(fx, { command: "npx", args, cwd: installRoot }, "npx");
+function runNpx(fx: DeployFsExec, args: string[], cwd: string | undefined): void {
+  const result = execInstaller(fx, { command: "npx", args, cwd }, "npx");
   if (result.status !== 0) {
     throw new InstallerTaskError(
       "installer_failed",
@@ -766,7 +863,44 @@ function applyManagedNpxBundle(
       ),
     );
   }
-  if (probeManagedNpxBundle(task) !== expectedBundleProbe(task)) {
+}
+
+// Claude gets its own copy: the CLI's default links Claude to the shared
+// `~/.agents/skills` folder, which would expose the skill to Codex as well.
+function installNpxBundle(fx: DeployFsExec, bundleName: string, install: NpxBundleInstall): void {
+  const installRoot = prepareImmutableNpxBundleSource(fx, bundleName, install.package);
+  const agent = install.target === "claude" ? ["claude-code", "--copy"] : ["codex"];
+  runNpx(
+    fx,
+    [
+      "-y",
+      "skills",
+      "add",
+      ".",
+      "--global",
+      "--agent",
+      ...agent,
+      ...install.skills.flatMap((skill) => ["--skill", skill]),
+      "--yes",
+    ],
+    installRoot,
+  );
+}
+
+function applyManagedNpxBundle(fx: DeployFsExec, task: NpxBundleTask): void {
+  if (npxBundleSettled(task)) return;
+  if (!probeBinary(fx, "npx")) {
+    throw new InstallerTaskError("missing_binary", "npx is not available on PATH");
+  }
+  if (task.action === "remove") {
+    // The skills CLI keeps a shared skill while any other agent still has it, so
+    // only the full uninstall a user would run removes it from one target.
+    runNpx(fx, ["-y", "skills", "remove", ...task.skills, "--global", "--yes"], undefined);
+    for (const kept of task.keep) installNpxBundle(fx, task.key.name, kept);
+  } else {
+    installNpxBundle(fx, task.key.name, task);
+  }
+  if (!npxBundleSettled(task)) {
     throw new InstallerTaskError(
       "installer_failed",
       `npx completed without satisfying ${task.action} postcondition`,
@@ -797,6 +931,33 @@ function applyMarketplacePlugin(
     throw new InstallerTaskError(
       "installer_failed",
       `${task.target} completed without recording ${task.pluginName}@${task.marketplaceName}`,
+    );
+  }
+}
+
+function removeMarketplacePlugin(
+  fx: DeployFsExec,
+  task: Extract<StagedDeployTask, { type: "marketplace-plugin-remove" }>,
+): void {
+  if (!marketplacePluginInstalled(fx.targets, task)) return;
+  if (!probeBinary(fx, task.target)) {
+    throw new InstallerTaskError("missing_binary", `${task.target} is not available on PATH`);
+  }
+  const request = marketplacePluginRemoveCommand(task);
+  const result = execInstaller(fx, request, request.command);
+  if (result.status !== 0) {
+    throw new InstallerTaskError(
+      "installer_failed",
+      boundedInstallerDetail(
+        [result.stdout, result.stderr].filter(Boolean).join("\n") ||
+          `${request.command} exited ${result.status}`,
+      ),
+    );
+  }
+  if (marketplacePluginInstalled(fx.targets, task)) {
+    throw new InstallerTaskError(
+      "installer_failed",
+      `${task.target} still records ${task.pluginName}@${task.marketplaceName}`,
     );
   }
 }
@@ -835,6 +996,9 @@ function applyStagedTask(fx: DeployFsExec, task: StagedDeployTask): void {
       return;
     case "marketplace-plugin":
       applyMarketplacePlugin(fx, task);
+      return;
+    case "marketplace-plugin-remove":
+      removeMarketplacePlugin(fx, task);
       return;
     case "bundle": {
       throw new ImmutableInstallerStagingError();
@@ -919,9 +1083,11 @@ function stagedTaskStillApplied(fx: DeployFsExec, task: StagedDeployTask): boole
           ? hashDeployedSkill(fx.targets, task.key.name, task.target) === null
           : hashDeployedAgent(fx.targets, task.key.name, task.target) === null;
       case "npx-bundle":
-        return probeManagedNpxBundle(task) === expectedBundleProbe(task);
+        return npxBundleSettled(task);
       case "marketplace-plugin":
         return marketplacePluginInstalled(fx.targets, task);
+      case "marketplace-plugin-remove":
+        return !marketplacePluginInstalled(fx.targets, task);
       case "plugin":
       case "bundle":
         return false;
@@ -971,6 +1137,7 @@ function commitProvisionalLedger(
   const prunedSkills = new Set<string>();
   const prunedAgents = new Set<string>();
   const prunedInstructions = new Set<string>();
+  const prunedPlugins = new Set<string>();
   const prunedBundles = new Set<string>();
   for (const action of operation.plan.actions) {
     if (
@@ -994,6 +1161,7 @@ function commitProvisionalLedger(
     if (action.key.kind === "skill") prunedSkills.add(action.key.name);
     if (action.key.kind === "agent") prunedAgents.add(action.key.name);
     if (action.key.kind === "instruction") prunedInstructions.add(action.key.name);
+    if (action.key.kind === "plugin") prunedPlugins.add(action.key.name);
     if (action.key.kind === "bundle") prunedBundles.add(action.key.name);
   }
   const instructions = new Set<string>();
@@ -1029,6 +1197,7 @@ function commitProvisionalLedger(
       instructions: [...instructions],
       plugins: [...plugins],
       bundles: [...bundles].map(([name, pin]) => ({ name, pin })),
+      prunedPlugins: [...prunedPlugins],
       prunedBundles: [...prunedBundles],
     },
     [...prunedSkills],
@@ -1100,6 +1269,12 @@ function finalizeCommittedDeployment(
               contentSha: task.contentSha,
               renderedHash: task.renderedHash,
               appliedAt: now(),
+              installedVia: {
+                installer: "npx-skills",
+                package: task.package,
+                skills: task.skills,
+                verifyPaths: task.verifyPaths,
+              },
             },
             operation.operationId,
           );
@@ -1113,9 +1288,16 @@ function finalizeCommittedDeployment(
             contentSha: task.contentSha,
             renderedHash: task.contentSha,
             appliedAt: now(),
+            installedVia: {
+              installer: "marketplace-plugin",
+              marketplaceName: task.marketplaceName,
+              pluginName: task.pluginName,
+            },
           },
           operation.operationId,
         );
+      } else if (task.type === "marketplace-plugin-remove") {
+        options.deploymentState.recordRemoval(task.key, task.target, operation.operationId);
       } else if (task.type === "plugin" || task.type === "bundle") {
         throw new ImmutableInstallerStagingError();
       } else {

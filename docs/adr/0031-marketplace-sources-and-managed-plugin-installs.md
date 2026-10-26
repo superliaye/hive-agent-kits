@@ -1,6 +1,7 @@
 # Marketplace Sources and managed plugin installs
 
-status: proposed
+status: proposed; superseded-in-part by ADR-0032 — hand-written pointers install
+too, and removal uninstalls
 relates-to: ADR-0025, ADR-0029, ADR-0023
 
 ## What this ADR records
@@ -26,9 +27,8 @@ Deploy: the Overview showed it as a manual install.
   existing pointer keeps its behavior. This replaces ADR-0025's "the frontmatter
   carries no target".
 - **Generated pointers are installed by Deploy, verbatim from the repository.**
-  They set `managed_install: true` and record `source_commit`. The plan adds or
-  updates a managed plugin on each declared target until Deployment State records
-  the current pointer, so every newly synced commit is an update. The task runs
+  They record `source_commit`. The plan adds or updates a plugin on each declared
+  target until Deployment State records the current pointer, so every newly synced commit is an update. The task runs
   the target CLI against the repository URL:
   - Claude Code: `plugin marketplace add`, `plugin marketplace update`,
     `plugin install`, `plugin update`.
@@ -46,10 +46,6 @@ Deploy: the Overview showed it as a manual install.
   repository itself, so an install can be newer than the synced commit. Pinning
   would need each CLI to install an exact commit; `claude plugin marketplace add`
   has no ref option.
-- Hand-written pointers stay manual installs. Hive installs only what a
-  marketplace Source generated, which keeps unpinned third-party installers out of
-  Deploy unless the user adds their repository as a Source.
-- Removal stays advisory, as for every plugin and bundle (ADR-0029).
 - A subpath Source or a working-tree Source is not ingested: the CLIs read a
   marketplace from a repository root, and a local path would make Claude Code load
   the user's working copy in place, outside Deploy.

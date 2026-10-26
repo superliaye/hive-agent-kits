@@ -55,9 +55,11 @@ A deployable unit in a **Source**. Five kinds, the upstream taxonomy:
   Source ships; **Agent** there is a Hive entity that does not exist in #1. When the
   word matters, say "the `agent` capability" vs "the Hive **Agent**".
 - **plugin** — a Claude Code or Codex plugin, installed from a marketplace via
-  each target CLI. Hive installs only a marketplace Source's plugins on Deploy; a
-  hand-written plugin pointer stays a manual install.
+  each target CLI. Deploy installs and uninstalls every plugin with that CLI's own
+  plugin commands, as a user would by hand.
 - **bundle** — a wrapper around an external installer that vends its own skills.
+  Deploy installs and uninstalls a bundle through that installer when Hive can run
+  it; otherwise the bundle stays a manual install.
 
 A **snippet** is a build-time *include* shared across Capabilities, not a deploy
 kind. Capabilities may be organized under nested **@-namespaces** for browsing;
@@ -135,8 +137,8 @@ failure leaves a consistent record and a re-Deploy is idempotent.
 The shared, durable record of what is currently deployed on the machine — reused
 for interop with the `agent-kit` CLI (both write it). A name in the Ledger is
 Hive-owned and may be reconciled away when deselected; anything on disk but absent
-from the Ledger is the user's and is never touched. Skills and `agent`
-capabilities are pruned by name on reconcile; plugins and bundles are never
+from the Ledger is the user's and is never touched. A deselected name is pruned
+once Hive removes it; a bundle whose installer Hive cannot run is never
 auto-removed (Hive only hints). Which **Source** a deployed name came from is
 recorded in Hive-private deploy metadata, never in this interop Ledger.
 

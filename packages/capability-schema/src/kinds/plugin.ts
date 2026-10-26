@@ -7,9 +7,9 @@
 // leaf); unknown keys pass through. `marketplace_source` is a non-empty string
 // with NO org/repo/URL regex — deploy forwards it as-is, and a regex would reject
 // valid Sources. `targets` names the CLIs whose marketplace lists the plugin
-// (default Claude only). `managed_install` marks a pointer Hive installs itself on
-// Deploy — sync generates such pointers for a marketplace Source (ADR-0031); a
-// hand-written pointer without it stays a manual install.
+// (default Claude only). Hive installs and uninstalls every pointer through each
+// CLI (ADR-0032), whether sync generated it for a marketplace Source (ADR-0031)
+// or a kit author wrote it.
 
 import { z } from "zod";
 
@@ -23,7 +23,6 @@ export const PluginFrontmatter = z
     marketplace_name: z.string().min(1),
     plugin_name: z.string().min(1).optional(),
     targets: z.array(PluginTarget).min(1).optional(),
-    managed_install: z.boolean().optional(),
   })
   .passthrough();
 export type PluginFrontmatter = z.infer<typeof PluginFrontmatter>;

@@ -150,7 +150,6 @@ export type PluginMeta = {
   pluginName: string;
   // The CLIs whose marketplace lists the plugin; Claude only when undeclared.
   targets: DeployTarget[];
-  managedInstall: boolean;
 };
 
 // Plugin frontmatter from the winner's Mirror.
@@ -166,7 +165,6 @@ export function pluginMeta(mirrorRoot: string, name: string): PluginMeta | null 
     market: typeof fm.marketplace_name === "string" ? fm.marketplace_name : "",
     pluginName: typeof fm.plugin_name === "string" ? fm.plugin_name : name,
     targets: declared.length > 0 ? [...new Set(declared)] : ["claude"],
-    managedInstall: fm.managed_install === true,
   };
 }
 
