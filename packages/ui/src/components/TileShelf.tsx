@@ -158,7 +158,8 @@ type AddedSource = {
   disabled: boolean;
 };
 
-// Remove shows on hover or keyboard focus, and asks once before it acts.
+// Remove takes the Added badge's place on hover or keyboard focus, and asks once
+// before it acts.
 function SourceCard({
   testIds,
   label,
@@ -184,11 +185,15 @@ function SourceCard({
   }, [failed]);
   const problem = added && sourceProblem(added.source, added.mirror);
   return (
-    <li className={`tile-card ${added ? "tile-card-added" : ""}`} data-testid={testIds.card}>
+    <li
+      className={`tile-card ${added ? "tile-card-added" : ""} ${confirming ? "tile-card-confirming" : ""}`}
+      data-testid={testIds.card}
+    >
       <div className="tile-card-head">
         {url ? (
           <a
             className="tile-card-label"
+            title={label}
             href={url}
             onClick={(event) => {
               event.preventDefault();
@@ -199,10 +204,19 @@ function SourceCard({
             {label}
           </a>
         ) : (
-          <span className="tile-card-label">{label}</span>
+          <span className="tile-card-label" title={label}>
+            {label}
+          </span>
         )}
         {added ? (
           <span className="tile-card-actions">
+            <span
+              className="tile-added"
+              title={readyTitle(added.mirror)}
+              data-testid={`${testIds.facts}-added-${testIds.id}`}
+            >
+              Added
+            </span>
             {!confirming && (
               <button
                 type="button"
@@ -215,19 +229,14 @@ function SourceCard({
                 Remove
               </button>
             )}
-            <span
-              className="tile-added"
-              title={readyTitle(added.mirror)}
-              data-testid={`${testIds.facts}-added-${testIds.id}`}
-            >
-              Added
-            </span>
           </span>
         ) : (
           add
         )}
       </div>
-      <p className="tile-card-desc">{description}</p>
+      <p className="tile-card-desc" title={description}>
+        {description}
+      </p>
       {(recipe || problem) && (
         <div className="tile-card-badges">
           {recipe && (
