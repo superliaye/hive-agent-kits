@@ -1,6 +1,6 @@
 import { type UseMutationResult, useMutation, useQuery } from "@tanstack/react-query";
 import {
-  AddSourceError,
+  type AddSourceError,
   type AddSourceResult,
   type ApiConfig,
   api,

@@ -624,18 +624,16 @@ export function stageDeployPlan(
 
 type PlanAction = DeployPlan["actions"][number];
 
+const sameKey = (left: PlanAction["key"], right: PlanAction["key"]) =>
+  serializeCapabilityKey(left) === serializeCapabilityKey(right);
+
 function appliedRecord(snapshot: DeploymentSnapshot, key: PlanAction["key"], target: DeployTarget) {
   return snapshot.deploymentState.records.find(
-    (record) =>
-      record.target === target &&
-      serializeCapabilityKey(record.key) === serializeCapabilityKey(key),
+    (record) => record.target === target && sameKey(record.key, key),
   )?.applied;
 }
 
 type TileBundleTask = Extract<StagedDeployTask, { type: "tile-bundle" }>;
-
-const sameKey = (left: PlanAction["key"], right: PlanAction["key"]) =>
-  serializeCapabilityKey(left) === serializeCapabilityKey(right);
 
 function selectedTargets(snapshot: DeploymentSnapshot, key: PlanAction["key"]): DeployTarget[] {
   return snapshot.selection.enabled.find((entry) => sameKey(entry.key, key))?.targets ?? [];
@@ -849,9 +847,7 @@ function stageNpxBundleRemoval(
   for (const target of ["claude", "codex"] as const) {
     if (target === action.target) continue;
     const other = plan.actions.find(
-      (candidate) =>
-        candidate.target === target &&
-        serializeCapabilityKey(candidate.key) === serializeCapabilityKey(action.key),
+      (candidate) => candidate.target === target && sameKey(candidate.key, action.key),
     );
     if (other?.action === "remove") continue;
     let kept: Install | null = null;

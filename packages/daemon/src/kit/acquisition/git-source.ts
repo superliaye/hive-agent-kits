@@ -579,10 +579,7 @@ export function gitSnapshot(
     const tracked = <T>(work: () => Promise<T>) =>
       Effect.tryPromise({
         try: () => {
-          const running = work().catch((error: unknown) => {
-            if (error instanceof GitAcquireError) throw error;
-            throw new GitAcquireError("io", "git acquisition filesystem operation failed");
-          });
+          const running = work();
           inFlight = running.catch(() => undefined);
           return running;
         },
