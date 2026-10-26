@@ -119,6 +119,7 @@ export function overviewFromLegacy(
       kind: source.kind,
       active: source.active,
       rank: source.rank,
+      recipe: null,
     })),
     sourceRegistryRevision: 1,
     mirrors: state.sync.map((sync, index) => ({

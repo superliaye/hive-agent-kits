@@ -96,7 +96,9 @@ function createApi(initial: Record<string, DeployTarget[]>): {
   const overview = (): DeploymentOverview => {
     const rows = ["alpha", "beta"].map((name) => row(name, [...(selected.get(name) ?? [])]));
     return {
-      sources: [{ id: SOURCE_ID, label: "Source", kind: "git", active: true, rank: 0 }],
+      sources: [
+        { id: SOURCE_ID, label: "Source", kind: "git", active: true, rank: 0, recipe: null },
+      ],
       sourceRegistryRevision: 1,
       mirrors: [{ sourceId: SOURCE_ID, precedence: 0, identity: "abc123" }],
       selectionRevision: revision,

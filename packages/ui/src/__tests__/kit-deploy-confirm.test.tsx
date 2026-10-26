@@ -62,7 +62,7 @@ function row(
 function overview(over: Partial<DeploymentOverview> = {}): DeploymentOverview {
   const rows = over.rows ?? [row("skill")];
   return {
-    sources: [{ id: "src", label: "Arca", kind: "git", active: true, rank: 0 }],
+    sources: [{ id: "src", label: "Arca", kind: "git", active: true, rank: 0, recipe: null }],
     sourceRegistryRevision: 1,
     mirrors: [{ sourceId: "src", precedence: 0, identity: "abc" }],
     selectionRevision: 8,

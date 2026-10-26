@@ -2,9 +2,20 @@
 //
 // - redirected temp homes (so the real ~/.claude is never touched)
 // - in-memory ustar tar + gzip fixture builder (content-derived top folder)
+// - in-memory tree snapshots and a hermetic Git process
 
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
+import { Effect } from "effect";
+import type { GitProcess } from "../acquisition/git-process.ts";
+import {
+  type ListedEntry,
+  resolveListing,
+  type TreeOrigin,
+  type TreePath,
+  type TreeSnapshot,
+} from "../acquisition/snapshot.ts";
 
 const HIVE_ENV_KEYS = [
   "HIVE_RUNTIME_ROOT",
@@ -127,4 +138,105 @@ export function buildTar(entries: TarFixtureEntry[]): Uint8Array {
 // Build a gzip'd ustar archive (what codeload serves).
 export function buildGzipTar(entries: TarFixtureEntry[]): Uint8Array {
   return new Uint8Array(gzipSync(Buffer.from(buildTar(entries))));
+}
+
+// ---- in-memory tree snapshot ----
+
+export type MemoryFile = string | { exec: string } | { link: string };
+
+export const MEMORY_GIT_ORIGIN = {
+  transport: "git",
+  repoUrl: "https://github.com/acme/stack",
+  requestedRevision: { mode: "track", ref: "refs/heads/main" },
+  resolvedCommit: "c".repeat(40),
+  subpath: ".",
+  treeIdentity: "d".repeat(40),
+} satisfies TreeOrigin;
+
+// A snapshot over literal files that records every path it was asked to read.
+export function memorySnapshot(
+  files: Record<string, MemoryFile>,
+  origin: TreeOrigin = MEMORY_GIT_ORIGIN,
+): { snapshot: TreeSnapshot; reads: string[] } {
+  const reads: string[] = [];
+  const listed = new Map<TreePath, ListedEntry>();
+  const bytes = new Map<string, Uint8Array>();
+  for (const [path, file] of Object.entries(files)) {
+    if (typeof file === "object" && "link" in file) {
+      listed.set(path as TreePath, { mode: "link", text: file.link });
+      continue;
+    }
+    const exec = typeof file === "object";
+    listed.set(path as TreePath, { mode: exec ? "exec" : "file" });
+    bytes.set(path, new TextEncoder().encode(exec ? file.exec : file));
+  }
+  const snapshot: TreeSnapshot = {
+    origin,
+    entries: resolveListing(listed),
+    read: (paths) =>
+      Effect.sync(() => {
+        reads.push(...paths);
+        const out = new Map<TreePath, Uint8Array>();
+        for (const path of paths) {
+          const data = bytes.get(path);
+          if (!data) throw new Error(`unlisted read ${path}`);
+          out.set(path, data);
+        }
+        return out;
+      }),
+    confirm: () => Effect.void,
+  };
+  return { snapshot, reads };
+}
+
+// ---- hermetic Git process over literal files ----
+
+export type FakeGitFile = { path: string; content: string; mode?: "100644" | "100755" | "120000" };
+
+// Answers the commands the git snapshot runs, and records which blob ids
+// `cat-file --batch` was asked for.
+export function fakeGitProcess(
+  files: readonly FakeGitFile[],
+  commit = "a".repeat(40),
+): { process: GitProcess; batched: string[] } {
+  const batched: string[] = [];
+  const byId = new Map<string, FakeGitFile>();
+  const listing = files
+    .map((file) => {
+      const id = createHash("sha1").update(file.path).digest("hex");
+      byId.set(id, file);
+      return `${file.mode ?? "100644"} blob ${id}\t${file.path}\0`;
+    })
+    .join("");
+  const result = (stdout: string | Uint8Array = "") => ({
+    exitCode: 0,
+    stdout: typeof stdout === "string" ? new TextEncoder().encode(stdout) : stdout,
+    stderr: "",
+  });
+  const process: GitProcess = {
+    async run(args, options) {
+      if (args.includes("--is-bare-repository")) return result("true\n");
+      if (args.includes("cat-file") && args.includes("-t")) return result("tree\n");
+      if (args.includes("ls-tree")) return result(listing);
+      if (args.includes("cat-file") && args.includes("--batch")) {
+        const ids = new TextDecoder().decode(options?.stdin).trim().split("\n").filter(Boolean);
+        batched.push(...ids);
+        const chunks = ids.flatMap((id) => {
+          const content = new TextEncoder().encode(byId.get(id)?.content ?? "");
+          return [
+            new TextEncoder().encode(`${id} blob ${content.byteLength}\n`),
+            content,
+            new Uint8Array([10]),
+          ];
+        });
+        return result(Buffer.concat(chunks));
+      }
+      if (args.includes("rev-parse") && args.some((arg) => arg.includes("FETCH_HEAD"))) {
+        return result(`${commit}\n`);
+      }
+      if (args.includes("rev-parse")) return result(`${"b".repeat(40)}\n`);
+      return result();
+    },
+  };
+  return { process, batched };
 }

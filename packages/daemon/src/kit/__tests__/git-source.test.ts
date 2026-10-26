@@ -13,17 +13,19 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { SourceLocator } from "@hive/contract";
+import { Effect } from "effect";
 import {
   type GitProcess,
   GitProcessFailure,
   productionGitProcess,
 } from "../acquisition/git-process.ts";
-import {
-  acquireGitSource,
-  GitAcquireError,
-  repositoryLockCountForTest,
-} from "../acquisition/git-source.ts";
-import { readProvenance } from "../mirror.ts";
+import { gitSnapshot, repositoryLockCountForTest } from "../acquisition/git-source.ts";
+import type { TreePath } from "../acquisition/snapshot.ts";
+import { DEFAULT_TREE_LIMITS, type TreeLimits } from "../acquisition/tree-guard.ts";
+import { commitMirror, type MirrorRecord, materialize, readMirrorRecord } from "../mirror.ts";
+import { recipeTree, recognizeSource } from "../recipes/recipe.ts";
+import { fakeGitProcess } from "./helpers.ts";
 
 const roots: string[] = [];
 const TEST_COMMIT = "a".repeat(40);
@@ -140,28 +142,86 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+type GitLocator = Extract<SourceLocator, { kind: "git" }>;
+type AcquireOptions = {
+  cacheRoot: string;
+  tmpRoot: string;
+  process: GitProcess;
+  limits?: TreeLimits;
+};
+
+// The Sync path with explicit roots: snapshot, recognize, materialize, commit.
+function syncGitSource(
+  locator: GitLocator,
+  destination: string,
+  options: AcquireOptions,
+): Promise<MirrorRecord | null> {
+  const limits = options.limits ?? DEFAULT_TREE_LIMITS;
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const snapshot = yield* gitSnapshot(locator, {
+          cacheRoot: options.cacheRoot,
+          process: options.process,
+          limits,
+        });
+        const recognition = yield* recognizeSource(recipeTree(snapshot));
+        const staged = yield* materialize(snapshot, recognition, options.tmpRoot, limits);
+        yield* commitMirror(destination, staged);
+        return readMirrorRecord(destination);
+      }),
+    ),
+  );
+}
+
+function listGitSource(
+  locator: GitLocator,
+  options: Omit<AcquireOptions, "tmpRoot">,
+): Promise<{ paths: string[]; read: (path: string) => Promise<string> }> {
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const snapshot = yield* gitSnapshot(locator, {
+          cacheRoot: options.cacheRoot,
+          process: options.process,
+          limits: options.limits ?? DEFAULT_TREE_LIMITS,
+        });
+        const paths = [...snapshot.entries.keys()].sort();
+        const bytes = yield* snapshot.read(
+          paths.filter((path) => snapshot.entries.get(path)?.mode !== "link"),
+        );
+        return {
+          paths,
+          read: async (path: string) =>
+            new TextDecoder().decode(bytes.get(path as TreePath) ?? new Uint8Array()),
+        };
+      }),
+    ),
+  );
+}
+
+const KIT_FILES = [
+  { path: "capabilities/skills/x/SKILL.md", content: "---\nname: x\ndescription: x\n---\n" },
+];
+
 describe("git Source acquisition", () => {
-  test("materializes a root tree without adding a synthetic wrapper", async () => {
+  test("lists a root tree without adding a synthetic wrapper", async () => {
     const repo = fixtureRepository();
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
 
-    await acquireGitSource(
+    const listed = await listGitSource(
       {
         kind: "git",
         repoUrl: FIXTURE_REPOSITORY_URL,
         revision: { mode: "pin", commit: repo.goodCommit },
         subpath: ".",
       },
-      join(work, "mirror"),
-      {
-        cacheRoot: join(work, "cache"),
-        tmpRoot: join(work, "tmp"),
-        process: localGitProcess(repo.root),
-      },
+      { cacheRoot: join(work, "cache"), process: localGitProcess(repo.root) },
     );
 
-    expect(existsSync(join(work, "mirror", "nested", "personal-kit", "capabilities"))).toBe(true);
+    expect(listed.paths).toContain("nested/personal-kit/capabilities/skills/arca-smoke/SKILL.md");
+    expect(listed.paths.every((path) => path.startsWith("nested/personal-kit/"))).toBe(true);
   });
 
   test("kills a TERM-resistant Git process group and its descendant after a bounded grace", async () => {
@@ -275,28 +335,26 @@ while :; do sleep 1; done
       revision: { mode: "track" as const, ref: "refs/heads/main" },
       subpath: ".",
     };
-    const git = testGitProcess(async (args) => {
-      return emptyTreeResult(args);
-    });
+    const git = fakeGitProcess(KIT_FILES).process;
     const cacheFile = join(work, "cache-file");
     const tmpFile = join(work, "tmp-file");
     writeFileSync(cacheFile, "not a directory");
     writeFileSync(tmpFile, "not a directory");
 
     await expect(
-      acquireGitSource(locator, join(work, "cache-failure"), {
+      syncGitSource(locator, join(work, "cache-failure"), {
         cacheRoot: cacheFile,
         tmpRoot: join(work, "tmp"),
         process: git,
       }),
-    ).rejects.toMatchObject({ code: "io" });
+    ).rejects.toMatchObject({ reason: "io" });
     await expect(
-      acquireGitSource(locator, join(work, "tmp-failure"), {
+      syncGitSource(locator, join(work, "tmp-failure"), {
         cacheRoot: join(work, "cache"),
         tmpRoot: tmpFile,
         process: git,
       }),
-    ).rejects.toMatchObject({ code: "io" });
+    ).rejects.toMatchObject({ reason: "io" });
   });
 
   test("enforces one total acquisition deadline across Git and extraction", async () => {
@@ -308,7 +366,7 @@ while :; do sleep 1; done
     });
 
     await expect(
-      acquireGitSource(
+      syncGitSource(
         {
           kind: "git",
           repoUrl: "https://example.invalid/acme/kits.git",
@@ -319,11 +377,11 @@ while :; do sleep 1; done
         {
           cacheRoot: join(work, "cache"),
           tmpRoot: join(work, "tmp"),
-          limits: { maxFiles: 20_000, maxBytes: 256 * 1024 * 1024, timeoutMs: 1 },
+          limits: { ...DEFAULT_TREE_LIMITS, timeoutMs: 1 },
           process: git,
         },
       ),
-    ).rejects.toMatchObject({ code: "timeout" });
+    ).rejects.toMatchObject({ reason: "timeout" });
   });
 
   test("treats the Mirror rename as the success commit point", async () => {
@@ -336,7 +394,7 @@ while :; do sleep 1; done
       existsSync(join(destination, "capabilities", "skills", "arca-smoke", "SKILL.md")) ? 101 : 0;
     try {
       await expect(
-        acquireGitSource(
+        syncGitSource(
           {
             kind: "git",
             repoUrl: FIXTURE_REPOSITORY_URL,
@@ -347,11 +405,11 @@ while :; do sleep 1; done
           {
             cacheRoot: join(work, "cache"),
             tmpRoot: join(work, "tmp"),
-            limits: { maxFiles: 20_000, maxBytes: 256 * 1024 * 1024, timeoutMs: 100 },
+            limits: { ...DEFAULT_TREE_LIMITS, timeoutMs: 100 },
             process: localGitProcess(repo.root),
           },
         ),
-      ).resolves.toMatchObject({ resolvedCommit: repo.goodCommit });
+      ).resolves.toMatchObject({ origin: { resolvedCommit: repo.goodCommit } });
     } finally {
       Date.now = realNow;
     }
@@ -367,7 +425,7 @@ while :; do sleep 1; done
     });
 
     await expect(
-      acquireGitSource(
+      syncGitSource(
         {
           kind: "git",
           repoUrl: "https://token@example.invalid/acme/kits.git",
@@ -377,7 +435,7 @@ while :; do sleep 1; done
         join(work, "mirror"),
         { cacheRoot: join(work, "cache"), tmpRoot: join(work, "tmp"), process: git },
       ),
-    ).rejects.toMatchObject({ code: "invalid_locator" });
+    ).rejects.toMatchObject({ reason: "invalid_locator" });
     expect(calls).toBe(0);
   });
 
@@ -399,12 +457,12 @@ while :; do sleep 1; done
       "https://example.invalid/acme/kits#secret",
     ]) {
       await expect(
-        acquireGitSource({ ...base, repoUrl }, join(work, crypto.randomUUID()), {
+        syncGitSource({ ...base, repoUrl }, join(work, crypto.randomUUID()), {
           cacheRoot: join(work, "cache"),
           tmpRoot: join(work, "tmp"),
           process: git,
         }),
-      ).rejects.toMatchObject({ code: "invalid_locator" });
+      ).rejects.toMatchObject({ reason: "invalid_locator" });
     }
     expect(calls).toBe(0);
   });
@@ -425,7 +483,7 @@ while :; do sleep 1; done
     );
 
     await expect(
-      acquireGitSource(
+      syncGitSource(
         {
           kind: "git",
           repoUrl: "https://example.invalid/acme/kits.git",
@@ -435,7 +493,7 @@ while :; do sleep 1; done
         join(work, "mirror"),
         { cacheRoot, tmpRoot: join(work, "tmp"), process: git },
       ),
-    ).rejects.toMatchObject({ code: "auth_or_repository_unavailable" });
+    ).rejects.toMatchObject({ reason: "auth_or_repository_unavailable" });
     expect(existsSync(cache)).toBe(false);
   });
 
@@ -479,12 +537,12 @@ while :; do sleep 1; done
         return gitResult();
       });
       await expect(
-        acquireGitSource(locator, join(work, failure.code), {
+        syncGitSource(locator, join(work, failure.code), {
           cacheRoot: join(work, "cache", failure.code),
           tmpRoot: join(work, "tmp"),
           process: git,
         }),
-      ).rejects.toMatchObject({ code: failure.code });
+      ).rejects.toMatchObject({ reason: failure.code });
     }
   });
 
@@ -499,7 +557,7 @@ while :; do sleep 1; done
     });
 
     await expect(
-      acquireGitSource(
+      syncGitSource(
         {
           kind: "git",
           repoUrl: "https://example.invalid/acme/kits.git",
@@ -509,7 +567,7 @@ while :; do sleep 1; done
         join(work, "mirror"),
         { cacheRoot: join(work, "cache"), tmpRoot: join(work, "tmp"), process: git },
       ),
-    ).rejects.toMatchObject({ code: "unsafe_tree" });
+    ).rejects.toMatchObject({ reason: "unsafe_tree" });
     expect(existsSync(join(work, "mirror"))).toBe(false);
   });
 
@@ -523,7 +581,7 @@ while :; do sleep 1; done
     const git = testGitProcess(async (args, options) => {
       calls.push({ args, env: options?.env });
       if (args.includes("ls-tree")) {
-        return gitResult(`100644 blob ${blob}\tREADME.md\0`);
+        return gitResult(`100644 blob ${blob}\tcapabilities/skills/x/SKILL.md\0`);
       }
       if (args.includes("cat-file") && args.includes("--batch")) {
         return gitBatchResult(options?.stdin, () => new TextEncoder().encode("raw bytes\n"));
@@ -532,7 +590,7 @@ while :; do sleep 1; done
     });
 
     try {
-      await acquireGitSource(
+      await syncGitSource(
         {
           kind: "git",
           repoUrl: "https://example.invalid/acme/kits.git",
@@ -589,15 +647,14 @@ while :; do sleep 1; done
       return emptyTreeResult(args);
     });
 
-    await acquireGitSource(
+    await listGitSource(
       {
         kind: "git",
         repoUrl: "https://example.invalid/acme/kits.git",
         revision: { mode: "track", ref: "refs/heads/main" },
         subpath: "capabilities",
       },
-      join(work, "mirror"),
-      { cacheRoot: join(work, "cache"), tmpRoot: join(work, "tmp"), process: git },
+      { cacheRoot: join(work, "cache"), process: git },
     );
 
     const typeLookup = calls.find(
@@ -622,7 +679,7 @@ while :; do sleep 1; done
     process.env.HOME = daemonHome;
     try {
       await expect(
-        acquireGitSource(
+        syncGitSource(
           {
             kind: "git",
             repoUrl: "https://rewrite.invalid/repo",
@@ -636,7 +693,7 @@ while :; do sleep 1; done
             process: productionGitProcess(),
           },
         ),
-      ).rejects.toMatchObject({ code: "auth_or_repository_unavailable" });
+      ).rejects.toMatchObject({ reason: "auth_or_repository_unavailable" });
       expect(existsSync(join(work, "mirror"))).toBe(false);
     } finally {
       process.env.HOME = oldHome;
@@ -648,7 +705,7 @@ while :; do sleep 1; done
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
 
-    await acquireGitSource(
+    await syncGitSource(
       {
         kind: "git",
         repoUrl: FIXTURE_REPOSITORY_URL,
@@ -684,7 +741,7 @@ while :; do sleep 1; done
     roots.push(work);
     const destination = join(work, "mirror");
 
-    await acquireGitSource(
+    const record = await syncGitSource(
       {
         kind: "git",
         repoUrl: FIXTURE_REPOSITORY_URL,
@@ -705,16 +762,17 @@ while :; do sleep 1; done
     );
     expect(pointer).toContain(`marketplace_source: ${FIXTURE_REPOSITORY_URL}`);
     expect(pointer).toContain(`source_commit: ${commit}`);
-    expect(readProvenance(destination)?.resolvedCommit).toBe(commit);
+    expect(record?.origin).toMatchObject({ transport: "git", resolvedCommit: commit });
+    expect(record?.recipe.id).toBe("single-cli-marketplace");
   });
 
-  test("materializes the selected subpath as the Mirror root with modes and safe links", async () => {
+  test("materializes the selected subpath as the Mirror root with modes, dropping a directory link", async () => {
     const repo = fixtureRepository();
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
     const destination = join(work, "mirror");
 
-    const provenance = await acquireGitSource(
+    const record = await syncGitSource(
       {
         kind: "git",
         repoUrl: FIXTURE_REPOSITORY_URL,
@@ -733,22 +791,19 @@ while :; do sleep 1; done
       readFileSync(join(destination, "capabilities", "skills", "arca-smoke", "SKILL.md"), "utf8"),
     ).toContain("name: arca-smoke");
     expect(existsSync(join(destination, "nested"))).toBe(false);
-    expect(lstatSync(join(destination, "capabilities", "skills", "current")).isSymbolicLink()).toBe(
-      true,
-    );
+    expect(existsSync(join(destination, "capabilities", "skills", "current"))).toBe(false);
     expect(
       lstatSync(join(destination, "capabilities", "skills", "arca-smoke", "verify.sh")).mode &
         0o111,
     ).not.toBe(0);
-    expect(provenance).toMatchObject({
-      sha: repo.goodCommit,
+    expect(record?.origin).toMatchObject({
       requestedRevision: { mode: "track", ref: "refs/heads/main" },
       resolvedCommit: repo.goodCommit,
       subpath: "nested/personal-kit",
     });
   });
 
-  test("materializes committed bytes without export-ignore or export-subst transformations", async () => {
+  test("reads committed bytes without export-ignore or export-subst transformations", async () => {
     const repo = fixtureRepository();
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
@@ -763,25 +818,18 @@ while :; do sleep 1; done
     runGit(repo.root, "commit", "-m", "export attributes");
     const commit = runGit(repo.root, "rev-parse", "HEAD");
 
-    await acquireGitSource(
+    const listed = await listGitSource(
       {
         kind: "git",
         repoUrl: FIXTURE_REPOSITORY_URL,
         revision: { mode: "pin", commit },
         subpath: "nested/personal-kit",
       },
-      join(work, "mirror"),
-      {
-        cacheRoot: join(work, "cache"),
-        tmpRoot: join(work, "tmp"),
-        process: localGitProcess(repo.root),
-      },
+      { cacheRoot: join(work, "cache"), process: localGitProcess(repo.root) },
     );
 
-    expect(readFileSync(join(work, "mirror", "hidden.txt"), "utf8")).toBe(
-      "committed but export-ignored\n",
-    );
-    expect(readFileSync(join(work, "mirror", "literal.txt"), "utf8")).toBe("$Format:%H$\n");
+    expect(await listed.read("hidden.txt")).toBe("committed but export-ignored\n");
+    expect(await listed.read("literal.txt")).toBe("$Format:%H$\n");
   });
 
   test("rejects an unavailable subpath and an over-budget selected tree", async () => {
@@ -800,17 +848,17 @@ while :; do sleep 1; done
     };
 
     await expect(
-      acquireGitSource({ ...base, subpath: "missing" }, join(work, "missing"), options),
-    ).rejects.toMatchObject({ code: "invalid_subpath" });
+      syncGitSource({ ...base, subpath: "missing" }, join(work, "missing"), options),
+    ).rejects.toMatchObject({ reason: "invalid_subpath" });
     await expect(
-      acquireGitSource({ ...base, subpath: "nested/personal-kit" }, join(work, "limited"), {
+      syncGitSource({ ...base, subpath: "nested/personal-kit" }, join(work, "limited"), {
         ...options,
-        limits: { maxFiles: 20_000, maxBytes: 1, timeoutMs: 120_000 },
+        limits: { ...DEFAULT_TREE_LIMITS, maxBytes: 1 },
       }),
-    ).rejects.toMatchObject({ code: "budget_exceeded" });
+    ).rejects.toMatchObject({ reason: "budget_exceeded" });
     await expect(
-      acquireGitSource({ ...base, subpath: ".gitignore" }, join(work, "file-subpath"), options),
-    ).rejects.toMatchObject({ code: "invalid_subpath" });
+      syncGitSource({ ...base, subpath: ".gitignore" }, join(work, "file-subpath"), options),
+    ).rejects.toMatchObject({ reason: "invalid_subpath" });
   });
 
   test("atomically recreates an incomplete cache directory", async () => {
@@ -822,7 +870,7 @@ while :; do sleep 1; done
     mkdirSync(cache, { recursive: true });
     writeFileSync(join(cache, "interrupted"), "not a bare repository");
 
-    await acquireGitSource(
+    await syncGitSource(
       {
         kind: "git",
         repoUrl: FIXTURE_REPOSITORY_URL,
@@ -839,45 +887,36 @@ while :; do sleep 1; done
     expect(runGit(cache, "rev-parse", "--is-bare-repository")).toBe("true");
   });
 
-  test("rejects an escaping link and retains the last-good Mirror", async () => {
+  test("drops a link that escapes the selected tree instead of failing the Sync", async () => {
     const repo = fixtureRepository();
     const work = mkdtempSync(join(tmpdir(), "hive-git-work-"));
     roots.push(work);
     const destination = join(work, "mirror");
-    const options = {
-      cacheRoot: join(work, "cache"),
-      tmpRoot: join(work, "tmp"),
-      process: localGitProcess(repo.root),
-    };
-    const pinned = {
-      kind: "git" as const,
-      repoUrl: FIXTURE_REPOSITORY_URL,
-      revision: { mode: "pin" as const, commit: repo.goodCommit },
-      subpath: "nested/personal-kit",
-    };
-    const pinnedProvenance = await acquireGitSource(pinned, destination, options);
-    expect(pinnedProvenance.requestedRevision).toEqual({ mode: "pin", commit: repo.goodCommit });
-
-    symlinkSync("../../../../outside", join(repo.root, "nested", "personal-kit", "escape"));
+    symlinkSync(
+      "../../../../outside",
+      join(repo.root, "nested", "personal-kit", "capabilities", "skills", "escape"),
+    );
     runGit(repo.root, "add", ".");
     runGit(repo.root, "commit", "-m", "unsafe link");
+    const commit = runGit(repo.root, "rev-parse", "HEAD");
 
-    let thrown: unknown;
-    try {
-      await acquireGitSource(
-        {
-          ...pinned,
-          revision: { mode: "track", ref: "refs/heads/main" },
-        },
-        destination,
-        options,
-      );
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(GitAcquireError);
-    expect((thrown as GitAcquireError).code).toBe("unsafe_tree");
-    expect(readProvenance(destination)?.sha).toBe(repo.goodCommit);
+    const record = await syncGitSource(
+      {
+        kind: "git",
+        repoUrl: FIXTURE_REPOSITORY_URL,
+        revision: { mode: "pin", commit },
+        subpath: "nested/personal-kit",
+      },
+      destination,
+      {
+        cacheRoot: join(work, "cache"),
+        tmpRoot: join(work, "tmp"),
+        process: localGitProcess(repo.root),
+      },
+    );
+
+    expect(record?.origin).toMatchObject({ resolvedCommit: commit });
+    expect(existsSync(join(destination, "capabilities", "skills", "escape"))).toBe(false);
     expect(existsSync(join(destination, "capabilities", "skills", "arca-smoke", "SKILL.md"))).toBe(
       true,
     );

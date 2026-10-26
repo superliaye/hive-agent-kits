@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Source } from "@hive/contract";
 import { Cause, Effect, Exit } from "effect";
 import { SyncError } from "../effect/errors.ts";
-import { mirrorExists, readProvenance } from "../mirror.ts";
-import { type HttpFetch, parseGithubOrigin, syncSource } from "../sync.ts";
+import { readMirrorIdentity, readMirrorRecord } from "../mirror.ts";
+import { type HttpFetch, parseGithubOrigin, syncLocatorSource } from "../sync.ts";
 import { failSafeDeployTargets } from "../targets.ts";
 import { buildGzipTar, clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
@@ -45,14 +46,35 @@ function tarballResponse(sha: string): Response {
   return new Response(gz, { status: 200 });
 }
 
-// Sync one Source into mirrors/<id> using the shared tmp root.
+// Sync one GitHub Source through the memory-mode HTTP fixture into mirrors/<id>.
 function runOne(
   sourceId: string,
   origin: string,
   fetchImpl: HttpFetch,
 ): Effect.Effect<{ status: "synced" | "unchanged" }, SyncError> {
-  const targets = failSafeDeployTargets();
-  return syncSource(targets.mirrorRoot(sourceId), targets.kitTmpRoot(), origin, fetchImpl);
+  const source: Source = {
+    id: sourceId,
+    label: sourceId,
+    locator: {
+      kind: "git",
+      repoUrl: origin,
+      revision: { mode: "track", ref: "refs/heads/main" },
+      subpath: ".",
+    },
+    origin,
+    kind: "git",
+    active: true,
+    createdAt: 0,
+    rank: 0,
+  };
+  return syncLocatorSource(source, failSafeDeployTargets(), {
+    legacyGithubFixtureFetch: fetchImpl,
+  });
+}
+
+function syncedCommit(mirror: string): string | null {
+  const origin = readMirrorRecord(mirror)?.origin;
+  return origin?.transport === "tarball" ? origin.resolvedCommit : null;
 }
 
 describe("parseGithubOrigin", () => {
@@ -74,8 +96,8 @@ describe("parseGithubOrigin", () => {
   });
 });
 
-describe("syncSource", () => {
-  test("(a) resolves main sha and downloads BY FULL SHA, writes mirror+provenance", async () => {
+describe("GitHub tarball fixture sync", () => {
+  test("(a) resolves main sha and downloads BY FULL SHA, writes the Mirror and its record", async () => {
     const urls: string[] = [];
     const fetchImpl: HttpFetch = async (url) => {
       urls.push(url);
@@ -95,8 +117,8 @@ describe("syncSource", () => {
     expect(dl).toContain(SHA_A);
     expect(dl).not.toContain("/main");
 
-    expect(mirrorExists(mirror)).toBe(true);
-    expect(readProvenance(mirror)?.sha).toBe(SHA_A);
+    expect(syncedCommit(mirror)).toBe(SHA_A);
+    expect(readMirrorRecord(mirror)?.recipe.id).toBe("capability-kit");
     // Content landed under mirrors/<id>/capabilities/...
     expect(existsSync(join(mirror, "capabilities", "skills", "foo", "SKILL.md"))).toBe(true);
   });
@@ -116,36 +138,19 @@ describe("syncSource", () => {
     expect(existsSync(join(mirrorB, "capabilities", "skills", "foo", "SKILL.md"))).toBe(true);
   });
 
-  test("(parse error) a non-GitHub origin yields a typed parse SyncError (no throw)", async () => {
-    const fetchImpl: HttpFetch = async () => {
-      throw new Error("should not fetch");
-    };
-    const exit = await Effect.runPromiseExit(
-      runOne("src-x", "https://gitlab.com/owner/repo", fetchImpl),
-    );
-    expect(Exit.isFailure(exit)).toBe(true);
-    if (Exit.isFailure(exit)) {
-      const err = Cause.squash(exit.cause);
-      expect(err).toBeInstanceOf(SyncError);
-      expect((err as SyncError).reason).toBe("parse");
-    }
-  });
-
-  test("(b) unchanged short-circuits — no re-download at the same recorded sha", async () => {
-    let downloads = 0;
-    const fetchImpl: HttpFetch = async (url) => {
-      if (url.includes("api.github.com")) return commitsResponse(SHA_A);
-      downloads++;
-      return tarballResponse(SHA_A);
-    };
+  test("(b) re-syncing the same commit reports unchanged and keeps the Mirror identity", async () => {
+    const fetchImpl: HttpFetch = async (url) =>
+      url.includes("api.github.com") ? commitsResponse(SHA_A) : tarballResponse(SHA_A);
+    const mirror = failSafeDeployTargets().mirrorRoot("src-a");
 
     const first = await Effect.runPromise(runOne("src-a", ORIGIN, fetchImpl));
-    expect(first.status).toBe("synced");
-    expect(downloads).toBe(1);
-
+    const identity = readMirrorIdentity(mirror);
     const second = await Effect.runPromise(runOne("src-a", ORIGIN, fetchImpl));
+
+    expect(first.status).toBe("synced");
     expect(second.status).toBe("unchanged");
-    expect(downloads).toBe(1); // NOT re-downloaded
+    expect(identity).not.toBeNull();
+    expect(readMirrorIdentity(mirror)).toBe(identity);
   });
 
   test("(c) offline — fetch throws -> SyncError.reason offline, prior mirror intact", async () => {
@@ -154,7 +159,7 @@ describe("syncSource", () => {
     const seed: HttpFetch = async (url) =>
       url.includes("api.github.com") ? commitsResponse(SHA_A) : tarballResponse(SHA_A);
     await Effect.runPromise(runOne("src-a", ORIGIN, seed));
-    expect(mirrorExists(mirror)).toBe(true);
+    expect(syncedCommit(mirror)).toBe(SHA_A);
 
     const offline: HttpFetch = async () => {
       throw new Error("ENOTFOUND");
@@ -166,8 +171,7 @@ describe("syncSource", () => {
       expect(err).toBeInstanceOf(SyncError);
       expect((err as SyncError).reason).toBe("offline");
     }
-    expect(mirrorExists(mirror)).toBe(true);
-    expect(readProvenance(mirror)?.sha).toBe(SHA_A);
+    expect(syncedCommit(mirror)).toBe(SHA_A);
   });
 
   test("(offline-isolation) one Source offline keeps the other's last-good + freshness", async () => {
@@ -195,8 +199,8 @@ describe("syncSource", () => {
     expect(outcomeB.status).toBe("synced");
 
     // A keeps last-good at SHA_A; B is at SHA_B — independent freshness.
-    expect(readProvenance(mirrorA)?.sha).toBe(SHA_A);
-    expect(readProvenance(mirrorB)?.sha).toBe(SHA_B);
+    expect(syncedCommit(mirrorA)).toBe(SHA_A);
+    expect(syncedCommit(mirrorB)).toBe(SHA_B);
   });
 
   test("(d) rate_limited — 403 + x-ratelimit-reset header", async () => {
@@ -235,8 +239,7 @@ describe("syncSource", () => {
       const err = Cause.squash(exit.cause);
       expect(err).toBeInstanceOf(SyncError);
     }
-    expect(mirrorExists(mirror)).toBe(true);
-    expect(readProvenance(mirror)?.sha).toBe(SHA_A);
+    expect(syncedCommit(mirror)).toBe(SHA_A);
   });
 
   test("(e2) corrupt tarball -> parse SyncError, prior mirror intact", async () => {
@@ -258,7 +261,7 @@ describe("syncSource", () => {
       expect(err).toBeInstanceOf(SyncError);
       expect((err as SyncError).reason).toBe("parse");
     }
-    expect(readProvenance(mirror)?.sha).toBe(SHA_A);
+    expect(syncedCommit(mirror)).toBe(SHA_A);
   });
 
   test("(f) a successful sync leaves another acquisition's temp dir untouched", async () => {
@@ -274,7 +277,6 @@ describe("syncSource", () => {
 
     expect(outcome.status).toBe("synced");
     expect(existsSync(stale)).toBe(true);
-    expect(mirrorExists(mirror)).toBe(true);
     expect(existsSync(join(mirror, "capabilities", "skills", "foo", "SKILL.md"))).toBe(true);
   });
 });

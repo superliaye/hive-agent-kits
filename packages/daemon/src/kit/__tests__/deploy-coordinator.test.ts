@@ -12,9 +12,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { DeployTarget } from "@hive/contract";
+import type { DeployTarget, Source } from "@hive/contract";
+import { Effect } from "effect";
 import { withCooperativeFileLock } from "../../lib/durable-file.ts";
-import { materializeMarketplacePlugins } from "../acquisition/marketplace.ts";
 import { mirrorContentSha } from "../content-sha.ts";
 import type { DeployFsExec } from "../deploy/adapter.ts";
 import { hashSkillFiles } from "../deploy/artifact-hash.ts";
@@ -41,9 +41,10 @@ import {
 import type { DeploymentSnapshot, DeployPlan } from "../deploy-plan.ts";
 import { openDeploymentStateStore } from "../deployment-state.ts";
 import { mergeLedger, readLedger } from "../ledger.ts";
-import { readMirrorIdentity } from "../overview.ts";
+import { readMirrorIdentity } from "../mirror.ts";
+import { syncLocatorSource } from "../sync.ts";
 import { failSafeDeployTargets } from "../targets.ts";
-import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
+import { clearHomeEnv, fakeGitProcess, redirectHomeEnv } from "./helpers.ts";
 
 const roots: string[] = [];
 
@@ -85,7 +86,9 @@ function plan(
 
 function snapshot(deployPlan = plan()): DeploymentSnapshot {
   return {
-    sources: [{ id: "source-a", label: "Source A", kind: "git", active: true, rank: 1 }],
+    sources: [
+      { id: "source-a", label: "Source A", kind: "git", active: true, rank: 1, recipe: null },
+    ],
     sourceRegistryRevision: deployPlan.sourceRegistryRevision,
     mirrors: deployPlan.mirrors,
     catalog: { entries: [], presets: [], problems: [] },
@@ -1040,18 +1043,36 @@ plugin
     ]);
   });
 
-  test("stages a managed marketplace plugin as one task per declared target", () => {
+  test("stages a managed marketplace plugin as one task per declared target", async () => {
     const root = mkdtempSync(join(tmpdir(), "deploy-marketplace-stage-"));
     roots.push(root);
     redirectHomeEnv(root);
     const targets = failSafeDeployTargets();
     const mirror = targets.mirrorRoot("source-a");
-    mkdirSync(join(mirror, ".claude-plugin"), { recursive: true });
-    writeFileSync(
-      join(mirror, ".claude-plugin", "marketplace.json"),
-      JSON.stringify({ name: "yestack", plugins: [{ name: "ye", source: "./plugins/ye" }] }),
-    );
-    materializeMarketplacePlugins(mirror, "https://github.com/superliaye/yestack", "c".repeat(40));
+    const repoUrl = "https://github.com/superliaye/yestack";
+    const source: Source = {
+      id: "source-a",
+      label: "yestack",
+      locator: {
+        kind: "git",
+        repoUrl,
+        revision: { mode: "track", ref: "refs/heads/main" },
+        subpath: ".",
+      },
+      origin: repoUrl,
+      kind: "git",
+      active: true,
+      createdAt: 0,
+      rank: 1,
+    };
+    const marketplace = JSON.stringify({
+      name: "yestack",
+      plugins: [{ name: "ye", source: "./plugins/ye" }],
+    });
+    const { process: gitProcess } = fakeGitProcess([
+      { path: ".claude-plugin/marketplace.json", content: marketplace },
+    ]);
+    await Effect.runPromise(syncLocatorSource(source, targets, { gitProcess }));
     const contentSha = mirrorContentSha(mirror, "plugin", "ye");
     if (!contentSha) throw new Error("missing plugin ContentSha");
     const action = (target: DeployTarget): DeployPlan["actions"][number] => ({

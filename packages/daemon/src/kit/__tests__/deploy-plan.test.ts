@@ -9,7 +9,7 @@ const bundle = (name: string): CapabilityKey => ({ kind: "bundle", name });
 function snapshot(overrides: Partial<DeploymentSnapshot> = {}): DeploymentSnapshot {
   const key = skill("alpha");
   return {
-    sources: [{ id: "source-a", label: "A", kind: "git", active: true, rank: 7 }],
+    sources: [{ id: "source-a", label: "A", kind: "git", active: true, rank: 7, recipe: null }],
     sourceRegistryRevision: 4,
     mirrors: [{ sourceId: "source-a", precedence: 7, identity: "mirror-a" }],
     catalog: {

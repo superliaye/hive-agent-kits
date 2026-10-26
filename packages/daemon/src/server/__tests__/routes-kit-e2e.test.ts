@@ -491,6 +491,7 @@ describe("server routes — multi-Source e2e (add → deploy → merge/shadow �
         kind: "git",
         active: true,
         rank: 0,
+        recipe: { id: "capability-kit", label: "Capability kit", unit: "pick" },
       });
       expect(JSON.stringify(initial.sources)).not.toContain("repoUrl");
       expect(

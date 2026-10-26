@@ -49,7 +49,7 @@ function skill(name: string, desired: "on" | "off"): OverviewRow {
 function overview(revision = 7): DeploymentOverview {
   const rows = [skill("alpha", "on"), skill("beta", "off")];
   return {
-    sources: [{ id: "src", label: "Arca", kind: "git", active: true, rank: 0 }],
+    sources: [{ id: "src", label: "Arca", kind: "git", active: true, rank: 0, recipe: null }],
     sourceRegistryRevision: 1,
     mirrors: [{ sourceId: "src", precedence: 0, identity: "abc" }],
     selectionRevision: revision,

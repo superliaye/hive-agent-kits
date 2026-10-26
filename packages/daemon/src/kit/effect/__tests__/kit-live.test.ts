@@ -10,7 +10,7 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import { SourceRegistry, SourceRegistryLive } from "../../../sources/effect/sources-live.ts";
 import { buildGzipTar, clearHomeEnv, redirectHomeEnv } from "../../__tests__/helpers.ts";
 import { createDeploymentMutationCoordinator, PlanStaleError } from "../../deploy-coordinator.ts";
-import { mirrorExists } from "../../mirror.ts";
+import { readMirrorRecord } from "../../mirror.ts";
 import type { HttpFetch } from "../../sync.ts";
 import { failSafeDeployTargets } from "../../targets.ts";
 import { Kit, KitLive } from "../kit-live.ts";
@@ -164,7 +164,7 @@ describe("Kit.sync — per-Source", () => {
 
     const targets = failSafeDeployTargets();
     for (const s of registry.currentSources()) {
-      expect(mirrorExists(targets.mirrorRoot(s.id))).toBe(true);
+      expect(readMirrorRecord(targets.mirrorRoot(s.id))?.recipe.id).toBe("capability-kit");
     }
 
     const state = kit.state();
@@ -243,12 +243,11 @@ describe("Kit launch-sync ordering with a file-mode local Starter seed", () => {
     expect(result.sources[0]?.status).toBe("synced");
 
     const mirror = failSafeDeployTargets().mirrorRoot("starter");
-    expect(mirrorExists(mirror)).toBe(true);
-    // The bundled Starter skill landed; NO provenance file was written.
+    // The bundled Starter skill landed under a bundled record.
     expect(
       existsSync(join(mirror, "capabilities", "skills", "summarize-changes", "SKILL.md")),
     ).toBe(true);
-    expect(existsSync(join(mirror, ".hive-mirror.json"))).toBe(false);
+    expect(readMirrorRecord(mirror)?.origin).toEqual({ transport: "bundled" });
     expect(existsSync(join(mirror, "presets", "starter.yaml"))).toBe(true);
 
     // Catalog lists the Starter's capabilities; sync-status is "local".
@@ -309,7 +308,14 @@ describe("Kit ↔ SourceRegistry shared store ( wiring invariant)", () => {
     expect(before.sourceRegistryRevision).toBe(0);
     expect(before.selectionRevision).toBe(1);
     expect(before.sources).toEqual([
-      { id: "src-0", label: "src-0", kind: "git", active: true, rank: 0 },
+      {
+        id: "src-0",
+        label: "src-0",
+        kind: "git",
+        active: true,
+        rank: 0,
+        recipe: { id: "capability-kit", label: "Capability kit", unit: "pick" },
+      },
     ]);
     expect(JSON.stringify(before.sources)).not.toContain("repoUrl");
     expect(before.mirrors).toHaveLength(1);
@@ -368,6 +374,7 @@ describe("Kit ↔ SourceRegistry shared store ( wiring invariant)", () => {
         kind: "local",
         active: true,
         rank: 1,
+        recipe: null,
       },
     ]);
     expect(JSON.stringify(overview)).not.toContain(rawPath);

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   chmodSync,
   cpSync,
@@ -7,7 +7,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readlinkSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -15,14 +14,24 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
+import type { Source, SourceLocator } from "@hive/contract";
+import { Effect } from "effect";
 import { type GitProcess, GitProcessFailure } from "../acquisition/git-process.ts";
+import { DEFAULT_TREE_LIMITS, type TreeLimits } from "../acquisition/tree-guard.ts";
 import {
-  acquireWorkingTree,
   canonicalizeWorkingTreeLocator,
   WorkingTreeAcquireError,
+  workingTreeSnapshot,
 } from "../acquisition/working-tree.ts";
+import type { SyncError } from "../effect/errors.ts";
+import { commitMirror, type MirrorRecord, materialize, readMirrorRecord } from "../mirror.ts";
+import { recipeTree, recognizeSource } from "../recipes/recipe.ts";
+import { syncLocatorSource } from "../sync.ts";
+import { failSafeDeployTargets } from "../targets.ts";
+import { clearHomeEnv, redirectHomeEnv } from "./helpers.ts";
 
 const roots: string[] = [];
+type WorkingTreeLocator = Extract<SourceLocator, { kind: "working-tree" }>;
 
 function runGit(cwd: string, ...args: string[]): string {
   const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
@@ -90,67 +99,117 @@ function workRoot(): string {
   return root;
 }
 
-async function expectCode(work: () => Promise<unknown>, code: WorkingTreeAcquireError["code"]) {
-  let thrown: unknown;
-  try {
-    await work();
-  } catch (error) {
-    thrown = error;
-  }
-  expect(thrown).toBeInstanceOf(WorkingTreeAcquireError);
-  expect((thrown as WorkingTreeAcquireError).code).toBe(code);
-}
+beforeEach(() => {
+  const home = mkdtempSync(join(tmpdir(), "hive-working-home-"));
+  roots.push(home);
+  redirectHomeEnv(home);
+});
 
 afterEach(() => {
+  clearHomeEnv();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+// Syncs the working tree as Source `id` through the real Sync path and returns
+// the Mirror it committed.
+async function syncWorkingTree(
+  locator: WorkingTreeLocator,
+  id: string,
+  options: { allowedRoots: readonly string[]; process?: GitProcess },
+): Promise<{ mirror: string; record: MirrorRecord | null }> {
+  const source: Source = {
+    id,
+    label: id,
+    locator,
+    origin: "local:working-tree",
+    kind: "local",
+    active: true,
+    createdAt: 0,
+    rank: 0,
+  };
+  const targets = failSafeDeployTargets();
+  await Effect.runPromise(
+    syncLocatorSource(source, targets, {
+      workingTreeRoots: options.allowedRoots,
+      ...(options.process ? { gitProcess: options.process } : {}),
+    }),
+  );
+  const mirror = targets.mirrorRoot(id);
+  return { mirror, record: readMirrorRecord(mirror) };
+}
+
+// One capture with explicit limits: no retry, so a budget failure surfaces.
+function captureWithLimits(
+  locator: WorkingTreeLocator,
+  allowedRoots: readonly string[],
+  limits: TreeLimits,
+  process?: GitProcess,
+): Promise<unknown> {
+  const targets = failSafeDeployTargets();
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const snapshot = yield* workingTreeSnapshot(locator, {
+          allowedRoots,
+          limits,
+          ...(process ? { process } : {}),
+        });
+        const recognition = yield* recognizeSource(recipeTree(snapshot));
+        const staged = yield* materialize(snapshot, recognition, targets.kitTmpRoot(), limits);
+        yield* snapshot.confirm();
+        return yield* commitMirror(targets.mirrorRoot("limited"), staged);
+      }),
+    ),
+  );
+}
+
+async function expectReason(work: () => Promise<unknown>, reason: SyncError["reason"]) {
+  await expect(work()).rejects.toMatchObject({ reason });
+}
 
 describe("working-tree Source acquisition", () => {
   test("snapshots tracked and non-ignored untracked files below the selected subpath", async () => {
     const repo = repository();
-    const work = workRoot();
-    const destination = join(work, "mirror");
 
-    const provenance = await acquireWorkingTree(
+    const { mirror, record } = await syncWorkingTree(
       { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      destination,
-      { allowedRoots: [repo], tmpRoot: join(work, "tmp") },
+      "wt",
+      { allowedRoots: [repo] },
     );
 
     expect(
-      readFileSync(join(destination, "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
+      readFileSync(join(mirror, "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
     ).toContain("name: tracked");
     expect(
-      readFileSync(join(destination, "capabilities", "skills", "untracked", "SKILL.md"), "utf8"),
+      readFileSync(join(mirror, "capabilities", "skills", "untracked", "SKILL.md"), "utf8"),
     ).toContain("name: untracked");
-    expect(existsSync(join(destination, "capabilities", "skills", "ignored"))).toBe(false);
-    expect(existsSync(join(destination, "nested"))).toBe(false);
-    expect(existsSync(join(destination, "ignored.txt"))).toBe(false);
-    expect(provenance.transport).toBe("working-tree");
-    expect(provenance.dirty).toBe(true);
+    expect(existsSync(join(mirror, "capabilities", "skills", "ignored"))).toBe(false);
+    expect(existsSync(join(mirror, "nested"))).toBe(false);
+    expect(existsSync(join(mirror, "ignored.txt"))).toBe(false);
+    expect(record?.origin).toMatchObject({
+      transport: "working-tree",
+      subpath: "nested/kit",
+      dirty: true,
+    });
   });
 
   test("treats a stable tracked deletion as absent content", async () => {
     const repo = repository();
-    const work = workRoot();
     const deleted = join(repo, "nested", "kit", "capabilities", "skills", "tracked", "bytes.bin");
     rmSync(deleted);
 
-    const provenance = await acquireWorkingTree(
+    const { mirror, record } = await syncWorkingTree(
       { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      join(work, "mirror"),
-      { allowedRoots: [repo], tmpRoot: join(work, "tmp") },
+      "wt",
+      { allowedRoots: [repo] },
     );
 
-    expect(existsSync(join(work, "mirror", "capabilities", "skills", "tracked", "bytes.bin"))).toBe(
-      false,
-    );
-    expect(provenance.dirty).toBe(true);
+    expect(existsSync(join(mirror, "capabilities", "skills", "tracked", "bytes.bin"))).toBe(false);
+    expect(record?.origin).toMatchObject({ dirty: true });
   });
 
   test("retries when a tracked file is present except during deleted-path enumeration", async () => {
     const repo = repository();
-    const work = workRoot();
     const source = join(repo, "nested", "kit", "capabilities", "skills", "tracked", "bytes.bin");
     const held = `${source}.held`;
     const local = localGitProcess();
@@ -170,15 +229,13 @@ describe("working-tree Source acquisition", () => {
       },
     };
 
-    await acquireWorkingTree(
+    const { mirror } = await syncWorkingTree(
       { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      join(work, "mirror"),
-      { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
+      "wt",
+      { allowedRoots: [repo], process },
     );
 
-    expect(existsSync(join(work, "mirror", "capabilities", "skills", "tracked", "bytes.bin"))).toBe(
-      true,
-    );
+    expect(existsSync(join(mirror, "capabilities", "skills", "tracked", "bytes.bin"))).toBe(true);
   });
 
   test("accepts a canonical allowlist root and rejects a repository outside it", async () => {
@@ -190,64 +247,52 @@ describe("working-tree Source acquisition", () => {
     runGit(initialized, "clone", "--local", initialized, repo);
     const alias = join(parent, "allowed-alias");
     symlinkSync(join(parent, "allowed"), alias);
+    const locator = { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" } as const;
 
-    await acquireWorkingTree(
-      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      join(parent, "mirror"),
-      { allowedRoots: [alias], tmpRoot: join(parent, "tmp") },
-    );
-    await acquireWorkingTree(
-      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      join(parent, "filesystem-root-mirror"),
-      { allowedRoots: [sep], tmpRoot: join(parent, "tmp") },
-    );
-    await expectCode(
-      () =>
-        acquireWorkingTree(
-          { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-          join(parent, "outside-mirror"),
-          { allowedRoots: [join(parent, "other")], tmpRoot: join(parent, "tmp") },
-        ),
+    await syncWorkingTree(locator, "aliased", { allowedRoots: [alias] });
+    await syncWorkingTree(locator, "filesystem-root", { allowedRoots: [sep] });
+    await expectReason(
+      () => syncWorkingTree(locator, "outside", { allowedRoots: [join(parent, "other")] }),
       "working_tree_not_allowed",
     );
-    await expectCode(
-      () =>
-        canonicalizeWorkingTreeLocator(
-          { kind: "working-tree", repoRoot: join(repo, "nested"), subpath: "kit" },
-          { allowedRoots: [repo] },
-        ),
-      "working_tree_not_allowed",
-    );
+    let thrown: unknown;
+    try {
+      await canonicalizeWorkingTreeLocator(
+        { kind: "working-tree", repoRoot: join(repo, "nested"), subpath: "kit" },
+        { allowedRoots: [repo] },
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(WorkingTreeAcquireError);
+    expect((thrown as WorkingTreeAcquireError).code).toBe("working_tree_not_allowed");
   });
 
   test("rejects a Git top-level not owned by the Daemon uid", async () => {
-    const work = workRoot();
     const process: GitProcess = {
       run: async (args) => {
         if (args.includes("--show-toplevel")) return gitResult("/tmp\n");
         throw new Error("unexpected Git command");
       },
     };
-    await expectCode(
+    await expectReason(
       () =>
-        acquireWorkingTree(
-          { kind: "working-tree", repoRoot: "/tmp", subpath: "." },
-          join(work, "mirror"),
-          { allowedRoots: ["/tmp"], tmpRoot: join(work, "tmp"), process },
-        ),
+        syncWorkingTree({ kind: "working-tree", repoRoot: "/tmp", subpath: "." }, "wt", {
+          allowedRoots: ["/tmp"],
+          process,
+        }),
       "working_tree_not_allowed",
     );
   });
 
   test("rejects locator roots that are not the canonical Git top-level", async () => {
     const repo = repository();
-    const work = workRoot();
-    await expectCode(
+    await expectReason(
       () =>
-        acquireWorkingTree(
+        syncWorkingTree(
           { kind: "working-tree", repoRoot: join(repo, "nested"), subpath: "kit" },
-          join(work, "mirror"),
-          { allowedRoots: [repo], tmpRoot: join(work, "tmp") },
+          "wt",
+          { allowedRoots: [repo] },
         ),
       "working_tree_not_allowed",
     );
@@ -261,62 +306,49 @@ describe("working-tree Source acquisition", () => {
       run: async (args) =>
         args.includes("--show-toplevel") ? gitResult(`${topLevel}\n`) : gitResult(),
     };
-    await expectCode(
+    await expectReason(
       () =>
-        acquireWorkingTree(
-          { kind: "working-tree", repoRoot: topLevel, subpath: "." },
-          join(work, "mirror"),
-          { allowedRoots: [work], tmpRoot: join(work, "tmp"), process },
-        ),
+        syncWorkingTree({ kind: "working-tree", repoRoot: topLevel, subpath: "." }, "wt", {
+          allowedRoots: [work],
+          process,
+        }),
       "working_tree_not_allowed",
     );
   });
 
-  test("preserves file bytes, executable modes, safe links, and byte identity", async () => {
+  test("preserves file bytes and executable modes, dereferences file links, and moves the identity", async () => {
     const repo = repository();
-    const work = workRoot();
     const skills = join(repo, "nested", "kit", "capabilities", "skills");
     symlinkSync("tracked/SKILL.md", join(skills, "skill-link"));
-    const destination = join(work, "mirror");
+    const locator = { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" } as const;
 
-    const first = await acquireWorkingTree(
-      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      destination,
-      { allowedRoots: [repo], tmpRoot: join(work, "tmp") },
+    const first = await syncWorkingTree(locator, "wt", { allowedRoots: [repo] });
+    const mirror = first.mirror;
+    expect(readFileSync(join(mirror, "capabilities", "skills", "tracked", "bytes.bin"))).toEqual(
+      Buffer.from([0, 255, 17, 128]),
     );
     expect(
-      readFileSync(join(destination, "capabilities", "skills", "tracked", "bytes.bin")),
-    ).toEqual(Buffer.from([0, 255, 17, 128]));
-    expect(
-      lstatSync(join(destination, "capabilities", "skills", "tracked", "SKILL.md")).mode & 0o777,
+      lstatSync(join(mirror, "capabilities", "skills", "tracked", "SKILL.md")).mode & 0o777,
     ).toBe(0o755);
-    expect(readlinkSync(join(destination, "capabilities", "skills", "skill-link"))).toBe(
-      "tracked/SKILL.md",
-    );
+    const link = join(mirror, "capabilities", "skills", "skill-link");
+    expect(lstatSync(link).isFile()).toBe(true);
+    expect(lstatSync(link).mode & 0o777).toBe(0o755);
+    expect(readFileSync(link, "utf8")).toContain("name: tracked");
 
     writeFileSync(join(skills, "tracked", "bytes.bin"), Buffer.from([0, 255, 18, 128]));
-    const second = await acquireWorkingTree(
-      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      destination,
-      { allowedRoots: [repo], tmpRoot: join(work, "tmp") },
-    );
-    expect(second.treeIdentity).not.toBe(first.treeIdentity);
+    const second = await syncWorkingTree(locator, "wt", { allowedRoots: [repo] });
+    expect(second.record?.contentDigest).not.toBe(first.record?.contentDigest);
   });
 
-  test("rejects selected roots and links that resolve outside the selected tree", async () => {
+  test("rejects a selected root outside the tree and drops links that resolve outside it", async () => {
     const repo = repository();
-    const work = workRoot();
     const outside = workRoot();
     const selected = join(repo, "nested", "kit");
     runGit(repo, "mv", "nested/kit", "nested/real-kit");
     symlinkSync(outside, selected);
-    await expectCode(
-      () =>
-        acquireWorkingTree(
-          { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-          join(work, "selected-root-mirror"),
-          { allowedRoots: [repo], tmpRoot: join(work, "tmp") },
-        ),
+    const locator = { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" } as const;
+    await expectReason(
+      () => syncWorkingTree(locator, "selected-root", { allowedRoots: [repo] }),
       "invalid_subpath",
     );
 
@@ -332,41 +364,29 @@ describe("working-tree Source acquisition", () => {
     symlinkSync("/etc/passwd", join(skills, "ignored-bridge"));
     symlinkSync("ignored-bridge", join(skills, "indirect-escape"));
     runGit(repo, "add", "nested/kit/capabilities/skills/indirect-escape");
-    await expectCode(
-      () =>
-        acquireWorkingTree(
-          { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-          join(work, "link-mirror"),
-          { allowedRoots: [repo], tmpRoot: join(work, "tmp") },
-        ),
-      "unsafe_tree",
-    );
+    const { mirror } = await syncWorkingTree(locator, "links", { allowedRoots: [repo] });
+    expect(existsSync(join(mirror, "capabilities", "skills", "indirect-escape"))).toBe(false);
+    expect(existsSync(join(mirror, "capabilities", "skills", "ignored-bridge"))).toBe(false);
+    expect(existsSync(join(mirror, "capabilities", "skills", "tracked", "SKILL.md"))).toBe(true);
   });
 
   test("enforces shared file, byte, and capture-time budgets", async () => {
     const repo = repository();
-    const work = workRoot();
-    const request = (
-      limits: { maxFiles: number; maxBytes: number; timeoutMs: number },
-      process?: GitProcess,
-    ) =>
-      acquireWorkingTree(
-        { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-        join(work, `mirror-${limits.maxFiles}-${limits.maxBytes}-${limits.timeoutMs}`),
-        { allowedRoots: [repo], tmpRoot: join(work, "tmp"), limits, process },
-      );
-    await expectCode(
-      () => request({ maxFiles: 1, maxBytes: 1024, timeoutMs: 10_000 }),
+    const locator = { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" } as const;
+    await expectReason(
+      () => captureWithLimits(locator, [repo], { ...DEFAULT_TREE_LIMITS, maxFiles: 1 }),
       "budget_exceeded",
     );
-    await expectCode(
-      () => request({ maxFiles: 100, maxBytes: 1, timeoutMs: 10_000 }),
+    await expectReason(
+      () => captureWithLimits(locator, [repo], { ...DEFAULT_TREE_LIMITS, maxBytes: 1 }),
       "budget_exceeded",
     );
-    await expectCode(
+    await expectReason(
       () =>
-        request(
-          { maxFiles: 100, maxBytes: 1024, timeoutMs: 1 },
+        captureWithLimits(
+          locator,
+          [repo],
+          { ...DEFAULT_TREE_LIMITS, timeoutMs: 1 },
           localGitProcess(async () => {
             await Bun.sleep(10);
           }),
@@ -382,7 +402,6 @@ describe("working-tree Source acquisition", () => {
     ];
     for (const fixture of fixtures) {
       const repo = repository();
-      const work = workRoot();
       const skills = join(repo, "nested", "kit", "capabilities", "skills");
       const source = join(skills, ...fixture.path);
       if (fixture.before) writeFileSync(source, fixture.before);
@@ -393,25 +412,21 @@ describe("working-tree Source acquisition", () => {
         if (statusCalls === 2) writeFileSync(source, "changed during capture\n");
       });
 
-      await acquireWorkingTree(
+      const { mirror } = await syncWorkingTree(
         { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-        join(work, fixture.path[0]),
-        { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
+        fixture.path[0],
+        { allowedRoots: [repo], process },
       );
 
-      expect(
-        readFileSync(
-          join(work, fixture.path[0], "capabilities", "skills", ...fixture.path),
-          "utf8",
-        ),
-      ).toBe("changed during capture\n");
+      expect(readFileSync(join(mirror, "capabilities", "skills", ...fixture.path), "utf8")).toBe(
+        "changed during capture\n",
+      );
       expect(statusCalls).toBe(4);
     }
   });
 
   test("retries once when the source changes, then fails if it changes again", async () => {
     const repo = repository();
-    const work = workRoot();
     let statusCalls = 0;
     let mutations = 0;
     const mutateAfterListing = (repeat: boolean) =>
@@ -425,30 +440,28 @@ describe("working-tree Source acquisition", () => {
         runGit(repo, "add", path);
         runGit(repo, "commit", "-m", `mutation ${mutations}`);
       });
+    const locator = { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" } as const;
 
-    const retried = await acquireWorkingTree(
-      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      join(work, "retried"),
-      { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process: mutateAfterListing(false) },
-    );
-    expect(retried.sha).toMatch(/^[0-9a-f]{40}$/);
+    const retried = await syncWorkingTree(locator, "retried", {
+      allowedRoots: [repo],
+      process: mutateAfterListing(false),
+    });
+    expect(retried.record?.origin).toMatchObject({ head: runGit(repo, "rev-parse", "HEAD") });
 
     statusCalls = 0;
     mutations = 100;
-    await expectCode(
+    await expectReason(
       () =>
-        acquireWorkingTree(
-          { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-          join(work, "changed"),
-          { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process: mutateAfterListing(true) },
-        ),
+        syncWorkingTree(locator, "changed", {
+          allowedRoots: [repo],
+          process: mutateAfterListing(true),
+        }),
       "working_tree_changed",
     );
   });
 
   test("retries a file-to-symlink swap instead of reading through the replacement", async () => {
     const repo = repository();
-    const work = workRoot();
     const source = join(repo, "nested", "kit", "capabilities", "skills", "tracked", "SKILL.md");
     const held = `${source}.held`;
     let statusCalls = 0;
@@ -464,13 +477,13 @@ describe("working-tree Source acquisition", () => {
       }
     });
 
-    await acquireWorkingTree(
+    const { mirror } = await syncWorkingTree(
       { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      join(work, "mirror"),
-      { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
+      "wt",
+      { allowedRoots: [repo], process },
     );
     expect(
-      readFileSync(join(work, "mirror", "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
+      readFileSync(join(mirror, "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
     ).toContain("name: tracked");
     expect(statusCalls).toBe(4);
   });
@@ -497,24 +510,28 @@ describe("working-tree Source acquisition", () => {
       }
     });
 
-    await acquireWorkingTree(
+    const { mirror } = await syncWorkingTree(
       { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-      join(work, "mirror"),
-      { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
+      "wt",
+      { allowedRoots: [repo], process },
     );
     expect(
-      readFileSync(join(work, "mirror", "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
+      readFileSync(join(mirror, "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
     ).toContain("name: tracked");
     expect(statusCalls).toBe(4);
   });
 
-  test("rejects a same-path parent directory inode replacement during capture", async () => {
+  test("re-captures from a fresh snapshot after a same-path parent directory replacement", async () => {
     const repo = repository();
     const work = workRoot();
     const parent = join(repo, "nested", "kit", "capabilities", "skills", "tracked");
     const held = join(work, "held");
     const replacement = join(work, "replacement");
     cpSync(parent, replacement, { recursive: true });
+    writeFileSync(
+      join(replacement, "SKILL.md"),
+      "---\nname: tracked\ndescription: replaced\n---\n",
+    );
     let statusCalls = 0;
     const process = localGitProcess((args) => {
       if (!args.includes("status")) return;
@@ -525,14 +542,14 @@ describe("working-tree Source acquisition", () => {
       }
     });
 
-    await expectCode(
-      () =>
-        acquireWorkingTree(
-          { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
-          join(work, "mirror"),
-          { allowedRoots: [repo], tmpRoot: join(work, "tmp"), process },
-        ),
-      "working_tree_changed",
+    const { mirror } = await syncWorkingTree(
+      { kind: "working-tree", repoRoot: repo, subpath: "nested/kit" },
+      "wt",
+      { allowedRoots: [repo], process },
     );
+    expect(
+      readFileSync(join(mirror, "capabilities", "skills", "tracked", "SKILL.md"), "utf8"),
+    ).toContain("description: replaced");
+    expect(statusCalls).toBe(4);
   });
 });

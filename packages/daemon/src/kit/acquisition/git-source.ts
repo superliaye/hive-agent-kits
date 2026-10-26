@@ -1,55 +1,42 @@
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  renameSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { SourceLocator } from "@hive/contract";
-import { commitStagedMirror, createOwnedMirrorStage } from "../mirror.ts";
-import type { MirrorProvenance } from "../types.ts";
+import { Effect, Exit, type Scope } from "effect";
+import { log } from "../../lib/log.ts";
+import type { SyncError } from "../effect/errors.ts";
 import {
   type GitProcess,
   GitProcessFailure,
   type GitProcessResult,
   productionGitProcess,
 } from "./git-process.ts";
-import { materializeMarketplacePlugins } from "./marketplace.ts";
-import { DEFAULT_TREE_LIMITS, type TreeLimits } from "./tree-guard.ts";
+import {
+  type AcquisitionCode,
+  acquisitionError,
+  type ListedEntry,
+  resolveListing,
+  type TreePath,
+  type TreeSnapshot,
+} from "./snapshot.ts";
+import type { TreeLimits } from "./tree-guard.ts";
 
 type GitLocator = Extract<SourceLocator, { kind: "git" }>;
 
-export type GitAcquireCode =
-  | "auth_or_repository_unavailable"
-  | "invalid_locator"
-  | "missing_ref"
-  | "invalid_subpath"
-  | "offline"
-  | "timeout"
-  | "budget_exceeded"
-  | "unsafe_tree"
-  | "io";
-
-export class GitAcquireError extends Error {
+class GitAcquireError extends Error {
   override readonly name = "GitAcquireError";
   constructor(
-    readonly code: GitAcquireCode,
+    readonly code: AcquisitionCode,
     message: string,
   ) {
     super(message);
   }
 }
 
-export type GitAcquireOptions = {
+export type GitSnapshotOptions = {
   cacheRoot: string;
-  tmpRoot: string;
   process?: GitProcess;
-  limits?: TreeLimits;
+  limits: TreeLimits;
 };
 
 const repositoryLocks = new Map<string, Promise<void>>();
@@ -91,7 +78,7 @@ function cacheKey(normalizedRepoUrl: string): string {
   return createHash("sha256").update(normalizedRepoUrl).digest("hex");
 }
 
-async function locked<T>(key: string, work: () => Promise<T>): Promise<T> {
+async function acquireRepositoryLock(key: string): Promise<() => void> {
   const prior = repositoryLocks.get(key) ?? Promise.resolve();
   let release = () => {};
   const current = new Promise<void>((resolveLock) => {
@@ -100,12 +87,10 @@ async function locked<T>(key: string, work: () => Promise<T>): Promise<T> {
   const queued = prior.then(() => current);
   repositoryLocks.set(key, queued);
   await prior;
-  try {
-    return await work();
-  } finally {
+  return () => {
     release();
     if (repositoryLocks.get(key) === queued) repositoryLocks.delete(key);
-  }
+  };
 }
 
 export function repositoryLockCountForTest(): number {
@@ -163,6 +148,10 @@ function mapGitFailure(error: unknown, phase: GitPhase): GitAcquireError {
   );
 }
 
+function syncErrorOf(error: unknown): SyncError {
+  return acquisitionError(error instanceof GitAcquireError ? error.code : "io");
+}
+
 function partialFilterUnsupported(stderr: string): boolean {
   const detail = stderr.toLowerCase();
   return (
@@ -176,45 +165,17 @@ function partialFilterUnsupported(stderr: string): boolean {
   );
 }
 
-function containedBy(path: string, root: string): boolean {
-  return root === sep ? path.startsWith(sep) : path === root || path.startsWith(root + sep);
-}
-
-function safeTreePath(stage: string, path: string): string {
+function assertSafeTreePath(path: string): void {
   if (
     !path ||
-    isAbsolute(path) ||
+    path.startsWith("/") ||
     /^[A-Za-z]:/.test(path) ||
     path.includes("\\") ||
     path.split("/").some((segment) => !segment || segment === "." || segment === "..")
   ) {
     throw new GitAcquireError("unsafe_tree", "git tree contains an unsafe path");
   }
-  const destination = resolve(stage, path);
-  if (!containedBy(destination, resolve(stage))) {
-    throw new GitAcquireError("unsafe_tree", "git tree path escapes the selected tree");
-  }
-  return destination;
 }
-
-function safeLinkTarget(path: string, target: string, stage: string): boolean {
-  if (
-    !target ||
-    target.includes("\0") ||
-    target.includes("\\") ||
-    isAbsolute(target) ||
-    /^[A-Za-z]:/.test(target)
-  ) {
-    return false;
-  }
-  return containedBy(resolve(stage, dirname(path), target), resolve(stage));
-}
-
-type RawEntry = {
-  path: string;
-  mode: "100644" | "100755" | "120000";
-  objectId: string;
-};
 
 function parseBatchObjects(output: Uint8Array, expectedIds: readonly string[]): Uint8Array[] {
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -246,335 +207,375 @@ function parseBatchObjects(output: Uint8Array, expectedIds: readonly string[]): 
   return objects;
 }
 
-async function materializeRawTree(
-  git: GitProcess,
-  cache: string,
-  treeIdentity: string,
-  stage: string,
-  limits: TreeLimits,
-  deadlineMs: number,
-  daemonEnv: NodeJS.ProcessEnv,
-): Promise<void> {
-  const remainingMs = () => {
-    const remaining = deadlineMs - Date.now();
-    if (remaining <= 0) throw new GitAcquireError("timeout", "git acquisition timed out");
-    return remaining;
-  };
-  const metadataLimit = Math.max(1, Math.min(128 * 1024 * 1024, limits.maxFiles * 8192));
-  const networkSafeEnv = httpsOnlyEnv(daemonEnv);
-  let listing: Uint8Array;
-  try {
-    listing = (
-      await git.run(["-C", cache, "ls-tree", "-r", "-z", treeIdentity], {
-        env: daemonEnv,
-        timeoutMs: remainingMs(),
-        maxStdoutBytes: metadataLimit,
-      })
-    ).stdout;
-  } catch (error) {
-    throw mapGitFailure(error, "other");
-  }
-  let decoded: string;
-  try {
-    decoded = new TextDecoder("utf-8", { fatal: true }).decode(listing);
-  } catch {
-    throw new GitAcquireError("unsafe_tree", "git tree contains a non-UTF-8 path");
-  }
-  const records = decoded.split("\0");
-  if (records.at(-1) === "") records.pop();
-  if (records.length > limits.maxFiles) {
-    throw new GitAcquireError("budget_exceeded", "selected tree exceeds file limit");
-  }
-  const entries: RawEntry[] = [];
-  const paths = new Set<string>();
-  let bytes = 0;
-  for (const record of records) {
-    remainingMs();
-    const tab = record.indexOf("\t");
-    const match = /^(100644|100755|120000) blob ([0-9a-f]{40})$/.exec(
-      tab < 0 ? "" : record.slice(0, tab),
-    );
-    if (!match || tab < 0) {
-      throw new GitAcquireError("unsafe_tree", "git tree contains an unsupported entry");
-    }
-    const path = record.slice(tab + 1);
-    safeTreePath(stage, path);
-    if (paths.has(path)) {
-      throw new GitAcquireError("unsafe_tree", "git tree contains duplicate paths");
-    }
-    paths.add(path);
-    const mode = match[1] as RawEntry["mode"];
-    const objectId = match[2];
-    if (!objectId) throw new GitAcquireError("io", "git tree entry is incomplete");
-    entries.push({ path, mode, objectId });
+const BATCH_SIZE = 128;
+
+type GitBlob = { path: TreePath; objectId: string };
+
+// One repository's bare partial-clone cache under one acquisition deadline and
+// byte budget. `cat-file --batch` fetches the blobs it is asked for lazily, so
+// only what is read crosses the network.
+class GitCache {
+  private bytesRead = 0;
+  private readonly cache: string;
+
+  constructor(
+    private readonly git: GitProcess,
+    private readonly cacheRoot: string,
+    private readonly key: string,
+    private readonly limits: TreeLimits,
+    private readonly deadlineMs: number,
+    private readonly daemonEnv: NodeJS.ProcessEnv,
+  ) {
+    this.cache = join(cacheRoot, key);
   }
 
-  const sortedPaths = [...paths].sort();
-  for (let index = 1; index < sortedPaths.length; index++) {
-    const prior = sortedPaths[index - 1];
-    const current = sortedPaths[index];
-    if (prior && current?.startsWith(`${prior}/`)) {
-      throw new GitAcquireError("unsafe_tree", "git tree contains conflicting paths");
+  private remainingMs(): number {
+    const remaining = this.deadlineMs - Date.now();
+    if (remaining <= 0) throw new GitAcquireError("timeout", "git acquisition timed out");
+    return remaining;
+  }
+
+  private async run(
+    args: readonly string[],
+    phase: GitPhase = "other",
+    maxStdoutBytes?: number,
+    networkCapable = false,
+  ): Promise<GitProcessResult> {
+    try {
+      return await this.git.run(networkCapable ? httpsOnly(args) : args, {
+        env: networkCapable ? httpsOnlyEnv(this.daemonEnv) : this.daemonEnv,
+        timeoutMs: this.remainingMs(),
+        ...(maxStdoutBytes === undefined ? {} : { maxStdoutBytes }),
+      });
+    } catch (error) {
+      throw mapGitFailure(error, phase);
     }
   }
-  const BATCH_SIZE = 128;
-  for (let start = 0; start < entries.length; start += BATCH_SIZE) {
-    remainingMs();
-    const group = entries.slice(start, start + BATCH_SIZE);
-    const objectIds = group.map((entry) => entry.objectId);
-    let batch: Uint8Array;
+
+  private async ensureCache(locator: GitLocator, normalizedRepoUrl: string): Promise<void> {
+    const cache = this.cache;
+    mkdirSync(this.cacheRoot, { recursive: true });
+    if (existsSync(cache)) {
+      let valid = false;
+      try {
+        const inspect = async (args: readonly string[], maxStdoutBytes: number) =>
+          text(
+            (
+              await this.git.run(args, {
+                env: this.daemonEnv,
+                timeoutMs: this.remainingMs(),
+                maxStdoutBytes,
+              })
+            ).stdout,
+          );
+        const bare = await inspect(["-C", cache, "rev-parse", "--is-bare-repository"], 16);
+        const partialClone = await inspect(
+          ["-C", cache, "config", "--get", "extensions.partialClone"],
+          64,
+        );
+        const remoteUrl = await inspect(
+          ["-C", cache, "config", "--get", "remote.origin.url"],
+          8 * 1024,
+        );
+        const promisor = await inspect(
+          ["-C", cache, "config", "--get", "remote.origin.promisor"],
+          16,
+        );
+        const filter = await inspect(
+          ["-C", cache, "config", "--get", "remote.origin.partialclonefilter"],
+          64,
+        );
+        valid =
+          bare === "true" &&
+          partialClone === "origin" &&
+          normalizedRepositoryUrl(remoteUrl) === normalizedRepoUrl &&
+          promisor === "true" &&
+          filter === "blob:none";
+      } catch {
+        valid = false;
+      }
+      if (!valid) rmSync(cache, { recursive: true, force: true });
+    }
+    if (existsSync(cache)) return;
+    const initializing = mkdtempSync(join(this.cacheRoot, `.init-${this.key}-`));
     try {
-      batch = (
-        await git.run(httpsOnly(["-C", cache, "cat-file", "--batch"]), {
-          env: networkSafeEnv,
-          timeoutMs: remainingMs(),
-          maxStdoutBytes: Math.max(1, limits.maxBytes - bytes + group.length * 96),
-          stdin: new TextEncoder().encode(`${objectIds.join("\n")}\n`),
-        })
-      ).stdout;
+      await this.run(["init", "--bare", initializing]);
+      await this.run(["-C", initializing, "config", "extensions.partialClone", "origin"]);
+      await this.run(["-C", initializing, "config", "remote.origin.url", locator.repoUrl]);
+      await this.run(["-C", initializing, "config", "remote.origin.promisor", "true"]);
+      await this.run([
+        "-C",
+        initializing,
+        "config",
+        "remote.origin.partialclonefilter",
+        "blob:none",
+      ]);
+      try {
+        renameSync(initializing, cache);
+      } catch (error: unknown) {
+        if (!existsSync(cache)) throw error;
+        rmSync(initializing, { recursive: true, force: true });
+      }
+    } finally {
+      if (existsSync(initializing)) rmSync(initializing, { recursive: true, force: true });
+    }
+  }
+
+  async fetch(
+    locator: GitLocator,
+    normalizedRepoUrl: string,
+  ): Promise<{ resolvedCommit: string; treeIdentity: string }> {
+    await this.ensureCache(locator, normalizedRepoUrl);
+    const { cache } = this;
+    const requested =
+      locator.revision.mode === "track" ? locator.revision.ref : locator.revision.commit;
+    const fetchArgs = [
+      "-c",
+      "protocol.allow=never",
+      "-c",
+      "protocol.https.allow=always",
+      "-C",
+      cache,
+      "fetch",
+      "--filter=blob:none",
+      "--no-tags",
+      "--depth=1",
+      locator.repoUrl,
+      requested,
+    ] as const;
+    let fetchResult: GitProcessResult;
+    try {
+      fetchResult = await this.git.run(fetchArgs, {
+        env: { ...this.daemonEnv, GIT_ALLOW_PROTOCOL: "https" },
+        timeoutMs: this.remainingMs(),
+      });
     } catch (error) {
-      throw mapGitFailure(error, "other");
-    }
-    const data = parseBatchObjects(batch, objectIds);
-    for (let index = 0; index < group.length; index++) {
-      remainingMs();
-      const entry = group[index];
-      const content = data[index];
-      if (!entry || !content) throw new GitAcquireError("io", "git blob batch is incomplete");
-      bytes += content.byteLength;
-      if (bytes > limits.maxBytes) {
-        throw new GitAcquireError("budget_exceeded", "selected tree exceeds byte limit");
+      if (error instanceof GitProcessFailure && partialFilterUnsupported(error.result.stderr)) {
+        rmSync(cache, { recursive: true, force: true });
       }
-      const destination = safeTreePath(stage, entry.path);
-      mkdirSync(dirname(destination), { recursive: true });
-      if (entry.mode === "120000") {
-        let target: string;
-        try {
-          target = new TextDecoder("utf-8", { fatal: true }).decode(content);
-        } catch {
-          throw new GitAcquireError("unsafe_tree", "git tree link target is invalid");
-        }
-        if (!safeLinkTarget(entry.path, target, stage)) {
-          throw new GitAcquireError("unsafe_tree", "git tree link escapes the selected tree");
-        }
-        symlinkSync(target, destination);
-      } else {
-        writeFileSync(destination, content);
-        chmodSync(destination, entry.mode === "100755" ? 0o755 : 0o644);
+      throw mapGitFailure(error, "fetch");
+    }
+    if (partialFilterUnsupported(fetchResult.stderr)) {
+      rmSync(cache, { recursive: true, force: true });
+      throw new GitAcquireError(
+        "auth_or_repository_unavailable",
+        "repository does not support bounded partial fetch",
+      );
+    }
+
+    const resolvedCommit = text(
+      (await this.run(["-C", cache, "rev-parse", "FETCH_HEAD^{commit}"], "other", 64)).stdout,
+    );
+    if (!/^[0-9a-f]{40}$/.test(resolvedCommit)) {
+      throw new GitAcquireError("io", "git returned an invalid resolved commit");
+    }
+    if (locator.revision.mode === "pin" && locator.revision.commit !== resolvedCommit) {
+      throw new GitAcquireError("missing_ref", "requested pinned commit did not resolve exactly");
+    }
+
+    const selectedObject =
+      locator.subpath === "." ? `${resolvedCommit}^{tree}` : `${resolvedCommit}:${locator.subpath}`;
+    const selectedType = text(
+      (await this.run(["-C", cache, "cat-file", "-t", selectedObject], "subpath", 16, true)).stdout,
+    );
+    if (selectedType !== "tree") {
+      throw new GitAcquireError("invalid_subpath", "selected subpath is not a directory");
+    }
+    const treeIdentity = text(
+      (await this.run(["-C", cache, "rev-parse", selectedObject], "subpath", 64)).stdout,
+    );
+    if (!/^[0-9a-f]{40}$/.test(treeIdentity)) {
+      throw new GitAcquireError("io", "git returned an invalid tree identity");
+    }
+    return { resolvedCommit, treeIdentity };
+  }
+
+  // `ls-tree -r` lists the blobless tree without fetching a blob; only link
+  // targets are read here, so links can be resolved against the listing.
+  async list(treeIdentity: string): Promise<{
+    listed: Map<TreePath, ListedEntry>;
+    objectIds: Map<TreePath, string>;
+  }> {
+    const metadataLimit = Math.max(
+      1,
+      Math.min(128 * 1024 * 1024, this.limits.maxListedEntries * 8192),
+    );
+    const listing = (
+      await this.run(
+        ["-C", this.cache, "ls-tree", "-r", "-z", treeIdentity],
+        "other",
+        metadataLimit,
+      )
+    ).stdout;
+    let decoded: string;
+    try {
+      decoded = new TextDecoder("utf-8", { fatal: true }).decode(listing);
+    } catch {
+      throw new GitAcquireError("unsafe_tree", "git tree contains a non-UTF-8 path");
+    }
+    const records = decoded.split("\0");
+    if (records.at(-1) === "") records.pop();
+    if (records.length > this.limits.maxListedEntries) {
+      throw new GitAcquireError("budget_exceeded", "selected tree exceeds listing limit");
+    }
+    const listed = new Map<TreePath, ListedEntry>();
+    const objectIds = new Map<TreePath, string>();
+    const links: GitBlob[] = [];
+    for (const record of records) {
+      this.remainingMs();
+      const tab = record.indexOf("\t");
+      const match = /^(100644|100755|120000) blob ([0-9a-f]{40})$/.exec(
+        tab < 0 ? "" : record.slice(0, tab),
+      );
+      if (!match || tab < 0) {
+        throw new GitAcquireError("unsafe_tree", "git tree contains an unsupported entry");
+      }
+      const raw = record.slice(tab + 1);
+      assertSafeTreePath(raw);
+      const path = raw as TreePath;
+      if (objectIds.has(path)) {
+        throw new GitAcquireError("unsafe_tree", "git tree contains duplicate paths");
+      }
+      const objectId = match[2];
+      if (!objectId) throw new GitAcquireError("io", "git tree entry is incomplete");
+      objectIds.set(path, objectId);
+      if (match[1] === "120000") links.push({ path, objectId });
+      else listed.set(path, { mode: match[1] === "100755" ? "exec" : "file" });
+    }
+    const sortedPaths = [...objectIds.keys()].sort();
+    for (let index = 1; index < sortedPaths.length; index++) {
+      const prior = sortedPaths[index - 1];
+      const current = sortedPaths[index];
+      if (prior && current?.startsWith(`${prior}/`)) {
+        throw new GitAcquireError("unsafe_tree", "git tree contains conflicting paths");
       }
     }
+    const targets = await this.readBlobs(links);
+    for (const link of links) {
+      let target: string;
+      try {
+        target = new TextDecoder("utf-8", { fatal: true }).decode(targets.get(link.path));
+      } catch {
+        throw new GitAcquireError("unsafe_tree", "git tree link target is invalid");
+      }
+      listed.set(link.path, { mode: "link", text: target });
+    }
+    return { listed, objectIds };
+  }
+
+  async readBlobs(blobs: readonly GitBlob[]): Promise<Map<TreePath, Uint8Array>> {
+    const out = new Map<TreePath, Uint8Array>();
+    const networkSafeEnv = httpsOnlyEnv(this.daemonEnv);
+    for (let start = 0; start < blobs.length; start += BATCH_SIZE) {
+      const group = blobs.slice(start, start + BATCH_SIZE);
+      const objectIds = group.map((blob) => blob.objectId);
+      let batch: Uint8Array;
+      try {
+        batch = (
+          await this.git.run(httpsOnly(["-C", this.cache, "cat-file", "--batch"]), {
+            env: networkSafeEnv,
+            timeoutMs: this.remainingMs(),
+            maxStdoutBytes: Math.max(1, this.limits.maxBytes - this.bytesRead + group.length * 96),
+            stdin: new TextEncoder().encode(`${objectIds.join("\n")}\n`),
+          })
+        ).stdout;
+      } catch (error) {
+        throw mapGitFailure(error, "other");
+      }
+      const data = parseBatchObjects(batch, objectIds);
+      for (let index = 0; index < group.length; index++) {
+        const blob = group[index];
+        const content = data[index];
+        if (!blob || !content) throw new GitAcquireError("io", "git blob batch is incomplete");
+        this.bytesRead += content.byteLength;
+        if (this.bytesRead > this.limits.maxBytes) {
+          throw new GitAcquireError("budget_exceeded", "selected tree exceeds byte limit");
+        }
+        out.set(blob.path, content);
+      }
+    }
+    return out;
   }
 }
 
-export async function acquireGitSource(
+// Fetches the requested commit into the per-repository partial-clone cache and
+// lists the selected tree. The repository lock is held until the scope closes;
+// after an interruption (an add that outran its budget) it is held until the
+// abandoned Git call settles, so a later Sync never moves the cache under it.
+export function gitSnapshot(
   locator: GitLocator,
-  destination: string,
-  options: GitAcquireOptions,
-): Promise<MirrorProvenance> {
-  const normalizedRepoUrl = normalizedRepositoryUrl(locator.repoUrl);
-  if (!normalizedRepoUrl) {
-    throw new GitAcquireError(
-      "invalid_locator",
-      "git repository URL must be credential-free HTTPS without query or fragment",
-    );
-  }
-  if (!safeSubpath(locator.subpath)) {
-    throw new GitAcquireError("invalid_subpath", "selected subpath is invalid");
-  }
-  const git = options.process ?? productionGitProcess();
-  const limits = options.limits ?? DEFAULT_TREE_LIMITS;
-  const key = cacheKey(normalizedRepoUrl);
-  return locked(key, async () => {
-    let stage: string | undefined;
-    try {
-      const deadlineMs = Date.now() + limits.timeoutMs;
-      const daemonEnv = { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
-      const remainingMs = () => {
-        const remaining = deadlineMs - Date.now();
-        if (remaining <= 0) throw new GitAcquireError("timeout", "git acquisition timed out");
-        return remaining;
-      };
-      const run = async (
-        args: readonly string[],
-        phase: GitPhase = "other",
-        maxStdoutBytes?: number,
-        networkCapable = false,
-      ) => {
-        try {
-          return await git.run(networkCapable ? httpsOnly(args) : args, {
-            env: networkCapable ? httpsOnlyEnv(daemonEnv) : daemonEnv,
-            timeoutMs: remainingMs(),
-            ...(maxStdoutBytes === undefined ? {} : { maxStdoutBytes }),
+  options: GitSnapshotOptions,
+): Effect.Effect<TreeSnapshot, SyncError, Scope.Scope> {
+  return Effect.gen(function* () {
+    const normalizedRepoUrl = normalizedRepositoryUrl(locator.repoUrl);
+    if (!normalizedRepoUrl) return yield* Effect.fail(acquisitionError("invalid_locator"));
+    if (!safeSubpath(locator.subpath)) {
+      return yield* Effect.fail(acquisitionError("invalid_subpath"));
+    }
+    const key = cacheKey(normalizedRepoUrl);
+    let inFlight: Promise<unknown> = Promise.resolve();
+    const tracked = <T>(work: () => Promise<T>) =>
+      Effect.tryPromise({
+        try: () => {
+          const running = work().catch((error: unknown) => {
+            if (error instanceof GitAcquireError) throw error;
+            throw new GitAcquireError("io", "git acquisition filesystem operation failed");
           });
-        } catch (error) {
-          throw mapGitFailure(error, phase);
-        }
-      };
-
-      const cache = join(options.cacheRoot, key);
-      mkdirSync(options.cacheRoot, { recursive: true });
-      if (existsSync(cache)) {
-        let valid = false;
-        try {
-          const inspect = async (args: readonly string[], maxStdoutBytes: number) =>
-            text(
-              (
-                await git.run(args, {
-                  env: daemonEnv,
-                  timeoutMs: remainingMs(),
-                  maxStdoutBytes,
-                })
-              ).stdout,
+          inFlight = running.catch(() => undefined);
+          return running;
+        },
+        catch: syncErrorOf,
+      });
+    yield* Effect.acquireRelease(
+      Effect.promise(() => acquireRepositoryLock(key)),
+      (release, exit) =>
+        Effect.sync(() => {
+          if (!Exit.hasInterrupts(exit)) return release();
+          inFlight
+            .then(release)
+            .catch((err: unknown) =>
+              log().warn(
+                { module: "kit/git-source", err: String(err) },
+                "repository lock release failed",
+              ),
             );
-          const bare = await inspect(["-C", cache, "rev-parse", "--is-bare-repository"], 16);
-          const partialClone = await inspect(
-            ["-C", cache, "config", "--get", "extensions.partialClone"],
-            64,
-          );
-          const remoteUrl = await inspect(
-            ["-C", cache, "config", "--get", "remote.origin.url"],
-            8 * 1024,
-          );
-          const promisor = await inspect(
-            ["-C", cache, "config", "--get", "remote.origin.promisor"],
-            16,
-          );
-          const filter = await inspect(
-            ["-C", cache, "config", "--get", "remote.origin.partialclonefilter"],
-            64,
-          );
-          valid =
-            bare === "true" &&
-            partialClone === "origin" &&
-            normalizedRepositoryUrl(remoteUrl) === normalizedRepoUrl &&
-            promisor === "true" &&
-            filter === "blob:none";
-        } catch {
-          valid = false;
-        }
-        if (!valid) rmSync(cache, { recursive: true, force: true });
-      }
-      if (!existsSync(cache)) {
-        const initializing = mkdtempSync(join(options.cacheRoot, `.init-${key}-`));
-        try {
-          await run(["init", "--bare", initializing]);
-          await run(["-C", initializing, "config", "extensions.partialClone", "origin"]);
-          await run(["-C", initializing, "config", "remote.origin.url", locator.repoUrl]);
-          await run(["-C", initializing, "config", "remote.origin.promisor", "true"]);
-          await run([
-            "-C",
-            initializing,
-            "config",
-            "remote.origin.partialclonefilter",
-            "blob:none",
-          ]);
-          try {
-            renameSync(initializing, cache);
-          } catch (error: unknown) {
-            if (!existsSync(cache)) throw error;
-            rmSync(initializing, { recursive: true, force: true });
-          }
-        } finally {
-          if (existsSync(initializing)) rmSync(initializing, { recursive: true, force: true });
-        }
-      }
-
-      const requested =
-        locator.revision.mode === "track" ? locator.revision.ref : locator.revision.commit;
-      const fetchArgs = [
-        "-c",
-        "protocol.allow=never",
-        "-c",
-        "protocol.https.allow=always",
-        "-C",
-        cache,
-        "fetch",
-        "--filter=blob:none",
-        "--no-tags",
-        "--depth=1",
-        locator.repoUrl,
-        requested,
-      ] as const;
-      let fetchResult: GitProcessResult;
-      try {
-        fetchResult = await git.run(fetchArgs, {
-          env: { ...daemonEnv, GIT_ALLOW_PROTOCOL: "https" },
-          timeoutMs: remainingMs(),
-        });
-      } catch (error) {
-        if (error instanceof GitProcessFailure && partialFilterUnsupported(error.result.stderr)) {
-          rmSync(cache, { recursive: true, force: true });
-        }
-        throw mapGitFailure(error, "fetch");
-      }
-      if (partialFilterUnsupported(fetchResult.stderr)) {
-        rmSync(cache, { recursive: true, force: true });
-        throw new GitAcquireError(
-          "auth_or_repository_unavailable",
-          "repository does not support bounded partial fetch",
-        );
-      }
-
-      const resolvedCommit = text(
-        (await run(["-C", cache, "rev-parse", "FETCH_HEAD^{commit}"], "other", 64)).stdout,
-      );
-      if (!/^[0-9a-f]{40}$/.test(resolvedCommit)) {
-        throw new GitAcquireError("io", "git returned an invalid resolved commit");
-      }
-      if (locator.revision.mode === "pin" && locator.revision.commit !== resolvedCommit) {
-        throw new GitAcquireError("missing_ref", "requested pinned commit did not resolve exactly");
-      }
-
-      const selectedObject =
-        locator.subpath === "."
-          ? `${resolvedCommit}^{tree}`
-          : `${resolvedCommit}:${locator.subpath}`;
-      const selectedType = text(
-        (await run(["-C", cache, "cat-file", "-t", selectedObject], "subpath", 16, true)).stdout,
-      );
-      if (selectedType !== "tree") {
-        throw new GitAcquireError("invalid_subpath", "selected subpath is not a directory");
-      }
-      const treeIdentity = text(
-        (await run(["-C", cache, "rev-parse", selectedObject], "subpath", 64)).stdout,
-      );
-      if (!/^[0-9a-f]{40}$/.test(treeIdentity)) {
-        throw new GitAcquireError("io", "git returned an invalid tree identity");
-      }
-
-      remainingMs();
-      stage = createOwnedMirrorStage(options.tmpRoot);
-      await materializeRawTree(git, cache, treeIdentity, stage, limits, deadlineMs, daemonEnv);
-      // The CLIs read a marketplace from the repository root, so only a whole-repo
-      // Source can stand for one.
-      if (locator.subpath === ".") {
-        materializeMarketplacePlugins(stage, locator.repoUrl, resolvedCommit);
-      }
-      const provenance: MirrorProvenance = {
-        sha: resolvedCommit,
-        fetchedAt: Date.now(),
+        }),
+    );
+    const cache = new GitCache(
+      options.process ?? productionGitProcess(),
+      options.cacheRoot,
+      key,
+      options.limits,
+      Date.now() + options.limits.timeoutMs,
+      { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" },
+    );
+    const opened = yield* tracked(async () => {
+      const fetched = await cache.fetch(locator, normalizedRepoUrl);
+      return { ...fetched, ...(await cache.list(fetched.treeIdentity)) };
+    });
+    return {
+      origin: {
         transport: "git",
         repoUrl: locator.repoUrl,
         requestedRevision: locator.revision,
-        resolvedCommit,
+        resolvedCommit: opened.resolvedCommit,
         subpath: locator.subpath,
-        treeIdentity,
-      };
-      remainingMs();
-      const cleanup = commitStagedMirror(destination, stage, provenance);
-      stage = undefined;
-      cleanup();
-      return provenance;
-    } catch (error) {
-      if (stage) {
-        try {
-          rmSync(stage, { recursive: true, force: true });
-        } catch {
-          // The original acquisition error remains the stable caller boundary.
-        }
-      }
-      if (error instanceof GitAcquireError) throw error;
-      throw new GitAcquireError("io", "git acquisition filesystem operation failed");
-    }
+        treeIdentity: opened.treeIdentity,
+      },
+      entries: resolveListing(opened.listed),
+      read: (paths) =>
+        tracked(async () =>
+          cache.readBlobs(
+            paths.map((path) => {
+              const objectId = opened.objectIds.get(path);
+              if (!objectId || opened.listed.get(path)?.mode === "link") {
+                throw new GitAcquireError("io", "git tree entry is unavailable");
+              }
+              return { path, objectId };
+            }),
+          ),
+        ),
+      confirm: () => Effect.void,
+    } satisfies TreeSnapshot;
   });
 }

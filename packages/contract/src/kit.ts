@@ -278,14 +278,31 @@ export const OverviewRow = z.object({
 });
 export type OverviewRow = z.infer<typeof OverviewRow>;
 
+// How a Source's Capabilities are selected. `whole`: a change to any of them
+// applies to all.
+export const SelectionUnit = z.enum(["pick", "whole"]);
+export type SelectionUnit = z.infer<typeof SelectionUnit>;
+
+// The Recipe that projected a Source's current Mirror. The Daemon supplies
+// `label`, so the UI never switches on `id` and a new Recipe needs no contract
+// change.
+export const RecipeSummary = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  unit: SelectionUnit,
+});
+export type RecipeSummary = z.infer<typeof RecipeSummary>;
+
 // Deliberately omits Source locators/origins: working-tree locators contain raw
 // Daemon paths, which never belong in the Overview or plan diagnostics.
+// `recipe` is null until the Source has a Mirror.
 export const OverviewSource = z.object({
   id: z.string(),
   label: z.string(),
   kind: z.enum(["git", "local"]),
   active: z.boolean(),
   rank: z.number().int(),
+  recipe: RecipeSummary.nullable(),
 });
 export type OverviewSource = z.infer<typeof OverviewSource>;
 

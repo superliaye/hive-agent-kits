@@ -1,11 +1,12 @@
-// Mirror — the read-only deploy source under the Hive home.
-//
-// Holds the extracted Kit tree plus a provenance file ({sha, fetchedAt}). The
-// atomic swap (writeMirror) extracts into a fresh temp dir then rename-swaps,
-// retaining the prior mirror until the new one is in place.
+// Mirror — the read-only deploy source under the Hive home, and the only writer
+// of its bytes. Sync plans a Recipe's projection against a snapshot listing,
+// materializes only the planned files into an owned stage, and swaps the stage
+// in together with its `.hive-mirror.json` record. The prior Mirror stays in
+// place until the new tree is.
 
+import { createHash } from "node:crypto";
 import {
-  cpSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -15,26 +16,125 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, join } from "node:path";
+import { RecipeSummary } from "@hive/contract";
+import { Effect, type Scope } from "effect";
+import { z } from "zod";
 import { log } from "../lib/log.ts";
-import { parseTar, topFolder } from "./tar.ts";
-import { MirrorProvenance } from "./types.ts";
+import {
+  acquisitionError,
+  type TreeEntry,
+  TreeOrigin,
+  type TreePath,
+  type TreeSnapshot,
+} from "./acquisition/snapshot.ts";
+import type { TreeLimits } from "./acquisition/tree-guard.ts";
+import { SyncError } from "./effect/errors.ts";
+import type { Projection, Recognition } from "./recipes/recipe.ts";
 
-const PROVENANCE_FILE = ".hive-mirror.json";
+const RECORD_FILE = ".hive-mirror.json";
 const OWNED_STAGE = /^extract-owner-([1-9]\d*)-/;
 
-export function readProvenance(mirrorRoot: string): MirrorProvenance | null {
-  const p = join(mirrorRoot, PROVENANCE_FILE);
-  if (!existsSync(p)) return null;
+// Written inside the stage, so record and bytes swap together. A Mirror without
+// a parseable record reads as unavailable until the next Sync rewrites it.
+export const MirrorRecord = z.object({
+  origin: TreeOrigin,
+  fetchedAt: z.number().int(),
+  recipe: RecipeSummary,
+  // sha256 over the Recipe id and unit and every Mirror file's path, mode, and
+  // byte hash. It moves when the projection moves even if the upstream tree did
+  // not, and holds still when only unprojected upstream files change.
+  contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type MirrorRecord = z.infer<typeof MirrorRecord>;
+
+export function readMirrorRecord(mirrorRoot: string): MirrorRecord | null {
   try {
-    return MirrorProvenance.parse(JSON.parse(readFileSync(p, "utf8")));
+    const parsed = MirrorRecord.safeParse(
+      JSON.parse(readFileSync(join(mirrorRoot, RECORD_FILE), "utf8")),
+    );
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
 }
 
-export function mirrorExists(mirrorRoot: string): boolean {
-  return existsSync(join(mirrorRoot, "capabilities"));
+// The Mirror identity the Overview and the Deploy plan bind to.
+export function readMirrorIdentity(mirrorRoot: string): string | null {
+  return readMirrorRecord(mirrorRoot)?.contentDigest ?? null;
+}
+
+export type IngestEntry =
+  | { readonly to: string; readonly mode: 0o644 | 0o755; readonly from: TreePath }
+  | { readonly to: string; readonly mode: 0o644; readonly text: string };
+
+export type IngestPlan = {
+  // Sorted by `to`.
+  readonly entries: readonly IngestEntry[];
+  readonly dropped: readonly { readonly from: TreePath; readonly reason: string }[];
+};
+
+function overlaps(left: string, right: string): boolean {
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+const fileMode = (entry: TreeEntry): 0o644 | 0o755 => (entry.mode === "exec" ? 0o755 : 0o644);
+
+// Expands the projection against the listing. A link to a listed file becomes
+// that file's bytes and mode; any other link is dropped, so a Mirror holds
+// regular files only. The file limit applies here, to what is ingested.
+export function planIngest(
+  entries: ReadonlyMap<TreePath, TreeEntry>,
+  projection: Projection,
+  limits: TreeLimits,
+): Effect.Effect<IngestPlan, SyncError> {
+  const outputs = [
+    ...projection.copies.map((copy) => copy.to),
+    ...projection.writes.map((write) => write.to),
+  ];
+  for (let left = 0; left < outputs.length; left++) {
+    for (let right = left + 1; right < outputs.length; right++) {
+      const a = outputs[left];
+      const b = outputs[right];
+      if (a !== undefined && b !== undefined && overlaps(a, b)) {
+        return Effect.die(new Error(`Recipe projection writes ${a} and ${b} over each other`));
+      }
+    }
+  }
+  const planned: IngestEntry[] = [];
+  const dropped: { from: TreePath; reason: string }[] = [];
+  for (const copy of projection.copies) {
+    for (const [path, entry] of entries) {
+      const rel =
+        path === copy.from
+          ? ""
+          : copy.from === ""
+            ? path
+            : path.startsWith(`${copy.from}/`)
+              ? path.slice(copy.from.length + 1)
+              : null;
+      if (rel === null) continue;
+      const to = rel ? `${copy.to}/${rel}` : copy.to;
+      if (entry.mode !== "link") {
+        planned.push({ to, mode: fileMode(entry), from: path });
+        continue;
+      }
+      const target = entry.target === null ? undefined : entries.get(entry.target);
+      if (entry.target === null || !target || target.mode === "link") {
+        dropped.push({
+          from: path,
+          reason: entry.target === null ? "link dangles or leaves the tree" : "link to a directory",
+        });
+        continue;
+      }
+      planned.push({ to, mode: fileMode(target), from: entry.target });
+    }
+  }
+  for (const write of projection.writes)
+    planned.push({ to: write.to, mode: 0o644, text: write.text });
+  if (planned.length > limits.maxFiles) return Effect.fail(acquisitionError("budget_exceeded"));
+  planned.sort((left, right) => (left.to < right.to ? -1 : left.to > right.to ? 1 : 0));
+  return Effect.succeed({ entries: planned, dropped });
 }
 
 function liveStageOwner(entry: string): boolean {
@@ -51,9 +151,105 @@ function liveStageOwner(entry: string): boolean {
   }
 }
 
-export function createOwnedMirrorStage(tmpRoot: string): string {
+function createOwnedMirrorStage(tmpRoot: string): string {
   mkdirSync(tmpRoot, { recursive: true });
   return mkdtempSync(join(tmpRoot, `extract-owner-${process.pid}-`));
+}
+
+const mirrorWriteError = (err: unknown) =>
+  new SyncError({
+    reason: "io",
+    message: `mirror write failed: ${String(err)}`,
+    detail: "mirror write failed",
+  });
+
+export type StagedMirror = { readonly stage: string; readonly record: MirrorRecord };
+
+const READ_BATCH = 128;
+
+// Reads only the planned blobs, in batches, and writes them with their modes
+// into a fresh owned stage. The same snapshot and Recognition give the same
+// bytes and digest. The scope removes the stage unless commitMirror moved it; a
+// crash leaves an owned stage that sweepStaleTmp removes.
+export function materialize(
+  snapshot: TreeSnapshot,
+  recognition: Recognition,
+  tmpRoot: string,
+  limits: TreeLimits,
+): Effect.Effect<StagedMirror, SyncError, Scope.Scope> {
+  return Effect.gen(function* () {
+    const plan = yield* planIngest(snapshot.entries, recognition.projection, limits);
+    for (const drop of plan.dropped) {
+      log().warn(
+        { module: "kit/mirror", path: drop.from, reason: drop.reason },
+        "link left out of the Mirror",
+      );
+    }
+    const stage = yield* Effect.acquireRelease(
+      Effect.try({ try: () => createOwnedMirrorStage(tmpRoot), catch: mirrorWriteError }),
+      (dir) =>
+        Effect.sync(() => {
+          try {
+            rmSync(dir, { recursive: true, force: true });
+          } catch (err) {
+            log().warn({ module: "kit/mirror", err: String(err) }, "mirror stage cleanup failed");
+          }
+        }),
+    );
+    const { recipe } = recognition;
+    const digest = createHash("sha256").update(`${recipe.id}\0${recipe.unit}\n`);
+    for (let start = 0; start < plan.entries.length; start += READ_BATCH) {
+      const group = plan.entries.slice(start, start + READ_BATCH);
+      const reads = [...new Set(group.flatMap((entry) => ("from" in entry ? [entry.from] : [])))];
+      const bytes =
+        reads.length > 0 ? yield* snapshot.read(reads) : new Map<TreePath, Uint8Array>();
+      yield* Effect.try({
+        try: () => {
+          for (const entry of group) {
+            const data =
+              "from" in entry ? bytes.get(entry.from) : new TextEncoder().encode(entry.text);
+            if (!data) throw new Error(`snapshot returned no bytes for ${entry.to}`);
+            const destination = join(stage, entry.to);
+            mkdirSync(dirname(destination), { recursive: true });
+            writeFileSync(destination, data);
+            chmodSync(destination, entry.mode);
+            const hash = createHash("sha256").update(data).digest("hex");
+            digest.update(`${entry.to}\0${entry.mode.toString(8)}\0${hash}\n`);
+          }
+        },
+        catch: mirrorWriteError,
+      });
+    }
+    return {
+      stage,
+      record: {
+        origin: snapshot.origin,
+        fetchedAt: Date.now(),
+        recipe,
+        contentDigest: digest.digest("hex"),
+      },
+    };
+  });
+}
+
+// "unchanged" when the content digest equals the current record's. The swap
+// still happens, so origin and fetchedAt stay true.
+export function commitMirror(
+  mirrorRoot: string,
+  staged: StagedMirror,
+): Effect.Effect<{ status: "synced" | "unchanged" }, SyncError> {
+  return Effect.try({
+    try: () => {
+      const prior = readMirrorIdentity(mirrorRoot);
+      writeFileSync(join(staged.stage, RECORD_FILE), `${JSON.stringify(staged.record, null, 2)}\n`);
+      swapMirror(mirrorRoot, staged.stage)();
+      return {
+        status:
+          prior === staged.record.contentDigest ? ("unchanged" as const) : ("synced" as const),
+      };
+    },
+    catch: mirrorWriteError,
+  });
 }
 
 // Sweep partial temp extract dirs from Daemons that are no longer alive. Legacy
@@ -72,7 +268,7 @@ export function sweepStaleTmp(tmpRoot: string): void {
   }
 }
 
-// Startup recovery for a crash mid-swap (writeMirror renames mirror→.prev then
+// Startup recovery for a crash mid-swap (swapMirror renames mirror→.prev then
 // stage→mirror; a crash between the two leaves the only copy under .prev). If
 // mirrorRoot is missing but a `.prev-*` backup exists, restore the newest one;
 // then sweep any leftover `.prev-*` backups so they don't accumulate.
@@ -126,60 +322,10 @@ export function removeMirror(mirrorRoot: string): void {
   }
 }
 
-// Reject an archive entry whose extracted destination would escape the stage
-// dir — absolute paths, drive-letter-rooted paths, and `..` traversal alike.
-function destEscapes(stageDir: string, rel: string): boolean {
-  if (isAbsolute(rel) || /^[A-Za-z]:/.test(rel)) return true;
-  const resolved = resolve(stageDir, rel);
-  const root = resolve(stageDir);
-  return resolved !== root && !resolved.startsWith(root + sep);
-}
-
-// Extract a gzip'd codeload tarball into the mirror, atomically. The top-folder
-// strip is content-derived (topFolder). Returns the provenance written.
-export function writeMirror(
-  mirrorRoot: string,
-  tmpRoot: string,
-  tarBuf: Uint8Array,
-  sha: string,
-): MirrorProvenance {
-  const stageDir = createOwnedMirrorStage(tmpRoot);
-
-  const entries = parseTar(tarBuf);
-  const strip = topFolder(entries);
-  const stripPrefix = strip ? `${strip}/` : "";
-
-  for (const entry of entries) {
-    const rel =
-      stripPrefix && entry.path.startsWith(stripPrefix)
-        ? entry.path.slice(stripPrefix.length)
-        : entry.path;
-    if (!rel) continue;
-    // Refuse any entry whose destination would escape the stage dir (traversal,
-    // absolute, or drive-letter-rooted).
-    if (destEscapes(stageDir, rel)) continue;
-    const dest = join(stageDir, rel);
-    if (entry.type === "dir") {
-      mkdirSync(dest, { recursive: true });
-    } else if (entry.type === "file") {
-      mkdirSync(dirname(dest), { recursive: true });
-      writeFileSync(dest, entry.data);
-    }
-  }
-
-  const provenance: MirrorProvenance = { sha, fetchedAt: Date.now() };
-  writeFileSync(join(stageDir, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
-
-  swapMirror(mirrorRoot, stageDir)();
-  return provenance;
-}
-
-// Atomic stage→swap of a PRE-POPULATED stage dir into the mirror: move the
-// current mirror aside (`.prev-<ts>`), move the stage in, then drop the old one.
-// Retains last-good until the new tree is in place; restores the prior mirror on
-// a swap failure. Shared by both writeMirror (tar path) and localSyncMirror
-// (copy path) — the only common tail; tar parse/strip/traversal stay in
-// writeMirror, copy concerns stay in localSyncMirror.
+// Atomic stage→swap of a fully written stage into the mirror: move the current
+// mirror aside (`.prev-<ts>`), move the stage in, then drop the old one. Retains
+// last-good until the new tree is in place; restores the prior mirror on a swap
+// failure.
 type MirrorCleanup = () => void;
 
 function swapMirror(mirrorRoot: string, stageDir: string): MirrorCleanup {
@@ -204,48 +350,4 @@ function swapMirror(mirrorRoot: string, stageDir: string): MirrorCleanup {
       log().warn({ module: "kit/mirror", err: String(err) }, "prior mirror cleanup failed");
     }
   };
-}
-
-export function commitStagedMirror(
-  mirrorRoot: string,
-  stageDir: string,
-  provenance: MirrorProvenance,
-): MirrorCleanup {
-  writeFileSync(join(stageDir, PROVENANCE_FILE), `${JSON.stringify(provenance, null, 2)}\n`);
-  return swapMirror(mirrorRoot, stageDir);
-}
-
-// Thrown by localSyncMirror when the bundled Starter content root (its
-// `capabilities/`) is absent — a bad HIVE_STARTER_ROOT override or a packaging
-// miss. A dedicated class so the Effect boundary (localSyncSource) discriminates
-// by `instanceof`, NOT by matching the human-readable message text.
-export class MissingStarterRoot extends Error {
-  override readonly name = "MissingStarterRoot";
-}
-
-// Local Sync: copy the bundled Starter's `capabilities/` + `presets/` from
-// `starterRoot` into a staged dir, then atomically swap it into the mirror —
-// producing a NORMAL Mirror the catalog/deploy already read, with no network and
-// no tar. Writes NO provenance file: MirrorProvenance mandates a 40-hex sha, and
-// a local mirror has none (the sync-status derives "local" from
-// Source.locator.kind, not from provenance). Re-copies on every call (no sha to short-circuit on) — that
-// is how a bundled-content update propagates when the app updates. Throws
-// MissingStarterRoot on an absent content root, or a bare Error on a copy/swap
-// fault; the caller maps both to a typed per-source SyncError (never a raw throw
-// out of the sync loop).
-export function localSyncMirror(mirrorRoot: string, tmpRoot: string, starterRoot: string): void {
-  const capsSrc = join(starterRoot, "capabilities");
-  if (!existsSync(capsSrc)) {
-    throw new MissingStarterRoot(`starter capabilities not found at ${capsSrc}`);
-  }
-
-  const stageDir = createOwnedMirrorStage(tmpRoot);
-
-  cpSync(capsSrc, join(stageDir, "capabilities"), { recursive: true });
-  const presetsSrc = join(starterRoot, "presets");
-  if (existsSync(presetsSrc)) {
-    cpSync(presetsSrc, join(stageDir, "presets"), { recursive: true });
-  }
-
-  swapMirror(mirrorRoot, stageDir)();
 }

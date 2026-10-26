@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type CapabilityKey,
@@ -62,7 +61,7 @@ import {
   type WouldDeployArtifact,
 } from "./deploy-plan.ts";
 import { type DeploymentStateFile, type DeploymentStateRecord } from "./deployment-state.ts";
-import { readProvenance } from "./mirror.ts";
+import { readMirrorIdentity, readMirrorRecord } from "./mirror.ts";
 import type { DeployTargets } from "./targets.ts";
 
 function pairId(key: CapabilityKey, target: DeployTarget): string {
@@ -357,89 +356,15 @@ export type CaptureDeploymentSnapshotInput = {
   lastOperation?: DeployOperationSummary | null;
 };
 
-const mirrorTreeIdentityCache = new Map<
-  string,
-  { dev: number; ino: number; mtimeMs: number; ctimeMs: number; identity: string }
->();
-
-function mirrorTreeIdentity(root: string): string {
-  const stat = lstatSync(root);
-  const cached = mirrorTreeIdentityCache.get(root);
-  if (
-    cached?.dev === stat.dev &&
-    cached.ino === stat.ino &&
-    cached.mtimeMs === stat.mtimeMs &&
-    cached.ctimeMs === stat.ctimeMs
-  ) {
-    return cached.identity;
-  }
-  const hash = createHash("sha256");
-  const walk = (directory: string, relative: string): void => {
-    const entries = readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
-      left.name.localeCompare(right.name),
-    );
-    for (const entry of entries) {
-      if (!relative && entry.name === ".hive-mirror.json") continue;
-      const path = join(directory, entry.name);
-      const rel = relative ? `${relative}/${entry.name}` : entry.name;
-      if (entry.isDirectory()) {
-        hash.update(`d\0${rel}\0`);
-        walk(path, rel);
-      } else if (entry.isFile()) {
-        hash.update(`f\0${rel}\0`);
-        hash.update(readFileSync(path));
-        hash.update("\0");
-      }
-    }
-  };
-  walk(root, "");
-  const identity = hash.digest("hex");
-  if (!mirrorTreeIdentityCache.has(root) && mirrorTreeIdentityCache.size >= 256) {
-    const oldest = mirrorTreeIdentityCache.keys().next().value;
-    if (oldest !== undefined) mirrorTreeIdentityCache.delete(oldest);
-  }
-  mirrorTreeIdentityCache.set(root, {
-    dev: stat.dev,
-    ino: stat.ino,
-    mtimeMs: stat.mtimeMs,
-    ctimeMs: stat.ctimeMs,
-    identity,
-  });
-  return identity;
-}
-
-export function readMirrorIdentity(root: string): string {
-  const provenance = readProvenance(root);
-  if (!provenance) return mirrorTreeIdentity(root);
-  return sha256(
-    JSON.stringify({
-      transport: provenance.transport ?? "legacy-git",
-      resolvedCommit: provenance.resolvedCommit ?? provenance.sha,
-      treeIdentity: provenance.treeIdentity ?? null,
-      dirty: provenance.dirty ?? false,
-    }),
-  );
-}
-
 function captureMirrors(
   targets: DeployTargets,
   activeSources: readonly Source[],
 ): OverviewMirror[] {
   return activeSources.map((source) => {
-    try {
-      return {
-        sourceId: source.id,
-        precedence: source.rank,
-        identity: readMirrorIdentity(targets.mirrorRoot(source.id)),
-      };
-    } catch {
-      return {
-        sourceId: source.id,
-        precedence: source.rank,
-        identity: null,
-        error: "unavailable" as const,
-      };
-    }
+    const identity = readMirrorIdentity(targets.mirrorRoot(source.id));
+    return identity === null
+      ? { sourceId: source.id, precedence: source.rank, identity, error: "unavailable" as const }
+      : { sourceId: source.id, precedence: source.rank, identity };
   });
 }
 
@@ -712,6 +637,7 @@ export function captureDeploymentSnapshot(
     kind: source.kind,
     active: source.active,
     rank: source.rank,
+    recipe: readMirrorRecord(targets.mirrorRoot(source.id))?.recipe ?? null,
   }));
   const mirrors = capturedMirrors ?? captureMirrors(targets, activeSources);
   const ledgerOwned = ledgerKeySet(input.ledger);

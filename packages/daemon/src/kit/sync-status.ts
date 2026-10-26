@@ -5,7 +5,7 @@
 
 import type { Source, SourceSyncStatus } from "@hive/contract";
 import type { SyncFailureReason } from "./effect/errors.ts";
-import { readProvenance } from "./mirror.ts";
+import { type MirrorRecord, readMirrorRecord } from "./mirror.ts";
 
 // The last sync error for a Source, surfaced in its freshness state. `reason`
 // stays on the typed channel (the wire `errorReason` is free-form, but the
@@ -16,6 +16,19 @@ export type LastSyncError = {
   rateLimitReset?: number;
 };
 
+function recordedCommit(record: MirrorRecord): string | null {
+  const { origin } = record;
+  switch (origin.transport) {
+    case "git":
+    case "tarball":
+      return origin.resolvedCommit;
+    case "working-tree":
+      return origin.head;
+    case "bundled":
+      return null;
+  }
+}
+
 // Build one Source's freshness status. A failed/rate-limited check is surfaced
 // distinctly and never reports "up to date".
 export function buildSourceSyncStatus(
@@ -24,10 +37,9 @@ export function buildSourceSyncStatus(
   lastError: LastSyncError | undefined,
 ): SourceSyncStatus {
   const base = { sourceId: source.id };
-  // A local (bundled) Source short-circuits BEFORE readProvenance: a local mirror
-  // writes no provenance file, so falling through would mis-report a CLEAN local
-  // sync as `check_failed`. But a local sync can still FAIL (a bad
-  // HIVE_STARTER_ROOT / packaging miss → missing_starter_root): when an error is
+  // A local (bundled) Source short-circuits: it has no commit to report. But a
+  // local sync can still FAIL (a bad HIVE_STARTER_ROOT / packaging miss →
+  // missing_starter_root): when an error is
   // recorded for it, surface `check_failed` like any other failed Source — never
   // mask a failure as the healthy `local` state. A clean local sync → `local`,
   // null sha/fetchedAt (derived from kind, never a synthetic sha).
@@ -44,13 +56,15 @@ export function buildSourceSyncStatus(
     }
     return { ...base, state: "local", sha: null, fetchedAt: null };
   }
-  const prov = readProvenance(mirrorRoot);
+  const record = readMirrorRecord(mirrorRoot);
+  const sha = record ? recordedCommit(record) : null;
+  const fetchedAt = record?.fetchedAt ?? null;
   if (lastError) {
     return {
       ...base,
       state: lastError.reason === "rate_limited" ? "rate_limited" : "check_failed",
-      sha: prov?.sha ?? null,
-      fetchedAt: prov?.fetchedAt ?? null,
+      sha,
+      fetchedAt,
       errorReason: lastError.reason,
       ...(lastError.detail ? { errorDetail: lastError.detail } : {}),
       ...(lastError.rateLimitReset !== undefined
@@ -60,9 +74,9 @@ export function buildSourceSyncStatus(
   }
   return {
     ...base,
-    state: prov ? "up_to_date" : "check_failed",
-    sha: prov?.sha ?? null,
-    fetchedAt: prov?.fetchedAt ?? null,
-    ...(prov ? {} : { errorReason: "no_mirror" }),
+    state: record ? "up_to_date" : "check_failed",
+    sha,
+    fetchedAt,
+    ...(record ? {} : { errorReason: "no_mirror" }),
   };
 }

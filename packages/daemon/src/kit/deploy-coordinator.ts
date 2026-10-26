@@ -65,7 +65,7 @@ import {
   mergeLedgerWithinLock,
   readLedger,
 } from "./ledger.ts";
-import { readMirrorIdentity } from "./overview.ts";
+import { readMirrorIdentity } from "./mirror.ts";
 import type { DeployTargets } from "./targets.ts";
 
 export type { StagedDeployPayload } from "./deploy-operations.ts";
@@ -409,14 +409,6 @@ export function createDeployCoordinator(
   };
 }
 
-function currentMirrorIdentity(targets: DeployTargets, sourceId: string): string | null {
-  try {
-    return readMirrorIdentity(targets.mirrorRoot(sourceId));
-  } catch {
-    return null;
-  }
-}
-
 function assertContentSha(
   targets: DeployTargets,
   sourceId: string,
@@ -441,7 +433,7 @@ export function stageDeployPlan(
   plan: DeployPlan,
 ): StagedDeployPayload {
   for (const mirror of plan.mirrors) {
-    if (currentMirrorIdentity(targets, mirror.sourceId) !== mirror.identity) {
+    if (readMirrorIdentity(targets.mirrorRoot(mirror.sourceId)) !== mirror.identity) {
       throw new PlanStaleError();
     }
   }
