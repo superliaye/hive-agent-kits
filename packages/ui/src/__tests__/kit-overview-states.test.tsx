@@ -92,7 +92,7 @@ async function renderPage(): Promise<HTMLElement> {
       createElement(
         QueryClientProvider,
         { client },
-        createElement(KitDeployPage, { apiConfig, connection }),
+        createElement(KitDeployPage, { apiConfig, connection, active: true }),
       ),
     );
   });
@@ -111,7 +111,7 @@ async function rerenderPage(
       createElement(
         QueryClientProvider,
         { client },
-        createElement(KitDeployPage, { apiConfig, connection }),
+        createElement(KitDeployPage, { apiConfig, connection, active: true }),
       ),
     );
   });

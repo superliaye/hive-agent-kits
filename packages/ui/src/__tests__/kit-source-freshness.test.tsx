@@ -76,7 +76,10 @@ async function render(unavailable = false): Promise<HTMLElement> {
       createElement(
         QueryClientProvider,
         { client },
-        createElement(KitDeployPage, { apiConfig: { baseUrl: "http://localhost", token: "test" } }),
+        createElement(KitDeployPage, {
+          apiConfig: { baseUrl: "http://localhost", token: "test" },
+          active: true,
+        }),
       ),
     );
   });

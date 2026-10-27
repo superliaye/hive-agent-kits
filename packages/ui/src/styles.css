@@ -1579,6 +1579,45 @@ a.tile-card-label:focus-visible {
   gap: 10px;
   flex-wrap: wrap;
 }
+.kit-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.kit-search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  max-width: 420px;
+}
+.kit-search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 64px 6px 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  background: var(--color-bg-base);
+  color: var(--color-fg-default);
+}
+.kit-search-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  background: var(--color-bg-surface);
+}
+.kit-search-hint {
+  position: absolute;
+  right: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--color-fg-muted);
+  background: var(--color-bg-surface);
+  pointer-events: none;
+}
 /* PRESET / TARGETS read as a deliberate control group: each label is a fixed,
    emphasized rail the eye aligns the row's controls against. */
 .kit-control-label {

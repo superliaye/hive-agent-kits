@@ -118,7 +118,7 @@ describe("KitDeployPage catalog skeleton", () => {
         createElement(
           QueryClientProvider,
           { client: qc },
-          createElement(KitDeployPage, { apiConfig }),
+          createElement(KitDeployPage, { apiConfig, active: true }),
         ),
       );
     });
@@ -163,7 +163,7 @@ describe("KitDeployPage catalog skeleton", () => {
         createElement(
           QueryClientProvider,
           { client: qc },
-          createElement(KitDeployPage, { apiConfig }),
+          createElement(KitDeployPage, { apiConfig, active: true }),
         ),
       );
     });

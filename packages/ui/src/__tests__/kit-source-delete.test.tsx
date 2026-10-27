@@ -220,7 +220,7 @@ async function render(): Promise<HTMLElement> {
       createElement(
         QueryClientProvider,
         { client: qc },
-        createElement(KitDeployPage, { apiConfig }),
+        createElement(KitDeployPage, { apiConfig, active: true }),
       ),
     );
   });
