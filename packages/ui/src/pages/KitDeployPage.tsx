@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   type ApiConfig,
   api,
@@ -144,6 +144,69 @@ export function syncToast(result: SyncRunResult): { kind: "success" | "error"; m
     : { kind: "success", message: "Up to date" };
 }
 
+type WholeSourceUnit = { source: OverviewSource; members: OverviewRow[]; toggled: OverviewRow };
+type DisplayedItem = { row: OverviewRow; variant: OverviewRow["variants"][number] | undefined };
+
+function wholeSourceUnits(overview: DeploymentOverview): WholeSourceUnit[] {
+  return overview.sources.flatMap((source) => {
+    const members = overview.rows.filter((row) => row.wholeSourceId === source.id);
+    const toggled = members.find((row) => row.desired === "on") ?? members[0];
+    return toggled ? [{ source, members, toggled }] : [];
+  });
+}
+
+function displayedItems(rows: OverviewRow[]): DisplayedItem[] {
+  const displayed: DisplayedItem[] = [];
+  for (const row of rows) {
+    if (row.variants.length === 0) displayed.push({ row, variant: undefined });
+    else
+      for (const variant of row.variants) {
+        // The whole Source's row carries the winning copy; a lower-precedence copy stays here.
+        if (row.wholeSourceId !== null && variant.catalog === "deployable") continue;
+        displayed.push({ row, variant });
+      }
+  }
+  return displayed;
+}
+
+function matchesQuery(fields: Array<string | undefined>, terms: string[]): boolean {
+  const haystack = fields.flatMap((field) => (field ? [field.toLowerCase()] : []));
+  return terms.every((term) => haystack.some((field) => field.includes(term)));
+}
+
+function unitMatches(
+  { source, members }: WholeSourceUnit,
+  descriptions: Map<string, string>,
+  terms: string[],
+): boolean {
+  return matchesQuery(
+    [source.label, descriptions.get(source.id), ...members.map((row) => row.key.name)],
+    terms,
+  );
+}
+
+function itemMatches(
+  kind: CapabilityKind,
+  { row, variant }: DisplayedItem,
+  sourceLabels: Map<string, string>,
+  terms: string[],
+): boolean {
+  return matchesQuery(
+    [
+      row.key.name,
+      variant?.description,
+      ...(variant?.sourceIds ?? []).map((sourceId) => sourceLabels.get(sourceId) ?? sourceId),
+      KIND_LABEL[kind],
+    ],
+    terms,
+  );
+}
+
+function findShortcutLabel(): string {
+  const platform = `${navigator.platform} ${navigator.userAgent}`;
+  return platform.includes("Mac") ? "⌘F" : "Ctrl+F";
+}
+
 function unitConflictMessage(error: SelectionUnitConflictError, sources: OverviewSource[]): string {
   const label = sources.find((source) => source.id === error.sourceId)?.label ?? error.sourceId;
   return `${label} installs whole, so its Capabilities turn on and off together. This change turned some on and some off for ${TARGET_LABEL[error.target]}, so Hive did not apply it.`;
@@ -152,9 +215,11 @@ function unitConflictMessage(error: SelectionUnitConflictError, sources: Overvie
 export function KitDeployPage({
   apiConfig,
   connection,
+  active,
 }: {
   apiConfig: ApiConfig;
   connection?: NonNullable<Window["__hive"]>["connection"];
+  active: boolean;
 }): JSX.Element {
   const queryClient = useQueryClient();
   const { toasts, push: pushToast, dismiss: dismissToast } = useToasts();
@@ -168,6 +233,24 @@ export function KitDeployPage({
   const [transportAcceptanceProven, setTransportAcceptanceProven] = useState(false);
   const [targetPreference, setTargetPreference] = useState<DeployTarget[]>(["claude"]);
   const { armed: realHomeArmed } = useDeveloperConfig(apiConfig);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+  useEffect(() => {
+    if (!active) return;
+    const focusSearch = (event: KeyboardEvent): void => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key.toLowerCase() !== "f") return;
+      const input = searchRef.current;
+      if (!input) return;
+      event.preventDefault();
+      input.focus();
+      input.select();
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, [active]);
 
   const overviewQuery = useQuery({
     queryKey: ["kit", "overview"],
@@ -518,6 +601,21 @@ export function KitDeployPage({
   const hasRows = (overview?.rows.length ?? 0) > 0;
   const allDisabled =
     overview !== undefined && sources.length > 0 && !sources.some((source) => source.active);
+  const sourceLabels = new Map(sources.map((source) => [source.id, source.label]));
+  const noSearchMatch =
+    overview !== undefined &&
+    terms.length > 0 &&
+    !wholeSourceUnits(overview).some((unit) => unitMatches(unit, tileDescriptions, terms)) &&
+    !KINDS.some((kind) =>
+      displayedItems(overview.rows.filter((row) => row.key.kind === kind)).some((item) =>
+        itemMatches(kind, item, sourceLabels, terms),
+      ),
+    );
+
+  function clearSearch(): void {
+    setQuery("");
+    searchRef.current?.focus();
+  }
 
   return (
     <div className="kit-page" data-testid="kit-deploy-page">
@@ -661,6 +759,29 @@ export function KitDeployPage({
 
       {overview && hasRows && (
         <div className="kit-controls">
+          <div className="kit-search">
+            <span className="kit-control-label">Search</span>
+            <span className="kit-search-field">
+              <input
+                ref={searchRef}
+                type="search"
+                className="kit-search-input"
+                value={query}
+                // onInput, not onChange: the same native event in a browser, but React's
+                // onChange never fires under the happy-dom test DOM.
+                onInput={(event) => setQuery(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape") return;
+                  if (query) setQuery("");
+                  else event.currentTarget.blur();
+                }}
+                placeholder="Search capabilities"
+                aria-label="Search capabilities"
+                data-testid="kit-search"
+              />
+              <kbd className="kit-search-hint">{findShortcutLabel()}</kbd>
+            </span>
+          </div>
           <div className="kit-presets" data-testid="kit-presets">
             <span className="kit-control-label">Preset</span>
             {catalogQuery.isLoading ? (
@@ -743,10 +864,24 @@ export function KitDeployPage({
               </p>
             </div>
           ))}
+        {noSearchMatch && (
+          <div className="kit-catalog-state" data-testid="kit-search-empty">
+            <p className="kit-catalog-state-title">No capabilities match “{query.trim()}”.</p>
+            <button
+              type="button"
+              className="button ghost"
+              onClick={clearSearch}
+              data-testid="kit-search-clear"
+            >
+              Clear search
+            </button>
+          </div>
+        )}
         {overview && (
           <WholeSourceSection
             overview={overview}
             descriptions={tileDescriptions}
+            terms={terms}
             pendingKeys={pendingKeys}
             selectionDisabled={authorityUnknown}
             onToggle={toggleRow}
@@ -761,7 +896,8 @@ export function KitDeployPage({
                 key={kind}
                 kind={kind}
                 rows={rows}
-                sourceLabels={new Map(overview.sources.map((source) => [source.id, source.label]))}
+                sourceLabels={sourceLabels}
+                terms={terms}
                 pendingKeys={pendingKeys}
                 selectionDisabled={authorityUnknown}
                 onToggle={toggleRow}
@@ -832,21 +968,19 @@ function CatalogSkeleton(): JSX.Element {
 function WholeSourceSection({
   overview,
   descriptions,
+  terms,
   pendingKeys,
   selectionDisabled,
   onToggle,
 }: {
   overview: DeploymentOverview;
   descriptions: Map<string, string>;
+  terms: string[];
   pendingKeys: OverviewRow["key"][] | undefined;
   selectionDisabled: boolean;
   onToggle: (row: OverviewRow) => void;
 }): JSX.Element | null {
-  const units = overview.sources.flatMap((source) => {
-    const members = overview.rows.filter((row) => row.wholeSourceId === source.id);
-    const toggled = members.find((row) => row.desired === "on") ?? members[0];
-    return toggled ? [{ source, members, toggled }] : [];
-  });
+  const units = wholeSourceUnits(overview).filter((unit) => unitMatches(unit, descriptions, terms));
   if (units.length === 0) return null;
   return (
     <section className="kit-kind" data-testid="kit-kind-whole">
@@ -908,6 +1042,7 @@ function KindSection({
   kind,
   rows,
   sourceLabels,
+  terms,
   pendingKeys,
   selectionDisabled,
   onToggle,
@@ -915,25 +1050,17 @@ function KindSection({
   kind: CapabilityKind;
   rows: OverviewRow[];
   sourceLabels: Map<string, string>;
+  terms: string[];
   pendingKeys: OverviewRow["key"][] | undefined;
   selectionDisabled: boolean;
   onToggle: (row: OverviewRow) => void;
 }): JSX.Element | null {
-  type Displayed = { row: OverviewRow; variant: OverviewRow["variants"][number] | undefined };
-  const displayed: Displayed[] = [];
-  for (const row of rows) {
-    if (row.variants.length === 0) displayed.push({ row, variant: undefined });
-    else
-      for (const variant of row.variants) {
-        // The whole Source's row carries the winning copy; a lower-precedence copy stays here.
-        if (row.wholeSourceId !== null && variant.catalog === "deployable") continue;
-        displayed.push({ row, variant });
-      }
-  }
+  const unfiltered = displayedItems(rows);
+  const displayed = unfiltered.filter((item) => itemMatches(kind, item, sourceLabels, terms));
   if (displayed.length === 0) return null;
-  const counts = new Map<string, number>();
-  for (const item of displayed)
-    counts.set(item.row.key.name, (counts.get(item.row.key.name) ?? 0) + 1);
+  const variantCountByName = new Map<string, number>();
+  for (const item of unfiltered)
+    variantCountByName.set(item.row.key.name, (variantCountByName.get(item.row.key.name) ?? 0) + 1);
   return (
     <section className="kit-kind" data-testid={`kit-kind-${kind}`}>
       <h2 className="kit-kind-title">
@@ -946,7 +1073,7 @@ function KindSection({
           const shadowed = catalog === "shadowed";
           const blocked = catalog === "blocked";
           const selectable = !shadowed && !blocked;
-          const multi = (counts.get(row.key.name) ?? 0) > 1;
+          const multi = (variantCountByName.get(row.key.name) ?? 0) > 1;
           const suffix = variant?.contentSha.slice(0, 8);
           const testId =
             multi && suffix

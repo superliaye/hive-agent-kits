@@ -66,7 +66,11 @@ export default function App({ apiConfig }: { apiConfig: ApiConfig }): JSX.Elemen
             selection survives leaving and returning to the tab; display:contents
             keeps .kit-page as the direct flex child of .body when visible. */}
         <div style={{ display: page === "capabilities" ? "contents" : "none" }}>
-          <KitDeployPage apiConfig={apiConfig} connection={connection} />
+          <KitDeployPage
+            apiConfig={apiConfig}
+            connection={connection}
+            active={page === "capabilities"}
+          />
         </div>
         {page === "settings" && (
           <fieldset className="settings-connection-gate" disabled={mutationsDisabled}>

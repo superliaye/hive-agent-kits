@@ -101,7 +101,7 @@ async function renderCatalog(
       createElement(
         QueryClientProvider,
         { client: qc },
-        createElement(KitDeployPage, { apiConfig }),
+        createElement(KitDeployPage, { apiConfig, active: true }),
       ),
     );
   });

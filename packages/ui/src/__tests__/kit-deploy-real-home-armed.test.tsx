@@ -107,7 +107,7 @@ async function render(): Promise<HTMLElement> {
       createElement(
         QueryClientProvider,
         { client: qc },
-        createElement(KitDeployPage, { apiConfig }),
+        createElement(KitDeployPage, { apiConfig, active: true }),
       ),
     );
   });
@@ -162,7 +162,7 @@ describe("KitDeployPage — real-home armed indicator", () => {
         createElement(
           QueryClientProvider,
           { client: qc },
-          createElement(KitDeployPage, { apiConfig }),
+          createElement(KitDeployPage, { apiConfig, active: true }),
           createElement(DeveloperSettings, { apiConfig }),
         ),
       );

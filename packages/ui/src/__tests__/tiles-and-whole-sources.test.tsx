@@ -277,7 +277,11 @@ async function render(): Promise<HTMLElement> {
   activeRoot = createRoot(host);
   await act(async () => {
     activeRoot?.render(
-      createElement(QueryClientProvider, { client }, createElement(KitDeployPage, { apiConfig })),
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(KitDeployPage, { apiConfig, active: true }),
+      ),
     );
   });
   await flush();
