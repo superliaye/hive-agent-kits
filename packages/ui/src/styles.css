@@ -1457,6 +1457,7 @@ a.tile-card-label:focus-visible {
    the Added badge's place. It is transparent, not hidden, so the keyboard still
    reaches it, and always shown where there is no hover. */
 .tile-remove {
+  z-index: 1;
   white-space: nowrap;
   padding: 1px 8px;
   font-size: 11px;
