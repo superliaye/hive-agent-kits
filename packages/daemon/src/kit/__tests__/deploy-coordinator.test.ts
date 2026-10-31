@@ -17,7 +17,7 @@ import { Effect } from "effect";
 import { withCooperativeFileLock } from "../../lib/durable-file.ts";
 import { mirrorContentSha } from "../content-sha.ts";
 import type { DeployFsExec } from "../deploy/adapter.ts";
-import { hashSkillFiles } from "../deploy/artifact-hash.ts";
+import { hashSkillFiles, sha256 } from "../deploy/artifact-hash.ts";
 import { managedNpxBundleHash, managedNpxBundleMeta } from "../deploy/npx-bundle.ts";
 import { bundleMeta } from "../deploy/sources.ts";
 import {
@@ -199,6 +199,134 @@ function coordinatorFixture(options: {
   });
   return { coordinator, operations, deployPlan };
 }
+
+describe("snippet-independent Deploy staging", () => {
+  function fixture() {
+    const root = mkdtempSync(join(tmpdir(), "deploy-snippets-"));
+    roots.push(root);
+    redirectHomeEnv(root);
+    const targets = failSafeDeployTargets();
+    const files = {
+      "skills/alpha/SKILL.md": "---\ndescription: skill\n---\n<!-- include: shared -->\n",
+      "agents/alpha/AGENT.md": "---\ndescription: agent\n---\n<!-- include: shared -->\n",
+      "instructions/alpha.instructions.md": "Guidance\n",
+      "plugins/alpha.plugin.md":
+        "---\nmarketplace_source: owner/market\nmarketplace_name: market\nplugin_name: alpha\n---\n",
+      "bundles/alpha.bundle.md": `---
+installer:
+  kind: npx-skills
+  package: https://github.com/owner/repo/tree/${"a".repeat(40)}
+  skills: [alpha]
+verify_paths:
+  claude: [~/.claude/skills/alpha/SKILL.md]
+---
+`,
+    };
+    for (const [path, body] of Object.entries(files)) {
+      const full = join(targets.mirrorRoot("source-a"), "capabilities", path);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, body);
+    }
+    for (const sourceId of ["source-a", "source-b"]) {
+      const snippet = join(targets.mirrorRoot(sourceId), "capabilities", "snippets", "shared.md");
+      mkdirSync(dirname(snippet), { recursive: true });
+      writeFileSync(snippet, `from ${sourceId}`);
+    }
+    const accepted = snapshot();
+    const first = accepted.sources[0];
+    if (!first) throw new Error("missing fixture Source");
+    accepted.sources.push({ ...first, id: "source-b", rank: 2 });
+    accepted.mirrors = accepted.sources.map((source) => ({
+      sourceId: source.id,
+      precedence: source.rank,
+      identity: readMirrorIdentity(targets.mirrorRoot(source.id)),
+    }));
+    const action = (
+      kind: DeployPlan["actions"][number]["key"]["kind"],
+      verb: "add" | "remove" = "add",
+    ): DeployPlan["actions"][number] & { contentSha: string } => {
+      const contentSha = mirrorContentSha(targets.mirrorRoot("source-a"), kind, "alpha");
+      if (!contentSha) throw new Error(`missing ${kind} ContentSha`);
+      return {
+        action: verb,
+        key: { kind, name: "alpha" },
+        target: "claude",
+        sourceId: "source-a",
+        contentSha,
+        renderedHash: "b".repeat(64),
+        artifact: { existence: "missing", hash: null },
+      };
+    };
+    return { targets, accepted, action };
+  }
+
+  test("duplicate snippets do not block removal-only or empty plans", () => {
+    const { targets, accepted, action } = fixture();
+    const actions = (["skill", "agent", "instruction", "plugin", "bundle"] as const).map((kind) =>
+      action(kind, "remove"),
+    );
+    const deployPlan = plan({ mirrors: accepted.mirrors, actions });
+
+    expect(stageDeployPlan(targets, accepted, deployPlan).tasks.map((task) => task.type)).toEqual([
+      "instruction",
+      "remove",
+      "remove",
+      "marketplace-plugin-remove",
+      "npx-bundle",
+    ]);
+    expect(stageDeployPlan(targets, accepted, { ...deployPlan, actions: [] }).tasks).toEqual([]);
+  });
+
+  test("duplicate snippets do not block instruction, plugin or bundle additions", () => {
+    const { targets, accepted, action } = fixture();
+    const instruction = action("instruction");
+    const deployPlan = plan({
+      mirrors: accepted.mirrors,
+      actions: [instruction, action("plugin"), action("bundle")],
+      instructionWrites: [
+        {
+          target: "claude",
+          contributions: [
+            {
+              key: { kind: "instruction", name: "alpha" },
+              sourceId: "source-a",
+              contentSha: instruction.contentSha,
+            },
+          ],
+          renderedHash: sha256("Guidance\n"),
+          artifact: { existence: "missing", hash: null },
+        },
+      ],
+    });
+
+    expect(stageDeployPlan(targets, accepted, deployPlan).tasks).toEqual([
+      expect.objectContaining({ type: "instruction", content: "Guidance\n" }),
+      expect.objectContaining({ type: "marketplace-plugin", pluginName: "alpha" }),
+      expect.objectContaining({ type: "npx-bundle", skills: ["alpha"] }),
+    ]);
+  });
+
+  test.each(["skill", "agent"] as const)("a kit %s still rejects duplicate snippets", (kind) => {
+    const { targets, accepted, action } = fixture();
+    const deployPlan = plan({ mirrors: accepted.mirrors, actions: [action(kind)] });
+
+    expect(() => stageDeployPlan(targets, accepted, deployPlan)).toThrow(
+      expect.objectContaining({ reason: "collision", name: "shared" }),
+    );
+  });
+
+  test.each(["skill", "agent"] as const)("a kit %s still rejects unknown includes", (kind) => {
+    const { targets, accepted, action } = fixture();
+    for (const source of accepted.sources) {
+      rmSync(join(targets.mirrorRoot(source.id), "capabilities", "snippets"), { recursive: true });
+    }
+    const deployPlan = plan({ mirrors: accepted.mirrors, actions: [action(kind)] });
+
+    expect(() => stageDeployPlan(targets, accepted, deployPlan)).toThrow(
+      "include 'shared' not found in snippets",
+    );
+  });
+});
 
 describe("persisted asynchronous Deploy coordinator", () => {
   test("rejects when the canonical snapshot changes while immutable bytes are staged", async () => {

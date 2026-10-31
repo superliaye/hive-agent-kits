@@ -53,33 +53,45 @@ const PNG = Uint8Array.from([
 
 // Syncs `files` as the only Source, then deploys skill `name` to both CLIs from
 // the Overview's plan through staging and a persisted operation payload.
-async function syncAndDeploy(files: Record<string, MemoryFile>, name: string) {
+async function syncAndDeploy(
+  files: Record<string, MemoryFile>,
+  name: string,
+  additionalSources: readonly Record<string, MemoryFile>[] = [],
+) {
   const root = mkdtempSync(join(tmpdir(), "skill-deploy-"));
   roots.push(root);
   const homes = redirectHomeEnv(root);
   const targets = failSafeDeployTargets();
-  const { snapshot } = memorySnapshot(files);
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const recognition = yield* recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS));
-        const staged = yield* materialize(
-          snapshot,
-          recognition,
-          targets.kitTmpRoot(),
-          DEFAULT_TREE_LIMITS,
-        );
-        return yield* commitMirror(targets.mirrorRoot(source.id), staged);
-      }),
-    ),
-  );
+  const sources = [
+    source,
+    ...additionalSources.map((_, index) => ({ ...source, id: `extra-${index}`, rank: index + 2 })),
+  ];
+  for (const [index, sourceFiles] of [files, ...additionalSources].entries()) {
+    const current = sources[index];
+    if (!current) throw new Error("missing fixture Source");
+    const { snapshot } = memorySnapshot(sourceFiles);
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const recognition = yield* recognizeSource(recipeTree(snapshot, DEFAULT_TREE_LIMITS));
+          const staged = yield* materialize(
+            snapshot,
+            recognition,
+            targets.kitTmpRoot(),
+            DEFAULT_TREE_LIMITS,
+          );
+          return yield* commitMirror(targets.mirrorRoot(current.id), staged);
+        }),
+      ),
+    );
+  }
   const deploymentState = openDeploymentStateStore(targets.deploymentStatePath(), {
     now: () => 20,
   });
   const capture = () =>
     captureDeploymentSnapshot(targets, {
-      sourceRegistry: { revision: 1, sources: [source] },
-      catalog: readCatalog(targets, [source]),
+      sourceRegistry: { revision: 1, sources },
+      catalog: readCatalog(targets, sources),
       selection: {
         revision: 1,
         enabled: [{ key: { kind: "skill", name }, targets: ["claude", "codex"] }],
@@ -90,6 +102,7 @@ async function syncAndDeploy(files: Record<string, MemoryFile>, name: string) {
     });
   const accepted = capture();
   const plan = buildDeployPlan(accepted);
+  const staged = stageDeployPlan(targets, accepted, plan);
   const operations = openDeployOperationStore(join(root, "operations.json"), { now: () => 10 });
   operations.createQueued({
     operationId: "op",
@@ -97,7 +110,7 @@ async function syncAndDeploy(files: Record<string, MemoryFile>, name: string) {
     selectionRevision: 1,
     planToken: "token",
     plan,
-    staged: stageDeployPlan(targets, accepted, plan),
+    staged,
   });
   await executeStagedDeploy(
     {
@@ -116,7 +129,7 @@ async function syncAndDeploy(files: Record<string, MemoryFile>, name: string) {
   );
   const deployed = (target: "claude" | "codex") =>
     join(target === "claude" ? homes.claudeHome : homes.agentsHome, "skills", name);
-  return { plan, deployed, replan: () => buildDeployPlan(capture()) };
+  return { plan, staged, deployed, replan: () => buildDeployPlan(capture()) };
 }
 
 function filesUnder(dir: string): string[] {
@@ -127,7 +140,7 @@ function filesUnder(dir: string): string[] {
 }
 
 describe("byte-faithful skill deploy", () => {
-  test("an upstream skill lands byte for byte with its exec bit and no kit rendering", async () => {
+  test("duplicate snippets do not block a verbatim upstream skill or change its reviewed hash", async () => {
     const files: Record<string, MemoryFile> = {
       "skills/tool/SKILL.md":
         "---\nname: tool\ndescription: upstream tool\ndisable-model-invocation: true\n---\n<!-- include: x -->\n",
@@ -135,13 +148,21 @@ describe("byte-faithful skill deploy", () => {
       "skills/tool/run.sh": { exec: "#!/bin/sh\necho run\n" },
       "skills/tool/assets/logo.png": PNG,
     };
-    const { plan, deployed, replan } = await syncAndDeploy(files, "tool");
+    const { plan, staged, deployed, replan } = await syncAndDeploy(files, "tool", [
+      { "capabilities/snippets/shared.md": "first provider\n" },
+      { "capabilities/snippets/shared.md": "second provider\n" },
+    ]);
 
     expect(plan.actions.map((action) => `${action.action} ${action.target}`)).toEqual([
       "add claude",
       "add codex",
     ]);
     for (const target of ["claude", "codex"] as const) {
+      const task = staged.tasks.find((candidate) => candidate.target === target);
+      if (task?.type !== "skill") throw new Error("expected a staged skill");
+      const reviewedHash = plan.actions.find((action) => action.target === target)?.renderedHash;
+      if (!reviewedHash) throw new Error("expected a reviewed skill hash");
+      expect(hashSkillFiles(task.files.map(stagedSkillFile))).toBe(reviewedHash);
       const dir = deployed(target);
       expect(filesUnder(dir)).toEqual(["SKILL.md", "SOURCE.md", "assets/logo.png", "run.sh"]);
       expect(new Uint8Array(readFileSync(join(dir, "assets/logo.png")))).toEqual(PNG);
