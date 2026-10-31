@@ -247,13 +247,15 @@ verify_paths:
     ): DeployPlan["actions"][number] & { contentSha: string } => {
       const contentSha = mirrorContentSha(targets.mirrorRoot("source-a"), kind, "alpha");
       if (!contentSha) throw new Error(`missing ${kind} ContentSha`);
+      const bundle = kind === "bundle" ? bundleMeta(targets.mirrorRoot("source-a"), "alpha") : null;
+      const managed = bundle ? managedNpxBundleMeta(bundle, "claude", targets) : null;
       return {
         action: verb,
         key: { kind, name: "alpha" },
         target: "claude",
         sourceId: "source-a",
         contentSha,
-        renderedHash: "b".repeat(64),
+        renderedHash: managed ? managedNpxBundleHash(managed, "claude") : "b".repeat(64),
         artifact: { existence: "missing", hash: null },
       };
     };

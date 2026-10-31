@@ -41,8 +41,8 @@ import {
 import {
   agentSourceDir,
   bundleMeta,
+  createSnippetResolver,
   instructionBody,
-  loadSnippets,
   pluginMeta,
   renderedSkillFiles,
 } from "./deploy/sources.ts";
@@ -461,7 +461,7 @@ export function stageDeployPlan(
   const activeRoots = snapshot.sources
     .filter((source) => source.active)
     .map((source) => targets.mirrorRoot(source.id));
-  const snippets = loadSnippets(activeRoots);
+  const snippets = createSnippetResolver(activeRoots);
   const tasks: StagedDeployTask[] = [];
 
   for (const target of ["claude", "codex"] as const) {
@@ -567,7 +567,7 @@ export function stageDeployPlan(
         if (!source || !action.renderedHash) throw new PlanStaleError();
         const rendered = transformAgent(
           { name: action.key.name, raw: readFileSync(join(source, "AGENT.md"), "utf8") },
-          snippets,
+          snippets(),
         );
         const content = action.target === "claude" ? rendered.claudeMd : rendered.codexToml;
         if (sha256(content) !== action.renderedHash) throw new PlanStaleError();

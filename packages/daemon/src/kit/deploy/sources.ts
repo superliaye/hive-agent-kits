@@ -85,7 +85,7 @@ export function renderedSkillFiles(
   mirrorRoot: string,
   name: string,
   target: DeployTarget,
-  snippets: Map<string, string>,
+  snippets: SnippetResolver,
 ): SkillFile[] | null {
   const source = skillSourceDir(mirrorRoot, name);
   if (!source) return null;
@@ -94,7 +94,7 @@ export function renderedSkillFiles(
   if (recipe !== CAPABILITY_KIT_RECIPE_ID) return files;
   const rendered = transformSkill(
     { name, files, disableModelInvocation: skillDisablesModelInvocation(source) },
-    snippets,
+    snippets(),
   );
   return rendered.sidecar && target === "codex"
     ? [...rendered.files, rendered.sidecar]
@@ -125,6 +125,13 @@ export function capabilityFilePath(
   return join(mirrorRoot, "capabilities", layout.dir, `${name}${layout.ext}`);
 }
 
+export type SnippetResolver = () => Map<string, string>;
+
+export function createSnippetResolver(mirrorRoots: readonly string[]): SnippetResolver {
+  let snippets: Map<string, string> | undefined;
+  return () => (snippets ??= loadSnippets(mirrorRoots));
+}
+
 // Load reusable snippets (capabilities/snippets/*.md) into name → body, unioned
 // across active Source mirrors. Snippets are NOT capabilities (a build-time
 // include), so the catalog's CapabilityKey collision pass never covers them — a
@@ -132,7 +139,7 @@ export function capabilityFilePath(
 // rendered skill/agent bodies. So a same-named snippet provided by >1 mirror
 // FAILS the deploy with a typed DeployError(collision) naming it; never a silent
 // winner.
-export function loadSnippets(mirrorRoots: readonly string[]): Map<string, string> {
+function loadSnippets(mirrorRoots: readonly string[]): Map<string, string> {
   const map = new Map<string, string>();
   const provider = new Map<string, string>();
   for (const root of mirrorRoots) {

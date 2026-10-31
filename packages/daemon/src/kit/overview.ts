@@ -41,10 +41,11 @@ import {
 import {
   agentSourceDir,
   bundleMeta,
+  createSnippetResolver,
   instructionBody,
-  loadSnippets,
   pluginMeta,
   renderedSkillFiles,
+  type SnippetResolver,
 } from "./deploy/sources.ts";
 import { resolveTileBundle, type TileBundle, tileInstalled } from "./deploy/tile-bundle.ts";
 import { transformAgent, transformInstructions } from "./deploy/transforms.ts";
@@ -489,7 +490,7 @@ type ResolvedItem = { name: string; sourceId: string };
 // artifact's hash. Returns null when the source isn't in the winner's Mirror.
 function renderedNamedHash(
   mirrorRoot: string,
-  snippets: Map<string, string>,
+  snippets: SnippetResolver,
   kind: "skill" | "agent",
   name: string,
   target: DeployTarget,
@@ -501,7 +502,7 @@ function renderedNamedHash(
   const src = agentSourceDir(mirrorRoot, name);
   if (!src) return null;
   const raw = readFileSync(join(src, "AGENT.md"), "utf8");
-  const rendered = transformAgent({ name, raw }, snippets);
+  const rendered = transformAgent({ name, raw }, snippets());
   return sha256(target === "claude" ? rendered.claudeMd : rendered.codexToml);
 }
 
@@ -532,16 +533,17 @@ function wouldDeployArtifacts(
       .filter((entry) => entry.deployable)
       .map((entry) => [serializeCapabilityKey(entry), entry] as const),
   );
-  let snippets: Map<string, string> | undefined;
-  let snippetError = false;
-  try {
-    snippets = loadSnippets(activeSources.map((source) => targets.mirrorRoot(source.id)));
-  } catch {
-    snippetError = true;
-  }
+  const snippets = createSnippetResolver(
+    activeSources.map((source) => targets.mirrorRoot(source.id)),
+  );
   const artifacts: WouldDeployArtifact[] = [];
   const requested = new Map<string, { key: CapabilityKey; target: DeployTarget }>();
-  for (const selection of [...input.selection.enabled, ...input.selection.removalIntents]) {
+  for (const selection of [
+    ...input.selection.enabled,
+    ...input.selection.removalIntents.filter(
+      ({ key }) => key.kind === "plugin" || key.kind === "bundle",
+    ),
+  ]) {
     if (selection.key.kind === "instruction") continue;
     for (const target of selection.targets) {
       if (!applicableTargets(selection.key, declared).includes(target)) continue;
@@ -583,17 +585,6 @@ function wouldDeployArtifacts(
         renderedHash: managed
           ? managedNpxBundleHash(managed, target)
           : (tile?.renderedHash ?? null),
-      });
-      continue;
-    }
-    if (snippetError || !snippets) {
-      artifacts.push({
-        key: selected.key,
-        target,
-        sourceId,
-        contentSha: entry.contentSha,
-        renderedHash: null,
-        error: "render_error",
       });
       continue;
     }
