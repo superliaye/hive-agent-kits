@@ -250,6 +250,25 @@ test("add a local Source, select its Skill, and Deploy to both CLI homes", async
         .toEqual(appearance);
       expect(rendererErrors).toEqual([]);
     });
+
+    await test.step("remove the Source with one click after the hover transition", async () => {
+      const sourceId = overview.sources[0]?.id;
+      if (!sourceId) throw new Error("fixture Source missing");
+      const remove = window.getByTestId(`kit-source-delete-${sourceId}`);
+      await remove.hover();
+      await expect.poll(() => remove.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+      await window.screenshot({ path: test.info().outputPath("source-remove-hover.png") });
+      const box = await remove.boundingBox();
+      if (!box) throw new Error("Remove button has no bounds");
+      // Locator click retries can hide pointer interception after the hover transition.
+      await window.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      const confirm = window.getByTestId(`kit-source-delete-confirm-${sourceId}`);
+      await expect(confirm).toBeVisible();
+      await confirm.click();
+      await expect(window.getByTestId(`kit-source-${sourceId}`)).toHaveCount(0);
+      const removed = await readApi(port, runtimeRoot, "/api/kit/overview", DeploymentOverview);
+      expect(removed.sources).toHaveLength(0);
+    });
   } finally {
     try {
       if (app) await closeApp(app);
