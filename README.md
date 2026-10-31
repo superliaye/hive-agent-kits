@@ -4,6 +4,10 @@ A desktop control surface for syncing capability Sources and deploying selected
 Capabilities into Claude Code and Codex CLI homes. Full vocabulary in
 [GLOSSARY.md](GLOSSARY.md).
 
+When you add a plain repository URL, Hive resolves its default branch and saves
+that branch in the Source Locator. Later Syncs keep that branch even if the
+repository changes its default. A GitHub folder URL keeps its explicit branch.
+
 ## Prerequisites
 
 [Bun](https://bun.sh) — the package manager and runtime.

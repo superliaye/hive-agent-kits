@@ -53,28 +53,31 @@ const TrackedGitRef = z
     "tracked ref must be a safe fully-qualified branch or tag ref",
   );
 
+const GitSourceLocator = z
+  .object({
+    kind: z.literal("git"),
+    repoUrl: GitHttpsUrl,
+    revision: z.discriminatedUnion("mode", [
+      z.object({ mode: z.literal("track"), ref: TrackedGitRef }).strict(),
+      z.object({ mode: z.literal("pin"), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
+    ]),
+    subpath: SafeRelativeSubpath,
+  })
+  .strict();
+const WorkingTreeSourceLocator = z
+  .object({
+    kind: z.literal("working-tree"),
+    repoRoot: z.string().min(1),
+    subpath: SafeRelativeSubpath,
+  })
+  .strict();
+
 // `starter`: a kit bundled inside Hive's repository, which only the dev fixture
 // Sources use. Users add git and working-tree Sources.
 export const SourceLocator = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("starter") }).strict(),
-  z
-    .object({
-      kind: z.literal("git"),
-      repoUrl: GitHttpsUrl,
-      revision: z.discriminatedUnion("mode", [
-        z.object({ mode: z.literal("track"), ref: TrackedGitRef }).strict(),
-        z.object({ mode: z.literal("pin"), commit: z.string().regex(/^[0-9a-f]{40}$/) }).strict(),
-      ]),
-      subpath: SafeRelativeSubpath,
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal("working-tree"),
-      repoRoot: z.string().min(1),
-      subpath: SafeRelativeSubpath,
-    })
-    .strict(),
+  GitSourceLocator,
+  WorkingTreeSourceLocator,
 ]);
 export type SourceLocator = z.infer<typeof SourceLocator>;
 
@@ -114,9 +117,15 @@ export type SourceSummary = z.infer<typeof SourceSummary>;
 const PastedSourceBody = z
   .object({
     label: z.string().min(1).max(160),
-    locator: SourceLocator.refine((locator) => locator.kind !== "starter", {
-      message: "a bundled Source cannot be added",
-    }),
+    locator: z.discriminatedUnion("kind", [
+      GitSourceLocator.extend({
+        revision: z.union([
+          GitSourceLocator.shape.revision,
+          z.object({ mode: z.literal("track"), ref: z.literal("HEAD") }).strict(),
+        ]),
+      }),
+      WorkingTreeSourceLocator,
+    ]),
   })
   .strict();
 
@@ -127,6 +136,7 @@ export const AddSourceBody = z.union([
   z.object({ tile: z.string().min(1) }).strict(),
 ]);
 export type AddSourceBody = z.infer<typeof AddSourceBody>;
+export type PastedSourceInput = z.infer<typeof PastedSourceBody>;
 export type AddSourceInput = {
   label: string;
   locator: Exclude<SourceLocator, { kind: "starter" }>;

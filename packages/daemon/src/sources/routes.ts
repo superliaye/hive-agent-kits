@@ -2,7 +2,13 @@
 // server. Zod at the boundary; typed errors mapped to wire codes. Mirrors
 // `kit/routes.ts`.
 
-import type { AddSourceResult, Source, SourceLocator, SourceSummary } from "@hive/contract";
+import type {
+  AddSourceResult,
+  PastedSourceInput,
+  Source,
+  SourceLocator,
+  SourceSummary,
+} from "@hive/contract";
 import { AddSourceBody } from "@hive/contract";
 import type { Effect } from "effect";
 import { Hono } from "hono";
@@ -25,7 +31,7 @@ export type RunSources = <A, E>(
 // fails the already-committed delete).
 export type SourceLifecycle = {
   prepareLocator(
-    locator: Exclude<SourceLocator, { kind: "starter" }>,
+    locator: PastedSourceInput["locator"],
   ): Effect.Effect<Exclude<SourceLocator, { kind: "starter" }>, Error>;
   onboard(source: Source): Effect.Effect<AddSourceResult>;
   forgetMirror(sourceId: string): Effect.Effect<void>;
@@ -98,7 +104,15 @@ export function buildSourcesRoutes(
         return c.json(
           {
             error: "invalid source",
-            issues: [{ path: "locator.repoRoot", message: "working tree locator is unavailable" }],
+            issues: [
+              {
+                path: parsed.data.locator.kind === "git" ? "locator.repoUrl" : "locator.repoRoot",
+                message:
+                  parsed.data.locator.kind === "git"
+                    ? "Git repository default branch is unavailable"
+                    : "working tree locator is unavailable",
+              },
+            ],
           },
           400,
         );

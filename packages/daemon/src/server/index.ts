@@ -32,6 +32,7 @@ import {
   AppConfigSchema,
   type Config,
 } from "../config/index.ts";
+import { resolveGitLocator } from "../kit/acquisition/default-branch.ts";
 import { canonicalizeWorkingTreeLocator } from "../kit/acquisition/working-tree.ts";
 import type { BinaryProbe, ExecPort } from "../kit/deploy/adapter.ts";
 import { createDeploymentMutationCoordinator } from "../kit/deploy-coordinator.ts";
@@ -365,7 +366,7 @@ export async function createServer(opts: CreateServerOptions): Promise<ServerHan
               }),
             catch: () => new Error("working tree locator is unavailable"),
           })
-        : Effect.succeed(locator),
+        : resolveGitLocator(locator),
     // onboardSource's typed channel is already `never`; this adapter also makes the
     // port honor that contract on a DEFECT — an unexpected throw in validate /
     // enumerate / fs degrades to a well-formed (defect-honest) body + a trace,

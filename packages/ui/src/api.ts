@@ -9,13 +9,13 @@ import type {
   AcceptedDeployRequest,
   AcceptedDeployResponse,
   AddSourceBody,
-  AddSourceInput,
   AddSourceResult,
   BackendReadiness,
   BackendStatus,
   Catalog,
   DeployTarget,
   KitState,
+  PastedSourceInput,
   SelectionMutation,
   SelectionSnapshot,
   SourceSummary,
@@ -442,9 +442,9 @@ async function postSource(
   throw new AddSourceError({ kind: "other", status: res.status, message }, message);
 }
 
-type GitSourceLocator = Extract<AddSourceInput["locator"], { kind: "git" }>;
+type GitSourceLocator = Extract<PastedSourceInput["locator"], { kind: "git" }>;
 
-export function sourceInputFromValue(origin: string): AddSourceInput {
+export function sourceInputFromValue(origin: string): PastedSourceInput {
   if (absoluteDaemonPath(origin)) {
     return {
       label: origin.split(/[\\/]/).filter(Boolean).at(-1) ?? origin,
@@ -454,7 +454,7 @@ export function sourceInputFromValue(origin: string): AddSourceInput {
   const locator = githubTreeLocator(origin) ?? {
     kind: "git" as const,
     repoUrl: origin,
-    revision: { mode: "track" as const, ref: "refs/heads/main" },
+    revision: { mode: "track" as const, ref: "HEAD" },
     subpath: ".",
   };
   return { label: sourceLabel(locator.repoUrl), locator };
