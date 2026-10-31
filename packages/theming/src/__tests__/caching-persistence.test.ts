@@ -45,7 +45,15 @@ describe("createCachingPersistence", () => {
 
   test("load() writes to cache for synchronous re-read", async () => {
     const storage = memStorage();
-    const loaded: Preferences = { ...DEFAULTS, mode: "dark" };
+    const loaded: Preferences = {
+      ...DEFAULTS,
+      mode: "dark",
+      light: { accent: "#123456", fontUiSize: 16 },
+      dark: { themeId: "midnight", contrast: 72 },
+      reduceMotion: "on",
+      pointerCursors: true,
+      useSystemAccent: true,
+    };
     const p = createCachingPersistence(memPersistence(loaded), storage);
     await p.load();
     expect(p.getCached()).toEqual(loaded);
@@ -72,6 +80,29 @@ describe("createCachingPersistence", () => {
     storage.write(JSON.stringify({ light: {}, dark: {} }));
     const p = createCachingPersistence(memPersistence(), storage);
     expect(p.getCached()).toBeNull();
+  });
+
+  test("cache with only mode returns null", () => {
+    const storage = memStorage();
+    storage.write(JSON.stringify({ mode: "dark" }));
+    const p = createCachingPersistence(memPersistence(), storage);
+    expect(p.getCached()).toBeNull();
+  });
+
+  test("cache with invalid nested configs returns null", () => {
+    for (const overrides of [
+      { light: null },
+      { dark: [] },
+      { light: { fontUiSize: "16" } },
+      { dark: { fontCodeSize: 49 } },
+      { light: { contrast: 101 } },
+      { dark: { unknown: true } },
+    ]) {
+      const storage = memStorage();
+      storage.write(JSON.stringify({ ...DEFAULTS, ...overrides }));
+      const p = createCachingPersistence(memPersistence(), storage);
+      expect(p.getCached()).toBeNull();
+    }
   });
 
   test("storage.write throw is swallowed (quota etc are non-fatal)", async () => {
