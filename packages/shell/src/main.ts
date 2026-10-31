@@ -250,7 +250,7 @@ async function ensureDaemon(): Promise<void> {
     // bun.exe directly and Electron quit completes promptly.
     const cmd = isWin ? "bun.exe" : "bun";
     daemon = spawn(cmd, ["run", "src/server/start.ts"], {
-      cwd: REPO_ROOT,
+      cwd: join(REPO_ROOT, "daemon"),
       stdio: ["ignore", "inherit", "inherit"],
       windowsHide: true,
     });

@@ -1,4 +1,11 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig } from "@playwright/test";
+
+const artifactsRoot =
+  process.env.HIVE_E2E_ARTIFACTS ?? mkdtempSync(join(tmpdir(), "hive-shell-e2e-"));
+process.env.HIVE_E2E_ARTIFACTS = artifactsRoot;
 
 export default defineConfig({
   testDir: "./tests",
@@ -7,7 +14,8 @@ export default defineConfig({
   timeout: 60_000,
   fullyParallel: false,
   workers: 1,
-  reporter: [["line"], ["json", { outputFile: "test-results.json" }]],
+  outputDir: join(artifactsRoot, "test-results"),
+  reporter: [["line"], ["json", { outputFile: join(artifactsRoot, "test-results.json") }]],
   use: {
     actionTimeout: 10_000,
     trace: "retain-on-failure",
