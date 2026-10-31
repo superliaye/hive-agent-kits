@@ -143,6 +143,25 @@ describe("Source — kind discriminator", () => {
 });
 
 describe("AddSourceBody", () => {
+  test("accepts remote HEAD only as pasted input, never as a durable locator", () => {
+    const locator = {
+      kind: "git",
+      repoUrl: "https://github.com/a/b",
+      revision: { mode: "track", ref: "HEAD" },
+      subpath: ".",
+    };
+    expect(AddSourceBody.safeParse({ label: "Default branch", locator }).success).toBe(true);
+    expect(SourceLocator.safeParse(locator).success).toBe(false);
+    for (const ref of ["HEAD~1", "origin/HEAD", "--upload-pack=other", "main"]) {
+      expect(
+        AddSourceBody.safeParse({
+          label: "Invalid",
+          locator: { ...locator, revision: { mode: "track", ref } },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   test("accepts a labeled locator", () => {
     expect(
       AddSourceBody.safeParse({

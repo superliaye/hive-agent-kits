@@ -8,7 +8,7 @@ describe("sourceInputFromValue", () => {
       locator: {
         kind: "git",
         repoUrl: "https://github.com/owner/repo",
-        revision: { mode: "track", ref: "refs/heads/main" },
+        revision: { mode: "track", ref: "HEAD" },
         subpath: ".",
       },
     });
