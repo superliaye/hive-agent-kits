@@ -712,6 +712,67 @@ describe("managed npx bundle snapshot capture", () => {
 });
 
 describe("snippet collision snapshot capture", () => {
+  test("native removal-only capture does not render kit skills or agents", () => {
+    const root = mkdtempSync(join(tmpdir(), "overview-snippet-removal-"));
+    try {
+      const targets = testTargets(root);
+      const skill = key("skill", "alpha");
+      const agent = key("agent", "alpha");
+      for (const [kind, marker] of [
+        ["skills", "SKILL.md"],
+        ["agents", "AGENT.md"],
+      ] as const) {
+        const path = join(targets.mirrorRoot("source-win"), "capabilities", kind, "alpha", marker);
+        mkdirSync(join(path, ".."), { recursive: true });
+        writeFileSync(path, "---\ndescription: alpha\n---\n<!-- include: shared -->\n");
+      }
+      for (const sourceId of ["source-win", "source-other"]) {
+        const snippet = join(targets.mirrorRoot(sourceId), "capabilities", "snippets", "shared.md");
+        mkdirSync(join(snippet, ".."), { recursive: true });
+        writeFileSync(snippet, `from ${sourceId}`);
+      }
+      const captured = captureDeploymentSnapshot(
+        targets,
+        {
+          sourceRegistry: {
+            revision: 1,
+            sources: [
+              { ...coherentSource, id: "source-win" },
+              { ...coherentSource, id: "source-other", rank: 2 },
+            ],
+          },
+          catalog: { entries: [variant(skill), variant(agent)], presets: [], problems: [] },
+          selection: {
+            revision: 1,
+            enabled: [],
+            removalIntents: [skill, agent].map((key) => ({ key, targets: ["claude"] })),
+          },
+          ledger: {
+            kitVersion: "",
+            agents: ["claude"],
+            skills: [{ name: "alpha" }],
+            agentDefs: [{ name: "alpha" }],
+            instructions: [],
+            plugins: [],
+            bundles: [],
+          },
+          deploymentState: { schemaVersion: 1, revision: 0, records: [] },
+        },
+        [],
+      );
+
+      expect(captured.wouldDeploy).toEqual([]);
+      expect(
+        buildDeployPlan(captured).actions.map((action) => [action.action, action.key.kind]),
+      ).toEqual([
+        ["remove", "agent"],
+        ["remove", "skill"],
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a snippet two active Sources provide blocks rendering instead of picking one", () => {
     const root = mkdtempSync(join(tmpdir(), "overview-snippet-collision-"));
     try {
