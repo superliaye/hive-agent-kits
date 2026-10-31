@@ -10,6 +10,7 @@
 // (hive uses it once, future apps would be the second adapter) but the
 // pattern collapses to a one-line wrap when adopted.
 
+import { AppearanceConfigSchema } from "./schema.ts";
 import type { Persistence, Preferences } from "./types.ts";
 
 /** Minimal storage interface — adapters provide read/write of a string blob.
@@ -44,13 +45,8 @@ export function createCachingPersistence(
     } catch {
       return null;
     }
-    if (!parsed || typeof parsed !== "object") return null;
-    // Minimal shape check — full validation is the inner adapter's job
-    // when load() resolves. The cache is a paint optimization, not a
-    // source of truth; a malformed entry just means no-cache + load.
-    const p = parsed as Record<string, unknown>;
-    if (p.mode !== "light" && p.mode !== "dark" && p.mode !== "system") return null;
-    return parsed as Preferences;
+    const result = AppearanceConfigSchema.safeParse(parsed);
+    return result.success ? result.data : null;
   }
 
   function writeCache(prefs: Preferences): void {
