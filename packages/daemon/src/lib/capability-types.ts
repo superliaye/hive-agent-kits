@@ -13,8 +13,6 @@ export const KebabName = z
   .max(64)
   .regex(/^[a-z0-9-]+$/, "must be lowercase kebab-case");
 
-// AgentBackend: the vendor Agent SDK identifier (ADR-0019).
-//   claude-code — drives @anthropic-ai/claude-agent-sdk
-//   codex       — drives @openai/codex-sdk
+// Agent Backend identifiers for the target CLIs (ADR-0021).
 export const AgentBackend = z.enum(["claude-code", "codex"]);
 export type AgentBackend = z.infer<typeof AgentBackend>;
